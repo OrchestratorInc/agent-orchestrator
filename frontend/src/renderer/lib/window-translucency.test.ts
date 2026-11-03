@@ -19,7 +19,7 @@ describe("window translucency", () => {
 	});
 
 	it("restores the Appearance preference independently of Developer Mode on macOS", () => {
-		expect(readStoredWindowTranslucency()).toBe(false);
+		expect(readStoredWindowTranslucency()).toBe(true);
 		window.localStorage.setItem(windowTranslucencyStorageKey, "true");
 		expect(readStoredWindowTranslucency()).toBe(true);
 
@@ -34,6 +34,9 @@ describe("window translucency", () => {
 
 		window.localStorage.setItem(windowTranslucencyStorageKey, "true");
 		vi.mocked(isMacPlatform).mockReturnValue(false);
+		expect(readStoredWindowTranslucency()).toBe(false);
+
+		window.localStorage.removeItem(windowTranslucencyStorageKey);
 		expect(readStoredWindowTranslucency()).toBe(false);
 	});
 

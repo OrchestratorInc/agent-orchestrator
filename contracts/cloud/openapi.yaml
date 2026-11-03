@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Client-facing contract for AO Cloud. The Cloud server implementation lives
-    under `cloud/` in this repository, while this file is the versioned contract
+    in a separate private repository, while this file is the versioned contract
     used to generate the runtime-neutral client types. The worker surface
     documents the exact outbound HTTP protocol used by sandbox workers,
     including one-time bootstrap, rotating credentials, fenced turn execution,
@@ -24,11 +24,13 @@ tags:
   - name: Events
   - name: Terminal
   - name: Workspace
+  - name: Artifacts
   - name: Providers
   - name: Worker Lifecycle
   - name: Worker Execution
   - name: Worker Orchestration
   - name: Worker Transport
+  - name: Remote Hosts
 paths:
   /api/cloud/v1/me:
     get:
@@ -98,6 +100,158 @@ paths:
       responses:
         "204":
           description: The personal coding-agent credential was disconnected.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares:
+    get:
+      operationId: listArtifactShares
+      tags: [Artifacts]
+      description: >-
+        Lists the signed-in user's public artifact share links, newest first,
+        with how many they may hold. Revoked links are listed with revokedAt:
+        they no longer serve but still use a slot, so used counts them. Available only when the development-only
+        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+      responses:
+        "200":
+          description: The user's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Publishes the request body, one file from a local session, as the
+        link of the document named by project, feature and name. A new
+        document gets a new public link at <project>-<feature>-<email> under
+        the share origin; a taken name gets a -2, -3, ... suffix. Publishing
+        a document that already has a link replaces the version that link
+        serves: the URL and slot stay, the earlier version is no longer
+        served, and the response is 200 with replaced true. A revoked link
+        is restored the same way.
+        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
+        artifact_share_limit_reached when a new document would exceed the
+        user's limit of links; revoked links count toward it.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: feature
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The document's existing link, now serving the new version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Replaces the file an existing link serves. The link keeps its URL and
+        does not count against the limit again. name must match the link's
+        file name, which is part of its document; another name returns 409
+        artifact_share_name_changed, and the renamed file is published as a
+        new link with POST.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The updated share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Revokes a link: it stops serving at once and its stored file is
+        deleted after a grace period. The link still uses its slot, so
+        revoking never makes room for a new document. Publishing the same
+        document again restores it. A link already revoked returns 404.
+      responses:
+        "204":
+          description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    get:
+      operationId: listUserAgentModels
+      tags: [Providers]
+      description: >-
+        The models and reasoning efforts a new Cloud task for this agent runs
+        with, for the authenticated user in this organization. The list is
+        what the next task's worker runs, not a suggestion, and needs no live
+        worker: `source` says whether a Cloud worker running the same CLI
+        version with the user's current credential reported it, or it is the
+        list the control plane's pinned CLI version supports. A task that
+        names no model keeps the project's or the agent's default. A listed
+        model without `efforts` takes no reasoning effort; every model that
+        takes one lists its levels.
+      responses:
+        "200":
+          description: The model catalog for the next task. It lists at least one model.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatModelsResponse"
+        "409":
+          description: MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
@@ -297,6 +451,164 @@ paths:
                 $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/environment:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProjectEnvironment
+      tags: [Projects]
+      description: >-
+        The project's environment variables, which every session of the project
+        gets (its coding agent, shells, and Setup and Cleanup commands), except
+        sessions issue intake starts. They are stored encrypted. Only an
+        organization owner or admin sees their values here; other members see
+        their names. That is not a secrecy boundary: everyone who can use one of
+        the project's sessions, and its coding agent, can read every value.
+      responses:
+        "200":
+          description: The project's environment variables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvironment"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putProjectEnvironment
+      tags: [Projects]
+      description: >-
+        Replace the project's environment variables as a whole; an empty map
+        removes them. Organization owners and admins only. They are delivered
+        into the sandbox of every new session of the project, except sessions
+        issue intake starts, where everyone using the session and its coding
+        agent can read them. A reserved name, in any case, is refused with 422
+        validation_error and a message naming it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutProjectEnvironmentInput"
+      responses:
+        "200":
+          description: The saved environment variables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvironment"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/intake:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProjectIntakeStatus
+      tags: [Projects]
+      description: How the project's issue intake (config.trackerIntake) last went.
+      responses:
+        "200":
+          description: The project's issue intake status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectIntakeStatus"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/cues:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectCues
+      tags: [Projects]
+      responses:
+        "200":
+          description: The project's cues, by name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectCue
+      tags: [Projects]
+      description: Add a cue. A name the project already has is refused with CUE_NAME_TAKEN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueDefinitionInput"
+      responses:
+        "201":
+          description: The created cue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/cues/{cueId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CueId"
+    patch:
+      operationId: updateProjectCue
+      tags: [Projects]
+      description: Replace a cue's whole definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueDefinitionInput"
+      responses:
+        "200":
+          description: The updated cue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteProjectCue
+      tags: [Projects]
+      responses:
+        "204":
+          description: The cue was deleted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/cues/{cueId}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CueId"
+    post:
+      operationId: invokeProjectCue
+      tags: [Projects]
+      description: >-
+        Run a cue into one of its project's sessions. An agent cue's prompt is
+        sent to the session as the caller's message (a shared session's composer
+        lease applies). A command cue is returned for the client to run in a new
+        shell of the session's sandbox. Accepts an optional Idempotency-Key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeCueInput"
+      responses:
+        "200":
+          description: What the cue did.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeCueResult"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/installations:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -474,6 +786,42 @@ paths:
                 $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/chat-search:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: searchChats
+      tags: [Sessions]
+      description: >-
+        Returns, newest first, the chat messages of the organization's
+        sessions in live projects whose text contains q, case insensitively:
+        prompts, and assistant replies assembled from their streamed text.
+        Only the organization's most recent chat events are searched.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 200
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: The matching messages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSearchResults"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -565,6 +913,12 @@ paths:
     delete:
       operationId: deleteSession
       tags: [Sessions]
+      parameters:
+        - name: deleteArtifacts
+          in: query
+          description: Also delete the session's artifact files. A restored session comes back without them.
+          schema:
+            type: boolean
       responses:
         "202":
           description: Session sandbox deletion was requested; durable history is retained.
@@ -572,6 +926,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateSession
+      tags: [Sessions]
+      description: >-
+        Renames the session: the title every viewer sees. Anyone who may write
+        in the session may rename it; a viewer is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionInput"
+      responses:
+        "200":
+          description: The renamed session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: pinSession
+      tags: [Sessions]
+      description: >-
+        Pins the session in the caller's sidebar. A pin is one person's:
+        nobody else sees the session move. Pinning a pinned session keeps its
+        first pin time.
+      responses:
+        "200":
+          description: The caller's pin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPinResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: unpinSession
+      tags: [Sessions]
+      responses:
+        "200":
+          description: The session is no longer pinned for the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPinResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
@@ -696,6 +1107,202 @@ paths:
                 $ref: "#/components/schemas/SessionChildrenPage"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionArtifacts
+      tags: [Artifacts]
+      description: >-
+        Lists the session's committed artifact files, sorted by path. Reads
+        Postgres only and never wakes or resumes the sandbox. Present only
+        when the deployment reports offering.artifacts; otherwise 404.
+      responses:
+        "200":
+          description: The session's artifact files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: createSessionArtifactAccess
+      tags: [Artifacts]
+      description: >-
+        Returns a short-lived path prefix that serves this session's artifact
+        files without a bearer header, for a sandboxed frame. Append a file's
+        URL-escaped path to filesPrefix; relative links inside an HTML file
+        resolve against the same prefix. A prefix lasts ten minutes and
+        stops working when the caller leaves the organization; request a new
+        one before expiresAt.
+      responses:
+        "200":
+          description: The file access prefix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactAccess"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/content:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    put:
+      operationId: saveSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Replaces the text of one committed artifact file with an edit made in
+        the app, when the committed file still has expectedSha256 (409
+        artifact_changed otherwise). The save is kept as the file's newest
+        version and reaches the session's worker, which writes it to its disk
+        unless the file changed there since. Present only when the deployment
+        reports offering.artifacts; otherwise 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveSessionArtifactInput"
+      responses:
+        "200":
+          description: The saved artifact file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionArtifactVersions
+      tags: [Artifacts]
+      description: >-
+        Lists the kept versions of one artifact file, newest first; the first
+        is the committed file. A session keeps the newest twenty versions of
+        each file.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: The file's kept versions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactVersionList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+    get:
+      operationId: getSessionArtifactVersion
+      tags: [Artifacts]
+      description: >-
+        Returns one kept version of an artifact file with the start of its
+        UTF-8 text (the first 256 KiB; truncated says when it was cut).
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: The version and its text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactVersion"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/restore:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restoreSessionArtifactVersion
+      tags: [Artifacts]
+      description: >-
+        Makes a kept version the committed file again, kept as its newest
+        version (restoredFrom names the one it restored), and hands it to the
+        session's worker. Restoring the committed version changes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [path, version]
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+      responses:
+        "200":
+          description: The restored artifact file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent/restart:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restartSessionAgent
+      tags: [Sessions]
+      description: >-
+        Starts a live session's terminal agent again in its worker after it
+        exited (Ctrl+C, /exit, a crash), resuming its conversation where the
+        agent keeps one, and reads the session as idle rather than exited.
+        requested is false when the agent is still running or starting. A
+        session in Chat starts its agent with its next message instead; a
+        session viewer cannot restart it.
+      responses:
+        "200":
+          description: Whether a start was requested.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requested]
+                properties:
+                  requested:
+                    type: boolean
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -792,6 +1399,105 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/UserMessageEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat-events:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    get:
+      operationId: listReviewChatEvents
+      tags: [Reviews]
+      description: One review conversation's events after a sequence, for a review whose run reports interfaceMode chat.
+      parameters:
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/EventLimit"
+      responses:
+        "200":
+          description: The review conversation's events after the supplied sequence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewChatEventPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/messages:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    post:
+      operationId: sendReviewChatMessage
+      tags: [Reviews]
+      description: Queues a message to the reviewer of a review that runs in Chat. A conversation that stopped after its verdict starts again.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+      responses:
+        "202":
+          description: The message was queued for the reviewer.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/ReviewChatEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/interrupt:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    post:
+      operationId: interruptReviewChat
+      tags: [Reviews]
+      responses:
+        "202":
+          description: The reviewer's running turn was asked to stop and its queued messages were dropped.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: suggestChatPrompt
+      tags: [Chat]
+      description: |
+        The next message the person could send after a settled turn. The
+        session's agent reads the supplied recent transcript once, with no
+        tools. An empty prompt means no clear next step; a worker that cannot
+        suggest fails the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromptSuggestionInput"
+      responses:
+        "200":
+          description: The suggestion, or an empty prompt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptSuggestion"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences:
@@ -906,6 +1612,7 @@ paths:
     post:
       operationId: cancelTurn
       tags: [Sessions]
+      description: Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
@@ -915,6 +1622,325 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkerOKResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerAcquire
+      tags: [Sessions]
+      description: Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRenew
+      tags: [Sessions]
+      description: Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRelease
+      tags: [Sessions]
+      description: Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerRequestTurn
+      tags: [Sessions]
+      description: Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: composerLeaveQueue
+      tags: [Sessions]
+      description: Leave the line for the composer lease.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerTakeOver
+      tags: [Sessions]
+      description: Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403.
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: composerPublishDraft
+      tags: [Sessions]
+      description: Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComposerGrantInput"
+      responses:
+        "200":
+          description: The composer lease after the request, and whether the caller holds it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposerLeaseAnswer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    put:
+      operationId: sessionSetChatSettings
+      tags: [Sessions]
+      description: Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionChatSettings"
+      responses:
+        "200":
+          description: The session's chat settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chatSettings]
+                properties:
+                  chatSettings:
+                    $ref: "#/components/schemas/SessionChatSettings"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge-requests:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: number
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      operationId: requestPullRequestMerge
+      tags: [Sessions]
+      description: Ask the owner of a shared project to merge one of the session's pull requests. Only someone the project or session was shared with, who may write in the session, asks; a merge by them is refused with MERGE_NEEDS_APPROVAL. Asking again while a request is pending returns it. The session's creator is notified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [prUrl]
+              properties:
+                prUrl:
+                  type: string
+      responses:
+        "200":
+          description: The pending merge request.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/merge-requests:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectMergeRequests
+      tags: [Sessions]
+      description: A project's merge requests, pending first, then newest first. A member of the organization sees them all; someone the project was shared with sees their own.
+      responses:
+        "200":
+          description: The merge requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequests]
+                properties:
+                  mergeRequests:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: approveMergeRequest
+      tags: [Sessions]
+      description: Merge the requested pull request as the approving owner (the session's creator, or an organization owner or admin), through the same readiness checks as their own merge, and tell the guest. A pull request that cannot merge leaves the request pending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedHeadSha]
+              properties:
+                expectedHeadSha:
+                  type: string
+      responses:
+        "202":
+          description: GitHub accepted the merge; the request is recorded as merged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: rejectMergeRequest
+      tags: [Sessions]
+      description: Decline a pending merge request and tell the guest.
+      responses:
+        "200":
+          description: The declined request.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/session-participants:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listSessionParticipants
+      tags: [Sessions]
+      description: Who is in each of the named sessions that someone has shared, for a board. Sessions the caller may not open, or that nobody has shared, are left out. Reading this does not make the caller present in any session.
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          description: A session to describe; repeat for each, at most 100.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              format: uuid
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: The shared sessions among those asked for, in the order asked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SharedSessionParticipants"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
@@ -959,6 +1985,7 @@ paths:
     post:
       operationId: decideChatApproval
       tags: [Sessions]
+      description: Answer an approval prompt. Allowed for the same people who may stop its turn (see cancelTurn); anyone else gets 403.
       requestBody:
         required: true
         content:
@@ -1004,11 +2031,25 @@ paths:
       parameters:
         - $ref: "#/components/parameters/After"
         - $ref: "#/components/parameters/EventTypes"
+        - name: live
+          in: query
+          required: false
+          description: |
+            1 opts this stream in to the session's live state. The caller is
+            listed as a viewer while the stream stays open, and the stream also
+            carries session.live frames (see SessionLiveState) whenever that
+            state changes. Omitted, the stream carries only ClientEvents.
+          schema:
+            type: string
+            enum: ["1"]
       responses:
         "200":
           description: |
             Replay followed by live client-visible events. Each SSE data field
-            contains a ClientEvent; the SSE id is its sequence.
+            contains a ClientEvent; the SSE id is its sequence. With live=1 the
+            stream also carries `event: session.live` frames whose data is a
+            SessionLiveState. Those frames have no SSE id and never move the
+            replay cursor; each one replaces the previous state.
           content:
             text/event-stream:
               schema:
@@ -1046,6 +2087,13 @@ paths:
       operationId: connectTerminal
       tags: [Terminal]
       summary: Upgrade to a terminal WebSocket using a short-lived ticket.
+      description: |
+        On the agent terminal, keystrokes are talking to the agent, so they need
+        the session's composer lease: typing takes it when it is free and nobody
+        is waiting, and renews it while the typist keeps typing. While someone
+        else holds it or is waiting for it, input is dropped and the server
+        sends `{"type":"input_refused","inputId":...,"message":...}` instead of
+        `input_ack`; the connection stays open.
       security: []
       parameters:
         - name: ticket
@@ -1069,6 +2117,54 @@ paths:
       responses:
         "101":
           description: WebSocket protocol upgrade accepted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-files/{token}/{path}:
+    get:
+      operationId: getSessionArtifactFile
+      tags: [Artifacts]
+      summary: Read one artifact file through an access prefix.
+      security: []
+      description: >-
+        Streams the committed version of one artifact file. The token comes
+        from createSessionArtifactAccess and binds one organization and
+        session. Every response carries a Content-Security-Policy sandbox
+        without allow-same-origin, X-Content-Type-Options nosniff, and an
+        ETag of the file's SHA-256. A listed file whose stored object is gone
+        returns 404 with code artifact_unavailable.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          description: The file's path in the artifact directory; may contain slashes.
+          schema:
+            type: string
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The file bytes, with Content-Type from the file extension.
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        "304":
+          description: The file has not changed since the given ETag.
+        "401":
+          description: The access token is invalid or expired (artifact_access_invalid).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files:
@@ -1755,6 +2851,124 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/manifest:
+    post:
+      operationId: compareWorkerArtifactManifest
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Compares the worker's artifact directory listing against the
+        session's committed files and returns the paths whose size or SHA-256
+        differ, including new paths. Requires `worker:connect`. Absent when
+        the deployment does not keep artifacts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactManifestInput"
+      responses:
+        "200":
+          description: The changed paths.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactManifestResponse"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "413":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/blob/{path}:
+    put:
+      operationId: putWorkerArtifactBlob
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Streams one artifact file to storage under the worker's own session.
+        Content-Length is required and the body's SHA-256 must match the
+        X-AO-Artifact-SHA256 header; storage rejects a mismatch without
+        keeping it. Returns the stored version for the commit. Requires
+        `worker:connect`.
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: The file's path in the artifact directory; may contain slashes.
+          schema:
+            type: string
+        - name: X-AO-Artifact-SHA256
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The stored version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactBlobResponse"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "411":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "422":
+          description: The body does not match its SHA-256 (checksum_mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/commit:
+    post:
+      operationId: commitWorkerArtifacts
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Records uploaded versions and deletions for the worker's own session
+        in one transaction and appends an artifact.changed event. Each
+        version must exist with the given size and SHA-256
+        (artifact_version_missing or artifact_version_mismatch otherwise).
+        Requires `worker:connect`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactCommitInput"
+      responses:
+        "204":
+          description: The changes are committed.
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
     get:
       operationId: listWorkerChildren
@@ -2291,8 +3505,184 @@ paths:
           description: Every unread notification for the current recipient was marked read.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts:
+    get:
+      operationId: listRemoteHosts
+      tags: [Remote Hosts]
+      responses:
+        "200":
+          description: The account's machines.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts/{hostId}:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    put:
+      operationId: putRemoteHost
+      tags: [Remote Hosts]
+      description: |
+        Lists a machine in the account, or updates its listing. A new `token`,
+        or listing a removed machine again, retires its standing fixed tunnel:
+        a run token fetched with the old credential stops working, and the
+        machine gets a new tunnel at the same address. A registration that
+        makes a tunnel can take more than a minute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostRegistration"
+      responses:
+        "204":
+          description: Listed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds."
+          $ref: "#/components/responses/Error"
+        "422":
+          description: "`validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses."
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`."
+          $ref: "#/components/responses/Error"
+        "502":
+          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRemoteHost
+      tags: [Remote Hosts]
+      description: |
+        Removes the machine from the account and deletes its fixed tunnel;
+        when Cloudflare fails, a later cleanup deletes it. The fixed address
+        counts against the account's limit until that cleanup, usually within
+        15 minutes.
+      responses:
+        "204":
+          description: Removed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/address:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: publishRemoteHostAddress
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+          hostSignature: []
+        - hostDigest: []
+      description: |
+        The machine publishes the address it serves now to every account that
+        lists it under this credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostAddress"
+      responses:
+        "204":
+          description: Published.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: ensureRemoteHostTunnel
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+          hostSignature: []
+        - hostDigest: []
+      description: |
+        The machine fetches the run token of the fixed tunnel an account gives
+        it: the account that lists the machine under the credential it
+        presents. If several do, one with a standing tunnel is preferred. The
+        deployment makes the tunnel when there is none. A deployment that
+        predates this route answers 404 without an error envelope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostTunnelRequest"
+      responses:
+        "200":
+          description: The machine's fixed tunnel.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostTunnel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
+          $ref: "#/components/responses/Error"
+        "404":
+          description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope."
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
+          $ref: "#/components/responses/Error"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later."
+          $ref: "#/components/responses/Error"
+        "502":
+          description: "`tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place."
+          $ref: "#/components/responses/Error"
+        "503":
+          description: "`fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
+    hostDigest:
+      type: http
+      scheme: bearer
+      description: |
+        Lowercase hex SHA-256 of the machine's account token (the ASCII bytes
+        of its 64-character hex form), the credential the account lists the
+        machine under. It is a bearer credential with no expiry, as strong on
+        these routes as the account token itself. It is not an account
+        session. A listing with a host key also needs `hostSignature`.
+    hostSignature:
+      type: apiKey
+      in: header
+      name: X-AO-Host-Signature
+      description: |
+        `<t>.<signature>`: `t` is the Unix time in seconds, and `signature`
+        is the unpadded base64url Ed25519 signature, by the listing's host key,
+        of `ao-host-v1`, the method, the path, `t` and the lowercase hex
+        SHA-256 of the request body, each followed by a newline. Required,
+        with `hostDigest`, on a listing that has a host key, and accepted
+        within 5 minutes of `t`. Only the machine holds the private key, so a
+        device that has the account token cannot act as the machine.
     bearerAuth:
       type: http
       scheme: bearer
@@ -2315,6 +3705,44 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    CueId:
+      name: cueId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReviewRunId:
+      name: reviewRunId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RemoteHostId:
+      name: hostId
+      in: path
+      required: true
+      description: The machine's stable identity, `h_` followed by a UUID.
+      schema:
+        type: string
+        pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    ArtifactShareName:
+      name: name
+      in: query
+      required: true
+      description: The file name, without a directory.
+      schema:
+        type: string
+        maxLength: 255
+    ArtifactShareSHA256:
+      name: X-AO-Artifact-SHA256
+      in: header
+      required: true
+      description: Lowercase hex SHA-256 of the body.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
     OrgId:
       name: orgId
       in: path
@@ -2487,6 +3915,92 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    RemoteHost:
+      type: object
+      additionalProperties: false
+      required: [hostId, label, url, token, updatedAt]
+      properties:
+        hostId:
+          type: string
+        label:
+          type: string
+        url:
+          type: string
+          description: The address devices reach the machine at.
+        token:
+          type: string
+          description: The credential a device presents to the machine.
+        updatedAt:
+          type: string
+          format: date-time
+    RemoteHostList:
+      type: object
+      additionalProperties: false
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemoteHost"
+        fixedAddresses:
+          type: boolean
+          description: Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`.
+        hostKeys:
+          type: boolean
+          description: Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one.
+    RemoteHostRegistration:
+      type: object
+      additionalProperties: false
+      required: [label, token]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          description: At most 64 bytes, after surrounding whitespace is trimmed.
+        url:
+          type: string
+          description: The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes.
+        token:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        hostKey:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it.
+    RemoteHostAddress:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+          description: An https origin with no path, query, fragment or user info.
+    RemoteHostTunnelRequest:
+      type: object
+      properties:
+        repair:
+          type: boolean
+          description: Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset.
+    RemoteHostTunnel:
+      type: object
+      additionalProperties: false
+      required: [hostname, runToken, since]
+      properties:
+        hostname:
+          type: string
+          description: The fixed address's host name.
+        runToken:
+          type: string
+          description: The Cloudflare run token for the machine's connector.
+        since:
+          type: string
+          format: date-time
+          description: When the address was made; it may not resolve for a short time after.
+        repaired:
+          type: boolean
+          description: Set when a repair request got a new tunnel.
     EmptyObject:
       type: object
       additionalProperties: false
@@ -2718,9 +4232,19 @@ components:
             allowed.
         features:
           type: array
-          description: Plan feature flags; empty when none apply.
+          description: >-
+            The organization's product features (share lets it share
+            sessions) and the deployment's own: attachments when the session
+            attachment routes are on. Empty when none apply.
           items:
             type: string
+        maxAttachmentBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The largest file one session attachment may be, in bytes. Sent
+            with attachments in features and omitted without it.
         customCoder:
           type: boolean
           description: >-
@@ -2729,6 +4253,12 @@ components:
             deployment offers coder without gating it. Also true while the
             organization still has a stored connection, so it can inspect or
             clear one. Absent from older control planes.
+        artifacts:
+          type: boolean
+          description: >-
+            Whether cloud sessions keep artifact files. When false the
+            artifact routes return 404 and requestedOutput "artifact" is
+            rejected. Older control planes omit it.
         coderWorkerWorkingFolder:
           type: boolean
           description: >-
@@ -2934,6 +4464,10 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         orchestratorRules:
           $ref: "#/components/schemas/ProjectRules"
+        workersRequestReview:
+          $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        trackerIntake:
+          $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
           type: string
           description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
@@ -3358,6 +4892,181 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         orchestratorRules:
           $ref: "#/components/schemas/ProjectRules"
+        workersRequestReview:
+          $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        trackerIntake:
+          $ref: "#/components/schemas/ProjectTrackerIntake"
+    ProjectWorkersRequestReview:
+      type: boolean
+      description: >-
+        Workers request AO's review of their own pull request once it is pushed
+        and ready, instead of waiting to be asked. Defaults to off.
+    ProjectTrackerIntake:
+      type: object
+      additionalProperties: false
+      description: >-
+        Issue intake: while enabled, every open GitHub issue of the project's
+        repository (or repo) that assignee matches gets one worker session,
+        started as the organization owner or admin who last saved the rule.
+        Only issues opened by the repository's owners, members and
+        collaborators are taken; an issue anyone else opens is skipped. The
+        sessions intake starts get none of the project's environment
+        variables. An enabled rule needs an assignee. A patch merges into the
+        stored rule. Setting it requires an organization owner or admin.
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [github]
+        repo:
+          type: string
+          maxLength: 200
+          description: owner/name; empty uses the project's repository.
+        assignee:
+          type: string
+          maxLength: 200
+          description: A GitHub login, "*" for any assigned issue, or "none" for unassigned issues.
+    ProjectEnvironment:
+      type: object
+      additionalProperties: false
+      required: [variables, editable]
+      properties:
+        variables:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectEnvironmentVariable"
+        editable:
+          type: boolean
+          description: Whether the caller may change the variables (an organization owner or admin).
+    ProjectEnvironmentVariable:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+          description: Omitted for a member who cannot change the variables.
+    PutProjectEnvironmentInput:
+      type: object
+      additionalProperties: false
+      required: [variables]
+      properties:
+        variables:
+          type: object
+          maxProperties: 100
+          description: >-
+            Name to value. Names are shell variable names, unique without case;
+            AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved, and so
+            are coding-agent logins and model relay settings (ANTHROPIC_API_KEY,
+            OPENAI_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the like), which belong
+            in the coding agent's connection instead. Values are text of at most
+            32 KB, 64 KB in all, readable by everyone who can use the project's
+            sessions.
+          additionalProperties:
+            type: string
+    ProjectIntakeStatus:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        lastPolledAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+          description: Why the last poll failed; absent when it did not.
+    Cue:
+      type: object
+      additionalProperties: false
+      required: [id, projectId, name, type, createdAt, updatedAt]
+      description: One of a project's reusable quick actions, run into a session from the desktop's top bar.
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [command, agent]
+        command:
+          type: string
+        prompt:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CueDefinitionInput:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique within the project; trimmed.
+        type:
+          type: string
+          enum: [command, agent]
+        command:
+          type: string
+          maxLength: 4096
+          description: The shell command of a command cue; cleared for an agent cue.
+        prompt:
+          type: string
+          maxLength: 16384
+          description: The agent instruction of an agent cue; cleared for a command cue.
+    CueList:
+      type: object
+      additionalProperties: false
+      required: [cues]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cue"
+    CueEnvelope:
+      type: object
+      additionalProperties: false
+      required: [cue]
+      properties:
+        cue:
+          $ref: "#/components/schemas/Cue"
+    InvokeCueInput:
+      type: object
+      additionalProperties: false
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: A session of the cue's project.
+    InvokeCueResult:
+      type: object
+      additionalProperties: false
+      required: [kind, sessionId]
+      properties:
+        kind:
+          type: string
+          enum: [agent, command]
+        sessionId:
+          type: string
+          format: uuid
+        command:
+          type: string
+          description: For a command cue, the command to run in a new shell of the session.
     ProjectSettingsInput:
       type: object
       additionalProperties: false
@@ -3883,6 +5592,15 @@ components:
           format: uri
         defaultBranch:
           type: string
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        artifacts:
+          type: boolean
+          description: >-
+            When true the worker syncs the session's artifact directory
+            through the worker artifact routes and names that directory in the
+            agent prompt and AO_SESSION_ARTIFACTS_DIR. Workers that do not advertise
+            the session.artifacts capability ignore it.
     WorkerBootstrapResponse:
       type: object
       additionalProperties: false
@@ -4410,8 +6128,15 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 65536
+          description: The message. It may be empty only when attachmentIds names at least one file.
+        attachmentIds:
+          type: array
+          maxItems: 10
+          description: Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message.
+          items:
+            type: string
+            format: uuid
         model:
           type: string
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
@@ -4423,6 +6148,46 @@ components:
         approvalMode:
           type: string
           enum: [default, accept-edits, auto, bypass-permissions]
+        composerEpoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+        displayText:
+          type: string
+          maxLength: 65536
+          description: How the message reads in the transcript when `text` carries quoted messages or file selections inlined for the agent. Recorded on the chat.user_message event only; the agent receives `text`.
+        content:
+          type: array
+          maxItems: 64
+          description: The quoted messages and file selections the message attaches, as the transcript shows them. Recorded on the chat.user_message event only.
+          items:
+            type: object
+            required: [type]
+            additionalProperties: true
+            properties:
+              type:
+                type: string
+                minLength: 1
+    MessageAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, size, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false
@@ -4451,6 +6216,15 @@ components:
             type: string
         defaultEffort:
           type: string
+        approvalModes:
+          description: >-
+            Approval modes a turn on this model can run, as its provider offers
+            them. Absent when the worker does not know; a client then offers
+            every mode the session allows.
+          type: array
+          items:
+            type: string
+            enum: [default, accept-edits, auto, bypass-permissions]
     ChatModelsResponse:
       type: object
       additionalProperties: false
@@ -4460,6 +6234,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChatModel"
+        source:
+          description: >-
+            Where the list came from. worker: reported by a Cloud worker
+            running this CLI version with the user's current credential.
+            release: the models the control plane's pinned CLI version
+            supports.
+          type: string
+          enum: [worker, release]
+        cliVersion:
+          description: The harness CLI version the list is for.
+          type: string
+        accountListed:
+          description: >-
+            On a session's list, true when its worker listed the models for
+            the signed-in account rather than from the CLI's built-in list.
+            Only such a list becomes the user's catalog.
+          type: boolean
     SendMessageInput:
       type: object
       additionalProperties: false
@@ -4469,6 +6260,11 @@ components:
           type: string
           minLength: 1
           maxLength: 65536
+        composerEpoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
     WorkerWorkspaceListPayload:
       type: object
       additionalProperties: false
@@ -4866,6 +6662,9 @@ components:
             desiredState:
               type: string
               const: deleted
+        artifactsDeleted:
+          type: boolean
+          description: Whether the session's artifact files were deleted.
     SessionResponse:
       type: object
       additionalProperties: false
@@ -5038,12 +6837,374 @@ components:
           $ref: "#/components/schemas/Turn"
         isTerminated:
           type: boolean
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        requestedBy:
+          type: object
+          additionalProperties: false
+          description: The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches.
+          required: [userId, name]
+          properties:
+            userId:
+              type: string
+            name:
+              type: string
+        outputType:
+          $ref: "#/components/schemas/SessionOutputType"
+        artifactCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many committed artifact files the session has, on the session
+            read and list routes while the deployment keeps artifacts.
+        artifactsUpdatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the newest of the session's artifact files was committed. It
+            changes whenever a commit changes the files, and only then, so a
+            client can keep a file list until it moves. Absent without files.
+        artifactFiles:
+          type: array
+          description: >-
+            The session's committed artifact files, on the session read route
+            while the deployment keeps artifacts. The list route sends only
+            artifactCount; listSessionArtifacts returns the files.
+          items:
+            $ref: "#/components/schemas/SessionArtifact"
+        pinned:
+          type: boolean
+          description: >-
+            Whether the caller pinned the session in their sidebar, on the
+            session read, list and rename routes. A pin is one person's; absent
+            means not pinned.
+        pinnedAt:
+          type: string
+          format: date-time
+          description: When the caller pinned the session; present only while pinned.
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+    RequestedOutput:
+      type: string
+      enum: [artifact]
+      description: >-
+        The deliverable a session was created for. artifact asks the agent for
+        a file in its artifact directory instead of a pull request.
+    SessionOutputType:
+      type: string
+      enum: [none, pr, artifact, pr_artifact]
+      description: What the session owns, a pull request, artifact files, or both.
+    SessionArtifact:
+      type: object
+      additionalProperties: false
+      required: [path, name, kind, contentType, size, sha256, updatedAt]
+      properties:
+        path:
+          type: string
+          description: Slash-separated path in the session's artifact directory.
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [html, markdown, file]
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        updatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the control plane last committed a new version of the file.
+    SessionArtifactResult:
+      type: object
+      additionalProperties: false
+      required: [artifact]
+      properties:
+        artifact:
+          $ref: "#/components/schemas/SessionArtifact"
+    SaveSessionArtifactInput:
+      type: object
+      additionalProperties: false
+      required: [path, content, expectedSha256]
+      properties:
+        path:
+          type: string
+          maxLength: 1024
+        content:
+          type: string
+          description: The file's new UTF-8 text, 8 MiB at most.
+        expectedSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The committed file's SHA-256 the edit started from.
+    SessionArtifactVersionSummary:
+      type: object
+      additionalProperties: false
+      required: [version, createdAt, fileFingerprint, size, source]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        fileFingerprint:
+          type: string
+          description: Hex SHA-256 of the version's content.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        source:
+          type: string
+          enum: [agent, user]
+          description: Who wrote it, the session's agent or a person through a save or restore.
+        harness:
+          type: string
+          description: The session's agent when the version was recorded.
+        restoredFrom:
+          type: integer
+          format: int64
+          description: The version this one restored, when it is a restore.
+    SessionArtifactVersionList:
+      type: object
+      additionalProperties: false
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionArtifactVersionSummary"
+    SessionArtifactVersion:
+      allOf:
+        - $ref: "#/components/schemas/SessionArtifactVersionSummary"
+        - type: object
+          required: [path, content]
+          properties:
+            path:
+              type: string
+            content:
+              type: string
+              description: The version's UTF-8 text, cut short when truncated is set.
+            truncated:
+              type: boolean
+    ChatSearchHit:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sessionTitle, projectId, sequence, role, snippet, createdAt]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        sessionTitle:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          description: The message's first event in the session's chat.
+        role:
+          type: string
+          enum: [user, assistant]
+        snippet:
+          type: string
+          description: The matched text around the match, on one line.
+        createdAt:
+          type: string
+          format: date-time
+    ChatSearchResults:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatSearchHit"
+    SessionArtifactList:
+      type: object
+      additionalProperties: false
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionArtifact"
+    SessionArtifactAccess:
+      type: object
+      additionalProperties: false
+      required: [filesPrefix, expiresAt]
+      properties:
+        filesPrefix:
+          type: string
+          description: >-
+            Path on this control plane ending in "/", for example
+            /api/cloud/v1/artifact-files/<token>/.
+        expiresAt:
+          type: string
+          format: date-time
+    ArtifactShare:
+      type: object
+      additionalProperties: false
+      required: [id, slug, url, name, contentType, size, sha256, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          description: The link's subdomain label.
+        url:
+          type: string
+          description: The public link, for example http://<slug>.share.localhost:8081/.
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+          description: When the link was revoked. A revoked link serves nothing but still uses a slot.
+    ArtifactShareEnvelope:
+      type: object
+      additionalProperties: false
+      required: [share]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+    ArtifactSharePublishResult:
+      type: object
+      additionalProperties: false
+      required: [share, replaced]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+        replaced:
+          type: boolean
+          description: True when publishing replaced the version of the document's existing link.
+    ArtifactShareList:
+      type: object
+      additionalProperties: false
+      required: [shares, limit, used]
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactShare"
+        limit:
+          type: integer
+          minimum: 1
+        used:
+          type: integer
+          minimum: 0
+    WorkerArtifactFile:
+      type: object
+      additionalProperties: false
+      required: [path, size, sha256]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 104857600
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    WorkerArtifactManifestInput:
+      type: object
+      additionalProperties: false
+      required: [files]
+      properties:
+        files:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/WorkerArtifactFile"
+    WorkerArtifactManifestResponse:
+      type: object
+      additionalProperties: false
+      required: [changed]
+      properties:
+        changed:
+          type: array
+          items:
+            type: string
+    WorkerArtifactBlobResponse:
+      type: object
+      additionalProperties: false
+      required: [path, versionId]
+      properties:
+        path:
+          type: string
+        versionId:
+          type: string
+    WorkerArtifactCommitFile:
+      type: object
+      additionalProperties: false
+      required: [path, versionId, size, sha256]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        versionId:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 104857600
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        mtime:
+          type: string
+          format: date-time
+    WorkerArtifactCommitInput:
+      type: object
+      additionalProperties: false
+      properties:
+        files:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/WorkerArtifactCommitFile"
+        deleted:
+          type: array
+          maxItems: 200
+          description: Paths this worker previously synced and has since removed.
+          items:
+            type: string
     SessionStartupError:
       type: object
       additionalProperties: false
@@ -5105,7 +7266,7 @@ components:
         displayName:
           type: string
           minLength: 1
-          maxLength: 80
+          maxLength: 100
         prompt:
           type: string
           maxLength: 65536
@@ -5118,6 +7279,26 @@ components:
           description: >-
             Coding-agent model the session launches with (harness-native id, e.g.
             "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the opening prompt runs with. Optional; empty uses
+            the model's default.
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+          description: >-
+            Approval mode the opening prompt's turn runs with in a session that
+            starts in chat. Optional; empty lets the worker derive it from the
+            session's mode, as for any turn sent without one.
+        provider:
+          type: string
+          description: >-
+            Sandbox provider the session runs on, one the deployment offers
+            (see /me). Optional; empty uses the organization's default. A
+            project set up for a provider, or a worker linked to the project's
+            orchestrator, runs there instead.
         deniedCommands:
           type: array
           items:
@@ -5126,6 +7307,8 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
         interfaceMode:
           $ref: "#/components/schemas/SessionInterfaceMode"
           description: >-
@@ -5149,6 +7332,29 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+    UpdateSessionInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: The session's new title, trimmed.
+    SessionPinResponse:
+      type: object
+      additionalProperties: false
+      required: [sessionId, pinned]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        pinnedAt:
+          type: string
+          format: date-time
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false
@@ -5498,6 +7704,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PullRequestSummary"
+        linkedPullRequests:
+          type: array
+          description: >-
+            GitHub pull requests the session's agent reported that AO does not
+            track, such as one in a repository the session has no grant for.
+          items:
+            $ref: "#/components/schemas/LinkedPullRequest"
+    LinkedPullRequest:
+      type: object
+      additionalProperties: false
+      required: [url, repository, number]
+      properties:
+        url:
+          type: string
+        repository:
+          type: string
+          description: owner/name
+        number:
+          type: integer
     AOReviewRunStatus:
       type: string
       enum: [running, complete, delivered, failed, cancelled]
@@ -5559,6 +7784,13 @@ components:
           format: date-time
         autoInjectReview:
           type: boolean
+        reviewerTerminalId:
+          type: string
+          description: The reviewer terminal of a review that runs in a terminal.
+        interfaceMode:
+          type: string
+          enum: [chat]
+          description: chat for a review that runs as a Chat conversation; absent for one in a reviewer terminal.
     AOPullRequestReviewState:
       type: object
       additionalProperties: false
@@ -5605,6 +7837,342 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AOReviewRun"
+        reviewerSurface:
+          $ref: "#/components/schemas/ReviewerSurface"
+    ReviewerSurface:
+      type: object
+      additionalProperties: false
+      description: The reviewer conversation the session shows, its newest review that runs in Chat.
+      required: [mode, reviewId, harness]
+      properties:
+        mode:
+          type: string
+          enum: [chat]
+        reviewId:
+          type: string
+          description: The review run whose conversation this is.
+        harness:
+          type: string
+    ReviewChatEvent:
+      type: object
+      additionalProperties: false
+      description: |
+        One event of a review conversation. Payloads carry reviewRunId and
+        reviewTurnId (never turnId), plus what the session's own chat event of
+        the same name carries: text and authorUserId for a message, text and
+        itemId for assistant text, activity for an activity, error for an
+        aborted turn.
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          type: string
+          enum:
+            - review.user_message
+            - review.turn_started
+            - review.assistant_delta
+            - review.activity
+            - review.turn_completed
+            - review.turn_interrupted
+            - review.turn_aborted
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    ReviewChatEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, hasMore, nextAfter]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewChatEvent"
+        hasMore:
+          type: boolean
+        nextAfter:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+    PromptSuggestionInput:
+      type: object
+      additionalProperties: false
+      required: [turnId, messages]
+      properties:
+        turnId:
+          type: string
+          maxLength: 200
+          description: The settled turn the suggestion follows; echoed back.
+        messages:
+          type: array
+          maxItems: 8
+          description: The conversation's most recent text messages, oldest first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [role, text]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              text:
+                type: string
+    PromptSuggestion:
+      type: object
+      additionalProperties: false
+      required: [turnId, prompt]
+      properties:
+        turnId:
+          type: string
+        prompt:
+          type: string
+          maxLength: 240
+    SessionViewer:
+      type: object
+      additionalProperties: false
+      required: [userId, name, role]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Display name. Never an email address.
+        avatarUrl:
+          type: string
+          description: Profile photo from the sign-in provider. Omitted when unavailable.
+        role:
+          type: string
+          enum: [member, editor, viewer]
+          description: member is an organization member; editor and viewer are share-grant roles.
+    SessionLiveState:
+      type: object
+      additionalProperties: false
+      description: Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log.
+      required: [type, viewers, composer, canTakeOver, you, chatSettings, canConfigure]
+      properties:
+        type:
+          const: session.live
+        chatSettings:
+          $ref: "#/components/schemas/SessionChatSettings"
+        canConfigure:
+          type: boolean
+          description: Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings).
+        mergeRequestsVersion:
+          type: string
+          description: Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none.
+        you:
+          type: string
+          format: uuid
+          description: The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
+        canTakeOver:
+          type: boolean
+          description: Whether the person reading this stream may take the composer lease from its holder (composerTakeOver).
+        viewers:
+          type: array
+          description: Everyone with the session open right now, once each, in the order they joined.
+          items:
+            $ref: "#/components/schemas/SessionViewer"
+        composer:
+          $ref: "#/components/schemas/ComposerLeaseState"
+    MergeRequest:
+      type: object
+      additionalProperties: false
+      description: A guest's request that a shared project's owner merge a pull request.
+      required: [id, projectId, sessionId, sessionName, pullRequest, requestedBy, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        sessionName:
+          type: string
+        pullRequest:
+          type: object
+          additionalProperties: false
+          required: [id, number, url, title, repository]
+          properties:
+            id:
+              type: string
+            number:
+              type: integer
+            url:
+              type: string
+            title:
+              type: string
+            repository:
+              type: string
+        requestedBy:
+          $ref: "#/components/schemas/MergeRequestPerson"
+        status:
+          type: string
+          enum: [pending, merged, rejected]
+        decidedBy:
+          $ref: "#/components/schemas/MergeRequestPerson"
+        decidedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    MergeRequestPerson:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+    SharedSessionParticipants:
+      type: object
+      additionalProperties: false
+      required: [sessionId, participants]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        participants:
+          type: array
+          description: The session's creator first, then each person a share link let in, in the order they joined, then any other organization member who has it open.
+          items:
+            $ref: "#/components/schemas/SessionParticipant"
+    SessionParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, name, role, present, state]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+          description: Display name, never an email address.
+        avatarUrl:
+          type: string
+          description: Profile photo from the sign-in provider. Omitted when unavailable.
+        role:
+          type: string
+          enum: [owner, member, editor, viewer]
+        present:
+          type: boolean
+          description: Whether they have the session open now.
+        state:
+          type: string
+          enum: [working, waiting, idle]
+          description: working while they hold the composer, waiting while in line for it, otherwise idle.
+    SessionChatSettings:
+      type: object
+      additionalProperties: false
+      description: The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults.
+      properties:
+        model:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+    ComposerParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Display name. Never an email address.
+    ComposerLeaseState:
+      type: object
+      additionalProperties: false
+      description: The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer.
+      required: [holder, epoch, waitlist]
+      properties:
+        holder:
+          description: Who holds the lease, or null while it is free.
+          oneOf:
+            - $ref: "#/components/schemas/ComposerParticipant"
+            - type: "null"
+        epoch:
+          type: integer
+          format: int64
+          description: Increases with every grant. A holder presents it to send, steer, renew, or release.
+        waitlist:
+          type: array
+          description: Everyone waiting for the lease, first in line first.
+          items:
+            $ref: "#/components/schemas/ComposerParticipant"
+        draft:
+          description: What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends.
+          oneOf:
+            - $ref: "#/components/schemas/ComposerDraft"
+            - type: "null"
+    ComposerDraft:
+      type: object
+      additionalProperties: false
+      required: [text, cursor]
+      properties:
+        text:
+          type: string
+          maxLength: 65536
+        cursor:
+          type: integer
+          minimum: 0
+          description: The caret's offset into text, in UTF-16 code units as the writing client counts them.
+    ComposerLeaseAnswer:
+      type: object
+      additionalProperties: false
+      required: [composer, granted]
+      properties:
+        composer:
+          allOf:
+            - $ref: "#/components/schemas/ComposerLeaseState"
+            - type: object
+              required: [expiresInMs]
+              properties:
+                expiresInMs:
+                  type: integer
+                  format: int64
+                  description: How long the caller's grant has left; 0 unless granted.
+        granted:
+          type: boolean
+          description: Whether the caller holds the lease after the request.
+    ComposerGrantInput:
+      type: object
+      additionalProperties: false
+      required: [epoch]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        typing:
+          type: boolean
+          description: renew only. True when the holder typed since the last renewal.
+        text:
+          type: string
+          maxLength: 65536
+          description: draft only. The holder's draft.
+        cursor:
+          type: integer
+          minimum: 0
+          description: draft only. The caret's offset into text.
     UserMessageEvent:
       type: object
       additionalProperties: false
@@ -5628,6 +8196,18 @@ components:
             turnId:
               type: string
               format: uuid
+            authorUserId:
+              type: string
+              format: uuid
+              description: The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+            authorName:
+              type: string
+              description: The sender's display name when the message was sent. Never an email address, so a share guest can see it.
+            attachments:
+              type: array
+              description: The files the message carries.
+              items:
+                $ref: "#/components/schemas/MessageAttachment"
         createdAt:
           type: string
           format: date-time

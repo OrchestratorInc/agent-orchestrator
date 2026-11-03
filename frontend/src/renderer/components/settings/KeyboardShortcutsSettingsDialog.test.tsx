@@ -35,8 +35,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true });
 
-		const toast = await screen.findByRole("status");
-		expect(toast).toHaveTextContent("Shortcut updated");
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Shortcut updated"));
 		expect(useKeybindingsStore.getState().overrides["new-session"]).toEqual([
 			{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
 		]);
@@ -82,7 +81,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		expect(persistBindings).not.toHaveBeenCalled();
 
 		fireEvent.keyDown(window, { key: "c", code: "KeyC", ctrlKey: true });
-		expect(await screen.findByRole("status")).toHaveTextContent("Shortcut is reserved");
+		expect(await screen.findByRole("alert")).toBeInTheDocument();
 		expect(screen.getByText(/Press shortcut/)).toBeInTheDocument();
 
 		fireEvent.blur(window);
@@ -101,6 +100,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		});
 		renderDialog();
 
+		await user.click(screen.getByRole("button", { name: "More options for Toggle terminal" }));
 		await user.click(screen.getByRole("button", { name: "Add alternative for Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
 		await waitFor(() => expect(useKeybindingsStore.getState().overrides["toggle-terminal"]).toHaveLength(2));
@@ -176,7 +176,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		const user = userEvent.setup();
 		renderDialog(true);
 
-		expect(screen.getByText("⌘N")).toBeInTheDocument();
+		expect(screen.getByRole("img", { name: "Command + N" })).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", metaKey: true });
 

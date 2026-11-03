@@ -487,6 +487,35 @@ describe("editor handoff", () => {
 		expect(input.resolveArtifactDir).not.toHaveBeenCalled();
 	});
 
+	it("lists installed editors with the stored preference outside any session", async () => {
+		const input = deps({ readPreference: vi.fn().mockResolvedValue("zed") });
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.getEditors()).resolves.toEqual({
+			editors: [
+				{ id: "cursor", name: "Cursor", kind: "editor" },
+				{ id: "vscode", name: "VS Code", kind: "editor" },
+			],
+			preferredEditorId: "zed",
+		});
+		expect(input.resolveWorkspace).not.toHaveBeenCalled();
+	});
+
+	it("stores an installed editor as the preference without launching it", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.setPreferredEditor("vscode")).resolves.toBe("vscode");
+		expect(input.writePreference).toHaveBeenCalledWith("vscode");
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it("refuses unknown or uninstalled editors as the preference", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.setPreferredEditor("file-manager")).rejects.toThrow("That editor is not supported.");
+		await expect(handoff.setPreferredEditor("zed")).rejects.toThrow("That editor is not installed. Choose another option.");
+		expect(input.writePreference).not.toHaveBeenCalled();
+	});
+
 	it("does not silently replace a missing preferred editor", async () => {
 		const handoff = createEditorHandoff(deps({
 			isExecutable: () => false,

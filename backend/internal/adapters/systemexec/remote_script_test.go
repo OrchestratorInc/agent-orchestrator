@@ -49,6 +49,33 @@ func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestRunInstallScriptPassesFixedArguments(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell installer")
+	}
+	server := httptest.NewTLSServer(httpHandler(`printf '%s|' "$@"`))
+	t.Cleanup(server.Close)
+	var output bytes.Buffer
+	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(t.Context(), ports.InstallScriptCommand{
+		URL: server.URL, Interpreter: []string{"sh"}, Args: []string{"--commit", "abc 123", "--non-interactive"},
+	}, &output, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "--commit|abc 123|--non-interactive|" {
+		t.Fatalf("installer arguments = %q", output.String())
+	}
+}
+
+func TestPowerShellArgsKeepNamesAndQuoteValues(t *testing.T) {
+	t.Parallel()
+	got := powerShellArgs([]string{"-Commit", "818c13be", "-NonInteractive", "it's $(evil)", "-not a name"})
+	if want := " -Commit '818c13be' -NonInteractive 'it''s $(evil)' '-not a name'"; got != want {
+		t.Fatalf("powerShellArgs = %q, want %q", got, want)
+	}
+}
+
 func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows PowerShell installer")

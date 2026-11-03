@@ -284,6 +284,62 @@ func TestSuccessfulCompletionFinalizesPlanWhenProviderOmitsTerminalPlan(t *testi
 	}
 }
 
+// A list the agent keeps across turns (Claude's task list) is not this turn's
+// plan, so the turn ending is no proof its open tasks finished. The stored copy
+// keeps the provider's statuses rather than reading "4/4" with work still open.
+func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
+	h := newHarness(t)
+
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "start on the tasks", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	plan := domain.ConversationPlan{SpansTurns: true, Steps: []domain.ConversationPlanStep{
+		{Text: "one", Status: domain.PlanStepCompleted},
+		{Text: "two", Status: domain.PlanStepInProgress},
+		{Text: "three", Status: domain.PlanStepPending},
+		{Text: "four", Status: domain.PlanStepPending},
+	}}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: "provider-turn-1",
+			Plan: &plan, Summary: "Plan 1/4: two"},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1",
+			ProviderItemID: "message-1", Text: "Started; more next turn."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			TurnState: domain.TurnStateCompleted},
+	)
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	turn := snapshot.Turns[0]
+	if turn.Plan == nil || !turn.Plan.SpansTurns {
+		t.Fatalf("turn plan = %#v, want the cross-turn list", turn.Plan)
+	}
+	for i, step := range turn.Plan.Steps {
+		if step.Status != plan.Steps[i].Status {
+			t.Errorf("turn plan step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
+		}
+	}
+
+	activity := firstActivityOfKind(snapshot, domain.ActivityKindPlan)
+	if activity.Summary != "Plan 1/4: two" {
+		t.Errorf("plan activity summary = %q, want the provider's count", activity.Summary)
+	}
+	var detail struct {
+		Steps []domain.ConversationPlanStep `json:"steps"`
+	}
+	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+		t.Fatalf("decode plan activity detail: %v", err)
+	}
+	for i, step := range detail.Steps {
+		if step.Status != plan.Steps[i].Status {
+			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
+		}
+	}
+}
+
 /* ---- model reroute ----------------------------------------------------- */
 
 // A reroute becomes conversation state AND a timeline row. The state says what is
@@ -893,4 +949,32 @@ func firstActivityOfKind(s store.ConversationSnapshot, kind domain.ActivityKind)
 		}
 	}
 	return domain.ConversationActivity{}
+}
+
+func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
+	h := newHarness(t)
+	countsAfter := func(changes, rechecks int32) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for h.accountChanges.Load() != changes || h.accountRechecks.Load() != rechecks {
+			if time.Now().After(deadline) {
+				t.Fatalf("account changes, rechecks = %d, %d; want %d, %d",
+					h.accountChanges.Load(), h.accountRechecks.Load(), changes, rechecks)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "first"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 1 })
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "first", TurnState: domain.TurnStateFailed, Err: ports.ErrChatAuthRequired})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
+	})
+	countsAfter(1, 0) // the refusal is an account change; the first turn had no demand
+	// The user signed in again, maybe with the CLI outside AO, and sent a message.
+	// That is a recheck, not another refusal: it must not invalidate readiness.
+	h.advance(time.Second)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "second"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })
+	countsAfter(1, 1)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -27,6 +28,16 @@ func Execute() error {
 
 func executeWithDeps(deps Deps, args []string) error {
 	deps = deps.withDefaults()
+	// A configured self-hosted agent browser has its own command interface, so
+	// `ao browser` must reach it before Cobra parses desktop-only commands
+	// (AO also pins its own executable first on session PATHs, so a shell
+	// alias or wrapper cannot intercept it there).
+	if remote, rest, err := remoteBrowserForward(os.Getenv, args); remote != nil || err != nil {
+		if err != nil {
+			return err
+		}
+		return runRemoteBrowserCommand(context.Background(), deps, *remote, rest)
+	}
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
@@ -44,8 +55,13 @@ type usageError struct{ err error }
 func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
 
-// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 1 for
-// any other failure, 0 for success.
+// exitDataDirLocked is the exit code of a daemon that gave up waiting for
+// another AO process to release its data dir: sysexits EX_TEMPFAIL, since the
+// start can succeed once that process exits.
+const exitDataDirLocked = 75
+
+// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
+// another AO process owns the data dir, 1 for any other failure, 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -53,6 +69,9 @@ func ExitCode(err error) int {
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2
+	}
+	if errors.Is(err, datadirlock.ErrLocked) {
+		return exitDataDirLocked
 	}
 	return 1
 }
@@ -211,6 +230,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newRenderCommand(ctx))
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
+	root.AddCommand(newBrowserHostCommand())
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())
@@ -246,9 +266,9 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 	switch commandPath {
 	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
 	// "ao completion"/"ao help" are shell setup and self-documentation.
-	// "ao pty-host", "ao agent-process", and "ao mcp" are internal runtime
+	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
 	// processes. None reflect user activity.
-	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
+	case "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
 		return true

@@ -30,6 +30,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { parseBlocks } from "./markdownBlocks";
 import * as androidSelection from "./useAndroidResponseSelection";
 
 function textOf(node: { children: Array<string | { children: unknown[] }> }): string {
@@ -68,16 +69,17 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 	platform.OS = os;
 	let renderer!: ReactTestRenderer;
 	try {
-		act(() => { renderer = create(<SelectableResponseText text={[
+		const blocks = parseBlocks([
 			"# Title", "", "Body [link](https://example.com).", "", "- List item", "", "> Quoted text", "",
-			"```text", "Code text", "```", "", "| Column |", "| --- |", "| Cell |", "",
+			"```text", "Code text", "```", "",
 			"![Caption](https://example.com/image.png)",
-		].join("\n")} />); });
+		].join("\n"));
+		act(() => { renderer = create(<SelectableResponseText blocks={blocks.filter((block) => block.kind !== "table")} />); });
 		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
 		expect(selectable).toHaveLength(1);
 		expect(selectable[0].props.uiTextView).toBe(true);
 		const selectedText = textOf(selectable[0]);
-		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Column", "Cell", "Caption"]) expect(selectedText).toContain(part);
+		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Caption"]) expect(selectedText).toContain(part);
 		expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(1);
 		act(() => renderer.unmount());
 	} finally {
@@ -91,16 +93,40 @@ it.each(["ios", "android"])("renders the agent reply as one in-place selection a
 	try {
 		act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
 			"# Release steps", "", "Build the app.", "", "- Check iOS", "- Check Android", "",
-			"```sh", "npm test", "```", "", "| Result |", "| --- |", "| Passed |",
+			"```sh", "npm test", "```",
 		].join("\n")} />); });
 		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
 		expect(selectable).toHaveLength(1);
 		expect(selectable[0].props.uiTextView).toBe(true);
-		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test\n\nResult\nPassed");
+		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test");
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
 	}
+});
+
+it("draws a table in an agent reply as a grid between the selectable text around it", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
+		"Before the table.", "",
+		"Job | Superset | AO",
+		"--- | --- | ---",
+		"Publish | `pages publish` | **Share links**",
+		"Identity | workspace | session",
+		"", "After the table.",
+	].join("\n")} />); });
+	const texts = renderer.root.findAll((node) => node.props.selectable === true).map(textOf);
+	expect(texts).toEqual(["Before the table.", "Job", "Superset", "AO", "Publish", "pages publish", "Share links", "Identity", "workspace", "session", "After the table."]);
+	expect(texts.join("")).not.toContain("|");
+	// Every row gives a column the same width (not flexBasis, which Yoga ignores
+	// in a horizontal ScrollView), so the columns line up.
+	const rows = renderer.root.findAll((node) => (node.type as string) === "View" && [node.props.style].flat().some((style) => style?.flexDirection === "row"));
+	expect(rows).toHaveLength(3);
+	const widths = rows.map((row) => row.children.map((cell) => typeof cell === "string" ? 0 : (cell.props.style as Array<{ width?: number } | false>).find((style) => style && style.width !== undefined)));
+	expect(widths[0].every((style) => typeof style === "object" && style.width! > 0)).toBe(true);
+	expect(widths[1]).toEqual(widths[0]);
+	expect(widths[2]).toEqual(widths[0]);
+	act(() => renderer.unmount());
 });
 
 it("keeps inline links operable in the continuously selectable response", () => {
@@ -231,5 +257,47 @@ it("adds the exact native selection without changing the response or link handle
 	act(() => root.props.onAddToChat({ nativeEvent: { target: 1, text: selection } }));
 	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection, source);
 	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
+	act(() => renderer.unmount());
+});
+
+it.each([false, true])("opens an orchestrator's ao://sessions links as sessions, a bare one named for its session (continuous: %s)", (continuousSelection) => {
+	const onLinkOpen = vi.fn();
+	const sessionName = (id: string) => id === "ao-259" ? "Fix table rendering" : undefined;
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen} sessionName={sessionName}>
+			<ChatMarkdown continuousSelection={continuousSelection} text={"Done: ao://sessions/proj/ao-259. Also [the review](ao://sessions/proj/ao-241) and <ao://sessions/proj/ao-999>."} />
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	// Named for the session when the board knows it, its id otherwise; an authored label is kept. Prose punctuation stays prose.
+	expect(links.map(textOf)).toEqual(["Fix table rendering", "the review", "ao-999"]);
+	expect(textOf(renderer.root)).toContain("Fix table rendering. Also");
+	act(() => links[0]!.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/ao-259");
+	act(() => renderer.unmount());
+});
+
+it("leaves an ao:// link as words where nothing knows which machine it is on", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See ao://sessions/proj/ao-259 now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See ao-259 now");
+	act(() => renderer.unmount());
+});
+
+it("asks once for the name of a session the surface does not know, then shows it", () => {
+	const wanted = vi.fn();
+	const names: Record<string, string> = {};
+	const tree = () => <ChatLinkProvider onLinkOpen={vi.fn()} sessionName={(id) => names[id]} onSessionNameNeeded={wanted}><ChatMarkdown text="Archived: ao://sessions/proj/ao-241" /></ChatLinkProvider>;
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(tree()); });
+	const link = () => renderer.root.find((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(textOf(link())).toBe("ao-241");
+	expect(wanted).toHaveBeenCalledExactlyOnceWith("ao-241");
+	names["ao-241"] = "Review PR #7113";
+	act(() => renderer.update(tree()));
+	expect(textOf(link())).toBe("Review PR #7113");
+	expect(wanted).toHaveBeenCalledTimes(1);
 	act(() => renderer.unmount());
 });

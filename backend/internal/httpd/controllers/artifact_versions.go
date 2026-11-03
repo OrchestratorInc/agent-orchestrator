@@ -44,6 +44,8 @@ type ArtifactVersionService interface {
 	// Snapshot keeps the file's current content as a version and returns its
 	// sha256, failing when it cannot be kept.
 	Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) (string, error)
+	// DeleteVersions deletes the kept versions of a file the user deleted.
+	DeleteVersions(ctx context.Context, sess domain.SessionRecord, relPath string) error
 }
 
 func artifactVersionSummary(v domain.SessionArtifactVersion) ArtifactVersionSummary {

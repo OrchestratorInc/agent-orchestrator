@@ -11,8 +11,8 @@ function cachePrefix(agentId: string, hostId?: string): string {
 	return `${SNAPSHOT_PREFIX}${JSON.stringify([hostId || LOCAL_HOST, agentId])}:`;
 }
 
-function cacheKey(agentId: string, projectId: string, hostId?: string): string {
-	return cachePrefix(agentId, hostId) + JSON.stringify(projectId);
+function cacheKey(agentId: string, scope: string, hostId?: string): string {
+	return cachePrefix(agentId, hostId) + JSON.stringify(scope);
 }
 
 /** Refresh catalog facts without dropping recency while history is pending. */
@@ -29,9 +29,9 @@ export function withCachedModelUsage(catalog: AgentModelCatalog, cached: AgentMo
 }
 
 /** A display snapshot only; the daemon DB remains the catalog authority. */
-export function readCachedAgentModels(agentId: string, projectId: string, hostId?: string): AgentModelCatalog | undefined {
+export function readCachedAgentModels(agentId: string, scope: string, hostId?: string): AgentModelCatalog | undefined {
 	try {
-		const catalog = JSON.parse(window.localStorage.getItem(cacheKey(agentId, projectId, hostId)) ?? "null") as (AgentModelCatalog & { snapshotWrittenAt?: number }) | null;
+		const catalog = JSON.parse(window.localStorage.getItem(cacheKey(agentId, scope, hostId)) ?? "null") as (AgentModelCatalog & { snapshotWrittenAt?: number }) | null;
 		if (!catalog || catalog.agentId !== agentId || !Array.isArray(catalog.models)
 			|| !catalog.models.every((model) => model && typeof model.id === "string" && typeof model.label === "string"
 				&& (model.provider === undefined || typeof model.provider === "string")
@@ -48,9 +48,9 @@ export function readCachedAgentModels(agentId: string, projectId: string, hostId
 	}
 }
 
-export function cacheAgentModels(catalog: AgentModelCatalog, agentId: string, projectId: string, hostId?: string): void {
+export function cacheAgentModels(catalog: AgentModelCatalog, agentId: string, scope: string, hostId?: string): void {
 	try {
-		const key = cacheKey(agentId, projectId, hostId);
+		const key = cacheKey(agentId, scope, hostId);
 		const snapshots: { key: string; bytes: number; writtenAt: number }[] = [];
 		for (let index = 0; index < window.localStorage.length; index++) {
 			const savedKey = window.localStorage.key(index);

@@ -1,0 +1,15 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'ao.mobile.imagepaste'
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+    }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-android'
+    implementation 'androidx.core:core:1.13.1'
+}

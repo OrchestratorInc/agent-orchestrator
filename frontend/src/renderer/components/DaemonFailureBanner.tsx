@@ -67,7 +67,7 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	return (
 		<section
 			aria-live={slowStartup ? "polite" : "assertive"}
-			className="pointer-events-auto fixed top-3 right-3 z-overlay flex w-daemon-failure-toast flex-col rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] px-3.5 py-3 text-xs shadow-[var(--shadow-import-modal)]"
+			className="pointer-events-auto fixed top-3 right-3 z-overlay flex w-daemon-failure-toast flex-col rounded-welcome-panel border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] px-3.5 py-3 text-xs shadow-[var(--shadow-import-modal)]"
 			role={slowStartup ? "status" : "alert"}
 		>
 			<div className="flex items-start gap-3">

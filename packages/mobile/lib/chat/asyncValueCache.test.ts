@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 type AsyncValueCache<K, V> = {
-	load(key: K, loader: () => Promise<V>): Promise<V>;
+	load(key: K, loader: () => Promise<V>, keep?: (value: V) => boolean): Promise<V>;
 	set(key: K, value: V): void;
 	delete(key: K): void;
 };
@@ -54,6 +54,28 @@ describe("bounded asynchronous value cache", () => {
 
 		expect(await cache?.load("one", () => Promise.resolve("new-1"))).toBe("1");
 		expect(await cache?.load("two", () => Promise.resolve("new-2"))).toBe("new-2");
+	});
+
+	it("does not cache a value the caller declines to keep", async () => {
+		const createCache = (await cacheModule()).createAsyncValueCache;
+		const cache = createCache?.<string, string[]>(2, 30_000);
+		const keep = (value: string[]) => value.length > 0;
+		expect(await cache?.load("catalog", () => Promise.resolve([]), keep)).toEqual([]);
+		expect(await cache?.load("catalog", () => Promise.resolve(["model"]), keep)).toEqual(["model"]);
+		expect(await cache?.load("catalog", () => Promise.resolve([]), keep)).toEqual(["model"]);
+	});
+
+	it("leaves a newer value alone when a superseded load comes back declined", async () => {
+		const createCache = (await cacheModule()).createAsyncValueCache;
+		const cache = createCache?.<string, string[]>(2, 30_000);
+		const keep = (value: string[]) => value.length > 0;
+		let finishSlow!: (value: string[]) => void;
+		const slow = cache?.load("catalog", () => new Promise<string[]>((done) => { finishSlow = done; }), keep);
+		cache?.delete("catalog");
+		expect(await cache?.load("catalog", () => Promise.resolve(["model"]), keep)).toEqual(["model"]);
+		finishSlow([]);
+		expect(await slow).toEqual([]);
+		expect(await cache?.load("catalog", () => Promise.resolve(["other"]), keep)).toEqual(["model"]);
 	});
 
 	it("allows explicit invalidation", async () => {

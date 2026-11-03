@@ -23,6 +23,7 @@ import (
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
@@ -74,6 +75,9 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
+		// One delivery recorder for every owner of a session end; services
+		// reach it through lcm.DeliveryTelemetry().
+		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
 		lifecycle.WithContainerReaper(dockerreap.New(), store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
@@ -81,7 +85,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithDataDir(dataDir),
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir})
 	turnFailurePoller := activityobserver.NewTurnFailureObserver(store, lcm, agents, activityobserver.TurnFailureConfig{Logger: logger})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
@@ -211,6 +215,10 @@ type sessionLifecycle interface {
 	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
+	// ReconcileWorkspaceCleanup finishes interrupted workspace cleanups and
+	// records sessions with nothing left on disk; it never deletes a worktree
+	// the user has not asked to remove.
+	ReconcileWorkspaceCleanup(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration) error
 	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
@@ -218,6 +226,7 @@ type sessionLifecycle interface {
 	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
+	SetComputerUseEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -286,7 +295,7 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // (issue #2685). The returned service is mounted at httpd APIDeps.Sessions.
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
-func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, reviewers *reviewer.Resolver, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, reviewers *reviewer.Resolver, reviewRefresher reviewsvc.ThreadRefresher, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
 	gitWS, err := gitworktree.New(gitworktree.Options{
 		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
 		// override moves all durable per-user state together.
@@ -323,6 +332,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Preview:             previewLifecycle,
 		Browser:             browserLifecycle,
 		BrowserCapabilities: browserCapabilities,
+		AgentBrowserURL:     cfg.AgentBrowserURL,
+		AgentBrowserToken:   cfg.AgentBrowserToken,
 		DataDir:             cfg.DataDir,
 		RunFilePath:         cfg.RunFilePath,
 		BackgroundContext:   ctx,
@@ -348,6 +359,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		DataDir:           cfg.DataDir,
 		Tracker:           tracker,
 		Telemetry:         telemetry,
+		Milestones:        installMilestones(cfg),
+		Delivery:          lcm.DeliveryTelemetry(),
 		Logger:            log,
 		BackgroundContext: ctx,
 		AgentReadiness:    agentReadiness,
@@ -394,6 +407,9 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		)
 	}
 	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
+	if reviewRefresher != nil {
+		reviewOpts = append(reviewOpts, reviewsvc.WithThreadRefresher(reviewRefresher))
+	}
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
 	return sessionSvc, reviewSvc, mgr, nil
@@ -408,9 +424,21 @@ type runtimeMessageSender interface {
 // runtimeMessenger sends the user's message directly to the session's live
 // runtime pane. The HTTP controller has already validated and sanitized the
 // message body; this adapter only resolves the stored runtime handle.
+type terminalMessageAdmission struct {
+	sync.Mutex
+	pending  string
+	baseline string
+	handleID string
+	launchID string
+}
+
+const terminalAdmissionCaptureLines = 200
+
 type runtimeMessenger struct {
-	store   *sqlite.Store
-	runtime runtimeMessageSender
+	store      *sqlite.Store
+	runtime    runtimeMessageSender
+	agents     ports.AgentResolver
+	inputLocks *sync.Map
 }
 
 func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
@@ -424,6 +452,83 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 	if rec.IsTerminated {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrTerminated)
 	}
+	if m.agents != nil {
+		agent, found := m.agents.Agent(rec.Harness)
+		if policy, supports := agent.(interface{ ValidateTerminalMessage(string, string) error }); found && supports {
+			lock, _ := m.inputLocks.LoadOrStore(id, &terminalMessageAdmission{})
+			admission, validAdmission := lock.(*terminalMessageAdmission)
+			if !validAdmission {
+				return fmt.Errorf("session %s: invalid input admission state", id)
+			}
+			admission.Lock()
+			defer admission.Unlock()
+			reader, supports := m.runtime.(interface {
+				GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
+			})
+			if !supports {
+				return fmt.Errorf("session %s: current rendered terminal unavailable", id)
+			}
+			screen, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
+			if err != nil {
+				return err
+			}
+			witness, hasWitness := agent.(interface {
+				TerminalMessageObserved(string, string, string) bool
+			})
+			if admission.pending != "" && (admission.handleID != rec.Metadata.RuntimeHandleID || admission.launchID != rec.Metadata.RuntimeLaunchID) {
+				admission.pending = ""
+			}
+			if admission.pending != "" {
+				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
+					// Admission resets only on a new runtime handle or launch, so name the
+					// recovery instead of looking like a transient failure.
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+				}
+				admission.pending = ""
+			}
+			if err := policy.ValidateTerminalMessage(message, screen); err != nil {
+				return err
+			}
+			current, exists, err := m.store.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if !exists || current.IsTerminated || current.Metadata.RuntimeHandleID != rec.Metadata.RuntimeHandleID || current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID {
+				return fmt.Errorf("session %s: runtime changed before input", id)
+			}
+			admission.pending = message
+			admission.baseline = screen
+			admission.handleID = rec.Metadata.RuntimeHandleID
+			admission.launchID = rec.Metadata.RuntimeLaunchID
+			if err := m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, message); err != nil {
+				// A runtime may report an error after applying input, so a failed write
+				// stays pending until a native witness or a new runtime generation.
+				return fmt.Errorf("session %s: terminal submission may have been written: %w", id, err)
+			}
+			// A socket write acknowledgement precedes native acceptance. Hold admission
+			// until the adapter witnesses submission through busy chrome or a committed
+			// transcript echo; an unrelated idle redraw cannot release admission.
+			deadline := time.NewTimer(2 * time.Second)
+			defer deadline.Stop()
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				frame, captureErr := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, terminalAdmissionCaptureLines)
+				if captureErr == nil && hasWitness && witness.TerminalMessageObserved(message, admission.baseline, frame) {
+					admission.pending = ""
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("session %s: terminal submission written but unconfirmed: %w", id, ctx.Err())
+				case <-deadline.C:
+					return fmt.Errorf("session %s: terminal submission written but native echo unconfirmed; do not automatically retry", id)
+				case <-ticker.C:
+				}
+			}
+
+		}
+	}
 	handleID := rec.Metadata.RuntimeHandleID
 	if handleID == "" {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrIncompleteHandle)
@@ -433,8 +538,12 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 
 // newSessionMessenger assembles the per-daemon agent messenger. For now, ao
 // send is intentionally minimal: submit the message to the live runtime pane.
-func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger) ports.AgentMessenger {
-	return runtimeMessenger{store: store, runtime: runtime}
+func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger, resolvers ...ports.AgentResolver) ports.AgentMessenger {
+	var agents ports.AgentResolver
+	if len(resolvers) > 0 {
+		agents = resolvers[0]
+	}
+	return runtimeMessenger{store: store, runtime: runtime, agents: agents, inputLocks: &sync.Map{}}
 }
 
 // modeAwareMessenger lets lifecycle start before the session manager while
@@ -625,6 +734,10 @@ func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
+}
+
 func (c chatLauncher) PreflightChat(
 	ctx context.Context,
 	harness domain.AgentHarness,
@@ -714,7 +827,8 @@ func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.Sessio
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
-		Text: text,
+		Text:               text,
+		SpawnOpeningPrompt: true,
 		// The opening prompt is the user's own task brief, whatever carries it.
 		Origin: domain.MessageOriginHuman,
 	})
@@ -800,7 +914,13 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 type reviewPRRefresher struct {
 	sessions interface {
 		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+		FindBranchPRs(ctx context.Context, id domain.SessionID) (sessionsvc.BranchPRs, error)
 	}
+}
+
+func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.SessionID) (reviewsvc.BranchPRs, error) {
+	found, err := r.sessions.FindBranchPRs(ctx, workerID)
+	return reviewsvc.BranchPRs{Own: found.Own, OtherAuthor: found.OtherAuthor}, err
 }
 
 func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {

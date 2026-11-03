@@ -15,7 +15,6 @@ vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: accou
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
-import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
@@ -58,22 +57,6 @@ it("requires AO sign-in and disconnects remote hosts on sign-out", async () => {
 	account.status = "unauthenticated";
 	rerender();
 	await waitFor(() => expect(result.current.hosts).toEqual([]));
-	expect(connectedHosts()).toEqual([]);
-});
-
-it("keeps remote hosts disconnected until Developer mode is enabled", async () => {
-	useUiStore.setState({ developerMode: false, remoteHosts: true });
-	const { result } = renderHook(() => useRemoteHosts());
-	const connections = renderHook(() => useConnectedHosts());
-	expect(result.current.hosts).toEqual([]);
-	expect(connections.result.current).toEqual([]);
-	expect(remotes.list).not.toHaveBeenCalled();
-	act(() => useUiStore.setState({ developerMode: true }));
-	await waitFor(() => expect(result.current.hosts).toHaveLength(2));
-	expect(connections.result.current).toEqual(["box-a", "box-b"]);
-	act(() => useUiStore.setState({ developerMode: false }));
-	await waitFor(() => expect(result.current.hosts).toEqual([]));
-	expect(connections.result.current).toEqual([]);
 	expect(connectedHosts()).toEqual([]);
 });
 

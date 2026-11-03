@@ -83,6 +83,60 @@ func TestVersionRefreshRunsWithHibernationOffAndWaitsForQuiet(t *testing.T) {
 	}
 }
 
+func makeOrchestrator(t *testing.T, h *harness) {
+	t.Helper()
+	ctx := context.Background()
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("get session = %v, %v", found, err)
+	}
+	rec.Kind = domain.KindOrchestrator
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Idle hibernation keeps orchestrators awake, but a move to a new release
+// starts them again right away, so a quiet stale orchestrator moves too.
+func TestVersionRefreshMovesQuietStaleOrchestrator(t *testing.T) {
+	h, conv, _ := versionRefreshHarness(t)
+	ctx := context.Background()
+	makeOrchestrator(t, h)
+	markStale(t, h)
+	h.advance(refreshIdle)
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || stopped {
+		t.Fatalf("idle hibernation of an orchestrator = %v, %v", stopped, err)
+	}
+	if stopped, err := h.svc.HibernateChatForVersionRefresh(ctx, testSession, refreshIdle); err != nil || !stopped || conv.calls.Load() != 1 {
+		t.Fatalf("refresh of a quiet stale orchestrator = %v, %v, stops=%d", stopped, err, conv.calls.Load())
+	}
+}
+
+func TestSendMovesQuietStaleOrchestratorToNewRelease(t *testing.T) {
+	h, old, resumed := versionRefreshHarness(t)
+	ctx := context.Background()
+	makeOrchestrator(t, h)
+	markStale(t, h)
+	h.advance(refreshIdle)
+	woke := wakeOnNewRelease(t, h, old, nil)
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after update", ClientMessageID: "orchestrator-refresh-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("orchestrator did not wake on the new release")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 1 && got[0] == "after update" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("new release received %v, old %v", resumed.sentTexts(), old.sentTexts())
+}
+
 func TestVersionRefreshLeavesCurrentAndViewedSessionsAlone(t *testing.T) {
 	h, conv, _ := versionRefreshHarness(t)
 	ctx := context.Background()

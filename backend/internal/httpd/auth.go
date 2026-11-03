@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -267,6 +268,17 @@ func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
 
+// lanBearerContextKey is set only by the authenticated listener after a
+// successful bearer check. Preview-scoped cookies never confer API authority.
+type lanBearerContextKey struct{}
+
+type lanPreviewCookieContextKey struct{}
+
+func authenticatedLANBearer(r *http.Request) bool {
+	authenticated, _ := r.Context().Value(lanBearerContextKey{}).(bool)
+	return authenticated
+}
+
 func authMiddleware(state *authState, lock *lockout, connected *mobileConnectReporter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -299,6 +311,11 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				lock.reset(src)
 				connected.report(remoteSrc)
 				maybeSetPreviewAuthCookie(w, r, tok)
+				if bearerToken(r) != "" {
+					r = r.WithContext(context.WithValue(r.Context(), lanBearerContextKey{}, true))
+				} else {
+					r = r.WithContext(context.WithValue(r.Context(), lanPreviewCookieContextKey{}, true))
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

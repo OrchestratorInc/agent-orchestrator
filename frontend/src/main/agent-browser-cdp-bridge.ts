@@ -35,7 +35,10 @@ type CDPRequest = {
 
 type ConnectionContext = {
 	socket: WebSocket;
+	discoveredTargets: Map<string, TargetMetadata> | null;
 };
+
+type TargetMetadata = Pick<AgentBrowserTarget, "title" | "url"> & { targetId: string };
 
 type AttachedTarget = {
 	targetId: string;
@@ -63,6 +66,7 @@ export class AgentBrowserCDPBridge {
 	private readonly pathToken = randomBytes(32).toString("base64url");
 	private readonly attached = new Map<string, AttachedTarget>();
 	private readonly physical = new Map<string, PhysicalTargetAttachment>();
+	private readonly connections = new Set<ConnectionContext>();
 	private endpoint = "";
 
 	constructor(private readonly targets: AgentBrowserTargetProvider) {
@@ -86,7 +90,7 @@ export class AgentBrowserCDPBridge {
 		}
 		this.endpoint = `ws://127.0.0.1:${address.port}/${this.pathToken}`;
 		this.server.on("connection", (socket) => {
-			this.handleConnection(socket, { socket });
+			this.handleConnection(socket, { socket, discoveredTargets: null });
 		});
 		return this.endpoint;
 	}
@@ -96,16 +100,50 @@ export class AgentBrowserCDPBridge {
 		for (const socket of this.server.clients) socket.close(1001, "AO browser session closed");
 		await new Promise<void>((resolve) => this.server.close(() => resolve()));
 		this.physical.clear();
+		this.connections.clear();
 		this.endpoint = "";
 	}
 
+	reconcileTargets(): void {
+		const targets = this.listTargets();
+		const currentIds = new Set(targets.map((target) => target.id));
+		for (const [sessionId, attached] of this.attached) {
+			if (!currentIds.has(attached.targetId)) this.detachTarget(sessionId);
+		}
+		for (const connection of this.connections) this.reconcileConnection(connection, targets);
+	}
+
+	private reconcileConnection(connection: ConnectionContext, targets: AgentBrowserTarget[]): void {
+		const known = connection.discoveredTargets;
+		if (!known) return;
+		for (const target of targets) {
+			const current = { targetId: target.id, title: target.title, url: target.url || "about:blank" };
+			const previous = known.get(target.id);
+			if (!previous || previous.title !== current.title || previous.url !== current.url) {
+				known.set(target.id, current);
+				this.send(connection.socket, {
+					method: previous ? "Target.targetInfoChanged" : "Target.targetCreated",
+					params: { targetInfo: this.targetInfo(target) },
+				});
+			}
+		}
+		const currentIds = new Set(targets.map((target) => target.id));
+		for (const targetId of known.keys()) {
+			if (currentIds.has(targetId)) continue;
+			known.delete(targetId);
+			this.send(connection.socket, { method: "Target.targetDestroyed", params: { targetId } });
+		}
+	}
+
 	private handleConnection(socket: WebSocket, connection: ConnectionContext): void {
+		this.connections.add(connection);
 		socket.on("message", (data) => {
 			// CDP correlates responses by request id and permits them to complete out
 			// of order. Do not serialize independent Page/DOM/Runtime/Network requests.
 			void this.handleMessage(connection, data).catch(() => undefined);
 		});
 		socket.on("close", () => {
+			this.connections.delete(connection);
 			for (const [sessionId, attached] of this.attached) {
 				if (attached.connection.socket === socket) this.detachTarget(sessionId);
 			}
@@ -155,6 +193,12 @@ export class AgentBrowserCDPBridge {
 					jsVersion: process.versions.v8 ?? "",
 				};
 			case "Target.setDiscoverTargets": {
+				if (params.discover === true) {
+					connection.discoveredTargets ??= new Map();
+					this.reconcileConnection(connection, this.listTargets());
+				} else {
+					connection.discoveredTargets = null;
+				}
 				return {};
 			}
 			case "Target.setAutoAttach": {
@@ -206,7 +250,7 @@ export class AgentBrowserCDPBridge {
 			case "Target.createTarget": {
 				const url = safeNavigationURL(optionalString(params.url) ?? "about:blank");
 				const target = await this.targets.createTarget(url);
-				this.send(connection.socket, { method: "Target.targetCreated", params: { targetInfo: this.targetInfo(target) } });
+				this.reconcileTargets();
 				return { targetId: target.id };
 			}
 			case "Target.activateTarget": {
@@ -220,7 +264,7 @@ export class AgentBrowserCDPBridge {
 					if (attached.targetId === target.id) this.detachTarget(sessionId, false);
 				}
 				await this.targets.closeTarget(target.id);
-				this.send(connection.socket, { method: "Target.targetDestroyed", params: { targetId: target.id } });
+				this.reconcileTargets();
 				return { success: true };
 			}
 			case "Browser.getWindowForTarget":
@@ -361,12 +405,11 @@ export class AgentBrowserCDPBridge {
 	private detachPhysicalIfUnused(physical: PhysicalTargetAttachment, detachDebugger: boolean): void {
 		if (physical.clients.size > 0) return;
 		this.physical.delete(physical.targetId);
-		const target = this.targets.listTargets().find((candidate) => candidate.id === physical.targetId);
 		physical.debugger.off?.("message", physical.messageListener);
 		physical.debugger.off?.("detach", physical.detachListener);
-		if (detachDebugger && physical.ownedDebugger && target?.debugger.isAttached()) {
+		if (detachDebugger && physical.ownedDebugger && physical.debugger.isAttached()) {
 			try {
-				target.debugger.detach();
+				physical.debugger.detach();
 			} catch {
 				// Electron may already be tearing the WebContents down.
 			}

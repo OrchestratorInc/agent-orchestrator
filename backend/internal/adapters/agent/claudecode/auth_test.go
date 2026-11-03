@@ -592,7 +592,7 @@ func TestProbeAnswersFromCacheWithoutReprobing(t *testing.T) {
 	}
 }
 
-func TestLaunchAuthReprobesCachedSuccess(t *testing.T) {
+func TestLaunchAuthReusesCachedSuccessUntilInvalidated(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)
@@ -607,8 +607,10 @@ func TestLaunchAuthReprobesCachedSuccess(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"message":"credential revoked"}}`))
 	})
+	cliRuns := 0
 	previous := claudeAuthCommand
 	claudeAuthCommand = func(context.Context, string, string, map[string]string) (claudeCommandOutput, error) {
+		cliRuns++
 		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"apiProvider":"gateway"}`)}, nil
 	}
 	t.Cleanup(func() { claudeAuthCommand = previous })
@@ -616,12 +618,19 @@ func TestLaunchAuthReprobesCachedSuccess(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "/fixture/claude"}
 	env := map[string]string{"ANTHROPIC_BASE_URL": server.URL, "ANTHROPIC_API_KEY": "same-key"}
 	status, err := plugin.authStatusFor(context.Background(), "/project", env, false)
-	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 {
-		t.Fatalf("cached probe setup: status=%q err=%v requests=%d", status, err, requests)
+	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 || cliRuns != 1 {
+		t.Fatalf("cached probe setup: status=%q err=%v requests=%d cliRuns=%d", status, err, requests, cliRuns)
 	}
+	// A launch within the cache TTL neither probes the provider nor runs the CLI again.
 	status, err = plugin.ValidateLaunchAuth(context.Background(), "/project", env)
-	if err != nil || status != ports.AgentAuthStatusUnauthorized || requests != 2 {
-		t.Fatalf("fresh launch probe: status=%q err=%v requests=%d, want revoked credential rejection after a second request", status, err, requests)
+	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 || cliRuns != 1 {
+		t.Fatalf("cached launch: status=%q err=%v requests=%d cliRuns=%d, want the cached verdict with no new probe", status, err, requests, cliRuns)
+	}
+	// A live rejection drops both caches; the next launch sees the revocation.
+	InvalidateAuthCache()
+	status, err = plugin.ValidateLaunchAuth(context.Background(), "/project", env)
+	if err != nil || status != ports.AgentAuthStatusUnauthorized || requests != 2 || cliRuns != 2 {
+		t.Fatalf("launch after invalidation: status=%q err=%v requests=%d cliRuns=%d, want a fresh probe that sees the revoked credential", status, err, requests, cliRuns)
 	}
 }
 

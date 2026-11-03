@@ -237,7 +237,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -442,7 +442,9 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 		return fingerprint
 	}
 	extra := d.ClaudeFingerprint(ctx, request)
-	hash := sha256.Sum256([]byte(fingerprint + "\x00" + extra))
+	// Snapshots from before context aliases kept their window label ("opus[1m]"
+	// read "Opus 5.5", a twin of the plain model) are replaced on the next read.
+	hash := sha256.Sum256([]byte(fingerprint + "\x00" + extra + "\x00alias-context-v1"))
 	return fmt.Sprintf("%x", hash[:8])
 }
 

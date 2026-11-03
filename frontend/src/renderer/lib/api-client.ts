@@ -21,6 +21,33 @@ export function getApiBaseUrl(): string {
 	return runtimeApiBaseUrl ?? "";
 }
 
+// Chromium allows six HTTP/1.1 connections per host, and every EventSource
+// holds one for its whole life. The renderer keeps three to five streams open
+// on the daemon, which left two or three connections for every other request,
+// so one slow request queued the rest (Settings among them). A *.localhost name
+// resolves to loopback in Chromium but is a separate host, so streams opened on
+// it get their own connections. Only the loopback daemon address is remapped.
+//
+// Chromium resolves a *.localhost name to ::1 first, and the daemon's main
+// listener is 127.0.0.1, so another process on [::1] at the daemon's port (or
+// on a dual-stack ::) would receive these streams. The name is used only while
+// the daemon reports that it serves [::1] at its port too (ipv6Loopback in its
+// status); otherwise streams stay on 127.0.0.1.
+const eventStreamHostname = "ao-events.localhost";
+let daemonServesIPv6Loopback = false;
+
+/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
+export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
+	try {
+		const url = new URL(baseUrl);
+		if (!ipv6Loopback || url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
+		url.hostname = eventStreamHostname;
+		return url.href.replace(/\/+$/, "");
+	} catch {
+		return baseUrl.replace(/\/+$/, "");
+	}
+}
+
 export function hasTrustedApiBaseUrl(): boolean {
 	return runtimeApiBaseUrl !== null;
 }
@@ -49,6 +76,7 @@ export function setApiBaseUrl(nextBaseUrl: string | null): void {
 // availability message.
 export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 	daemonStatus = nextStatus;
+	daemonServesIPv6Loopback = nextStatus.state === "ready" && nextStatus.ipv6Loopback === true;
 }
 
 // Route templates from the generated OpenAPI schema (frontend/src/api/schema.ts).
@@ -115,6 +143,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/projects",
 "/api/v1/projects/clone",
 	"/api/v1/projects/clone/prepare",
+	"/api/v1/projects/clone/check",
 	"/api/v1/projects/clone/cleanup",
 	"/api/v1/projects/initialize",
 	"/api/v1/projects/{id}",
@@ -219,6 +248,27 @@ type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "h
 // makes every polling query fail at once and on every retry — the failure
 // signal matters, the storm does not.
 const API_ERROR_DEDUPE_MS = 30_000;
+// These codes are the successful or expected outcome of a probe: Codex is not
+// wired in this process, or a shell the user already closed. Other 401 and
+// 404 responses still report, including an expired GitHub token.
+const EXPECTED_API_ERROR_CODES = new Set([
+	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
+	"SHELL_TERMINAL_NOT_FOUND",
+]);
+
+// Conversation probes that 409 while the chat controller is not ready.
+// Exact normalized operations only, so a later 409 on another skills or
+// models route still reports.
+const EXPECTED_PROBE_CONFLICTS = new Set([
+	"POST /api/v1/sessions/:id/workspace/diffs",
+	"GET /api/v1/sessions/:id/conversation/config-options",
+	"GET /api/v1/sessions/:id/conversation/models",
+	"GET /api/v1/sessions/:id/conversation/skills",
+]);
+
+function expectedProbeConflict(operation: string, status?: number): boolean {
+	return status === 409 && EXPECTED_PROBE_CONFLICTS.has(operation);
+}
 const lastApiErrorAt = new Map<string, number>();
 
 function reportApiError(
@@ -238,14 +288,16 @@ function reportApiError(
 		error_category: category,
 		status,
 	});
-	captureApiErrorToSentry(operation, category, status, code, requestId);
+	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
+		captureApiErrorToSentry(operation, category, status, code, requestId);
+	}
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
 	if (baseUrl === null) {
-		reportApiError(operation, "daemon_unavailable", 503);
+		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
 		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
 			status: 503,
 			headers: { "Content-Type": "application/json" },
@@ -306,7 +358,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		} catch {
 			// Non-JSON or empty body: fall back to status-only classification.
 		}
-		reportApiError(
+		if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
 			operation,
 			response.status >= 500 ? "http_5xx" : "http_4xx",
 			response.status,

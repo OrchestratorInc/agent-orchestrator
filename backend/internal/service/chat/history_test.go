@@ -859,6 +859,75 @@ func TestEditAndBranchActivationRotateControllerCredentialsAfterStoppingSource(t
 	}
 }
 
+// A branch install rewrites the session's durable controller owner, including
+// its agent-session identity (ActivateConversationBranchSession). The owner the
+// next credential rotation expects must match it, or Session Manager's fence
+// refuses the rotation and a second edit of the same prompt is reported
+// uncertain while the source restore fails the same way and stops the session.
+func TestRepeatedEditRotatesCredentialsAgainstDurableControllerOwner(t *testing.T) {
+	var mu sync.Mutex
+	var st *store.Store
+	type rotation struct{ expected, durable domain.SessionControllerOwner }
+	var rotations []rotation
+	prepare := func(ctx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+		mu.Lock()
+		current := st
+		mu.Unlock()
+		if current != nil {
+			record, found, err := current.GetSession(ctx, testSession)
+			if err != nil || !found {
+				return nil, fmt.Errorf("GetSession: found=%v err=%w", found, err)
+			}
+			mu.Lock()
+			rotations = append(rotations, rotation{expected: expected, durable: record.ControllerOwner()})
+			mu.Unlock()
+		}
+		return map[string]string{"AO_BROWSER_CAPABILITY": "rotated"}, nil
+	}
+	h, _, driver := newEditHarnessWithControllerEnv(t, false, prepare)
+	mu.Lock()
+	st = h.st
+	mu.Unlock()
+	ctx := context.Background()
+	first := completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	edited, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{
+		Text: "banana", ClientMessageID: "repeat-edit-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("first EditMessage: %v", err)
+	}
+	driver.fresh.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		for _, turn := range snapshot.Turns {
+			if turn.ID == edited.Turn.ID {
+				return turn.State.Terminal()
+			}
+		}
+		return false
+	})
+	if _, err := h.svc.EditMessage(ctx, testSession, edited.Turn.ID, ports.ChatUserMessage{
+		Text: "dog", ClientMessageID: "repeat-edit-2", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("second EditMessage: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rotations) != 2 {
+		t.Fatalf("credential rotations = %d, want one per edit", len(rotations))
+	}
+	second := rotations[1]
+	if second.expected.AgentSessionID != second.durable.AgentSessionID ||
+		second.expected.AgentSessionIDLaunchID != second.durable.AgentSessionIDLaunchID ||
+		second.expected.ProviderConversationID != second.durable.ProviderConversationID ||
+		second.expected.ControllerGeneration != second.durable.ControllerGeneration {
+		t.Fatalf("second edit rotated credentials for a stale owner:\nexpected %#v\ndurable  %#v", second.expected, second.durable)
+	}
+}
+
 func TestEditMessageReplaysDurableContextWhenNativeForkIsUnavailable(t *testing.T) {
 	h, _, driver := newEditHarness(t, true)
 	ctx := context.Background()
@@ -2948,4 +3017,52 @@ func awaitSessionName(t *testing.T, h *harness, want string) {
 		rec, ok, err := h.st.GetSession(context.Background(), testSession)
 		return err == nil && ok && rec.DisplayName == want
 	})
+}
+
+func TestEditLaterTurnReplaysEarlierFileCapture(t *testing.T) {
+	h, _, driver := newEditHarness(t, true)
+	ctx := context.Background()
+	n := 2
+	ref := ports.ChatFileReference{ID: "earlier-code", SessionID: string(testSession), Path: "deleted-demo.ts", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Side: "file", Line: 2, EndLine: 2, Lines: []ports.ChatFileReferenceLine{{Kind: "context", OldNo: &n, NewNo: &n, Text: "AO_CAPTURE_ORCHID_742"}}}
+	first, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "Reply only ACK", Origin: domain.MessageOriginHuman, Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"}, ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1", ProviderItemID: "capture-answer", Text: "ACK"}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ID == first.ID {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	later := completeTurn(t, h, "NEXT", "provider-turn-2")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		if len(s.Messages) != 4 {
+			return false
+		}
+		for _, turn := range s.Turns {
+			if turn.ID == later {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	if _, err := h.svc.EditMessage(ctx, testSession, later, ports.ChatUserMessage{Text: "What was the saved marker?", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	sent := driver.fresh.sentMessages()
+	if len(sent) != 1 {
+		t.Fatalf("replay sends: %+v", sent)
+	}
+	replay := ""
+	for _, block := range sent[0].Content {
+		if block.Internal && block.Type == "resource" {
+			replay += block.Text
+		}
+	}
+	if strings.Count(replay, "AO_CAPTURE_ORCHID_742") != 1 || !strings.Contains(replay, `deleted-demo.ts\"#L2-L2`) {
+		t.Fatalf("lost earlier durable capture: %s", replay)
+	}
 }

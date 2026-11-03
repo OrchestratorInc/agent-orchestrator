@@ -4,6 +4,9 @@ import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
+import type { ServerConfig } from "../config";
+import { cachedInstallId } from "../installId";
+import { setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -22,6 +25,7 @@ import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
 // verified on a device via an EAS build, not in unit tests.
 
 let telemetry: MobileTelemetry | null = null;
+let connectedConfigs: ServerConfig[] = [];
 
 /**
  * Builds the PostHog client once and returns the capture facade.
@@ -76,8 +80,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Anonymous ingestion rate until a paired desktop's identity is adopted
-		// (adoptDesktopIdentity); only then does identify() create a profile.
+		// Keep the phone's own anonymous SDK identity across desktop pairings.
 		personProfiles: "identified_only",
 	});
 
@@ -96,10 +99,14 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	loadRateState();
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
+		phoneInstallId: cachedInstallId,
+		awaitIdentityMigration: true,
 		allow: allowEvent,
 		// Nothing is captured until loadMobileOptOut() has read the saved preference.
 		awaitPreference: true,
 		onOptOutChange: (optedOut) => {
+			setMobileSentryConsent(!optedOut);
+			if (!optedOut && connectedConfigs.length) void syncDesktopTelemetryIdentity(connectedConfigs).catch(() => {});
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
 				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
@@ -112,9 +119,25 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 // The desktop's opt-out is sticky on the phone: it survives unpairing and only a
 // paired desktop that is opted in lifts it.
 const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+const PHONE_IDENTITY_MIGRATION_KEY = "ao.telemetry.phoneIdentity.v2";
 
 /** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
 export async function loadMobileOptOut(): Promise<void> {
+	if (telemetry) {
+		let reset = false;
+		try {
+			if ((await AsyncStorage.getItem(PHONE_IDENTITY_MIGRATION_KEY)) !== "1") {
+				telemetry.resetPhoneIdentity();
+				reset = true;
+				await AsyncStorage.setItem(PHONE_IDENTITY_MIGRATION_KEY, "1");
+			} else {
+				telemetry.releasePhoneIdentity();
+			}
+		} catch {
+			// If the marker is unreadable, reset again on the next launch.
+			if (!reset) telemetry.resetPhoneIdentity();
+		}
+	}
 	let stored = false;
 	try {
 		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";
@@ -125,9 +148,17 @@ export async function loadMobileOptOut(): Promise<void> {
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
-export const syncDesktopTelemetryIdentity = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
-	telemetry?.adoptDesktopIdentity(identity),
+const desktopIdentitySync = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
+	{
+		telemetry?.adoptDesktopIdentity(identity);
+		setMobileSentryPairedInstallId(identity && !identity.optedOut ? identity.installId ?? null : null);
+	},
 );
+
+export function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {
+	connectedConfigs = configs;
+	return desktopIdentitySync(configs);
+}
 
 /** The capture facade, or null before init. Call sites no-op when null. */
 export function mobileTelemetry(): MobileTelemetry | null {

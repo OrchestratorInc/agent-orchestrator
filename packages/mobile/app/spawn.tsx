@@ -2,13 +2,13 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
 	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Text,
 	View,
@@ -23,7 +23,8 @@ import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
@@ -214,11 +215,12 @@ function SpawnModalContent() {
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
+		const polling = new AbortController();
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
 			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
-		return () => { cancelled = true; };
+		return () => { cancelled = true; polling.abort(); };
 	}, [config, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
@@ -295,26 +297,13 @@ function SpawnModalContent() {
 			</Text>
 		</View>
 	) : null;
-	const pickAttachments = async () => {
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
 		if (pickingAttachments.current) return;
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
-			const result = await DocumentPicker.getDocumentAsync({
-				multiple: true,
-				copyToCacheDirectory: true,
-				type: "*/*",
-			});
-			if (result.canceled) return;
-			const picked = result.assets.map((asset) => {
-				const file = new File(asset.uri);
-				return {
-					name: asset.name,
-					mimeType: asset.mimeType || "application/octet-stream",
-					bytes: asset.size ?? file.size,
-					readData: () => file.base64(),
-				};
-			});
+			const picked = await pick();
+			if (!picked) return;
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
@@ -322,12 +311,44 @@ function SpawnModalContent() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+			setAttachmentError(userFacingError(cause, fallback));
 		} finally {
 			pickingAttachments.current = false;
-
 		}
 	};
+	const pickFiles = () => addAttachments(async () => {
+		const result = await DocumentPicker.getDocumentAsync({
+			multiple: true,
+			copyToCacheDirectory: true,
+			type: "*/*",
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset) => {
+			const file = new File(asset.uri);
+			return {
+				name: asset.name,
+				mimeType: asset.mimeType || "application/octet-stream",
+				bytes: asset.size ?? file.size,
+				previewUri: asset.uri,
+				readData: () => file.base64(),
+			};
+		});
+	}, "Couldn't read that file.");
+	const pickPhotos = () => addAttachments(async () => {
+		const remaining = MAX_SPAWN_ATTACHMENTS - attachmentsRef.current.length;
+		if (remaining <= 0) throw new Error(`You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`);
+		// "compatible" asks iOS for a JPEG rather than the library's HEIC
+		// original, which most agents can't open.
+		const result = await ImagePicker.launchImageLibraryAsync({
+			mediaTypes: ["images"],
+			quality: 0.82,
+			allowsMultipleSelection: true,
+			selectionLimit: remaining,
+			preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
+	}, "Couldn't open your photo library.");
 
 	const onSpawn = async () => {
 		if (!selectedHostId || !config) {
@@ -397,26 +418,13 @@ function SpawnModalContent() {
 					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
 				</View>
 
-				{attachments.length ? (
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
-						{attachments.map((item, index) => (
-							<View key={`${item.name}-${index}`} style={styles.attachment}>
-								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
-								<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>
-								<Pressable
-									hitSlop={8}
-									accessibilityLabel={`Remove ${item.name}`}
-									onPress={() => {
-										attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-										setAttachments(attachmentsRef.current);
-									}}
-								>
-									<Feather name="x" size={iconSize.xs} color={t.textTertiary} />
-								</Pressable>
-							</View>
-						))}
-					</ScrollView>
-				) : null}
+				<SpawnAttachmentRow
+					attachments={attachments}
+					onRemove={(item) => {
+						attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+						setAttachments(attachmentsRef.current);
+					}}
+				/>
 
 		{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
@@ -458,7 +466,8 @@ function SpawnModalContent() {
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
-					onAttach={() => { void pickAttachments(); }}
+					onChoosePhoto={() => { void pickPhotos(); }}
+					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
@@ -519,9 +528,6 @@ const makeStyles = (t: Theme) =>
 		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		attachments: { gap: space.sm },
-		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
 		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

@@ -97,7 +97,7 @@ describe("ShellTerminalTab rename", () => {
 	it("makes the full connected tile the semantic selection button", () => {
 		const { onSelect } = renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		expect(tab).toHaveClass("h-full", "min-w-0", "px-2", "cursor-pointer", "focus-visible:outline-2");
+		expect(tab).toHaveClass("h-full", "min-w-0", "px-2", "cursor-pointer");
 		fireEvent.click(tab);
 		expect(onSelect).toHaveBeenCalledOnce();
 	});
@@ -106,15 +106,15 @@ describe("ShellTerminalTab rename", () => {
 		renderTab({ appearance: "connected", isActive: true });
 
 		const closeButton = screen.getByRole("button", { name: "Close terminal ao" });
-		expect(closeButton.parentElement).toHaveClass("absolute", "inset-y-0", "left-2");
-		expect(closeButton).toHaveClass(
+		expect(closeButton.parentElement).toHaveClass(
+			"absolute",
+			"left-2",
 			"opacity-0",
-			"pointer-events-none",
 			"group-hover:opacity-100",
 		);
 		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
 		expect(closeButton).not.toHaveClass("w-control-sm");
-		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")).toHaveClass("group-hover:opacity-0");
+		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).toHaveClass("group-hover:opacity-0");
 		expect(screen.getByRole("tab", { name: "ao" })).toHaveAttribute("aria-selected", "true");
 	});
 
@@ -128,8 +128,7 @@ describe("ShellTerminalTab rename", () => {
 		expect(frame?.classList.contains("inline-flex")).toBe(true);
 		expect(frame?.classList.contains("shrink-0")).toBe(true);
 		expect(frame?.classList.contains("max-w-shell-tab-max")).toBe(true);
-		expect(frame?.classList.contains("w-shell-tab-connected")).toBe(false);
-		expect(frame?.classList.contains("min-w-shell-tab-min")).toBe(false);
+		expect(frame?.classList.contains("min-w-shell-tab-min")).toBe(true);
 	});
 
 	it("uses a neutral active surface with a strong foreground selection line", () => {

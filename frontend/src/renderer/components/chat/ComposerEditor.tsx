@@ -13,22 +13,26 @@ import {
 	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
+	$setSelection,
 	$createParagraphNode,
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
+	HISTORY_MERGE_TAG,
 	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
 	type LexicalNode,
 	type NodeKey,
 	type RangeSelection,
 	type SerializedLexicalNode,
+	type SerializedTextNode,
 	type Spread,
 } from "lexical";
 import {
@@ -66,6 +70,8 @@ export type ComposerEditorSnapshot = {
 	text: string;
 	hasText: boolean;
 	trigger?: ComposerTrigger;
+	/** The caret's offset into text; undefined without a selection in the editor. */
+	caret?: number;
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -78,6 +84,13 @@ export type ComposerEditorHandle = {
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/**
+	 * Shows a dictation transcript at the caret (or the end), replacing the one
+	 * shown before it, so the words appear as they are recognized.
+	 */
+	dictate(text: string): void;
+	/** Ends the dictated run: kept as ordinary text, or removed. */
+	endDictation(keep: boolean): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
 	/**
@@ -156,6 +169,50 @@ type SerializedComposerTokenNode = Spread<
 	},
 	SerializedLexicalNode
 >;
+
+/** How long a dictated letter takes to fade in (the `stream-char` animation in styles.css). */
+const DICTATION_FADE_MS = 300;
+/** Letters that arrive together fade in this far apart, left to right. */
+const DICTATION_LETTER_STAGGER_MS = 14;
+
+/**
+ * One letter of a dictation in progress. A letter fades in once, when it first
+ * appears (the streamed-prose `stream-char` fade), after a delay that staggers
+ * the letters of a word. Revisions change the letter in place, and copies
+ * Lexical makes later (clone, split) never fade, so nothing flashes. The run
+ * becomes plain text once the last fade has finished.
+ */
+class DictationLetterNode extends TextNode {
+	__fadeDelay: number | undefined;
+
+	static getType(): string {
+		return "dictation-letter";
+	}
+
+	static clone(node: DictationLetterNode): DictationLetterNode {
+		return new DictationLetterNode(node.__text, node.__key);
+	}
+
+	static importJSON(serialized: SerializedTextNode): DictationLetterNode {
+		return new DictationLetterNode(serialized.text).updateFromJSON(serialized);
+	}
+
+	constructor(text: string, key?: NodeKey, fadeDelay?: number) {
+		super(text, key);
+		this.__fadeDelay = fadeDelay;
+	}
+
+	createDOM(config: EditorConfig, editor?: LexicalEditor): HTMLElement {
+		const dom = super.createDOM(config, editor);
+		if (this.__fadeDelay !== undefined) {
+			dom.classList.add("stream-char");
+			// Hidden until its turn, then fades in like the rest.
+			dom.style.animationDelay = `${this.__fadeDelay}ms`;
+			dom.style.animationFillMode = "backwards";
+		}
+		return dom;
+	}
+}
 
 class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	__kind: TokenKind;
@@ -408,24 +465,58 @@ function $removeImageTokens(remove: (path: string) => boolean): void {
 	}
 }
 
+// The text content of container's descendants before target, in document
+// order, counted as $serializeComposer counts it.
+function $textBefore(container: LexicalNode, target: LexicalNode): number {
+	if (!$isElementNode(container)) return 0;
+	let count = 0;
+	for (const child of container.getChildren()) {
+		if (child.is(target)) return count;
+		if ($isElementNode(child) && child.isParentOf(target)) return count + $textBefore(child, target);
+		count += child.getTextContent().length;
+	}
+	return count;
+}
+
+/** Where the selection's focus sits in $serializeComposer's text. */
+function $caretOffset(): number | undefined {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return undefined;
+	const point = selection.focus;
+	const node = point.getNode();
+	let offset = 0;
+	for (const paragraph of $getRoot().getChildren()) {
+		if (paragraph.is(node) || ($isElementNode(paragraph) && paragraph.isParentOf(node))) {
+			const within = point.type === "element" && $isElementNode(node)
+				? node.getChildren().slice(0, point.offset).reduce((sum, child) => sum + child.getTextContent().length, 0)
+				: point.offset;
+			return offset + $textBefore(paragraph, node) + within;
+		}
+		offset += paragraph.getTextContent().length + 1;
+	}
+	return undefined;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
+	const caret = $caretOffset();
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0 };
+	if (!active) return { text, hasText: text.trim().length > 0, caret };
 	return {
 		text,
 		hasText: text.trim().length > 0,
+		caret,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,
@@ -436,8 +527,17 @@ function editorSnapshot(): ComposerEditorSnapshot {
 }
 
 function focusEditor(editor: LexicalEditor): void {
-	editor.focus();
 	const root = editor.getRootElement();
+	const native = getDOMSelectionFromTarget(root);
+	// A native caret move can precede Lexical's queued selectionchange. Adopt it
+	// before focus restores the editor selection, including background clicks.
+	if (root && native?.anchorNode && native.focusNode && root.contains(native.anchorNode) && root.contains(native.focusNode)) {
+		editor.update(() => {
+			const selection = $createRangeSelectionFromDom(native, editor);
+			if (selection) $setSelection(selection);
+		}, { discrete: true });
+	}
+	editor.focus();
 	if (root && document.activeElement !== root) root.focus({ preventScroll: true });
 }
 
@@ -445,16 +545,20 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		enterSends: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
+		onEmptyChange: (empty: boolean) => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
+	/** The dictated letters, after an empty anchor node, and when the last fade ends. */
+	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
@@ -485,6 +589,70 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
+			dictate: (text) => {
+				const continuing = dictation.current !== null;
+				editor.update(() => {
+					let run = dictation.current;
+					if (!run) {
+						if (!text) return;
+						let selection = $getSelection();
+						if (!$isRangeSelection(selection)) {
+							$getRoot().selectEnd();
+							selection = $getSelection();
+						}
+						if (!$isRangeSelection(selection)) return;
+						const { anchor } = selection;
+						const before = anchor.type === "text" ? anchor.getNode().getTextContent().slice(0, anchor.offset) : "";
+						// Holds the run's place; it stays empty.
+						const anchorNode = new DictationLetterNode("");
+						selection.insertNodes([anchorNode]);
+						run = { anchor: anchorNode.getKey(), keys: [], prefix: before && !/\s$/.test(before) ? " " : "", settled: 0 };
+						dictation.current = run;
+					}
+					const letters = Array.from(run.prefix + text);
+					const nodes = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					let last: TextNode | null = $getNodeByKey<TextNode>(run.anchor);
+					if (!last) return;
+					const keys: NodeKey[] = [];
+					let arriving = 0;
+					letters.forEach((letter, index) => {
+						let node = nodes[index];
+						if (node) {
+							// A revised letter changes in place, so it does not flash.
+							if (node.getTextContent() !== letter) node.setTextContent(letter);
+						} else {
+							const delay = arriving++ * DICTATION_LETTER_STAGGER_MS;
+							node = new DictationLetterNode(letter, undefined, delay);
+							last!.insertAfter(node);
+							run!.settled = Math.max(run!.settled, performance.now() + delay + DICTATION_FADE_MS);
+						}
+						last = node;
+						keys.push(node.getKey());
+					});
+					for (const extra of nodes.slice(letters.length)) extra.remove();
+					run.keys = keys;
+					last.selectEnd();
+				}, continuing ? { discrete: true, tag: HISTORY_MERGE_TAG } : { discrete: true });
+			},
+			endDictation: (keep) => {
+				const run = dictation.current;
+				dictation.current = null;
+				if (!run) return;
+				const finish = () => editor.update(() => {
+					const letters = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					const anchor = $getNodeByKey(run.anchor);
+					const text = letters.map((letter) => letter.getTextContent()).join("");
+					if (keep && text && anchor) {
+						const plain = $createTextNode(text);
+						anchor.insertAfter(plain);
+						plain.selectEnd();
+					}
+					for (const node of [anchor, ...letters]) node?.remove();
+				}, { discrete: true, tag: HISTORY_MERGE_TAG });
+				// Kept letters become plain text after their fades, so none is cut short.
+				if (keep) window.setTimeout(finish, Math.max(run.settled - performance.now(), 0));
+				else finish();
+			},
 			insertReference: (path, display, wire) => {
 				editor.update(() => {
 					$insertComposerReference(path, display, wire);
@@ -513,16 +681,15 @@ const EditorBridge = forwardRef<
 	);
 
 	useLayoutEffect(() => {
-		const dismissIfNotEmpty = () => {
-			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
-		};
-		editor.getEditorState().read(dismissIfNotEmpty);
+		// Draft edits and Tab acceptance only hide the hint; Escape dismisses it.
+		const updateEmpty = () => onEmptyChange($serializeComposer().length === 0);
+		editor.getEditorState().read(updateEmpty);
 		return editor.registerUpdateListener(({ editorState, tags }) => {
-			editorState.read(dismissIfNotEmpty);
+			editorState.read(updateEmpty);
 			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
 			editorState.read(() => onChange(editorSnapshot()));
 		});
-	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
+	}, [editor, onChange, onEmptyChange]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -530,7 +697,8 @@ const EditorBridge = forwardRef<
 			// bubble listener. A prevented event was already handled there and must not
 			// also insert a newline or a second completion token.
 			if (event?.defaultPrevented) return true;
-			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+			if (event?.isComposing || event?.keyCode === 229 || event?.shiftKey || editor.isComposing()) return false;
+			if (key === "Enter" && !enterSends && !event?.metaKey && !event?.ctrlKey) return false;
 			const snapshot = editorSnapshot();
 			if (
 				key === "Tab" && promptSuggestion && !snapshot.text &&
@@ -543,7 +711,6 @@ const EditorBridge = forwardRef<
 				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
 				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
 				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
-				onDismissSuggestion();
 				if (event) {
 					completionHandledEvents.add(event);
 					event.preventDefault();
@@ -569,7 +736,10 @@ const EditorBridge = forwardRef<
 		const removeEnter = editor.registerCommand(
 			KEY_ENTER_COMMAND,
 			(event) => {
-				if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+				// Claim only the editor command: the browser must still confirm the IME
+				// candidate, without Lexical inserting a newline or selecting a suggestion.
+				if (event?.isComposing || event?.keyCode === 229) return true;
+				if (event?.shiftKey || editor.isComposing()) return false;
 				if (complete(event, "Enter")) return true;
 				return false;
 			},
@@ -593,7 +763,7 @@ const EditorBridge = forwardRef<
 			removeTab();
 			removeEscape();
 		};
-	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+	}, [editor, enterSends, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
@@ -626,8 +796,11 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
+		/** While dictating, the words arrive on their own: no caret, placeholder or suggestion. */
+		dictating?: boolean;
 		label: string;
 		placeholder: string;
 		promptSuggestion?: ComposerPromptSuggestion;
@@ -645,7 +818,9 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		enterSends,
 		concealed,
+		dictating,
 		label,
 		placeholder,
 		promptSuggestion,
@@ -665,7 +840,8 @@ export const ComposerEditor = forwardRef<
 	const { t } = useTranslation();
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
-	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const [empty, setEmpty] = useState(true);
+	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -676,7 +852,7 @@ export const ComposerEditor = forwardRef<
 	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",
-		nodes: [ComposerTokenNode],
+		nodes: [ComposerTokenNode, DictationLetterNode],
 		editable: !disabled,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
@@ -698,10 +874,20 @@ export const ComposerEditor = forwardRef<
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
 					: "pointer-events-none absolute inset-x-0 top-0",
 			)}>
-				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
+				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
+					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
+					<span className="grid *:col-start-1 *:row-start-1 *:transition-[opacity,filter] *:duration-300 *:ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:*:transition-none">
+						<span aria-hidden={dictating} className={dictating ? "opacity-0 blur-[2px]" : "opacity-100 blur-0"}>
+							<FadingPlaceholder text={placeholder} />
+						</span>
+						<span aria-hidden={!dictating} className={dictating ? "opacity-100 blur-0" : "opacity-0 blur-[2px]"}>
+							{t("chat.dictation.placeholder")}
+						</span>
+					</span>
+				)}
 			</div>
 		),
-		[placeholder, suggestion],
+		[dictating, placeholder, suggestion, t],
 	);
 
 	return (
@@ -735,6 +921,7 @@ export const ComposerEditor = forwardRef<
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
+								dictating && "caret-transparent",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>
@@ -751,8 +938,10 @@ export const ComposerEditor = forwardRef<
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
+					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}

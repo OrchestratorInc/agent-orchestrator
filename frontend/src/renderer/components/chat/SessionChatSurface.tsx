@@ -1,3 +1,4 @@
+import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -15,9 +16,13 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
 
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
+import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
+import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
+import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -38,6 +43,7 @@ import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -45,9 +51,8 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
-import { apiErrorMessage } from "../../lib/api-client";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
@@ -116,10 +121,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	shellError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -136,7 +142,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange,
 	interfaceSwitch,
 }: {
-	/** The control that moves this session to the terminal view, and its error. */
+	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
@@ -167,11 +173,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
@@ -212,7 +219,27 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
-	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
+	// Set only when this task was started from the new chat page.
+	const queryClient = useQueryClient();
+	// Whether the project has a setup script, so a start lists that step only when it
+	// runs something. Remote and cloud projects are not read here and keep the step.
+	const plansSetup = Boolean(session.provisionSteps?.some((step) => step.id === "setup"));
+	const projectScripts = useQuery({
+		queryKey: ["project", session.workspaceId],
+		enabled: plansSetup && !hostId && !session.cloud,
+		staleTime: 30_000,
+		queryFn: async () => {
+			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
+			if (error) throw new Error(apiErrorMessage(error));
+			return data?.status === "ok" ? data.project : undefined;
+		},
+	});
+	const projectConfig = projectScripts.data && "config" in projectScripts.data ? projectScripts.data.config : undefined;
+	const showSetupStep = Boolean(hostId || session.cloud) || !projectScripts.isSuccess ||
+		(projectConfig?.postCreate ?? []).some((command: string) => command.trim() !== "");
+	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
+	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);
+	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId, session.kind);
 	const {
 		acknowledgeAcceptedTurn,
 		acknowledgeLocalEcho,
@@ -239,15 +266,24 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
-	const queryClient = useQueryClient();
+	// After a daemon restart the daemon reattaches surviving Chats on its own, and
+	// that reattach emits no change event. The session's recovery check settling
+	// on "ready" is the signal to refresh the controller state this view shows.
+	const statusReadiness = session.statusReadiness;
+	const lastReadiness = useRef({ id: session.id, readiness: statusReadiness });
+	useEffect(() => {
+		const previous = lastReadiness.current;
+		lastReadiness.current = { id: session.id, readiness: statusReadiness };
+		if (hostId || previous.id !== session.id || statusReadiness !== "ready" ||
+			!previous.readiness || previous.readiness === "ready") return;
+		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
+	}, [hostId, queryClient, session.id, statusReadiness]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
-	// A pick made in Developer Mode lapses when the mode is turned off.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const pendingSwitch = developerMode && currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
 	// Catalogs are cached by session; a switch made elsewhere (another window or device)
 	// leaves the outgoing agent's, so they follow the agent the chat reports.
 	useEffect(() => {
@@ -331,7 +367,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (
+			if (echo.opening && durableHumanTurnIds.size > 0) acknowledgeLocalEcho?.(undefined, echo.clientMessageId);
+			else if (
 				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
 				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
 			) acknowledgeLocalEcho?.(echo.turnId);
@@ -351,7 +388,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
-	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
+	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
@@ -361,26 +398,44 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Suppress native controls only for dimensions the provider catalog replaces;
 	// a model-only catalog must not hide the Approvals control.
 	const providerOptions = configOptions.options ?? [];
+	// Keep this agent's settings so the new chat page can draw the very bar a
+	// session of it will show, before that session exists.
+	// Keyed by the raw harness: the provider label folds unknown harnesses into one.
+	const templateHarness = snapshot?.harness;
+	useEffect(() => {
+		if (session.kind !== "worker" || !templateHarness || !configOptions.loaded || providerOptions.length === 0) return;
+		rememberChatSettingsTemplate(templateHarness, hostId, { options: providerOptions });
+	}, [configOptions.loaded, hostId, providerOptions, session.kind, templateHarness]);
 	const hasProviderMode = hasProviderPermissionMode(providerOptions);
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
 	);
 	// Only asked for once the conversation is actually readable: the catalog comes
 	// from the live controller, so there is nothing to fetch before then.
-	const { models: controllerModels } = useConversationModels(
+	const { models: controllerModels, loaded: controllerModelsLoaded } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
-	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId);
+	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
+	// A new chat of this agent offers these "/" skills before its own session runs.
+	const skillsHarness = snapshot?.harness;
+	useEffect(() => {
+		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
+		rememberChatSkills(skillsHarness, hostId, skills);
+	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
+	// Applied once: the chat below unmounts while the conversation reloads, and
+	// a request still held would scroll it back to the same message on return.
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string; revision?: number }>(uiSessionId);
+	const navigateToAnnotation = annotationNavigation.navigate;
+	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -392,20 +447,72 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		session.id, models, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")), sideEnabled,
 		(annotation) => {
 			onSelectChat?.();
-			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
+			navigateToAnnotation({ ...annotation, id: crypto.randomUUID() });
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
 		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	// A pending action owns its destination; an unanswered creation owns only its
+	// request identity. Reselecting text must not turn a lost reply into a new fork.
+	const selectionSideScope = useMemo(() => ({ active: true,
+		processing: new Map<string, Promise<void>>(),
+		receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
+	}), [uiSessionId, snapshot?.conversationId]);
+	const selectionSideScopeRef = useRef(selectionSideScope);
+	selectionSideScopeRef.current = selectionSideScope;
+	const selectionSideChatsRef = useRef(sideChats);
+	selectionSideChatsRef.current = sideChats;
+	useEffect(() => {
+		selectionSideScope.active = true;
+		return () => {
+			selectionSideScope.active = false;
+			selectionSideScope.processing.clear(); selectionSideScope.receipts.clear();
+		};
+	}, [selectionSideScope]);
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-		openSideInspector();
-		if (sideChats.activeId) {
-			sideChats.addReference(sideChats.activeId, excerpt);
-			sideChats.show(sideChats.activeId);
-		} else {
-			await sideChats.create(excerpt);
+		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
+		if (!current()) throw new Error("Side chat is no longer active.");
+		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+		const pending = selectionSideScope.processing.get(identity);
+		if (pending) return pending;
+		const destination = selectionSideChatsRef.current;
+		const destinationId = destination.activeId;
+		// Reserve before any UI update or synchronous failure can trigger activation.
+		const action = Promise.resolve().then(async () => {
+			if (!current()) throw new Error("Side chat is no longer active.");
+			openSideInspector();
+			if (destinationId) {
+				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
+				destination.addReference(destinationId, excerpt);
+				destination.show(destinationId);
+			} else {
+				let receipt = selectionSideScope.receipts.get(identity);
+				if (!receipt) {
+					receipt = { creationKey: crypto.randomUUID(), excerpt: { ...excerpt } };
+					selectionSideScope.receipts.set(identity, receipt);
+				}
+				try {
+					await destination.create(receipt.excerpt, false, receipt.creationKey, {
+						isCurrent: current,
+						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
+					});
+				} catch (error) {
+					// A confirmed close is terminal, not an unanswered creation. Do not retry
+					// automatically; the next deliberate Add may allocate a fresh request.
+					if (apiErrorCode(error) === "CHAT_SIDE_CLOSED") selectionSideScope.receipts.delete(identity);
+					throw error;
+				}
+				if (!current()) throw new Error("Side chat is no longer active.");
+				selectionSideScope.receipts.delete(identity);
+			}
+		});
+		selectionSideScope.processing.set(identity, action);
+		try {
+			await action;
+		} finally {
+			selectionSideScope.processing.delete(identity);
 		}
 	};
 
@@ -471,7 +578,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		}
 	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
-		targetChatControllerReady && !controllerBusy && !localEchos.length &&
+		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
@@ -484,7 +591,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// arrival, even over a cached transcript, so history appears once and fades
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
-	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	// A task started from the new chat page already shows its brief, so its first
+	// read keeps that frame instead of flashing a loading state.
+	const openingSend = localEchos.some((echo) => echo.opening);
+	const optimisticChat = ((session.kind === "orchestrator" || openingSend) && isLoading && !renderShellFallback) || optimisticArrival;
 	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
@@ -495,6 +605,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? unavailableConversationSnapshot(session)
 			: undefined);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
+	// The model the running agent reports, kept so this chat names it at once the next time it loads.
+	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
+		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
+	useEffect(() => {
+		if (liveModel && snapshot?.harness) rememberChatLastModel(uiSessionId, snapshot.harness, liveModel);
+	}, [liveModel, snapshot?.harness, uiSessionId]);
+	const lastModel = useMemo(
+		() => settingsLoading ? readChatLastModel(uiSessionId, renderSnapshot?.harness) : undefined,
+		[renderSnapshot?.harness, settingsLoading, uiSessionId],
+	);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
 	useEffect(() => {
 		// Keep an ambiguous request's identity until durable progress confirms
@@ -512,6 +632,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
 	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
+
+	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
+	// none saved yet it waits, so defaults never pass for the chat's own.
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
+		(!settingsLoading || Boolean(renderSnapshot?.settings?.model || renderSnapshot?.settings?.approvalMode));
+	// The session's own settings have taken over; a later restart must not bring the launch chips back.
+	useEffect(() => {
+		if (settingsReady && !settingsLoading && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
+	}, [hostId, launchSettings, queryClient, session.id, settingsLoading, settingsReady]);
+	// Once the opening brief's turn has settled the chat is an ordinary one; a later
+	// Undo of that turn must not bring the start-up state back.
+	const openingSettled = Boolean(snapshot?.turns[0] && snapshot.turns[0].state !== "queued" && snapshot.turns[0].state !== "running");
+	useEffect(() => {
+		if (openingStartedAt && openingSettled) forgetOpeningStart(queryClient, session.id, hostId);
+	}, [hostId, openingSettled, openingStartedAt, queryClient, session.id]);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -560,8 +695,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
+				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
-				annotationNavigationRequest={annotationNavigationRequest}
+				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
+				annotationNavigationRequest={annotationNavigation.request}
+				onAnnotationNavigationHandled={annotationNavigation.handled}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
@@ -591,7 +729,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				theme={theme}
 				headerActions={headerActions}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
+				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabs={workspaceTabs}
 				workspaceTabActions={workspaceTabActions}
@@ -607,12 +745,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={async (text, attachments, clientMessageId, excerpts) => {
-					// Only claim /btw and /side where side chats can open. Elsewhere the
+				fileReferencesEnabled={Boolean(renderSnapshot.supportsFileReferences)}
+				onSend={async (text, attachments, clientMessageId, excerpts, fileReferences) => {
+					// Only claim /btw where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
-					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
-					if (btw) {
+					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
+     if (btw && fileReferences?.length) {
+      throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
+     }
+     if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
@@ -627,7 +769,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
+						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
+							id: excerpt.id, order: excerpt.order,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
@@ -682,7 +826,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerAction={interfaceSwitch?.control}
 				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
@@ -712,14 +855,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
-				// none saved yet it waits, so defaults never pass for the chat's own.
-				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
-					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
+				settingsReady={settingsReady}
 				settingsLoading={settingsLoading}
+				lastModel={lastModel}
+				openingStartedAt={openingStartedAt}
+				// A task started from the new chat page keeps its chips until the agent's own settings load.
+				draftSettings={launchSettings && (!settingsReady || settingsLoading) ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
-				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
+				// A Scratchpad session has no project to remember a mode for.
+				onRememberPermissions={session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
@@ -736,6 +881,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}
 				onOpenFile={onOpenFile}
+				onOpenFileAnnotation={onOpenFileAnnotation}
 				retryControl={commands.retryControl}
 				onEditMessage={commands.editMessage}
 				editMessagePending={commands.editMessagePending}
@@ -743,7 +889,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
+				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -326,7 +327,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	defer cancel()
 
 	started := time.Now()
-	out, err := aoprocess.CommandContext(probeCtx, binary, "login", "status").CombinedOutput()
+	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary)
+	out, err := cmd.CombinedOutput()
 	status, recognized := codexAuthStatusFromOutput(out)
 	if !recognized {
 		status = ports.AgentAuthStatusUnknown

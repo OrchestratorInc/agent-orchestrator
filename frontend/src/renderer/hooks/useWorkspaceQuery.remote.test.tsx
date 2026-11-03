@@ -67,6 +67,7 @@ it.each([
 	[401, true],
 	[426, true],
 	[502, true],
+	[530, true],
 	[500, false],
 ])("rechecks a connected host after a remote HTTP %i response only when connection health is in doubt", async (status, shouldRecheck) => {
 	const hostId = `box-${status}`;

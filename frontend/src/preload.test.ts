@@ -341,7 +341,7 @@ describe("preload browser profile bridge", () => {
 		await bridge.browserProfiles.create("Work");
 		await bridge.browserProfiles.rename({ id: "profile-id", name: "Personal" });
 		await bridge.browserProfiles.clear("profile-id");
-		await bridge.browserProfiles.delete("profile-id");
+		await bridge.browserProfiles.delete("profile-id", ["1:worker-1"]);
 		await bridge.browserProfiles.discoverImportSources();
 		await bridge.browserProfiles.import({
 			requestId: "11111111-1111-4111-8111-111111111111",
@@ -362,9 +362,14 @@ describe("preload browser profile bridge", () => {
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(8, "browserProfiles:create", { name: "Work" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(9, "browserProfiles:rename", { id: "profile-id", name: "Personal" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(10, "browserProfiles:clear", { id: "profile-id" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(11, "browserProfiles:delete", { id: "profile-id" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(11, "browserProfiles:delete", { id: "profile-id", confirmedViewIds: ["1:worker-1"] });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(12, "browserProfiles:import:discover");
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(13, "browserProfiles:import:start", expect.objectContaining({ destination: { mode: "merge", name: "Work" } }));
+	});
+
+	it("requests the sessions affected by profile deletion", async () => {
+		await exposedBridge().browserProfiles.usage("profile-id");
+		expect(electronMocks.invoke).toHaveBeenCalledWith("browserProfiles:usage", { id: "profile-id" });
 	});
 
 	it("validates profile-management event payloads and removes wrapped listeners", () => {
@@ -414,5 +419,30 @@ describe("preload browser downloads bridge", () => {
 		expect(listener).toHaveBeenCalledWith({ downloads: [] });
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
+	});
+});
+
+describe("preload cloud binary requests", () => {
+	const init = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments", method: "POST" };
+
+	it("cancels a request by its id, and every one still running when the page goes away", async () => {
+		let finish!: (value: unknown) => void;
+		electronMocks.invoke.mockReturnValueOnce(new Promise(() => undefined)).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		const bridge = exposedBridge().cloudCp;
+		void bridge.requestBinary({ ...init, requestId: "running" });
+		const done = bridge.requestBinary({ ...init, requestId: "done" });
+		expect(electronMocks.invoke).toHaveBeenCalledWith("cloudCp:requestBinary", expect.objectContaining({ requestId: "running" }));
+		finish({ status: 201, headers: {}, body: new Uint8Array() });
+		await done;
+
+		bridge.cancelBinary("other");
+		expect(electronMocks.send).toHaveBeenCalledWith("cloudCp:cancelBinary", "other");
+		electronMocks.send.mockClear();
+		// A reload: what still runs is cancelled, not what already finished.
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send.mock.calls).toEqual([["cloudCp:cancelBinary", "running"]]);
+		electronMocks.send.mockClear();
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send).not.toHaveBeenCalled();
 	});
 });

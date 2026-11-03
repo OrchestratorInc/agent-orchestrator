@@ -3,7 +3,7 @@ import type { VoiceMode, VoiceState } from "./voice/types";
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
-	icon?: "folder" | "message-square-plus";
+	icon?: "folder" | "message-square-plus" | "image" | "file-text";
 	sectionBreakBefore?: boolean;
 };
 
@@ -28,7 +28,9 @@ export type SpawnComposerControlsProps = {
 	modelSelection: string;
 	modelLabel: string;
 	onSelectModel: (model: string) => void;
-	onAttach: () => void;
+	/** The attach button offers both the photo library and the file picker. */
+	onChoosePhoto: () => void;
+	onChooseFile: () => void;
 	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
 	voice: SpawnComposerVoice;
 	onSpawn: () => void;

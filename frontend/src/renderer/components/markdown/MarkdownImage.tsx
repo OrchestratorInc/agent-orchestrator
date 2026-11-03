@@ -1,3 +1,4 @@
+import { mediaCrossOrigin } from "../../lib/file-media";
 import { snapshotBlobUrl } from "../../hooks/useSessionWorkspaceFiles";
 import { getApiBaseUrl } from "../../lib/api-client";
 import { useContext, useState } from "react";
@@ -29,5 +30,5 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
 		? context.hostId && !base ? undefined : resolveMarkdownImageSrc(context.sessionId, context.filePath, src, context.version, base)
 		: src;
 	if (!resolvedSrc || resolvedSrc === failedSrc) return <span className="text-muted-foreground">{alt ?? ""}</span>;
-	return <img src={resolvedSrc} alt={alt ?? ""} onError={() => setFailedSrc(resolvedSrc)} />;
+	return <img crossOrigin={mediaCrossOrigin(resolvedSrc)} src={resolvedSrc} alt={alt ?? ""} onError={() => setFailedSrc(resolvedSrc)} />;
 }

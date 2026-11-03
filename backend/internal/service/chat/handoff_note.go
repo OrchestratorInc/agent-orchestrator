@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 // SessionTurns returns every turn AO holds for a session, oldest first: the
@@ -139,6 +141,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	if err != nil {
 		return domain.HandoffNoteInput{}, err
 	}
+	artifactDir, artifacts := s.handoffArtifacts(ctx, record)
 	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
 		SourceHarness: record.Harness,
@@ -149,10 +152,25 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 		Branch:        record.Metadata.Branch,
 		At:            s.now(),
 		OriginalTask:  record.Metadata.Prompt,
+		ArtifactDir:   artifactDir,
+		Artifacts:     artifacts,
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
 		HistoryFiles:  s.handoffHistoryFiles(record, turns),
 	}, nil
+}
+
+// handoffArtifacts returns the session's artifact directory and its files,
+// most recently updated first. A directory that cannot be read lists none.
+func (s *Service) handoffArtifacts(ctx context.Context, record domain.SessionRecord) (string, []domain.SessionArtifactFile) {
+	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, record.ID))
+	files, err := sessionartifacts.List(ctx, dir)
+	if err != nil {
+		s.log.Debug("list artifacts for handoff note", "session", record.ID, "error", err)
+		return filepath.ToSlash(dir), nil
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].UpdatedAt.After(files[j].UpdatedAt) })
+	return filepath.ToSlash(dir), files
 }
 
 // SessionHistory returns one page of a session's turns, newest first, with the

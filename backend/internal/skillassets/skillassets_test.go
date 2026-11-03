@@ -192,6 +192,27 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEmbeddedRemoteBrowserGuidanceMatchesRemoteInterface(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/browser-remote.md")
+	if err != nil {
+		t.Fatalf("read embedded remote browser guidance: %v", err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"sessions share tabs, cookies, and logins",
+		"ao browser --help",
+		"ao browser get url",
+		"ao browser snapshot --interactive",
+		"agent-browser",
+		"Desktop-only `status`, `act`, and snapshot `--delta` are not available here",
+		"untrusted external content",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("remote browser guidance missing %q:\n%s", want, body)
+		}
+	}
+}
+
 // TestMaterialize_WritesIntoArbitraryDest covers the opencode adapter path:
 // materialize the skill into .opencode/skills/using-ao (not the data-dir layout).
 func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
@@ -206,6 +227,9 @@ func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "commands", "browser-remote.md")); err != nil {
+		t.Fatalf("commands/browser-remote.md missing: %v", err)
 	}
 }
 

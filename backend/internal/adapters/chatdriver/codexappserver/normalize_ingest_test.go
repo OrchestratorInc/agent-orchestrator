@@ -323,6 +323,57 @@ func TestNormalizeMcpToolPayloadOverCapIsMarkedNotCut(t *testing.T) {
 	}
 }
 
+// The provider's aggregate is a command's whole output in one field. Past the
+// command output cap the detail keeps the end, where a command reports how it went,
+// and says it was cut. A small aggregate is stored as it arrived.
+func TestNormalizeCommandAggregatedOutputKeepsTail(t *testing.T) {
+	item := func(output string) string {
+		encoded, _ := json.Marshal(output)
+		return `{"threadId":"th","turnId":"tu","item":{"type":"commandExecution","id":"exec-1","command":"yes",` +
+			`"exitCode":0,"aggregatedOutput":` + string(encoded) + `}}`
+	}
+	tail := strings.Repeat("é", commanddetail.MaxOutputChars)
+	detail := decodeDetailAny(t, normalizeOne(t, codexproto.MethodItemCompleted, item("lost head\n"+tail)).Detail)
+	if detail["output"] != tail || detail["outputTruncated"] != true {
+		output, _ := detail["output"].(string)
+		t.Fatalf("output = %d chars truncated=%v, want the last %d chars, truncated",
+			len([]rune(output)), detail["outputTruncated"], commanddetail.MaxOutputChars)
+	}
+	if detail["outputMayBePartial"] != true || detail["outputSource"] != "aggregate" {
+		t.Fatalf("aggregate provenance lost: %v", detail["outputSource"])
+	}
+
+	small := decodeDetailAny(t, normalizeOne(t, codexproto.MethodItemCompleted, item("hi\n")).Detail)
+	if small["output"] != "hi\n" {
+		t.Fatalf("small output = %q", small["output"])
+	}
+	if _, marked := small["outputTruncated"]; marked {
+		t.Fatal("small output was marked truncated")
+	}
+}
+
+// A patch past the per-file cap stops early, is marked, and is cut on a character
+// boundary: a byte cut inside one would be stored as a replacement character.
+func TestNormalizeFileChangePatchOverCapIsCutOnCharacterBoundary(t *testing.T) {
+	diff, _ := json.Marshal("+" + strings.Repeat("é", commanddetail.MaxPatchChars))
+	ev := normalizeOne(t, codexproto.MethodItemCompleted,
+		`{"threadId":"th","turnId":"tu","item":{"type":"fileChange","id":"i","changes":[{"path":"accents.txt","kind":{"type":"add"},"diff":`+
+			string(diff)+`}]}}`)
+	files := decodeFiles(t, ev.Detail)
+	if len(files) != 1 {
+		t.Fatalf("files = %d, want 1", len(files))
+	}
+	patch := files[0].Patch
+	if !files[0].PatchTruncated || len(patch) > commanddetail.MaxPatchChars || len(patch) < commanddetail.MaxPatchChars-3 ||
+		!strings.HasPrefix("+"+strings.Repeat("é", commanddetail.MaxPatchChars), patch) {
+		t.Fatalf("patch = %d bytes truncated=%v, want a prefix of at most %d bytes", len(patch), files[0].PatchTruncated,
+			commanddetail.MaxPatchChars)
+	}
+	if strings.ContainsRune(patch, '\uFFFD') {
+		t.Fatal("patch was cut inside a character")
+	}
+}
+
 // MCP progress was NEVER OBSERVED: a probe MCP server that sent
 // notifications/progress with the token Codex supplied produced no app-server
 // notification, so 0.146.0 does not appear to forward it.

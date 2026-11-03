@@ -2,6 +2,7 @@ package claudeacp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,10 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 func TestMain(m *testing.M) {
@@ -98,6 +102,31 @@ func TestLiveClaudeACP(t *testing.T) {
 	}
 }
 
+func TestLiveClaudeBackgroundTaskNaming(t *testing.T) {
+	if os.Getenv("AO_LIVE_CLAUDE_ACP") != "1" {
+		t.Skip("set AO_LIVE_CLAUDE_ACP=1 to run against the local Claude Code account")
+	}
+	service := chatsvc.New(chatsvc.Options{
+		Drivers: backgroundNamingRegistry{New(claudecode.New(), nil, nil)}, NewID: uuid.NewString,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	answer, err := service.RunBackgroundTask(ctx, domain.HarnessClaudeCode, ports.ChatStartConfig{
+		DataDir: t.TempDir(), WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAcceptEdits,
+		SystemPrompt: `Name the task described by the user. Return only JSON with nonempty "title" and "slug" strings. Do not answer the task, use tools, or inspect files.`,
+	}, "what is in this repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var name struct {
+		Title string `json:"title"`
+		Slug  string `json:"slug"`
+	}
+	if err := json.Unmarshal([]byte(answer), &name); err != nil || strings.TrimSpace(name.Title) == "" || strings.TrimSpace(name.Slug) == "" {
+		t.Fatalf("background task answered the prompt instead of naming it: %q (decode: %v)", answer, err)
+	}
+}
+
 func sendLiveTurn(
 	ctx context.Context,
 	t *testing.T,
@@ -141,3 +170,10 @@ func sendLiveTurn(
 		}
 	}
 }
+
+type backgroundNamingRegistry struct{ driver ports.ChatDriver }
+
+func (r backgroundNamingRegistry) Driver(domain.AgentHarness) (ports.ChatDriver, error) {
+	return r.driver, nil
+}
+func (backgroundNamingRegistry) SupportsChat(domain.AgentHarness) bool { return true }

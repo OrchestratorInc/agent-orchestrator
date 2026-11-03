@@ -17,6 +17,15 @@ export function focusAfterPaint(selector: string): void {
 // calls preventDefault, which must not stop the rest from running.
 const claimedEvents = new WeakSet<Event>();
 
+// In-renderer listeners, so the command palette can run a shortcut's action
+// exactly as its chord would.
+const localListeners = new Set<(event: AppShortcutEvent) => void>();
+
+/** Runs every handler registered for event.id, as if its chord had been pressed. */
+export function runAppShortcut(event: AppShortcutEvent): void {
+	for (const listener of Array.from(localListeners)) listener(event);
+}
+
 const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 /**
@@ -42,9 +51,15 @@ export function useAppShortcut(
 	handlerRef.current = handler;
 	useEffect(() => {
 		if (!enabled) return;
-		return aoBridge.app.onShortcut((event) => {
+		const listener = (event: AppShortcutEvent) => {
 			if (event.id === id) handlerRef.current(event);
-		});
+		};
+		localListeners.add(listener);
+		const unsubscribe = aoBridge.app.onShortcut(listener);
+		return () => {
+			localListeners.delete(listener);
+			unsubscribe();
+		};
 	}, [id, enabled]);
 	useEffect(() => {
 		if (!enabled) return;

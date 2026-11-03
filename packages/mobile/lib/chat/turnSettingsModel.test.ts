@@ -81,6 +81,17 @@ describe("turnSettingsRows", () => {
 		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Never ask");
 	});
 
+	it("uses a remembered provider catalog alone while the chat's snapshot still reports no capabilities", () => {
+		const options: ChatConfigOption[] = [
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "auto", choices: [{ value: "auto", name: "Auto" }, { value: "default", name: "Default" }] },
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "opus", choices: [{ value: "opus", name: "Opus 5.5" }] },
+		];
+		const hibernated = snapshot({ harness: "claude-code", controller: { state: "hibernated" }, capabilities: [], settings: { approvalMode: "auto" } });
+
+		expect(turnSettingsRows(hibernated, [], options).map((row) => row.id)).toEqual(["option:model", "option:mode"]);
+		expect(turnSettingsSummary(hibernated, [], options)).toBe("Opus 5.5 · Auto");
+	});
+
 	it("builds model, effort, and approvals drill-down rows when provider controls are unavailable", () => {
 		const models: ChatModel[] = [{
 			id: "opus",

@@ -285,6 +285,20 @@ export async function rollbackConversation(cfg: ServerConfig, sessionId: string,
 	return body.turnsDiscarded ?? 0;
 }
 
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
+}
+
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, "/title"), { method: "PUT", body: JSON.stringify({ title }) });
 }

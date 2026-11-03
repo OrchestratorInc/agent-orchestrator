@@ -1,13 +1,16 @@
+import { BrowserIcon } from "./icons";
+import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
+import { FileText, LoaderCircle, Play, Sheet } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
+import { formatTimeCompact } from "../lib/format-time";
 import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { IMAGE_CHECKERBOARD, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { cn } from "../lib/utils";
@@ -33,13 +36,11 @@ const prToneClasses = {
 	error: { dot: "bg-destructive", text: "text-destructive" },
 } as const;
 
-function relativeTime(timestamp: string | undefined, format: (key: "time.justNow" | "shell.updatedAt", values?: Record<string, unknown>) => string): string {
+// Time phrase comes from formatTimeCompact (appI18n catalogs), not Intl locale
+// resolution, so the card never leaks the OS language into the app UI.
+function relativeTime(timestamp: string | undefined, format: (key: "shell.updatedAt", values?: Record<string, unknown>) => string): string {
 	if (!timestamp) return "";
-	const elapsedMinutes = Math.floor((Date.now() - Date.parse(timestamp)) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return format("shell.updatedAt", { time: format("time.justNow") });
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return format("shell.updatedAt", { time: new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit) });
+	return format("shell.updatedAt", { time: formatTimeCompact(timestamp) });
 }
 
 function LoadingCard() {
@@ -194,23 +195,35 @@ export function SessionLinkPreviewCard({
 	href,
 	sourceHostId,
 	sourceKind,
+	onOpen,
 }: {
 	href: string;
 	sourceHostId?: string;
 	sourceKind?: "cloud";
+	/** Opens the session through the same path as clicking the link itself. */
+	onOpen?: () => void;
 }) {
 	const target = parseSessionLink(href);
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
-	if (session) return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			{session.isTerminated === true || session.status === "terminated"
-				? <TerminatedCard session={session} hostId={restoreHostId} />
-				: <SessionCardBody session={session} />}
-		</HoverCardContent>
-	);
+	if (session) {
+		const terminated = session.isTerminated === true || session.status === "terminated";
+		// A terminated card already holds its own Resume button, so only a live one opens on click.
+		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
+		const openable = onOpen && !terminated;
+		return (
+			<HoverCardContent
+				collisionPadding={8}
+				sideOffset={6}
+				className={cn("max-h-48 overflow-y-auto p-3", openable && "cursor-pointer transition-colors hover:bg-accent")}
+				onClick={openable ? onOpen : undefined}
+			>
+				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
+			</HoverCardContent>
+		);
+	}
 	if (source.isLoading) return <LoadingCard />;
 	if (source.isError) return <ErrorCard />;
 	return <UnavailableCard />;
@@ -318,7 +331,7 @@ function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; nam
 	if (failedSrc === src) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
 	return (
 		<div className="grid max-h-40 place-items-center overflow-hidden rounded-sm text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
-			<img alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
+			<img crossOrigin={mediaCrossOrigin(src)} alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
 		</div>
 	);
 }
@@ -383,7 +396,7 @@ function ArtifactContentPreview({ artifact, session, remote }: { artifact: Sessi
 
 function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
+	const Icon = artifact.kind === "html" ? BrowserIcon : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>

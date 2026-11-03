@@ -32,6 +32,50 @@ func TestRateLimitedSinkCapsBurstPerMinute(t *testing.T) {
 	}
 }
 
+func TestRateLimitedSinkLetsPreSummarizedNamesExceedTheMinuteCap(t *testing.T) {
+	rec := &recordingSink{}
+	s := NewRateLimitedSink(rec, nil)
+	s.SkipMinuteWindow("ao.cli.usage_errors")
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		s.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.cli.usage_errors", OccurredAt: now})
+	}
+	if len(rec.events) != 20 {
+		t.Fatalf("events forwarded = %d, want 20", len(rec.events))
+	}
+	for i := 0; i < eventsPerNamePerMinute+3; i++ {
+		s.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.http.5xx", OccurredAt: now})
+	}
+	httpCount := 0
+	for _, ev := range rec.events {
+		if ev.Name == "ao.http.5xx" {
+			httpCount++
+		}
+	}
+	if httpCount != eventsPerNamePerMinute {
+		t.Fatalf("http events = %d, want %d", httpCount, eventsPerNamePerMinute)
+	}
+}
+
+func TestRateLimitedSinkKeepsDurableUsageSummariesBeyondGenericCaps(t *testing.T) {
+	s := NewRateLimitedSink(&recordingSink{}, nil)
+	s.SkipMinuteWindow("ao.usage.messages_sent")
+	s.UseUsageDailyWindow("ao.usage.messages_sent")
+	now := time.Now()
+	for i := 0; i < eventsPerNamePerDay+10; i++ {
+		if !s.reserve("ao.usage.messages_sent", now) {
+			t.Fatalf("usage summary %d was dropped", i)
+		}
+	}
+	if s.reserve("ao.http.5xx", now) == false {
+		t.Fatal("ordinary event cap changed")
+	}
+	s.days["ao.usage.messages_sent"].count = eventsPerNamePerDayUsage
+	if s.reserve("ao.usage.messages_sent", now) {
+		t.Fatal("usage emergency cap did not apply")
+	}
+}
+
 func TestRateLimitedSinkCapsTotalPerDayEvenWhenPacedUnderBurstLimit(t *testing.T) {
 	s := NewRateLimitedSink(&recordingSink{}, nil)
 	start := time.Now()

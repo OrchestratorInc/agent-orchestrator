@@ -108,13 +108,14 @@ export function sessionLookupDue(args: {
  * notification from one of those still routes here. So a miss is only a
  * question — the daemon answers it, and only a 404/410 is "not found".
  *
- * An unlisted session that has ended is reported as ended, not opened. Workers
- * are listed whether or not they have ended, so what reaches this is an
- * orchestrator the list dropped — and the session screens offer Restore on an
- * ended session. A restored old orchestrator would be the first live one in
+ * An unlisted orchestrator that has ended is reported as ended, not opened: it
+ * is one the list dropped, and the session screens offer Restore on an ended
+ * session. A restored old orchestrator would be the first live one in
  * session-number order, which is the one `bestByProject` keeps for the phone and
  * the one the daemon names as orchestrator in new workers' prompts
  * (`activeOrchestratorSessionID`), displacing the orchestrator that replaced it.
+ * An unlisted ended worker opens: a machine that pages its archive leaves
+ * archived workers out of the poll, and Restore is the way back for one of them.
  *
  * While the board is not connected, the route does not diagnose the link itself.
  * Telling a rotated tunnel from a rejected password from an unreachable machine
@@ -146,7 +147,9 @@ export function sessionRouteView(args: {
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
 	if (lookup.state === "found") {
-		return lookup.session.isTerminated ? { kind: "ended" } : { kind: "screen", session: lookup.session };
+		return lookup.session.isTerminated && lookup.session.kind === "orchestrator"
+			? { kind: "ended" }
+			: { kind: "screen", session: lookup.session };
 	}
 	if (lookup.state === "failed" && isSessionGone(lookup.status)) return { kind: "missing" };
 	if (args.connection !== "open") {

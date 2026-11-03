@@ -3,6 +3,10 @@ import { defineDocs, defineConfig } from "fumadocs-mdx/config";
 
 export const docs = defineDocs({
   dir: "content",
+  docs: {
+    // Keeps each article's Markdown for llms.txt and the `.md` copies.
+    postprocess: { includeProcessedMarkdown: { headingIds: false } },
+  },
 });
 
 export default defineConfig({

@@ -24,7 +24,9 @@ function repeatsPageTitle(title: string, pageTitle: string | null) {
  * `toolbar` sits under the heading and above the card — a SettingsSearch, for
  * instance. Its sticky wrapper's bottom padding is the gap to the card.
  * `action` sits at the right end of the heading line, vertically centred: a
- * ghost "Copy report" button or a muted figure, never a second heading.
+ * ghost button or a muted figure, never a second heading.
+ * `titleAction` sits right after the heading text on the same line: a small
+ * icon button that acts on the whole section, named by its tooltip.
  * `testId` replaces the section's data-testid for suites that are not the
  * settings smoke suite.
  */
@@ -35,6 +37,7 @@ export function SettingsSection({
 	grouped,
 	toolbar,
 	action,
+	titleAction,
 	testId,
 	children,
 }: {
@@ -44,11 +47,13 @@ export function SettingsSection({
 	grouped?: boolean;
 	toolbar?: ReactNode;
 	action?: ReactNode;
+	titleAction?: ReactNode;
 	testId?: string;
 	children: ReactNode;
 }) {
 	const pageTitle = useContext(SettingsPageTitleContext);
 	const showTitle = !titleHidden && !repeatsPageTitle(title, pageTitle);
+	const heading = <h2 className="min-w-0 text-sm font-medium leading-5 text-foreground">{title}</h2>;
 	const body = (
 		<div
 			className={cn(
@@ -67,12 +72,17 @@ export function SettingsSection({
 			data-testid={testId ?? (sectionId ? "settings-section" : undefined)}
 			data-section={sectionId}
 		>
-			{action ? (
+			{action || (showTitle && titleAction) ? (
 				// h-5, the heading's own line: a taller action (a ghost button)
 				// centres on it and overhangs, so heading→card stays 12px.
 				<div className="flex h-5 items-center justify-between gap-3 px-(--settings-row-inset)">
-					{showTitle ? <h2 className="min-w-0 text-sm font-medium leading-5 text-foreground">{title}</h2> : <span />}
-					<div className="flex shrink-0 items-center">{action}</div>
+					{!showTitle ? <span /> : titleAction ? (
+						<div className="flex min-w-0 items-center gap-0.5">
+							{heading}
+							{titleAction}
+						</div>
+					) : heading}
+					{action ? <div className="flex shrink-0 items-center">{action}</div> : null}
 				</div>
 			) : showTitle ? (
 				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">{title}</h2>

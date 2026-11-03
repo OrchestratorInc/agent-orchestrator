@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { formatFileChatReference, type FileCodeReference, type FileChatReference } from "../../shared/file-annotations";
+import type { FileCodeReference } from "../../shared/file-annotations";
+import { captureFileReference, isSupportedFileReference, type ChatFileReference } from "../../shared/chat-file-reference";
 import { sessionUiKey } from "./hosts";
 
 // Lets a file or diff view hand a code reference to the session's Chat
 // composer without threading callbacks through the inspector and centre-pane
 // trees. A composer registers while it can accept a new draft; the session
 // view registers to bring the Chat surface forward when a reference arrives.
-type ReferenceListener = (reference: FileChatReference) => void;
+type ReferenceListener = (reference: ChatFileReference) => boolean | void;
 type RevealListener = () => void;
 
 const composers = new Map<string, Set<ReferenceListener>>();
@@ -51,13 +52,14 @@ export function hasChatComposer(sessionId: string): boolean {
 	return (composers.get(sessionId)?.size ?? 0) > 0;
 }
 
-/** Delivers a reference to the session's composer; false when none is listening. */
-export function sendReferenceToChat(sessionId: string, reference: FileChatReference): boolean {
+/** A reference is accepted only when a listening composer acknowledges it. */
+export function sendReferenceToChat(sessionId: string, reference: ChatFileReference): boolean {
 	const listeners = composers.get(sessionId);
 	if (!listeners?.size) return false;
-	for (const reveal of revealers.get(sessionId) ?? []) reveal();
-	for (const listener of listeners) listener(reference);
-	return true;
+	let accepted = false;
+	for (const listener of listeners) accepted = listener(reference) !== false || accepted;
+	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
+	return accepted;
 }
 
 function subscribeAvailability(listener: () => void): () => void {
@@ -76,11 +78,14 @@ export function useHasChatComposer(sessionId: string): boolean {
  * or is undefined while the session has no Chat composer (a TUI session). The
  * composer registers under the host-scoped UI key, not the raw session ID.
  */
-export function useAskInChat(sessionId: string, hostId?: string): ((reference: FileCodeReference) => void) | undefined {
+export function useAskInChat(sessionId: string, hostId?: string): ((reference: FileCodeReference) => boolean) | undefined {
 	const key = sessionUiKey(sessionId, hostId);
 	const available = useHasChatComposer(key);
 	return useMemo(
-		() => (available ? (reference: FileCodeReference) => void sendReferenceToChat(key, formatFileChatReference(reference)) : undefined),
-		[available, key],
+		() => (available ? (reference: FileCodeReference) => {
+			const captured = captureFileReference(reference, sessionId, hostId);
+			return isSupportedFileReference(captured) && sendReferenceToChat(key, captured);
+		} : undefined),
+		[available, key, sessionId, hostId],
 	);
 }

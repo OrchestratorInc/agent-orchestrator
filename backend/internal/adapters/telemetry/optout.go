@@ -23,13 +23,28 @@ func NewOptOutSink(next ports.EventSink, suppressed func() bool) ports.EventSink
 	return &OptOutSink{next: next, suppressed: suppressed}
 }
 
+type usageDiscarder interface {
+	Discard()
+}
+
 // Emit forwards the event unless telemetry is currently opted out.
 func (s *OptOutSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
+		if discarder, ok := s.next.(usageDiscarder); ok {
+			discarder.Discard()
+		}
 		return
 	}
 	s.next.Emit(ctx, ev)
 }
 
-// Close delegates so the wrapped sink still flushes on shutdown.
-func (s *OptOutSink) Close(ctx context.Context) error { return s.next.Close(ctx) }
+// Close delegates so the wrapped sink still flushes on shutdown. An opted-out
+// close drops the unsent CLI summary instead of flushing it.
+func (s *OptOutSink) Close(ctx context.Context) error {
+	if s.suppressed() {
+		if discarder, ok := s.next.(usageDiscarder); ok {
+			discarder.Discard()
+		}
+	}
+	return s.next.Close(ctx)
+}

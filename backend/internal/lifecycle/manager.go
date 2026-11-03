@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
@@ -156,6 +157,12 @@ func WithNotificationSink(sink notificationSink) Option {
 	return func(m *Manager) { m.notifications = sink }
 }
 
+// WithDeliveryTelemetry reports ao.sessions.ended for the terminations lifecycle
+// itself decides (runtime death, merge and issue-close teardown).
+func WithDeliveryTelemetry(r *deliverytelemetry.Recorder) Option {
+	return func(m *Manager) { m.delivery = r }
+}
+
 // WithTelemetry wires lifecycle activity transitions to the shared telemetry sink.
 func WithTelemetry(sink ports.EventSink) Option {
 	return func(m *Manager) { m.telemetry = sink }
@@ -247,6 +254,7 @@ type Manager struct {
 	clock     func() time.Time
 	react     reactionState
 	telemetry ports.EventSink
+	delivery  *deliverytelemetry.Recorder
 	// flights tracks, per session, the in-flight tool executions and the
 	// pending permission dialog's identity (see toolFlight). Guarded by mu.
 	flights map[domain.SessionID]*toolFlight
@@ -319,15 +327,6 @@ func (m *Manager) SetUsageFinalizer(finalizer sessionUsageFinalizer) {
 	defer m.mu.Unlock()
 	m.usageFinalizer = finalizer
 	m.usageReactivator, _ = finalizer.(sessionUsageReactivator)
-}
-
-// SetSessionInputLease late-binds Session Manager's pane-input authority into
-// lifecycle's guarded reaction writes. Lifecycle is constructed first during
-// daemon boot, so constructor injection would create a dependency cycle.
-func (m *Manager) SetSessionInputLease(lease sessionguard.InputLease) {
-	if m.guard != nil {
-		m.guard.SetInputLease(lease)
-	}
 }
 
 // SetSessionOperationGate prevents observation-driven terminal facts from
@@ -490,6 +489,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 	finalizeSessionUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
 
 	terminated := false
+	var beforeEnd domain.SessionRecord
 	err := m.mutate(ctx, id, func(cur domain.SessionRecord, now time.Time) (domain.SessionRecord, bool) {
 		if cur.IsTerminated || cur.Revision != terminationRevision ||
 			cur.Metadata.RuntimeLaunchID != terminationLaunch || !matchesLaunch(cur) ||
@@ -507,12 +507,14 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		delete(m.flights, id)
 		delete(m.steps, id)
 		terminated = true
+		beforeEnd = cur
 		return next, true
 	})
 	if err != nil {
 		return err
 	}
 	if terminated {
+		m.delivery.SessionEnded(ctx, beforeEnd, deliverytelemetry.EndRuntimeDied)
 		// Route reaper-observed death through the same container-reap hook as
 		// every other terminal path (#2652): a crash/SIGKILL detected by the
 		// runtime reaper must not leave the session's Docker containers behind
@@ -1388,6 +1390,9 @@ func (m *Manager) emitTelemetry(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 	if ev.RequestID == "" {
 		ev.RequestID = reqid.FromContext(ctx)
+	}
+	if ev.Name == "ao.session.waiting_input_entered" && ev.SessionID != nil {
+		m.countWaitingInput(ctx, *ev.SessionID)
 	}
 	m.telemetry.Emit(ctx, ev)
 }

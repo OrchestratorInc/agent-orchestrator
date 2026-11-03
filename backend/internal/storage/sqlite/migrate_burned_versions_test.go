@@ -204,6 +204,7 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
+	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
@@ -212,9 +213,36 @@ var shippedMigrations = map[int64]string{
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
 
+	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
 	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
 	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
+	20261020090353460: "20261020090353460_allow_ao_action_activity.sql",
 	20261020131539535: "20261020131539535_provider_switching.sql",
+	20261021051727800: "20261021051727800_conversation_batch_members.sql",
+	20261021142844923: "20261021142844923_index_conversation_activity_provider_item_lookup.sql",
+	20261021230230412: "20261021230230412_provider_events_session_index.sql",
+	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
+	20261022172135175: "20261022172135175_session_branch_naming.sql",
+	20261023055441558: "20261023055441558_automation_model_settings.sql",
+	20261023123504180: "20261023123504180_app_settings_computer_use.sql",
+	20261024194546592: "20261024194546592_conversation_messages_search.sql",
+	20261026083409462: "20261026083409462_deepseek_chat_failure_code.sql",
+	20261026185532680: "20261026185532680_usage_telemetry_measurements.sql",
+	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
+	20261029072736970: "20261029072736970_session_telemetry.sql",
+	20261029191416441: "20261029191416441_session_num_floors.sql",
+	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
+	20261030120740000: "20261030120740000_deleted_session_account_usage.sql",
+	20261030141527623: "20261030141527623_session_end_telemetry_claim.sql",
+	20261030182857119: "20261030182857119_session_cleanup_report_only.sql",
+	20261030182857237: "20261030182857237_session_retention.sql",
+	20261030182857344: "20261030182857344_session_delete_cdc.sql",
+	20261031021251693: "20261031021251693_session_interface_transitions_degraded_kind.sql",
+	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
+	20261101145613011: "20261101145613011_repository_renames.sql",
+	20261102100313400: "20261102100313400_lifetime_session_count.sql",
+	20261102164353715: "20261102164353715_automation_template_metadata.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -230,7 +258,8 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 203 was used by the historical Hermes candidate and must not be reused.
+	return v == 22 || v == 203
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

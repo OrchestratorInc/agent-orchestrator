@@ -4,225 +4,155 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// NameTaskWorkspace finalizes names before setup or agent processes can use the
-// checkout. The caller holds its project workspace gate. Git never force-renames
-// branches or overwrites destinations, including when another daemon claims them.
-func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
-	if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || strings.HasPrefix(name, "-") || len(name) > 50 {
-		return info, fmt.Errorf("gitworktree: invalid task name %q", name)
-	}
-	oldPath, err := w.validateManagedPath(info.Root.Path)
+// RenameTaskBranch gives a launched task's temporary branch its generated
+// name. The checkout never moves, so a running agent keeps its working
+// directory, and AO keeps attributing refs under the temporary namespace to
+// the session. It refuses once the temporary branch is pushed, because the
+// agent's later plain `git push` would then name a different remote branch.
+// Git never force-renames, and another claimant gets a suffix.
+func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspaceProjectInfo, branch string) (ports.WorkspaceProjectInfo, error) {
+	repos, err := w.taskRepos(info)
 	if err != nil {
 		return info, err
-	}
-	if err := validatePathComponent("project id", string(info.Root.ProjectID)); err != nil {
-		return info, err
-	}
-	parent := filepath.Join(w.managedRoot, string(info.Root.ProjectID))
-	if filepath.Dir(oldPath) != parent {
-		return info, fmt.Errorf("gitworktree: task path is outside its project")
-	}
-	repos := append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
-	if len(repos) == 0 {
-		repo := info.Root.RepoPath
-		if repo == "" {
-			repo, err = w.repoPath(info.Root.ProjectID)
-			if err != nil {
-				return info, err
-			}
-		}
-		repos = []ports.WorkspaceRepoInfo{{RepoPath: repo, Path: oldPath, Branch: info.Root.Branch}}
-	}
-	for _, repo := range repos {
-		inside, err := pathWithin(oldPath, repo.Path)
-		if err != nil || !inside {
-			return info, fmt.Errorf("gitworktree: task repository path is outside its workspace: %s", repo.Path)
-		}
 	}
 	if err := w.validateBranch(ctx, repos[0].RepoPath, branch); err != nil {
 		return info, err
 	}
-	namespace := strings.TrimSuffix(branch, "/root")
-	for suffix := 1; suffix <= 100; suffix++ {
-		candidate, candidateNamespace := name, namespace
-		if suffix > 1 {
-			candidate = fmt.Sprintf("%s-%d", name, suffix)
-			candidateNamespace = fmt.Sprintf("%s-%d", namespace, suffix)
-		}
-		path := filepath.Join(parent, candidate)
-		if _, err := os.Lstat(path); err == nil {
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return info, err
-		}
-		result, retry, renameErr := w.nameTaskCandidate(ctx, info, repos, candidateNamespace, path)
-		if retry {
-			continue
-		}
-		return result, renameErr
-	}
-	return info, fmt.Errorf("gitworktree: no unused task name for %q", name)
-}
-
-func (w *Workspace) nameTaskCandidate(ctx context.Context, info ports.WorkspaceProjectInfo, repos []ports.WorkspaceRepoInfo, namespace, path string) (ports.WorkspaceProjectInfo, bool, error) {
-	branch := namespace + "/root"
-	for _, repo := range repos {
-		relative, err := filepath.Rel(info.Root.Path, repo.Path)
-		if err != nil {
-			return info, false, err
-		}
-		records, err := w.listRecords(ctx, repo.RepoPath)
-		if err != nil {
-			return info, false, err
-		}
-		if _, exists := findWorktree(records, filepath.Join(path, relative)); exists {
-			return info, true, nil
-		}
+	refsByRepo := make([][]string, len(repos))
+	for i, repo := range repos {
 		out, err := w.run(ctx, w.binary, "-C", repo.RepoPath, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes")
 		if err != nil {
-			return info, false, err
+			return info, err
 		}
 		for _, ref := range strings.Fields(string(out)) {
-			if remote, ok := strings.CutPrefix(ref, "refs/remotes/"); ok {
-				_, ref, _ = strings.Cut(remote, "/")
+			if remote, pushed := strings.CutPrefix(ref, "refs/remotes/"); pushed {
+				if _, ref, _ = strings.Cut(remote, "/"); ref == repo.Branch {
+					return info, fmt.Errorf("gitworktree: temporary task branch %s is already pushed", ref)
+				}
 			} else {
 				ref = strings.TrimPrefix(ref, "refs/heads/")
 			}
-			if ref == namespace || strings.HasPrefix(ref, namespace+"/") || strings.HasPrefix(namespace, ref+"/") {
-				return info, true, nil
-			}
+			refsByRepo[i] = append(refsByRepo[i], ref)
 		}
 	}
-	oldPath := info.Root.Path
-	target := info
-	target.Worktrees = append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
-	target.Root.Path, target.Root.Branch = path, branch
-	for i := range target.Worktrees {
-		relative, err := filepath.Rel(oldPath, target.Worktrees[i].Path)
-		if err != nil {
-			return info, false, err
+	namespace := strings.TrimSuffix(branch, "/root")
+	root := branch[len(namespace):]
+candidates:
+	for suffix := 1; suffix <= 100; suffix++ {
+		candidate := namespace
+		if suffix > 1 {
+			candidate = fmt.Sprintf("%s-%d", namespace, suffix)
 		}
-		target.Worktrees[i].Path, target.Worktrees[i].Branch = filepath.Join(path, relative), branch
-	}
-	info.Root.RepoPath, target.Root.RepoPath = repos[0].RepoPath, repos[0].RepoPath
-	move := taskNamingMove{Original: info, Target: target}
-	for _, repo := range repos {
-		gitDir, err := checkoutGitDir(repo.Path)
-		if err != nil {
-			return info, false, err
+		// The generated name is the temporary one; a workspace project's
+		// temporary branch is the bare namespace.
+		if candidate == strings.TrimSuffix(info.Root.Branch, "/root") {
+			return info, nil
 		}
-		move.GitDirs = append(move.GitDirs, gitDir)
-	}
-	journal, err := w.taskNamingJournal(info.Root.ProjectID, info.Root.SessionID)
-	if err != nil {
-		return info, false, err
-	}
-	if err := writeTaskNamingMove(ctx, journal, move); err != nil {
-		return info, false, err
-	}
-	// Roll back only before a successful move. After the move, returned paths
-	// must describe reality even if a child registration needs repair.
-	renamed := 0
-	rollbackFailed := false
-	rollback := func(cause error) (ports.WorkspaceProjectInfo, bool, error) {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		for i := renamed - 1; i >= 0; i-- {
-			if _, err := w.run(cleanupCtx, w.binary, "-C", repos[i].Path, "branch", "-m", repos[i].Branch); err != nil {
-				rollbackFailed = true
-				cause = errors.Join(cause, err)
-				if len(info.Worktrees) > i {
-					info.Worktrees[i].Branch = branch
-				}
-				if i == 0 {
-					info.Root.Branch = branch
+		for _, refs := range refsByRepo {
+			for _, ref := range refs {
+				if ref == candidate || strings.HasPrefix(ref, candidate+"/") || strings.HasPrefix(candidate, ref+"/") {
+					continue candidates
 				}
 			}
 		}
-		if !rollbackFailed {
-			cause = errors.Join(cause, os.Remove(journal))
-		}
-		return info, false, cause
-	}
-	for _, repo := range repos {
-		renamed++ // include a command that succeeds immediately before cancellation
-		if _, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "-m", branch); err != nil {
-			result, _, rollbackErr := rollback(err)
-			// Another project can share this repository but have a different gate.
-			// If it claimed the branch after our preflight, retry a suffixed name.
-			if !rollbackFailed && ctx.Err() == nil {
-				if _, probeErr := w.run(ctx, w.binary, "-C", repo.RepoPath, "show-ref", "--verify", "refs/heads/"+branch); probeErr == nil {
-					return result, true, nil
-				}
-			}
-			return result, false, rollbackErr
-		}
-	}
-	if err := moveTaskDirectory(oldPath, path); err != nil {
-		return rollback(err)
-	}
-	info = target
-	// Once moved, finish registration repair even if the request was cancelled.
-	repairCtx, cancelRepair := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancelRepair()
-	info, repairErr := w.RepairTaskWorkspace(repairCtx, info)
-	return info, false, repairErr
-}
-
-// RepairTaskWorkspace retains the existing names and never recreates a checkout.
-func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
-	root, err := w.validateManagedPath(info.Root.Path)
-	if err != nil {
-		return info, err
-	}
-	if err := validatePathComponent("project id", string(info.Root.ProjectID)); err != nil {
-		return info, err
-	}
-	if filepath.Dir(root) != filepath.Join(w.managedRoot, string(info.Root.ProjectID)) {
-		return info, errors.New("gitworktree: task path is outside its project")
-	}
-	repos := append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
-	if len(repos) == 0 {
-		repo := info.Root.RepoPath
-		if repo == "" {
-			repo, err = w.repoPath(info.Root.ProjectID)
-			if err != nil {
-				return info, err
-			}
-		}
-		repos = []ports.WorkspaceRepoInfo{{RepoPath: repo, Path: root}}
-	}
-	for _, repo := range repos {
-		inside, err := pathWithin(root, repo.Path)
-		if err != nil || !inside {
-			return info, fmt.Errorf("gitworktree: task repository path is outside its workspace: %s", repo.Path)
-		}
-	}
-	var repairErr error
-	for i, repo := range repos {
-		if _, err := w.run(ctx, w.binary, "-C", repo.RepoPath, "worktree", "repair", repo.Path); err != nil {
-			repairErr = errors.Join(repairErr, err)
+		renamed, retry, err := w.renameTaskCandidate(ctx, info, repos, candidate+root)
+		if retry {
 			continue
 		}
-		out, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "--show-current")
-		repairErr = errors.Join(repairErr, err)
-		if err == nil {
-			branch := strings.TrimSpace(string(out))
-			if i == 0 {
-				info.Root.Branch = branch
-			}
-			if len(info.Worktrees) > i {
-				info.Worktrees[i].Branch = branch
-			}
+		return renamed, err
+	}
+	return info, fmt.Errorf("gitworktree: no unused task branch for %q", branch)
+}
+
+// RevertTaskBranch puts back the branches original held before a rename the
+// caller could not record. It is exact: no suffix and no guard. On error it
+// reports the branches Git holds: the first repositories are already back.
+func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	from, err := w.taskRepos(renamed)
+	if err != nil {
+		return renamed, err
+	}
+	to, err := w.taskRepos(original)
+	if err != nil || len(to) != len(from) {
+		return renamed, errors.Join(err, errors.New("gitworktree: task repositories changed during naming"))
+	}
+	moves := make([]branchMove, len(from))
+	for i, repo := range from {
+		moves[i] = branchMove{repo.Path, repo.Branch, to[i].Branch}
+	}
+	n, err := w.moveBranches(ctx, moves)
+	return withTaskBranches(renamed, moves[:n]), err
+}
+
+func (w *Workspace) taskRepos(info ports.WorkspaceProjectInfo) ([]ports.WorkspaceRepoInfo, error) {
+	if len(info.Worktrees) > 0 {
+		return info.Worktrees, nil
+	}
+	repo, err := w.repoPathForInfo(info.Root)
+	if err != nil {
+		return nil, err
+	}
+	return []ports.WorkspaceRepoInfo{{RepoPath: repo, Path: info.Root.Path, Branch: info.Root.Branch}}, nil
+}
+
+func (w *Workspace) renameTaskCandidate(ctx context.Context, info ports.WorkspaceProjectInfo, repos []ports.WorkspaceRepoInfo, branch string) (ports.WorkspaceProjectInfo, bool, error) {
+	moves := make([]branchMove, len(repos))
+	for i, repo := range repos {
+		moves[i] = branchMove{repo.Path, repo.Branch, branch}
+	}
+	n, err := w.moveBranches(ctx, moves)
+	if err == nil {
+		return withTaskBranches(info, moves), false, nil
+	}
+	// All repositories share one task name, so undo the ones already renamed,
+	// last first.
+	undo := make([]branchMove, n)
+	for i := range undo {
+		mv := moves[n-1-i]
+		undo[i] = branchMove{mv.path, mv.to, mv.from}
+	}
+	if undone, undoErr := w.moveBranches(ctx, undo); undoErr != nil {
+		// Report what Git now holds: the first repositories kept the new name.
+		return withTaskBranches(info, moves[:n-undone]), false, errors.Join(err, undoErr)
+	}
+	// Another project sharing this repository may have claimed the name.
+	if claimed, _ := w.refExists(ctx, repos[n].RepoPath, "refs/heads/"+branch); claimed {
+		return info, true, nil
+	}
+	return info, false, err
+}
+
+// withTaskBranches puts the first repositories (and the root with the first)
+// on the branches the landed moves gave them.
+func withTaskBranches(info ports.WorkspaceProjectInfo, landed []branchMove) ports.WorkspaceProjectInfo {
+	if len(landed) > 0 {
+		info.Root.Branch = landed[0].to
+	}
+	info.Worktrees = append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
+	for i := range info.Worktrees[:min(len(landed), len(info.Worktrees))] {
+		info.Worktrees[i].Branch = landed[i].to
+	}
+	return info
+}
+
+type branchMove struct{ path, from, to string }
+
+// moveBranches renames branches in order and reports how many landed. Shutdown
+// cannot cancel it, so Git never stops halfway through renaming the branch a
+// live agent has checked out.
+func (w *Workspace) moveBranches(ctx context.Context, moves []branchMove) (int, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	for i, mv := range moves {
+		if _, err := w.run(ctx, w.binary, "-C", mv.path, "branch", "-m", "--", mv.from, mv.to); err != nil {
+			return i, err
 		}
 	}
-	return info, repairErr
+	return len(moves), nil
 }

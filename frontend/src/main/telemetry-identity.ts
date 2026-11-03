@@ -63,6 +63,7 @@ export class TelemetryIdentityController {
 		if (optedOut) {
 			await mkdir(this.dataDir, { recursive: true });
 			await writeFile(file, "1\n", { mode: 0o600 });
+			await rm(path.join(this.dataDir, "telemetry", "cli-usage-daily.json"), { force: true });
 		} else {
 			await rm(file, { force: true });
 		}

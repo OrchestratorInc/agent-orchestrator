@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ArtifactVersionSummary } from "../hooks/useArtifactVersions";
 import { ArtifactHistoryMenu, ArtifactVersionPreview, formatVersionTime } from "./ArtifactHistory";
-import { TooltipProvider } from "./ui/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const { versionsMock, versionMock, statusMock, syncMock } = vi.hoisted(() => ({ versionsMock: vi.fn(), versionMock: vi.fn(), statusMock: vi.fn(), syncMock: vi.fn() }));
 vi.mock("../lib/github-daemon", () => ({ getGitHubStatus: statusMock }));
@@ -36,19 +36,27 @@ function renderMenu(data: ArtifactVersionSummary[] | null, extra: { isError?: bo
 	const onSelect = vi.fn();
 	render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-			<TooltipProvider>
-				<ArtifactHistoryMenu fallbackHarness="codex" onSelect={onSelect} path="plan.md" selectedVersion={null} sessionId="s1" />
-			</TooltipProvider>
+			<DropdownMenu>
+				<DropdownMenuTrigger>plan.md</DropdownMenuTrigger>
+				<DropdownMenuContent>
+					<ArtifactHistoryMenu fallbackHarness="codex" onSelect={onSelect} path="plan.md" selectedVersion={null} sessionId="s1" />
+				</DropdownMenuContent>
+			</DropdownMenu>
 		</QueryClientProvider>,
 	);
 	return { onSelect };
 }
 
+async function openHistory() {
+	await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
+	await userEvent.click(screen.getByRole("menuitem", { name: "Version history" }));
+}
+
 describe("ArtifactHistoryMenu", () => {
 	it("lists every version in one list, the current one first, and previews a chosen version", async () => {
 		const { onSelect } = renderMenu([v(4, "agent", 100, "claude-code"), v(3, "agent", 90, "claude-code"), v(2, "agent", 80), v(1, "user", 0)]);
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
-		const menu = await screen.findByRole("menu");
+		await openHistory();
+		const menu = await screen.findByRole("menu", { name: "Version history" });
 
 		const items = within(menu).getAllByRole("menuitem");
 		expect(items).toHaveLength(4);
@@ -65,15 +73,15 @@ describe("ArtifactHistoryMenu", () => {
 	it("records any unnoticed edit each time it opens", async () => {
 		renderMenu([v(1, "agent", 0)]);
 		expect(syncMock).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
+		await openHistory();
 		expect(syncMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows eight versions, then the rest after Show more", async () => {
 		const many = Array.from({ length: 11 }, (_, i) => v(11 - i, i % 2 ? "user" : "agent", 1000 - i * 100, "claude-code"));
 		renderMenu(many);
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
-		const menu = await screen.findByRole("menu");
+		await openHistory();
+		const menu = await screen.findByRole("menu", { name: "Version history" });
 		expect(within(menu).getAllByRole("menuitem")).toHaveLength(9);
 		await userEvent.click(within(menu).getByText("Show more"));
 		expect(within(menu).getAllByRole("menuitem")).toHaveLength(11);
@@ -84,28 +92,28 @@ describe("ArtifactHistoryMenu", () => {
 		const restored = { ...v(3, "user", 200), restoredFrom: 1 };
 		const lost = { ...v(4, "user", 300), restoredFrom: 99 };
 		renderMenu([lost, restored, v(2, "agent", 100), v(1, "agent", 0)]);
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
-		const menu = await screen.findByRole("menu");
+		await openHistory();
+		const menu = await screen.findByRole("menu", { name: "Version history" });
 		expect(within(menu).getByText(/^Restored from .+\d/)).toBeTruthy();
 		expect(within(menu).getByText("Restored from an earlier version")).toBeTruthy();
 	});
 
 	it("opens the live file from the current row", async () => {
 		const { onSelect } = renderMenu([v(2, "agent", 10), v(1, "agent", 0)]);
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
-		await userEvent.click(within(await screen.findByRole("menu")).getAllByRole("menuitem")[0]!);
+		await openHistory();
+		await userEvent.click(within(await screen.findByRole("menu", { name: "Version history" })).getAllByRole("menuitem")[0]!);
 		expect(onSelect).toHaveBeenCalledWith(null);
 	});
 
 	it("says so when there are no versions or loading failed", async () => {
 		renderMenu([]);
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
+		await openHistory();
 		expect(await screen.findByText("No earlier versions yet.")).toBeTruthy();
 	});
 
 	it("reports a load error", async () => {
 		renderMenu(null, { isError: true });
-		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
+		await openHistory();
 		expect(await screen.findByText("Unable to load version history")).toBeTruthy();
 	});
 });

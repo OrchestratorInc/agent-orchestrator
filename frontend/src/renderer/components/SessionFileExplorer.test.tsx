@@ -283,7 +283,7 @@ describe("SessionFileExplorer", () => {
 		expect(start).toContainElement(changes);
 		expect(end).toContainElement(screen.getByRole("button", { name: "Split diff view" }));
 		expect(end).toContainElement(screen.getByRole("tab", { name: "Changes" }));
-		expect(end?.lastElementChild).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
+		expect(end?.lastElementChild).toContainElement(screen.getByRole("button", { name: "Return to panel" }));
 		expect(container.querySelector("header")).toBeNull();
 		// The titlebar's own border divides it from the review, so the split adds none.
 		expect(container.querySelector('[data-slot="resizable-panel-group"]')).not.toHaveClass("border-t");
@@ -304,7 +304,7 @@ describe("SessionFileExplorer", () => {
 
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 		expect(filterHost).toContainElement(screen.getByRole("textbox", { name: "Filter files" }));
-		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "Maximize files" }));
+		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "Maximize" }));
 		const viewOptions = screen.getByRole("button", { name: "Split diff view" });
 		expect(actionsHost).not.toContainElement(viewOptions);
 		const header = viewOptions.closest("header");
@@ -458,14 +458,11 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).not.toHaveBeenCalled();
 	});
 
-	it("opens in the center and closes the maximized overlay in one action", async () => {
-  const onOpenFile=vi.fn();const onToggleMaximized=vi.fn();
-  renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onToggleMaximized={onToggleMaximized} sessionId="sess-review-center-maximized" />);
+	it("drops the open-diff-in-center action from the maximized review", async () => {
+		renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={vi.fn()} onToggleMaximized={vi.fn()} sessionId="sess-review-center-maximized" />);
 
 		expect(await screen.findByRole("button", { name: "Edit src/App.tsx" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", {name:"Open diff in center"}));
-  expect(onToggleMaximized).toHaveBeenCalledWith(false);
-  expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx",expect.objectContaining({mode:"diff"}));
+		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
 	});
 
 	it("moves the maximized full-file preview into the center while keeping its source", async () => {
@@ -525,7 +522,7 @@ describe("SessionFileExplorer", () => {
 
 	it("opens the maximize tooltip on hover or keyboard focus, not when focus is handed back", async () => {
 		renderWithQuery(<SessionFileExplorer onToggleMaximized={vi.fn()} sessionId="sess-explorer-tooltip" />);
-		const maximize = await screen.findByRole("button", { name: "Maximize files" });
+		const maximize = await screen.findByRole("button", { name: "Maximize" });
 		// Closing the maximized overlay restores focus to this button in code.
 		const focusVisible = vi.spyOn(maximize, "matches").mockImplementation((selector) => selector !== ":focus-visible");
 		act(() => maximize.focus());
@@ -534,7 +531,7 @@ describe("SessionFileExplorer", () => {
 		act(() => maximize.blur());
 		focusVisible.mockImplementation((selector) => selector === ":focus-visible");
 		act(() => maximize.focus());
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("Maximize files");
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Maximize");
 		focusVisible.mockRestore();
 	});
 
@@ -542,7 +539,7 @@ describe("SessionFileExplorer", () => {
 		const onToggleMaximized = vi.fn();
 		renderWithQuery(<SessionFileExplorer onToggleMaximized={onToggleMaximized} sessionId="sess-explorer-4" />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 		expect(onToggleMaximized).toHaveBeenCalledWith(true);
 	});
 });

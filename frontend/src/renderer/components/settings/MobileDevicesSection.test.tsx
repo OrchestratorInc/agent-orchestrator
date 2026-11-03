@@ -20,12 +20,12 @@ const twoDevices = {
 		devices: [
 			{
 				installId: "i1", token: "ExponentPushToken[a]", deviceName: "iPhone", platform: "ios",
-				muted: false, live: true, notificationsEnabled: true,
+				live: true, notificationsEnabled: true,
 				createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 			},
 			{
 				installId: "i2", token: "ExponentPushToken[b]", deviceName: "M31s", platform: "android",
-				muted: true, live: false, notificationsEnabled: true, createdAt: new Date().toISOString(),
+				live: false, notificationsEnabled: true, createdAt: new Date().toISOString(),
 				lastSeenAt: new Date(Date.now() - 7200_000).toISOString(),
 			},
 		],
@@ -54,23 +54,9 @@ describe("MobileDevicesSection", () => {
 		expect(iphoneRow).not.toHaveClass("rounded-lg", "border", "bg-[var(--color-bg-settings-input)]");
 		expect(screen.getByText("M31s")).toBeInTheDocument();
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();
-		expect(screen.getAllByTestId("bell")).toHaveLength(2);
+		// Push notifications are managed on the phone, so rows have no per-device switch.
+		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 		expect(screen.queryByText(/2 hours ago/)).not.toBeInTheDocument();
-	});
-
-	it("mutes a device", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		const patch = vi.spyOn(apiClient, "PATCH").mockResolvedValue({ data: { muted: true } } as never);
-		renderSection();
-
-		const toggle = await screen.findByRole("switch", { name: /notifications for iPhone/i });
-		fireEvent.click(toggle);
-
-		await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-		expect(patch.mock.calls[0][1]).toMatchObject({
-			params: { path: { installId: "i1" } },
-			body: { muted: true },
-		});
 	});
 
 	it("removes a device in one click and sends the DELETE once the undo window ends", async () => {
@@ -176,29 +162,6 @@ describe("MobileDevicesSection", () => {
 		expect(await screen.findByRole("button", { name: /remove iPhone/i })).toBeInTheDocument();
 	});
 
-	it("keeps each switch locked until its own mute settles when toggles overlap", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		vi.spyOn(apiClient, "PATCH").mockReturnValue(new Promise(() => {}) as never);
-		renderSection();
-
-		fireEvent.click(await screen.findByRole("switch", { name: /notifications for iPhone/i }));
-		fireEvent.click(screen.getByRole("switch", { name: /notifications for M31s/i }));
-
-		await waitFor(() => expect(screen.getByRole("switch", { name: /notifications for M31s/i })).toBeDisabled());
-		expect(screen.getByRole("switch", { name: /notifications for iPhone/i })).toBeDisabled();
-	});
-
-	it("only locks the switch of the device whose mute is in flight", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		vi.spyOn(apiClient, "PATCH").mockReturnValue(new Promise(() => {}) as never);
-		renderSection();
-
-		fireEvent.click(await screen.findByRole("switch", { name: /notifications for iPhone/i }));
-
-		await waitFor(() => expect(screen.getByRole("switch", { name: /notifications for iPhone/i })).toBeDisabled());
-		expect(screen.getByRole("switch", { name: /notifications for M31s/i })).toBeEnabled();
-	});
-
 	it("renders nothing when no devices are paired", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { devices: [] } } as never);
 		renderSection();
@@ -252,20 +215,6 @@ describe("MobileDevicesSection", () => {
 		expect(screen.queryByText(/No devices paired yet/i)).not.toBeInTheDocument();
 	});
 
-	it("surfaces a failed mute instead of silently reverting with no explanation", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		vi.spyOn(apiClient, "PATCH").mockResolvedValue({
-			data: undefined,
-			error: { error: "device not found", code: "DEVICE_NOT_FOUND", message: "Device not found", requestId: "req-3" },
-		} as never);
-		renderSection();
-
-		const toggle = await screen.findByRole("switch", { name: /notifications for iPhone/i });
-		fireEvent.click(toggle);
-
-		expect(await screen.findByText(/Device not found/i)).toBeInTheDocument();
-	});
-
 	it("surfaces a failed remove instead of silently reverting with no explanation", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
 		vi.spyOn(apiClient, "DELETE").mockResolvedValue({
@@ -302,13 +251,13 @@ describe("MobileDevicesSection", () => {
 		expect(names).toEqual(["iPhone", "M31s"]);
 	});
 
-	it("keeps a device without a push token manageable without extra status copy", async () => {
+	it("keeps a device without a push token removable without extra status copy", async () => {
 		const noToken = {
 			data: {
 				devices: [
 					{
 						installId: "i3", deviceName: "Pixel Announce", platform: "android",
-						muted: false, live: true, notificationsEnabled: false,
+						live: true, notificationsEnabled: false,
 						createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 					},
 				],
@@ -322,15 +271,8 @@ describe("MobileDevicesSection", () => {
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Notifications not enabled on this device/i)).not.toBeInTheDocument();
 
-		const toggle = screen.getByRole("switch", { name: /notifications for Pixel Announce/i });
-		expect(toggle).toBeDisabled();
-		// Why it's disabled lives in the hover hint, not in visible row copy.
-		expect(toggle.parentElement).toHaveAttribute(
-			"title",
-			expect.stringMatching(/turn them on in the AO mobile app/i),
-		);
+		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
-		// Still removable.
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		fireEvent.click(screen.getByRole("button", { name: /remove Pixel Announce/i }));
 		await act(async () => {

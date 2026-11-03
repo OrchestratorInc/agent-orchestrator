@@ -128,7 +128,7 @@ export default function PRsScreen() {
 				}
 			/>
 			{hostStates.length === 1 && !routeHostId ? <ProjectSwitcher /> : null}
-			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 
 			{loading && prs.length === 0 ? (
 				<View style={styles.center}>

@@ -118,6 +118,7 @@ describe("agent-browser runtime lifecycle", () => {
 		const bridge = {
 			start: vi.fn(overrides.start ?? (async () => "ws://127.0.0.1:1/fixture")),
 			close: vi.fn(overrides.close ?? (async () => undefined)),
+			reconcileTargets: vi.fn(),
 		};
 		const processRunner = vi.fn(
 			overrides.processRunner ?? (async () => ({ stdout: "", stderr: "", exitCode: 0 })),
@@ -137,6 +138,81 @@ describe("agent-browser runtime lifecycle", () => {
 	async function cleanup(dataDir: string): Promise<void> {
 		await rm(dataDir, { recursive: true, force: true });
 	}
+
+	it("resolves AO tab identity separately from native tab numbering and verifies the selected target", async () => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async (_binary, rawArgs) => {
+				const args = rawArgs as string[];
+				const data = args[1] === "list"
+					? { tabs: [{ tabId: "t2", targetId: "t3" }] }
+					: { tabId: "t2", targetId: "t4" };
+				return { stdout: JSON.stringify({ success: true, data }), stderr: "", exitCode: 0 };
+			},
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+				message: "Browser automation did not target AO tab t3",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(["tab", "t2", "--json"]))).toBe(true);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it.each([
+		undefined,
+		[],
+		[{ tabId: "t2", targetId: "t4" }],
+		[{ tabId: "--help", targetId: "t3" }],
+		[{ tabId: "t2", targetId: "t3" }, { tabId: "t3", targetId: "t3" }],
+	])("rejects unavailable or malformed native tab mappings before dispatch: %j", async (tabs) => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async () => ({ stdout: JSON.stringify({ success: true, data: { tabs } }), stderr: "", exitCode: 0 }),
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => (args as string[])[0] === "tab" && (args as string[])[1] !== "list")).toBe(false);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it("closes only the requested AO target without using native numeric IDs", async () => {
+		const { dataDir, runtime, bridge, processRunner } = await fixture();
+		const closeTarget = vi.fn();
+		const closeProvider = {
+			...provider,
+			listTargets: () => ["t1", "t3", "t4"].map((id) => ({ id, url: "about:blank", title: id, debugger: {} as never })),
+			closeTarget,
+		};
+		try {
+			await runtime.run("session-1", ["snapshot"], closeProvider);
+			processRunner.mockClear();
+			bridge.reconcileTargets.mockClear();
+			expect(await runtime.runAction("session-1", "tab-close", { tabId: "t3" }, closeProvider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(closeTarget).toHaveBeenCalledOnce();
+			expect(closeTarget).toHaveBeenCalledWith("t3");
+			expect(bridge.reconcileTargets).toHaveBeenCalledOnce();
+			expect(processRunner).not.toHaveBeenCalled();
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t2" }, closeProvider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t4" }, closeProvider, AbortSignal.abort())).rejects.toMatchObject({
+				code: "AGENT_BROWSER_CANCELLED",
+			});
+			expect(closeTarget).toHaveBeenCalledTimes(1);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
 
 	it("serializes concurrent initialization and removes the owned run root", async () => {
 		const { dataDir, bridge, runtime } = await fixture();
@@ -602,9 +678,12 @@ describe("agent-browser structured output", () => {
 
 const nativeBinary = process.env.AO_AGENT_BROWSER_TEST_BINARY;
 describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
-	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+	function setupNativeFixture() {
 		class DebuggerFixture extends EventEmitter {
 			attached = false;
+			constructor(private readonly url = "http://localhost:5173/") {
+				super();
+			}
 			attach() {
 				this.attached = true;
 			}
@@ -617,7 +696,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			}
 			async sendCommand(method: string) {
 				if (method === "Runtime.evaluate") {
-					return { result: { type: "string", value: "http://localhost:5173/" } };
+					return { result: { type: "string", value: this.url } };
 				}
 				if (method === "Accessibility.getFullAXTree") {
 					return {
@@ -626,7 +705,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 								nodeId: "1",
 								ignored: false,
 								role: { type: "role", value: "button" },
-								name: { type: "computedString", value: "Save" },
+								name: { type: "computedString", value: this.url === "http://localhost:5173/" ? "Save" : "Popup action" },
 								childIds: [],
 							},
 						],
@@ -655,7 +734,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 					id: `t${targets.length + 1}`,
 					url,
 					title: "New tab",
-					debugger: new DebuggerFixture(),
+					debugger: new DebuggerFixture(url),
 				};
 				targets.push(target);
 				return target;
@@ -670,6 +749,11 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			binaryPath: nativeBinary!,
 			dataDir: path.join(shortTempDir, "ao-agent-browser-native-test"),
 		});
+		return { runtime, provider, targets, DebuggerFixture };
+	}
+
+	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+		const { runtime, provider, targets } = setupNativeFixture();
 		try {
 			const result = await runtime.runAction("native-fixture", "get", { property: "url" }, provider);
 			expect(result.url).toBe("http://localhost:5173/");
@@ -691,6 +775,74 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			expect(["full", "unchanged", "delta"]).toContain(next.kind);
 			expect(next.revision).toBeGreaterThan(baselineRevision);
 			if (next.kind !== "full") expect(next.baseRevision).toBe(baselineRevision);
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("discovers externally opened tabs and forgets externally closed tabs without renumbering", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-external-tabs";
+		try {
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/",
+			});
+			for (const tabId of ["t2", "t3"]) {
+				const url = `http://localhost:5173/${tabId}`;
+				// Electron registers a page-opened popup without Target.createTarget.
+				targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+				await runtime.runAction(sessionId, "tab-select", { tabId }, provider);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [
+						{ tabId: "t1", targetId: "t1", active: false },
+						{ tabId, targetId: tabId, active: true, url },
+					],
+				});
+				expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({ url });
+				expect(await runtime.runAction(sessionId, "snapshot", {}, provider)).toMatchObject({
+					snapshot: expect.stringContaining('button "Popup action"'),
+				});
+				targets.splice(1, 1);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [{ tabId: "t1", targetId: "t1", active: true }],
+				});
+			}
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("selects and closes AO targets when a vanished popup leaves a gap in target IDs", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-target-id-gap";
+		// AO's ephemeral t2 disappeared before native discovery. Native IDs will
+		// be t1,t2,t3 for these physical AO targets t1,t3,t4.
+		for (const tabId of ["t3", "t4"]) {
+			const url = `http://localhost:5173/${tabId}`;
+			targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+		}
+		try {
+			expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+				tabs: [
+					{ tabId: "t1", targetId: "t1" },
+					{ tabId: "t2", targetId: "t3" },
+					{ tabId: "t3", targetId: "t4" },
+				],
+			});
+			expect(await runtime.runAction(sessionId, "tab-select", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3",
+			});
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t3",
+			});
+			expect(await runtime.runAction(sessionId, "tab-close", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(targets.map((target) => target.id)).toEqual(["t1", "t4"]);
+			await runtime.runAction(sessionId, "tab-select", { tabId: "t4" }, provider);
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t4",
+			});
 		} finally {
 			await runtime.dispose();
 		}

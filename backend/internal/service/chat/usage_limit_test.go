@@ -438,7 +438,7 @@ func TestUsageLimitAutoResumeWakesHibernatedChatWithoutAView(t *testing.T) {
 			Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), ProviderConversationID: old.ProviderConversationID()})
 		return err
 	})
-	h.advance(30 * time.Second)
+	h.advance(time.Minute)
 	if err := wakeService.ResumeUsageLimitedTurns(ctx); err != nil {
 		t.Fatal(err)
 	}

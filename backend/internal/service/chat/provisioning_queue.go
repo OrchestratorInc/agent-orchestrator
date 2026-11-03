@@ -93,8 +93,13 @@ func (s *Service) queueWithoutController(
 		ClientMessageID:     msg.ClientMessageID,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		SenderSessionID:     msg.SenderSessionID,
+		SenderProjectID:     msg.SenderProjectID,
+		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		SpawnOpeningPrompt:  msg.SpawnOpeningPrompt,
 		Continuation:        msg.Continuation,
+		InteractionAt:       msg.InteractionAt,
 	}
 	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", message, turnID, now)
 	if errors.Is(err, domain.ErrConversationRebound) {
@@ -127,7 +132,7 @@ func (s *Service) queueWithoutController(
 	// after a prior drain found the queue empty. Kicking the same serialized drain
 	// here closes both races; NextQueuedTurn still owns ordering.
 	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil && controller.State() != ports.ChatControllerStopped {
-		_ = controller.drain(ctx) // The message is already accepted; drain logs failures.
+		_ = controller.drainOne(ctx) // The message is already accepted; drain logs failures.
 	}
 	return turn, nil
 }
@@ -165,5 +170,5 @@ func (s *Service) DrainQueued(ctx context.Context, id domain.SessionID) error {
 	if err != nil {
 		return err
 	}
-	return controller.drain(ctx)
+	return controller.drainOne(ctx)
 }
