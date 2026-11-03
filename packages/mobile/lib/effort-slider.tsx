@@ -1,6 +1,7 @@
 import { useNavigation } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View, type DimensionValue, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
+import { StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
@@ -68,11 +69,10 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	// The blob's centre along the track.
 	const blobX = useSharedValue(0);
 	const dragging = useRef(false);
-	// The stop the finger last picked, and the track's left edge on screen.
-	// The blob's own position is not read back: mid-glide the JS thread sees a
-	// stale value, and a quick tap would land the blob back on the old level.
+	// The stop the finger last picked. The blob's own position is not read
+	// back: mid-glide the JS thread sees a stale value, and a quick tap would
+	// land the blob back on the old level.
 	const held = useRef(0);
-	const trackLeft = useRef(0);
 	const glide = (x: number) => {
 		blobX.value = reduceMotion ? x : withTiming(x, { duration: duration.base, easing: Easing.out(Easing.cubic) });
 	};
@@ -81,10 +81,9 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	const blobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: blobX.value - BLOB / 2 }] }));
 	const fillStyle = useAnimatedStyle(() => ({ width: blobX.value + BLOB / 2 + INSET }));
 
-	// iOS reports `locationX` against whichever view is under the finger, so
-	// the drag is measured in page coordinates from the edge found at grant.
-	const follow = (event: GestureResponderEvent, animate: boolean) => {
-		const x = Math.min(width - END, Math.max(END, event.nativeEvent.pageX - trackLeft.current));
+	// `x` is measured from the track's own left edge.
+	const follow = (fingerX: number, animate: boolean) => {
+		const x = Math.min(width - END, Math.max(END, fingerX));
 		const stop = nearestStop(x, END, step, count);
 		held.current = stop;
 		pick(stop);
@@ -94,42 +93,49 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	};
 
 	const release = () => {
+		if (!dragging.current) return;
 		dragging.current = false;
 		glide(stopX(held.current));
 		onRelease?.();
 	};
 
+	// Gesture Handler's pan rather than the responder system: the slider floats
+	// over the conversation, outside the composer's bounds, and on Android the
+	// list under it took the drag as a scroll before a responder could keep it.
+	// With no distance to travel the pan activates on touch down, so the list
+	// never starts scrolling, and a tap lands on its level.
+	const drag = Gesture.Pan()
+		.runOnJS(true)
+		.minDistance(0)
+		.onBegin((event) => {
+			dragging.current = true;
+			follow(event.x, true);
+		})
+		.onUpdate((event) => follow(event.x, false))
+		.onFinalize(release);
+
 	return (
 		<View style={styles.row}>
 			<Text style={styles.label} numberOfLines={1}>{label}</Text>
-			<View
-				style={styles.track}
-				onLayout={(event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
-				onStartShouldSetResponder={() => true}
-				onMoveShouldSetResponder={() => true}
-				onResponderTerminationRequest={() => false}
-				onResponderGrant={(event) => {
-					dragging.current = true;
-					trackLeft.current = event.nativeEvent.pageX - event.nativeEvent.locationX;
-					follow(event, true);
-				}}
-				onResponderMove={(event) => follow(event, false)}
-				onResponderRelease={release}
-				onResponderTerminate={release}
-				accessible
-				accessibilityRole="adjustable"
-				accessibilityLabel="Effort"
-				accessibilityValue={{ text: label }}
-				accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-				onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
-				testID="effort-slider"
-			>
-				{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
-				{width ? choices.map((choice, i) => (
-					<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
-				)) : null}
-				{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
-			</View>
+			<GestureDetector gesture={drag}>
+				<View
+					style={styles.track}
+					onLayout={(event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
+					accessible
+					accessibilityRole="adjustable"
+					accessibilityLabel="Effort"
+					accessibilityValue={{ text: label }}
+					accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+					onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
+					testID="effort-slider"
+				>
+					{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
+					{width ? choices.map((choice, i) => (
+						<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
+					)) : null}
+					{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
+				</View>
+			</GestureDetector>
 		</View>
 	);
 }

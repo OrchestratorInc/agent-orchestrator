@@ -6,7 +6,10 @@ const fixtures = vi.hoisted(() => ({
 	os: "ios",
 	show: vi.fn(),
 	tap: vi.fn(),
+	hideKeyboard: undefined as undefined | (() => void),
+	dismiss: vi.fn(() => new Promise<void>((resolve) => { fixtures.hideKeyboard = resolve; })),
 }));
+vi.mock("react-native-keyboard-controller", () => ({ KeyboardController: { dismiss: fixtures.dismiss } }));
 vi.mock("@expo/ui/community/menu", async () => {
 	const { createElement } = await import("react");
 	// The Android trigger opens the menu through its ref.
@@ -38,6 +41,7 @@ beforeEach(() => {
 	fixtures.os = "ios";
 	fixtures.show.mockClear();
 	fixtures.tap.mockClear();
+	fixtures.dismiss.mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -78,11 +82,16 @@ describe("ChatAttachmentMenu", () => {
 		expect(fixtures.tap).not.toHaveBeenCalled();
 	});
 
-	it("opens the Compose menu from its button on Android", () => {
+	// The popup takes focus: opened over the keyboard, it dropped the keyboard,
+	// raised it again as it closed, and dropped it once more for the picker.
+	it("opens the Compose menu from its button on Android once the keyboard is down", async () => {
 		fixtures.os = "android";
 		render();
 		const trigger = menu().findByProps({ accessibilityLabel: "Attach" });
 		act(() => trigger.props.onPress());
+		expect(fixtures.dismiss).toHaveBeenCalledOnce();
+		expect(fixtures.show).not.toHaveBeenCalled();
+		await act(async () => fixtures.hideKeyboard?.());
 		expect(fixtures.show).toHaveBeenCalledOnce();
 		expect(fixtures.tap).not.toHaveBeenCalled();
 	});

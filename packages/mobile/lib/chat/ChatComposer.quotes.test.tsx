@@ -40,6 +40,7 @@ vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handle
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
+vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
 vi.mock("./PRChip", () => ({ PRChipContent: "PRChipContent", prChipAccessibilityLabel: () => "Pull request" }));
 
 import { ChatComposer } from "./ChatComposer";

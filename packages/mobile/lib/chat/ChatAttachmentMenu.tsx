@@ -1,6 +1,7 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
 import { useRef } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { KeyboardController } from "react-native-keyboard-controller";
 import { AppSymbol } from "../AppSymbol";
 import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemeState } from "../ThemeProvider";
@@ -50,8 +51,12 @@ export function ChatAttachmentMenu({
 		<MenuView ref={menu} title="Attach" colorScheme={scheme} actions={actions} onPressAction={choose} testID="chat-attachment-menu">
 			{Platform.OS === "android" ? (
 				// Compose's trigger is no accessibility node and draws no ripple, so
-				// Android's is a button of its own that opens the menu.
-				<Pressable {...button} android_ripple={feedback.android_ripple} onPress={() => menu.current?.show()} style={styles.trigger}>
+				// Android's is a button of its own that opens the menu. The menu's
+				// popup takes focus, which dropped the keyboard, raised it again as
+				// the menu closed, and dropped it once more for the picker: the
+				// keyboard goes down first, once, and the menu opens where the
+				// composer settles.
+				<Pressable {...button} android_ripple={feedback.android_ripple} onPress={() => void KeyboardController.dismiss().then(() => menu.current?.show())} style={styles.trigger}>
 					{glyph}
 				</Pressable>
 			) : (

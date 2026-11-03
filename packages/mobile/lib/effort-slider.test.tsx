@@ -22,6 +22,26 @@ vi.mock("react-native", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
 });
+// The pan's builder keeps its callbacks, so a test can play a drag through them.
+vi.mock("react-native-gesture-handler", async () => {
+	const React = await import("react");
+	const pan = () => {
+		const handlers: Record<string, (event?: { x: number }) => void> = {};
+		const builder = {
+			handlers,
+			runOnJS: () => builder,
+			minDistance: (distance: number) => { handlers.minDistance = () => distance; return builder; },
+			onBegin: (fn: () => void) => { handlers.begin = fn; return builder; },
+			onUpdate: (fn: () => void) => { handlers.update = fn; return builder; },
+			onFinalize: (fn: () => void) => { handlers.finalize = fn; return builder; },
+		};
+		return builder;
+	};
+	return {
+		Gesture: { Pan: pan },
+		GestureDetector: ({ gesture, children }: { gesture: unknown; children?: React.ReactNode }) => React.createElement("GestureDetector", { gesture }, children),
+	};
+});
 vi.mock("react-native-reanimated", async () => {
 	const React = await import("react");
 	return {
@@ -68,10 +88,17 @@ async function render(selected?: string) {
 		const style = root.findAll((node) => hostType(node) === "AnimatedView").at(-1)!.props.style[1]() as { transform: { translateX: number }[] };
 		return style.transform[0].translateX + 16;
 	};
+	// The pan's callbacks, from the latest render; `x` is from the track's left edge.
+	const pan = () => (root.findAll((node) => hostType(node) === "GestureDetector")[0].props.gesture as { handlers: Record<string, (event?: { x: number }) => unknown> }).handlers;
+	const drag = {
+		begin: (x: number) => { pan().begin({ x }); },
+		move: (x: number) => { pan().update({ x }); },
+		end: () => { pan().finalize(); },
+	};
 	return {
 		track,
-		// The track sits 100 in from the page's edge.
-		touch: (x: number) => ({ nativeEvent: { locationX: x, pageX: 100 + x } }),
+		pan,
+		drag,
 		label: () => root.findAll((node) => hostType(node) === "Text")[0].props.children,
 		blobCentre,
 		onChoose,
@@ -81,16 +108,16 @@ async function render(selected?: string) {
 
 describe("effort slider", () => {
 	it("pulls the blob toward the nearest level while dragging, ticking as it lands on each", async () => {
-		const { track, touch, blobCentre, label, onChoose } = await render("high");
-		await act(async () => track().props.onResponderGrant(touch(120)));
+		const { drag, blobCentre, label, onChoose } = await render("high");
+		await act(async () => drag.begin(120));
 		// A little off a level, the blob barely moves.
-		await act(async () => track().props.onResponderMove(touch(130)));
+		await act(async () => drag.move(130));
 		expect(blobCentre()).toBeCloseTo(124);
 		expect(onChoose).not.toHaveBeenCalled();
 		// Past halfway it is drawn onto the next one.
-		await act(async () => track().props.onResponderMove(touch(150)));
+		await act(async () => drag.move(150));
 		expect(blobCentre()).toBeCloseTo(154);
-		await act(async () => track().props.onResponderMove(touch(236)));
+		await act(async () => drag.move(236));
 		expect(blobCentre()).toBe(220);
 		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["xhigh", "max"]);
 		expect(fixtures.detent).toHaveBeenCalledTimes(2);
@@ -98,31 +125,36 @@ describe("effort slider", () => {
 	});
 
 	it("glides onto the level when let go, and says the level is settled", async () => {
-		const { track, touch, blobCentre, onRelease } = await render("high");
-		await act(async () => track().props.onResponderGrant(touch(60)));
-		await act(async () => track().props.onResponderMove(touch(82)));
+		const { drag, blobCentre, onRelease } = await render("high");
+		await act(async () => drag.begin(60));
+		await act(async () => drag.move(82));
 		expect(blobCentre()).not.toBe(70);
 		expect(onRelease).not.toHaveBeenCalled();
-		await act(async () => track().props.onResponderRelease());
+		await act(async () => drag.end());
 		expect(blobCentre()).toBe(70);
 		expect(onRelease).toHaveBeenCalledOnce();
 	});
 
 	it("lands a quick tap on the tapped level, not back where the blob was mid-glide", async () => {
-		const { track, touch, onChoose } = await render("low");
+		const { drag, onChoose } = await render("low");
 		fixtures.midGlide = true;
-		await act(async () => track().props.onResponderGrant(touch(220)));
-		await act(async () => track().props.onResponderRelease());
+		await act(async () => drag.begin(220));
+		await act(async () => drag.end());
 		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["max"]);
 		expect(fixtures.glides.at(-1)).toBe(220);
 	});
 
-	it("follows the finger by its page position, whatever view iOS measures it against", async () => {
-		const { track, touch, label } = await render("low");
-		await act(async () => track().props.onResponderGrant(touch(20)));
-		// Over another view, iOS's locationX can read near zero.
-		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 4, pageX: 100 + 170 } }));
+	// On Android the conversation under the floating slider took the drag as a
+	// scroll. A pan with no distance to travel holds the touch from touch down.
+	it("claims the touch as it lands, before the list under it can scroll", async () => {
+		const { pan, drag, label, onRelease } = await render("low");
+		expect(pan().minDistance()).toBe(0);
+		await act(async () => drag.begin(170));
 		expect(label()).toBe("Xhigh");
+		await act(async () => drag.end());
+		// A pan that ends twice (cancelled, then finalized) settles once.
+		await act(async () => drag.end());
+		expect(onRelease).toHaveBeenCalledOnce();
 	});
 
 	it("keeps its own touches from counting as a tap outside it", async () => {
