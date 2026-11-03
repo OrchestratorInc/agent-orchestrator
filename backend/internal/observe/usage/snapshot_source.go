@@ -26,6 +26,7 @@ type snapshotUsageReader func(ctx context.Context, path string, source domain.Us
 
 var snapshotUsageReaders = map[domain.UsageSourceKind]snapshotUsageReader{
 	domain.UsageSourceGrokSession: readGrokUsageChunk,
+	domain.UsageSourceFXSession:   readFXUsageChunk,
 }
 
 func snapshotUsageSource(kind domain.UsageSourceKind) bool {
