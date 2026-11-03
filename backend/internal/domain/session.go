@@ -191,6 +191,9 @@ type SessionImportSource struct {
 	// SourceTranscriptPath preserves the archive's source when preparation
 	// selects a different native transcript for the resumed binding.
 	SourceTranscriptPath string `json:"sourceTranscriptPath,omitempty"`
+	// Fingerprint pins optional provider content/sidecar evidence from selection.
+	// First-open native preparation must verify it before copying that source.
+	Fingerprint string `json:"fingerprint,omitempty"`
 	// HistoryThrough is the last conversation sequence the provider replayed
 	// while adopting. The timeline shows the archive in place of that replay.
 	HistoryThrough int64 `json:"historyThrough,omitempty"`
