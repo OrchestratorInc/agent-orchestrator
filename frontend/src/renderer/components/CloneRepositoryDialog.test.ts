@@ -7,7 +7,7 @@ import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, 
 // The first run prompt reads the GitHub CLI state from the daemon; drive it directly.
 const gitHub = vi.hoisted(() => ({
 	requirements: [{ id: "gh", label: "gh", required: false, satisfied: true }] as Array<{ id: string; label: string; required: boolean; satisfied: boolean }>,
-	auth: { isSuccess: true, isError: false, data: { satisfied: true }, refetch: vi.fn() } as { isSuccess: boolean; isError: boolean; data: { satisfied: boolean }; refetch: () => unknown },
+	auth: { isSuccess: true, isError: false, data: { satisfied: true }, refetch: vi.fn() } as { isSuccess: boolean; isError: boolean; data?: { satisfied: boolean }; refetch: () => unknown },
 }));
 vi.mock("../hooks/useSystemRequirementsGate", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useSystemRequirementsGate")>()),
@@ -96,6 +96,16 @@ describe("clone repository input", () => {
 		expect(props.onClose).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Close clone repository dialog" }));
 		expect(props.onClose).toHaveBeenCalledOnce();
+	});
+
+	it("does not block a pasted URL when the GitHub check itself failed", () => {
+		gitHub.auth = { isSuccess: false, isError: true, data: undefined, refetch: vi.fn() };
+		renderCloneDialog({ firstRun: true, value: { remoteUrl: "", destinationParent: "/code" } }, true);
+		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+		fireEvent.change(screen.getByPlaceholderText("https://github.com/org/repository.git"), { target: { value: "https://github.com/acme/web-app" } });
+		fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+		expect(screen.queryByText("Sign in to GitHub")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Back to code source" })).toBeInTheDocument();
 	});
 
 	it("offers GitHub sign-in only once a pasted URL is submitted, and can continue without it", () => {

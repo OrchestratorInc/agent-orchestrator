@@ -122,7 +122,7 @@ type ProjectSource = "clone" | "local" | "workspace";
 type ProjectOffering = "local" | "cloud";
 type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean } | { kind: "clone_destination" };
 
-function initialCloneDetails(hostId?: string, firstRun = false): CloneRepositoryDetails {
+function initialCloneDetails(hostId?: string): CloneRepositoryDetails {
 	return {
 		remoteUrl: "",
 		destinationParent: hostId ? "" :
@@ -307,7 +307,7 @@ export function CreateProjectFlow({
 		setValidationScan(null);
 		resetProjectImportState();
 		if (source === "clone") {
-			setCloneDetails(initialCloneDetails(hostId, firstRunClone));
+			setCloneDetails(initialCloneDetails(hostId));
 			setCloneSelection(null);
 			if (firstRunClone) setCloneDialogOpen(true);
 			else transitionToChild(() => setCloneDialogOpen(true));

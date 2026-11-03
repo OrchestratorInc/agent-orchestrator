@@ -60,7 +60,11 @@ export type GitHubState = {
 	known: boolean;
 	/** The CLI is installed and signed in, so the user's repositories can be listed. */
 	hasGitHub: boolean;
-	/** A git-related action should first offer to install the CLI or sign in. */
+	/**
+	 * The CLI is known to be missing or signed out, so a git-related action should
+	 * first offer to install it or sign in. A probe that failed or timed out is
+	 * not a reason to block anyone, so unknown never counts as needing setup.
+	 */
 	needsSetup: boolean;
 };
 
@@ -81,7 +85,8 @@ export function WithGitHubState({ children }: { children: (state: GitHubState) =
 	const known = answered || gaveUp;
 	const installed = requirements.find((requirement) => requirement.id === "gh")?.satisfied !== false;
 	const hasGitHub = known && installed && auth.data?.satisfied === true;
-	return <>{children({ known, hasGitHub, needsSetup: known && !hasGitHub })}</>;
+	const needsSetup = !installed || auth.data?.satisfied === false;
+	return <>{children({ known, hasGitHub, needsSetup })}</>;
 }
 
 /** Install the GitHub CLI if it is missing, then sign in. Calls `onReady` once both are done. */
