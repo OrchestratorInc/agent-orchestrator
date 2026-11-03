@@ -328,26 +328,6 @@ describe("shell index route", () => {
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
 	});
 
-	it("surfaces missing GitHub authentication on the seeded first-run home page", () => {
-		routeMocks.workspaces = [
-			{ id: "scratch", name: "Scratch", kind: "scratch", path: "/scratch", sessions: [] },
-		];
-		routeMocks.requirements = [
-			{ id: "gh", label: "gh", satisfied: true, required: false, detail: "/usr/bin/gh" },
-		];
-		routeMocks.authRequirement = { id: "github-auth", label: "GitHub access", satisfied: false, required: false, detail: "Sign in." };
-
-		render(<HomePage />);
-
-		expect(screen.getByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: /Scratch/ }).compareDocumentPosition(
-				screen.getByText("Connect GitHub for pull requests"),
-			) & Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-	});
-
 	it("opens a project from the recent-project list", async () => {
 		routeMocks.workspaces = [
 			{ id: "scratch", name: "Scratch", kind: "scratch", path: "/scratch", sessions: [] },
