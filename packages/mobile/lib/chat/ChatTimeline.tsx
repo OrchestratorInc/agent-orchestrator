@@ -173,6 +173,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// above as they scroll up change the content's size, and that must not read
 	// as a reason to pull them back down.
 	const followsTail = useRef(true);
+	// The list's own height and its content's, for `scrollToLatest`.
+	const viewportHeight = useRef(0);
+	const contentHeight = useRef(0);
 	const dragging = useRef(false);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
@@ -218,9 +221,25 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// The ScrollView's own end, not FlatList's: FlatList measures to the last row
 	// and footer and leaves out the content's bottom padding, so it stopped short
 	// of the newest message by the composer's height.
+	//
+	// Under the iOS glass header the list rests at minus the header's height
+	// (`contentInsetAdjustmentBehavior`), but the native scrollToEnd never goes
+	// above 0. A conversation shorter than the screen was pushed up under the
+	// header by exactly that much, jumping there as it opened. Short content
+	// scrolls to its true end here instead, which is never above the header,
+	// and nothing scrolls until the list has measured itself (the content can
+	// report its size first; `onLayout` then makes the scroll).
 	const scrollToLatest = (animated: boolean) => {
 		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
-		if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
+		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
+		if (clampsUnderHeader && !viewportHeight.current) return;
+		const overflow = contentHeight.current - viewportHeight.current;
+		// `scrollToOffset` passes a negative offset through; FlatList's own
+		// scrollToEnd, the fallback below, clamps it to 0. The native scrollTo
+		// then clamps to the list's own content inset, which leaves out the one
+		// the header adds, unless `scrollToOverflowEnabled` is set (it is, below).
+		if (clampsUnderHeader && overflow < 0) listRef.current?.scrollToOffset({ offset: Math.max(overflow, -underHeader), animated });
+		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
@@ -325,6 +344,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 							style={styles.list}
 							contentContainerStyle={contentStyle}
 							contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}
+							// Lets `scrollToLatest` rest a short conversation just below the header.
+							scrollToOverflowEnabled={Platform.OS === "ios" && underHeader > 0}
 							scrollIndicatorInsets={{ bottom: bottomInset }}
 							keyboardShouldPersistTaps="handled"
 							initialNumToRender={OPENING_ROWS}
@@ -348,7 +369,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
-							onContentSizeChange={() => {
+							onLayout={(event) => {
+								const measured = !viewportHeight.current;
+								viewportHeight.current = event.nativeEvent.layout.height;
+								if (measured && followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+							}}
+							onContentSizeChange={(_width, height) => {
+								contentHeight.current = height;
 								notifyRenderViewport();
 								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 							}}
