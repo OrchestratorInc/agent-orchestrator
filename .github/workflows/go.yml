@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
     paths:
       - "backend/**"
       - "pricing/**"
@@ -15,12 +16,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: go-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: go-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: true
 
 jobs:
   backend-core:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +86,9 @@ jobs:
           printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=20m
 
   chat-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -107,7 +112,9 @@ jobs:
           go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/service/chat
 
   session-store-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -123,7 +130,9 @@ jobs:
         run: go test -race -count=1 -timeout=20m ./internal/session_manager ./internal/storage/sqlite/store
 
   sqlite-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -148,12 +157,14 @@ jobs:
 
   # Keep the existing required check as the gate for every backend race test.
   build-test:
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
     needs: [backend-core, chat-race, session-store-race, sqlite-race]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check backend results
         run: |
+          # This gate is skipped with draft/stacked jobs, never for a failed dependency.
           test '${{ needs.backend-core.result }}' = success
           test '${{ needs.chat-race.result }}' = success
           test '${{ needs.session-store-race.result }}' = success
@@ -165,7 +176,9 @@ jobs:
   # an open handle makes both fail. Scoped to those packages rather than the
   # whole suite to keep the matrix cheap.
   windows-workspace:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'ci:full'))
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -224,7 +237,9 @@ jobs:
         run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
 
   lint:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -248,7 +263,9 @@ jobs:
           # any new issue fails CI rather than being grandfathered.
 
   sqlc-drift:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -270,7 +287,9 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- backend/internal/storage/sqlite/gen)"
 
   api-drift:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
