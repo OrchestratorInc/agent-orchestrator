@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -506,7 +507,16 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
 	}
-	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	var env map[string]string
+	preparedImportEnv := requireNativeHistory && rec.NeedsImportResume()
+	if preparedImportEnv {
+		rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+		if err != nil {
+			return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
+		}
+	} else {
+		env = m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
@@ -534,7 +544,7 @@ func (m *Manager) resumeChatController(
 		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
 	}
 	if requireNativeHistory && rec.NeedsImportResume() {
-		relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath)
+		relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath, env)
 		if relocateErr != nil {
 			return RestoreResult{}, relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, relocateErr))
 		}
@@ -578,6 +588,16 @@ func (m *Manager) resumeChatController(
 		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			if preparedImportEnv {
+				// The import preparer already saw this resolved environment. Only
+				// bind its verifier to the gate's exact owner; do not issue again.
+				prepared, prepareErr := m.persistBrowserCapabilityVerifier(launchCtx, rec, expected, rec.Metadata.BrowserCapabilityVerifier)
+				if prepareErr != nil {
+					return nil, prepareErr
+				}
+				rec = prepared
+				return maps.Clone(env), nil
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, rec, project.Config.Env, expected,
 			)
