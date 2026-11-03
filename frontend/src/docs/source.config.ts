@@ -1,11 +1,12 @@
 import remarkGfm from "remark-gfm";
 import { defineDocs, defineConfig } from "fumadocs-mdx/config";
+import { PROCESSED_MARKDOWN } from "./src/lib/markdown-export";
 
 export const docs = defineDocs({
   dir: "content",
   docs: {
     // Keeps each article's Markdown for llms.txt and the `.md` copies.
-    postprocess: { includeProcessedMarkdown: { headingIds: false } },
+    postprocess: { includeProcessedMarkdown: PROCESSED_MARKDOWN },
   },
 });
 

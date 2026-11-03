@@ -4,6 +4,7 @@ import { localePath, withTrailingSlash } from "@/i18n/paths";
 import { COMPANY } from "./constants";
 import { commitDates } from "./last-modified";
 import { docsTree } from "./docs-tree";
+import type { FaqEntry } from "./faq";
 
 /** The `og:locale` of each language, in the `language_TERRITORY` form link previews expect. */
 export const OG_LOCALES: Record<SupportedLocale, string> = {
@@ -66,6 +67,8 @@ type Article = {
   locale: SupportedLocale;
   /** The article's source file inside `content/`, for its dates. */
   path: string;
+  /** The questions the article answers, for an FAQ page. */
+  faq?: FaqEntry[];
 };
 
 /**
@@ -90,9 +93,26 @@ function breadcrumbs({ title, url, locale }: Article) {
   };
 }
 
+/** The `FAQPage` of an article that answers questions, e.g. the FAQ. */
+function faqPage(url: string, { locale, faq = [] }: Article) {
+  return {
+    "@type": "FAQPage",
+    "@id": `${url}#faq`,
+    url,
+    inLanguage: locale,
+    isPartOf: { "@id": website["@id"] },
+    mainEntity: faq.map(({ question, answer }) => ({
+      "@type": "Question",
+      name: question,
+      acceptedAnswer: { "@type": "Answer", text: answer },
+    })),
+  };
+}
+
 /**
  * The JSON-LD of an article: a `TechArticle` in the docs site, with its
- * breadcrumbs everywhere but the docs home.
+ * breadcrumbs everywhere but the docs home, and an `FAQPage` when it
+ * answers questions.
  */
 export function articleStructuredData(article: Article) {
   const url = absoluteUrl(withTrailingSlash(article.url));
@@ -117,6 +137,7 @@ export function articleStructuredData(article: Article) {
       },
       website,
       ...(isHome ? [] : [breadcrumbs(article)]),
+      ...(article.faq?.length ? [faqPage(url, article)] : []),
     ],
   };
 }
