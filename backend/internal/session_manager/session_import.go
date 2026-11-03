@@ -28,20 +28,31 @@ type ImportArchiveRefresher interface {
 	RefreshArchive(context.Context, domain.SessionRecord) error
 }
 
-// SetImportArchiveRefresher late-binds the import service; nil skips the refresh.
+// SetImportArchiveRefresher late-binds the import service. Nil skips optional
+// archive refresh, but cannot validate a fingerprinted first-open source.
 func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 	m.importArchive = refresher
 }
 
 // refreshImportArchive keeps turns added in another app since the import in the
 // visible history. The copy taken at import remains when the source is unreadable.
-func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
+func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
+	source := rec.Metadata.ImportSource
+	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
 	if m.importArchive == nil {
-		return
+		if required {
+			return importNotice("native source snapshot validation is unavailable; retry after the import service is ready")
+		}
+		return nil
 	}
 	if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
+		if required {
+			m.logger.Warn("native import source snapshot could not be verified", "sessionID", rec.ID, "error", err)
+			return importNotice("the native source changed or could not be verified; retry, or remove this pending import and scan again")
+		}
 		m.logger.Warn("imported history refresh failed; keeping the import-time copy", "sessionID", rec.ID, "error", err)
 	}
+	return nil
 }
 
 // importReplayedThrough is the last sequence of the provider replay projected
@@ -155,11 +166,12 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 		return rec, nil
 	}
 	err := relocator.RelocateImportedSession(ctx, ports.ImportedSessionRelocation{
-		NativeSessionID: source.NativeID,
-		ConfigDir:       source.ConfigDir,
-		TranscriptPath:  rec.Metadata.NativeTranscriptPath,
-		SourceCWD:       source.CWD,
-		LaunchCWD:       launchPath,
+		NativeSessionID:   source.NativeID,
+		ConfigDir:         source.ConfigDir,
+		TranscriptPath:    rec.Metadata.NativeTranscriptPath,
+		SourceCWD:         source.CWD,
+		LaunchCWD:         launchPath,
+		SourceFingerprint: source.Fingerprint,
 	})
 	if err != nil {
 		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), err)
