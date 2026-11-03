@@ -76,8 +76,8 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
-	// fingerprint covers additional native inputs (for example SQLite WAL and
-	// manifest stats) without changing the existing size/mtime contract.
+	// fingerprint covers the exact content inputs (including WAL/metadata) the
+	// importer read. It also pins selection and first-open copy validation.
 	fingerprint string
 }
 
@@ -642,6 +642,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 					return ctxErr
 				}
 				count := len(source.messages)
+				source.fingerprint = file.fingerprint
 				source.messages = nil // Retain only metadata between preview and import.
 				results[i] = parsed{source: source, count: count, err: err}
 				return nil
@@ -696,7 +697,24 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	replacer, ok := s.store.(interface {
 		ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
 	})
-	if source == nil || source.Adopted || !ok {
+	if source == nil || source.Adopted {
+		return nil
+	}
+	if source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == "" {
+		dests, err := s.destinations(ctx)
+		if err != nil {
+			return err
+		}
+		path := rec.Metadata.NativeTranscriptPath
+		if source.SourceTranscriptPath != "" {
+			path = source.SourceTranscriptPath
+		}
+		selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
+		if err := s.checkSourceFingerprint(ctx, selected, s.registeredDiscoveryRoots(dests)); err != nil {
+			return err
+		}
+	}
+	if !ok {
 		return nil
 	}
 	paths := []string{rec.Metadata.NativeTranscriptPath}
@@ -765,7 +783,7 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		mode = domain.SessionModeTUI
 	}
 	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
 	// Claude and Pi resume on AO's or the user's default model unless told
 	// otherwise, which may be a provider the chat never used; keep the chat's own.
 	switch source.harness {
@@ -819,8 +837,16 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 				continue
 			}
 			group.Go(func() error {
+				projects := s.registeredDiscoveryRoots(dests)
+				if err := s.checkSourceFingerprint(ctx, item.source, projects); err != nil {
+					reads[i].err = err
+					return nil
+				}
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, s.registeredDiscoveryRoots(dests), item.source.paths...)
+				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
+				if reads[i].err == nil {
+					reads[i].err = s.checkSourceFingerprint(ctx, item.source, projects)
+				}
 				return nil
 			})
 		}
