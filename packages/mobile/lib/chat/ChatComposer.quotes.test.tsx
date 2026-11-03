@@ -53,7 +53,7 @@ import { launchImageLibraryAsync } from "expo-image-picker";
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
 
 const props = () => ({
-	sessionId: "session", config: null,
+	sessionId: "session", config: null, machine: "",
 	snapshot: { turns: [], items: [], controller: { state: "idle" }, settings: {} },
 	skills: [], filePaths: [], models: [], restingInset: 0,
 	onSend: vi.fn(async () => "send-id"), onSteer: vi.fn(), onAcknowledgeSend: vi.fn(async () => {}), onQuoteHandled: vi.fn(),
@@ -105,6 +105,7 @@ it("keeps a quote added while an earlier send is waiting for acknowledgement", a
 it("restores a saved quote alongside a typed draft", async () => {
 	const p = props();
 	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test" } as ComponentProps<typeof ChatComposer>["config"];
+	p.machine = "http.localhost.1234";
 	storage.getItem.mockResolvedValueOnce(encodeResponseDraft("Saved reply", [{ id: "saved", text: "Saved excerpt", source }]));
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Saved reply");
@@ -123,8 +124,9 @@ it("saves an immediately submitted reply and quote before an old host rejects it
 	vi.mocked(launchImageLibraryAsync).mockResolvedValue({ canceled: false, assets: [{ uri: "qa-image", width: 1, height: 1, base64: "aGVsbG8=", mimeType: "image/png" }] });
 	const p = props();
 	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "draft-rejection-host" };
+	p.machine = "host.draft-rejection-host";
 	function Harness({ quote = true }: { quote?: boolean }) {
-		const conversation = useMobileConversation(p.config, p.sessionId);
+		const conversation = useMobileConversation(p.config, p.machine, p.sessionId);
 		return <ChatComposer {...p} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend}
 			quoteRequest={quote ? { id: "immediate", text: "Quoted context", source, composerKey: "session" } : undefined} />;
 	}

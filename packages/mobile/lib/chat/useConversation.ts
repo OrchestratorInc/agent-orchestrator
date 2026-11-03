@@ -121,13 +121,24 @@ export type MobileConversation = {
 	rename(title: string): Promise<void>;
 };
 
+/**
+ * `verified` is the connection, used only to make requests; it is null in
+ * the background and while endpoints are raced. `machine` (the store's, see
+ * viewMachine.ts) says whose conversation this is, and keys everything shown:
+ * keyed on the connection, every app switch swapped the transcript and pending sends
+ * for an empty key and back.
+ */
 export function useMobileConversation(
-	cfg: ServerConfig | null,
+	verified: ServerConfig | null,
+	machine: string,
 	sessionId: string,
 	options?: { reviewId?: string; eventSessionId?: string },
 ): MobileConversation {
-	const cacheKey = cfg ? conversationPageCacheKey(cfg, options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
-	const pendingKey = cfg ? pendingSendKey(machineIdentity(cfg), options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
+	const scope = options?.reviewId ? `review:${options.reviewId}` : sessionId;
+	const cacheKey = machine ? conversationPageCacheKey(machine, scope) : "";
+	const pendingKey = machine ? pendingSendKey(machine, scope) : "";
+	// A connection to some other machine (mid-switch) must not answer for this one.
+	const cfg = verified && machineIdentity(verified) === machine ? verified : null;
 	const [initialState] = useState(() => cacheKey
 		? cachedConversationState(conversationPageCache, cacheKey)
 		: { pages: [] as ConversationPage[], loading: true });
@@ -208,21 +219,28 @@ export function useMobileConversation(
 		}
 	}, [cfg, options?.reviewId, sessionId, snapshot?.hasMoreBefore, snapshot?.oldestSequence, loadingOlder]);
 
+	// What is remembered for this conversation shows as soon as it is known,
+	// and only a different conversation replaces it. Losing the connection
+	// does not: the transcript stays and the next refresh brings it up to date.
 	useEffect(() => {
-		mounted.current = true;
 		const cached = cacheKey
 			? cachedConversationState(conversationPageCache, cacheKey)
 			: { pages: [] as ConversationPage[], loading: true };
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
+	}, [cacheKey]);
+
+	// Asks the machine whenever a verified connection to it is (again) available.
+	useEffect(() => {
+		mounted.current = true;
 		void refresh();
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
-	}, [cacheKey, refresh, refreshGate]);
+	}, [refresh, refreshGate]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -566,6 +584,6 @@ function classifyConversationError(error: unknown, reviewer = false): { permanen
 	};
 }
 
-function conversationPageCacheKey(cfg: ServerConfig, sessionId: string): string {
-	return `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}/${cfg.password}/${sessionId}`;
+function conversationPageCacheKey(machine: string, scope: string): string {
+	return `${machine}/${scope}`;
 }

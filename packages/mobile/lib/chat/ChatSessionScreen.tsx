@@ -4,7 +4,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
-import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
@@ -39,6 +38,7 @@ import { conversationActionError, conversationActionUnsupported } from "./conver
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
 import { sessionStartupView, startupVisible } from "../session/sessionStartup";
@@ -90,10 +90,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, kill } = useApp();
+	// `config` makes requests and drops on every app switch; `machine` keys what
+	// this screen shows and keeps it across one (see viewMachine.ts).
+	const { config, machine, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
-	const conversation = useMobileConversation(config, session.id);
+	const conversation = useMobileConversation(config, machine, session.id);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -235,8 +237,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const headerState = conversation.snapshot?.controller.state;
 	// The PR ready for review, as a chip over the composer that opens it.
 	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	// Fetched only over the live connection; read through the last verified one
+	// too, so the card stays put while an app switch has the connection down.
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
-	const reviewPromptSummary = config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number) : undefined;
+	const summaryConfig = useLastVerifiedConfig(config, machine);
+	const reviewPromptSummary = summaryConfig && reviewPromptPR ? reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number) : undefined;
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
@@ -282,7 +287,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
 	}, [navigation, t]);
 
-	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
+	// Remounts the composer only for a different conversation, never because the
+	// connection dropped: that discarded the field and any attachments mid-pick.
+	const composerKey = JSON.stringify([machine, session.id]);
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
 	const quoteSequence = useRef(0);
 	const addResponseToChat = useCallback((text: string, source?: ResponseQuoteRequest["source"]) => {
@@ -750,6 +757,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onExpandedChange={setComposerOpen}
 					sessionId={session.id}
 					config={config}
+					machine={machine}
 					snapshot={snapshot}
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
 					quotaActive={Boolean(quota)}
