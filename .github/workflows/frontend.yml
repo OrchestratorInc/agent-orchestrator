@@ -9,7 +9,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
     paths:
       - "frontend/**"
       # Keep workflow edits covered by the frontend validation suite.
@@ -24,13 +24,28 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: true
+  # Coalesce pending main runs, but let the active run finish for a main signal.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  policy:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.native.outputs.enabled }}
+    steps:
+      - name: Select native coverage
+        id: native
+        env:
+          ENABLED: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:macos') || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: printf 'enabled=%s\n' "$ENABLED" >> "$GITHUB_OUTPUT"
+
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while
     # Swift cross-compiles and lipo-verifies the arm64 helper.
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main' && (contains(github.event.pull_request.labels.*.name, 'ci:macos') || contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    needs: policy
+    if: needs.policy.outputs.native == 'true'
     runs-on: macos-26-intel
     timeout-minutes: 15
     defaults:
@@ -84,7 +99,8 @@ jobs:
     # read-only and asserts the .DS_Store, background and icon positions are
     # there. The control proves the check still catches what shipped through
     # v0.14.7: a bare `hdiutil create -srcfolder` image with no layout at all.
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main' && (contains(github.event.pull_request.labels.*.name, 'ci:macos') || contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    needs: policy
+    if: needs.policy.outputs.native == 'true'
     runs-on: macos-latest
     timeout-minutes: 15
     defaults:
@@ -333,24 +349,24 @@ jobs:
   # Keep the existing check name as the gate for the split frontend jobs.
   test:
     if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
-    needs: [checks, typecheck, vitest, mac-dmg-layout]
+    needs: [policy, checks, typecheck, vitest, mac-update-helper, mac-dmg-layout]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check frontend results
         run: |
-          # Linux dependencies must never silently skip or pass after cancellation.
+          # A failed policy must not turn native coverage into a successful skip.
+          test '${{ needs.policy.result }}' = success
           test '${{ needs.checks.result }}' = success
           test '${{ needs.typecheck.result }}' = success
           test '${{ needs.vitest.result }}' = success
-          # Only an intentionally unrequested native job may be skipped.
-          if [ '${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:macos') || contains(github.event.pull_request.labels.*.name, 'ci:full') }}' = true ]; then
-            test '${{ needs.mac-dmg-layout.result }}' = success
-          else
-            case '${{ needs.mac-dmg-layout.result }}' in
-              success|skipped) ;; *) exit 1 ;;
+          for result in '${{ needs.mac-update-helper.result }}' '${{ needs.mac-dmg-layout.result }}'; do
+            case '${{ needs.policy.outputs.native }}' in
+              true) test "$result" = success ;;
+              false) case "$result" in success|skipped) ;; *) exit 1 ;; esac ;;
+              *) exit 1 ;;
             esac
-          fi
+          done
 
   renderer-smoke:
     # RENDERER smoke (issue #2483, renderer slice) — the Playwright specs that run

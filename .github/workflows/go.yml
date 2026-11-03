@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
     paths:
       - "backend/**"
       - "pricing/**"
@@ -17,7 +17,8 @@ permissions:
 
 concurrency:
   group: go-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: true
+  # Coalesce pending main runs, but let the active run finish for a main signal.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-core:

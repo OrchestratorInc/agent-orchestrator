@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
     paths:
       - "backend/**"
       - "test/cli/**"
@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: true
+  # Coalesce pending main runs, but let the active run finish for a main signal.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Primary tier: the cross-platform Go E2E suite (build tag `e2e`) runs the real
@@ -27,10 +28,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # PRs run Linux only; macOS and Windows run on push to main, or on a PR
-        # carrying the ci:full label (label changes trigger a new run).
-        os: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+        # Preserve all check names, even when a PR does not request native tests.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
+    env:
+      CI_NATIVE: ${{ matrix.os == 'ubuntu-latest' || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
@@ -38,13 +40,16 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        if: env.CI_NATIVE == 'true'
 
       - uses: actions/setup-go@v5
+        if: env.CI_NATIVE == 'true'
         with:
           go-version: "1.27.1"
           cache: false
 
       - name: CLI E2E (native)
+        if: env.CI_NATIVE == 'true'
         run: go test -tags e2e -v ./internal/cli/...
 
   # Secondary hardening tier: prove that a freshly installed binary works on a
