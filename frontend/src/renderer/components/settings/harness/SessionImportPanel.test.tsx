@@ -16,6 +16,7 @@ it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
 });
@@ -50,6 +51,13 @@ beforeEach(() => {
 		},
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
+});
+it("lists OMP chats for import", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },
+	});
+	renderPanel("omp");
+	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
 });
 it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
 	renderPanel();
