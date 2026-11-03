@@ -241,3 +241,10 @@ function timeOf(value: string): number {
 	const time = Date.parse(value);
 	return Number.isNaN(time) ? 0 : time;
 }
+
+/** The page a horizontal pager of artifacts rests on at a scroll offset. */
+export function artifactPageAt<T>(pages: readonly T[], offsetX: number, pageWidth: number): T | undefined {
+	if (pageWidth <= 0 || pages.length === 0) return undefined;
+	const index = Math.min(pages.length - 1, Math.max(0, Math.round(offsetX / pageWidth)));
+	return pages[index];
+}

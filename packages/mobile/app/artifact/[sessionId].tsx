@@ -1,11 +1,11 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -27,7 +27,7 @@ import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { toolbarIcon } from "../../lib/toolbarIcon";
-import { font, iconSize, radius, space, type } from "../../lib/tokens";
+import { font, fontScaleCap, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
@@ -46,6 +46,10 @@ const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
  * artifact ("Add to chat" in the selection menu) opens a comment on that text,
  * and Ask the agent comments on the whole file. A comment is sent now or added
  * to the session's review, the same one the Files screen keeps.
+ *
+ * A listed artifact opens as one page of a gallery: swiping sideways moves
+ * through the session's other artifacts, in the gallery's order. The header and
+ * its actions follow the page on screen.
  */
 export default function ArtifactViewerScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -67,7 +71,11 @@ function ArtifactViewerContent() {
 	const { artifacts, loading } = useSessionArtifacts(hostMatches ? sessionId : "");
 	// A listed file's modified time, so a document's regenerated image is not served from cache.
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
-	const artifact = artifacts?.find((candidate) => candidate.path === path);
+	// The page on screen: the file the route opened, until a swipe moves on.
+	const [currentPath, setCurrentPath] = useState(path);
+	const artifact = artifacts?.find((candidate) => candidate.path === currentPath);
+	const pageIndex = artifact && artifacts ? artifacts.indexOf(artifact) : -1;
+	const pageCount = artifacts?.length ?? 0;
 	const leave = useCallback(() => backOr(router), [router]);
 	const { openMenu, menu } = useArtifactActions(sessionId, leave);
 	const openHistory = useCallback((target: SessionArtifact) => {
@@ -84,6 +92,11 @@ function ArtifactViewerContent() {
 		Keyboard.dismiss();
 		setAsk(null);
 	}, []);
+	const showPage = useCallback((next: SessionArtifact) => {
+		closeAsk();
+		setActionError(undefined);
+		setCurrentPath(next.path);
+	}, [closeAsk]);
 	const askedOnOpen = useRef(false);
 	useEffect(() => {
 		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
@@ -131,8 +144,13 @@ function ArtifactViewerContent() {
 	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({ title: artifact?.name ?? path.split("/").pop() ?? "Artifact" });
-	}, [artifact?.name, navigation, path]);
+		const title = artifact?.name ?? path.split("/").pop() ?? "Artifact";
+		navigation.setOptions({
+			title,
+			// In a gallery of several, the title also says where this page sits.
+			headerTitle: pageCount > 1 && pageIndex >= 0 ? () => <PagerTitle title={title} position={`${pageIndex + 1} of ${pageCount}`} /> : undefined,
+		});
+	}, [artifact?.name, navigation, pageCount, pageIndex, path]);
 	// Memoized: each new element re-registers the header's items.
 	const headerItems = useMemo(() => artifact ? (
 		<Stack.Toolbar placement="right">
@@ -147,14 +165,21 @@ function ArtifactViewerContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!artifact) {
-		const url = artifactFileUrl(config, sessionId, path);
-		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(path) ? { sessionId, path } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	if (!artifact || !artifacts) {
+		const url = artifactFileUrl(config, sessionId, currentPath);
+		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	return (
 		<View style={styles.screen}>
 			{headerItems}
-			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
+			<ArtifactPager
+				pages={artifacts}
+				index={pageIndex}
+				// A comment belongs to the file it was opened on; paging waits until it is sent or closed.
+				scrollEnabled={!ask}
+				onPage={showPage}
+				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
+			/>
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
@@ -170,6 +195,71 @@ function ArtifactViewerContent() {
 				<ReviewButton count={review.comments.length} onPress={openReview} />
 			)}
 			{menu}
+		</View>
+	);
+}
+
+/**
+ * The session's artifacts side by side, one page each, swiped like a photo
+ * gallery. Only the page on screen and its neighbours are mounted, so a long
+ * list does not load every web page at once.
+ */
+function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }: {
+	pages: readonly SessionArtifact[];
+	index: number;
+	scrollEnabled: boolean;
+	onPage(artifact: SessionArtifact): void;
+	renderPage(artifact: SessionArtifact): ReactNode;
+}) {
+	const styles = useThemedStyles(makeStyles);
+	const list = useRef<FlatList<SessionArtifact>>(null);
+	// Pages are as wide as the viewer, which on an iPad in split view is not the screen.
+	const [size, setSize] = useState<{ width: number; height: number }>();
+	const onLayout = useCallback((event: LayoutChangeEvent) => {
+		const { width, height } = event.nativeEvent.layout;
+		setSize((current) => current?.width === width && current.height === height ? current : { width, height });
+	}, []);
+	const width = size?.width ?? 0;
+	// A file written while this is open lands at the front of the list, and a
+	// resize changes the page width: either way the page on screen stays put.
+	useEffect(() => {
+		if (width > 0 && index >= 0) list.current?.scrollToOffset({ offset: index * width, animated: false });
+	}, [index, width]);
+	const onSettled = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		const next = artifactPageAt(pages, event.nativeEvent.contentOffset.x, width);
+		if (next && next !== pages[index]) onPage(next);
+	}, [index, onPage, pages, width]);
+	return (
+		<View style={styles.screen} onLayout={onLayout}>
+			{size ? (
+				<FlatList
+					ref={list}
+					data={pages}
+					horizontal
+					pagingEnabled
+					scrollEnabled={scrollEnabled && pages.length > 1}
+					showsHorizontalScrollIndicator={false}
+					keyExtractor={(artifact) => artifact.path}
+					getItemLayout={(_, item) => ({ length: size.width, offset: size.width * item, index: item })}
+					initialScrollIndex={Math.max(0, index)}
+					initialNumToRender={1}
+					maxToRenderPerBatch={1}
+					windowSize={3}
+					onMomentumScrollEnd={onSettled}
+					renderItem={({ item }) => <View style={{ width: size.width, height: size.height }}>{renderPage(item)}</View>}
+				/>
+			) : null}
+		</View>
+	);
+}
+
+/** The header of a gallery page: the file's name over where it sits in the list. */
+function PagerTitle({ title, position }: { title: string; position: string }) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View accessible accessibilityRole="header" accessibilityLabel={`${title}, ${position}`} style={styles.pagerTitle}>
+			<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.pagerTitleText}>{title}</Text>
+			<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.pagerPosition}>{position}</Text>
 		</View>
 	);
 }
@@ -341,6 +431,9 @@ function Unavailable({ title, message, action }: { title: string; message?: stri
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	pagerTitle: { maxWidth: 240, alignItems: "center", justifyContent: "center" },
+	pagerTitleText: { fontFamily: font.semibold, maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	pagerPosition: { fontFamily: font.regular, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
