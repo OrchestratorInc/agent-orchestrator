@@ -11,7 +11,7 @@ import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
@@ -49,6 +49,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
 	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;

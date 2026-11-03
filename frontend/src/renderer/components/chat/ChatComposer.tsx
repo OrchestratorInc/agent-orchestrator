@@ -50,7 +50,10 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { isMacPlatform } from "../../lib/platform";
+import { useDictation } from "./useDictation";
+import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -468,6 +471,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const dictation = useDictation({
+		onText: (text) => editor.current?.dictate(text),
+		onEnd: (keep) => editor.current?.endDictation(keep),
+	});
+	const dictating = dictation.phase !== "idle";
+	// Dictation is in preview: macOS only, behind Developer mode.
+	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -1295,6 +1305,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending keeps what was dictated so far and stops listening.
+		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
@@ -1698,6 +1710,10 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
+		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
+			dictation.detach();
+		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -2052,6 +2068,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
@@ -2097,6 +2114,11 @@ export const ChatComposer = memo(function ChatComposer({
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
+				{dictation.error ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+						{dictation.error}
+					</p>
+				) : null}
 				{steerRefusal ?? steerOutcomeNotice ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
@@ -2191,6 +2213,43 @@ export const ChatComposer = memo(function ChatComposer({
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
 								Steer
 							</Button>
+						) : null}
+						{canDictate ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="none"
+											disabled={!dictating && controlsDisabled}
+											// Keep focus in the editor, where the words appear.
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={() => {
+												editor.current?.focus();
+												dictation.toggle();
+											}}
+											data-shortcut-target="dictate"
+											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-pressed={dictating}
+											className={cn(
+												// Important: the chat surface's button rule (styles.css) would otherwise drop width from the transition.
+												"mr-1 h-7 overflow-hidden rounded-full p-0 transition-[width,background-color,color]! duration-200! ease-[cubic-bezier(0.23,1,0.32,1)]! active:translate-y-0! active:transform-none! active:scale-100! motion-reduce:transition-none!",
+												dictating
+													? "w-[76px] bg-foreground text-on-foreground hover:bg-foreground/90! hover:text-on-foreground dark:hover:bg-foreground/90!"
+													: "w-7 text-muted-foreground hover:bg-interactive-active! hover:text-foreground",
+											)}
+										>
+											{dictating ? (
+												<DictationMeter listening={dictation.phase === "listening"} />
+											) : (
+												<Mic aria-hidden="true" className="size-3.5" />
+											)}
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
+							</Tooltip>
 						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
