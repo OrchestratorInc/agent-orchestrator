@@ -78,7 +78,7 @@ func TestKimiDiscoverAndParse(t *testing.T) {
 func TestScanDoesNotOfferKimiWithReadableHistory(t *testing.T) {
 	root := t.TempDir()
 	kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
-	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: "/work/repo"}}}, "")
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: "/work/repo"}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimi: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {

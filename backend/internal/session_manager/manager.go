@@ -3693,7 +3693,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ports.ErrAgentAuthRequired)
 		}
 	}
-	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env, restoredWorkspaceContext(rec, forceFresh)); err != nil {
 		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh {
@@ -3791,7 +3791,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("supervisor", fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err))
 	}
-	if err := m.prepareRuntimeLaunch(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+	if err := m.prepareRuntimeLaunch(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env, restoredWorkspaceContext(rec, mode != RestoreModeNative)); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("runtime preparation", fmt.Errorf("%s %s: runtime preparation: %w", operation, rec.ID, err))
 	}
@@ -6843,8 +6843,8 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // starts the agent: installing the workspace-local activity hooks (so early
 // startup hooks can update the already-created session row), then any optional
 // PreLaunch step. Shared by Spawn and Restore.
-func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
-	if err := agent.GetAgentHooks(ctx, ports.WorkspaceHookConfig{
+func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore ...workspaceRestoreContext) error {
+	cfg := ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
 		DataDir:          m.dataDir,
@@ -6852,7 +6852,11 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
-	}); err != nil {
+	}
+	if len(restore) > 0 {
+		restore[0].apply(&cfg)
+	}
+	if err := agent.GetAgentHooks(ctx, cfg); err != nil {
 		m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 		return fmt.Errorf("install hooks: %w", err)
 	}
@@ -6872,12 +6876,12 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 	return nil
 }
 
-func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore ...workspaceRestoreContext) error {
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil
 	}
-	return preparer.PrepareRuntimeLaunch(ctx, ports.WorkspaceHookConfig{
+	cfg := ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
 		DataDir:          m.dataDir,
@@ -6885,7 +6889,11 @@ func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, i
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
-	})
+	}
+	if len(restore) > 0 {
+		restore[0].apply(&cfg)
+	}
+	return preparer.PrepareRuntimeLaunch(ctx, cfg)
 }
 
 func (m *Manager) cleanupPreparedAgentWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, env map[string]string) {
