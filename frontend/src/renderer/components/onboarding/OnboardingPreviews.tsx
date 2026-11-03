@@ -135,46 +135,87 @@ function PhoneFrame({ height, children }: { height: number; children: ReactNode 
 }
 
 /** `phone` is the phone's screen; given one, the phone slides in beside the window. */
+type AppRect = { left: number; top: number; width: number; height: number };
+
+function sameRect(a: AppRect | null, b: AppRect | null): boolean {
+	if (!a || !b) return a === b;
+	return Math.abs(a.left - b.left) < 0.5 && Math.abs(a.top - b.top) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
+}
+
+/** An element's rect in the window's own (unscaled) coordinates. */
+function appRect(box: HTMLElement, element: HTMLElement): AppRect | null {
+	const boxRect = box.getBoundingClientRect();
+	const k = boxRect.width / APP_WIDTH;
+	if (!k) return null;
+	const rect = element.getBoundingClientRect();
+	return { left: (rect.left - boxRect.left) / k, top: (rect.top - boxRect.top) / k, width: rect.width / k, height: rect.height / k };
+}
+
+/** How far the camera may zoom past the fitted window, so text stays crisp. */
+const MAX_ZOOM = 2;
+/** The camera: a soft spring that eases into a framing and can retarget mid-move. */
+const CAMERA_SPRING = { type: "spring", visualDuration: 0.6, bounce: 0.08 } as const;
+
 export function PreviewStage({
 	children,
 	phone,
 	phoneShown = false,
 	opaque = false,
+	frameWidth,
 }: {
 	children: ReactNode;
 	phone?: ReactNode;
 	phoneShown?: boolean;
 	/** Paint the window without transparency (as with the setting off). */
 	opaque?: boolean;
+	/** Lay the stage out at this width whatever its column's current width, so a
+	 * collapsing column crops the stage instead of rescaling it. */
+	frameWidth?: number;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const reduceMotion = useReducedMotion();
-	const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+	const [measured, setMeasured] = useState<{ width: number; height: number } | null>(null);
+	const size = measured ? { width: frameWidth ?? measured.width, height: measured.height } : null;
+	const hasSize = measured !== null;
 	// Where the window's center panel sits (same on every step), so the plate
-	// can back it with the panel colour when the window turns opaque.
+	// can back it with the panel colour when the window turns opaque; and what
+	// the current step asks the camera to frame (its [data-preview-focus]
+	// elements, ignoring a step that is on its way out).
 	const boxRef = useRef<HTMLDivElement>(null);
-	const [panel, setPanel] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+	const [panel, setPanel] = useState<AppRect | null>(null);
+	const [focus, setFocus] = useState<AppRect | null>(null);
 	useLayoutEffect(() => {
 		const box = boxRef.current;
 		if (!box) return;
 		const measure = () => {
 			const surface = box.querySelector<HTMLElement>(".center-panel-surface");
-			if (!surface) return;
-			const boxRect = box.getBoundingClientRect();
-			const rect = surface.getBoundingClientRect();
-			const k = boxRect.width / APP_WIDTH;
-			if (!k) return;
-			setPanel({ left: (rect.left - boxRect.left) / k, top: (rect.top - boxRect.top) / k, width: rect.width / k, height: rect.height / k });
+			const nextPanel = surface ? appRect(box, surface) : null;
+			if (nextPanel) setPanel((current) => (sameRect(current, nextPanel) ? current : nextPanel));
+			const targets = [...box.querySelectorAll<HTMLElement>("[data-preview-focus]")].filter((element) => !element.closest("[data-stage-exiting]"));
+			let union: AppRect | null = null;
+			for (const target of targets) {
+				const rect = appRect(box, target);
+				if (!rect) continue;
+				if (!union) union = rect;
+				else {
+					const right = Math.max(union.left + union.width, rect.left + rect.width);
+					const bottom = Math.max(union.top + union.height, rect.top + rect.height);
+					const left = Math.min(union.left, rect.left);
+					const top = Math.min(union.top, rect.top);
+					union = { left, top, width: right - left, height: bottom - top };
+				}
+			}
+			setFocus((current) => (sameRect(current, union) ? current : union));
 		};
 		measure();
 		const observer = new MutationObserver(measure);
-		observer.observe(box, { childList: true, subtree: true });
+		observer.observe(box, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-preview-focus", "data-stage-exiting"] });
 		return () => observer.disconnect();
-	}, [size]);
+	}, [hasSize]);
 	useLayoutEffect(() => {
 		const element = ref.current;
 		if (!element) return;
-		const measure = () => setSize({ width: element.clientWidth, height: element.clientHeight });
+		const measure = () => setMeasured({ width: element.clientWidth, height: element.clientHeight });
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
@@ -194,14 +235,29 @@ export function PreviewStage({
 	// A soft spring: settles with a hint of overshoot, the same both ways, and
 	// picks up mid-flight if the step changes again before it lands.
 	const transition = reduceMotion ? { duration: 0 } : SLIDE_SPRING;
+	// The camera: the fitted window, or the focus rect filling the stage with an
+	// even margin (never smaller than the fit, at most MAX_ZOOM of it), centred.
+	let camera = { x: left, y: top, scale };
+	if (focus && size && scale) {
+		const zoom = Math.max(scale, Math.min(scale * MAX_ZOOM, (size.width - 2 * STAGE_INSET) / focus.width, (size.height - 2 * STAGE_INSET) / focus.height));
+		camera = {
+			x: size.width / 2 - (focus.left + focus.width / 2) * zoom,
+			y: size.height / 2 - (focus.top + focus.height / 2) * zoom,
+			scale: zoom,
+		};
+	}
 	return (
-		<div ref={ref} aria-hidden="true" inert data-opaque={opaque} className="pointer-events-none relative min-h-0 flex-1 select-none overflow-hidden border-l border-border onboarding-preview-stage">
+		<div ref={ref} aria-hidden="true" inert className="pointer-events-none relative min-h-0 flex-1 select-none overflow-hidden border-l border-border">
+			<div data-opaque={opaque} className="onboarding-preview-stage absolute inset-y-0 left-0" style={{ width: size?.width ?? "100%" }}>
 			{size ? (
 				<motion.div className="absolute inset-0" initial={{ x: 0 }} animate={{ x: windowShift }} transition={transition}>
-					<div
+					<motion.div
 						ref={boxRef}
-						className="absolute origin-top-left"
-						style={{ left, top, width: APP_WIDTH, height: APP_HEIGHT, transform: `scale(${scale})` }}
+						className="absolute left-0 top-0"
+						style={{ width: APP_WIDTH, height: APP_HEIGHT, originX: 0, originY: 0 }}
+						initial={false}
+						animate={camera}
+						transition={reduceMotion ? { duration: 0 } : CAMERA_SPRING}
 					>
 						{/* The window's glass, tint and shadow: one persistent plate under
 						    whichever step's contents are showing. */}
@@ -209,7 +265,7 @@ export function PreviewStage({
 							{panel ? <div className="onboarding-preview-panel-backing absolute" style={panel} /> : null}
 						</div>
 						{children}
-					</div>
+					</motion.div>
 				</motion.div>
 			) : null}
 			{size && phone != null ? (
@@ -224,6 +280,7 @@ export function PreviewStage({
 					<PhoneFrame height={windowHeight}>{phone}</PhoneFrame>
 				</motion.div>
 			) : null}
+			</div>
 		</div>
 	);
 }

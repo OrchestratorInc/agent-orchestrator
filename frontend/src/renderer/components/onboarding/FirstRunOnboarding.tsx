@@ -8,6 +8,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -89,6 +90,9 @@ const READINESS_POLL_MS = 3_000;
 const INSTALL_POLL_MS = 1_000;
 // --duration-normal and --ease-out, for motion's JS-driven transitions.
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
+/** The copy column's width beside the stage. */
+const COPY_WIDTH = 400;
+const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.55, bounce: 0.06 } as const;
 
 const STARTER_PROMPTS = [
 	{ label: "firstRun.startPromptImproveLabel", prompt: "firstRun.startPromptImprove" },
@@ -195,6 +199,27 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	const [footerSlot, setFooterSlot] = useState<HTMLDivElement | null>(null);
 	const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
 	const [confirmingSkip, setConfirmingSkip] = useState(false);
+	// The window's width, for the copy column / stage split (stage from 900px).
+	const rowRef = useRef<HTMLDivElement>(null);
+	const [rowWidth, setRowWidth] = useState(0);
+	useLayoutEffect(() => {
+		const element = rowRef.current;
+		if (!element) return;
+		const measure = () => setRowWidth(element.clientWidth);
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const wide = rowWidth >= 900;
+	const stageCollapsed = step === "project";
+	// Spring only when the stage opens or closes; a window resize follows at once.
+	const previousCollapsed = useRef(stageCollapsed);
+	const collapseChanged = previousCollapsed.current !== stageCollapsed;
+	useEffect(() => {
+		previousCollapsed.current = stageCollapsed;
+	}, [stageCollapsed]);
+	const collapseTransition = reduceMotion || !collapseChanged ? { duration: 0 } : COLLAPSE_SPRING;
 	const goNext = () => {
 		const next = STEPS[Math.min(index + 1, STEPS.length - 1)]!;
 		if (next === "orchestrator") setPoint(0);
@@ -228,8 +253,18 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			    mounted, so the wallpaper, window and phone never blink. Each step
 			    portals its window into the stage, and the outgoing step stays
 			    mounted under the incoming one until its fade ends. */}
-			<div className="grid min-h-0 flex-1 grid-cols-1 min-[900px]:grid-cols-[400px_minmax(0,1fr)]">
-				<div className="relative min-h-0">
+			{/* On the project step the copy's column widens over the whole window
+			    (the stage column closes to nothing) so the setup sits centred; the
+			    stage keeps its full layout width meanwhile and is cropped, not
+			    rescaled. */}
+			<div ref={rowRef} className="flex min-h-0 flex-1 overflow-hidden">
+				<motion.div
+					className="relative min-h-0 shrink-0"
+					initial={false}
+					animate={{ width: !wide ? rowWidth : stageCollapsed ? rowWidth : COPY_WIDTH }}
+					transition={collapseTransition}
+					style={{ width: !wide ? "100%" : undefined }}
+				>
 					<AnimatePresence initial={false}>
 						<motion.div
 							key={step}
@@ -252,14 +287,21 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							{step === "start" ? <StartStep onFinish={onFinish} /> : null}
 						</motion.div>
 					</AnimatePresence>
-				</div>
-				<div className="hidden min-h-0 min-[900px]:flex">
-					{/* Beside the phone, the window drops transparency so both devices show
-					    the theme in the same colours. */}
-					<PreviewStage phone={<ExamplePhone />} phoneShown={step === "signin"} opaque={step === "signin"}>
-						<div ref={setPreviewSlot} className="absolute inset-0" />
-					</PreviewStage>
-				</div>
+				</motion.div>
+				{wide ? (
+					<div className="flex min-h-0 min-w-0 flex-1">
+						{/* Beside the phone, the window drops transparency so both devices show
+						    the theme in the same colours. */}
+						<PreviewStage
+							frameWidth={rowWidth - COPY_WIDTH}
+							phone={<ExamplePhone />}
+							phoneShown={step === "signin"}
+							opaque={step === "signin"}
+						>
+							<div ref={setPreviewSlot} className="absolute inset-0" />
+						</PreviewStage>
+					</div>
+				) : null}
 			</div>
 			<div className="flex h-14 shrink-0 items-center justify-between gap-3 border-t border-border pl-12 pr-4">
 				<Progress index={index} />
@@ -322,10 +364,13 @@ const PreviewSlotContext = createContext<HTMLDivElement | null>(null);
 function StagePreview({ children }: { children: ReactNode }) {
 	const slot = useContext(PreviewSlotContext);
 	const reduceMotion = useReducedMotion();
+	// The stage's camera frames only the current step's focus, not one leaving.
+	const present = useIsPresent();
 	if (!slot) return null;
 	return createPortal(
 		<motion.div
 			className="absolute inset-0"
+			data-stage-exiting={present ? undefined : ""}
 			initial={reduceMotion ? false : { opacity: 0 }}
 			animate={{ opacity: 1 }}
 			exit={{ opacity: 0, transition: reduceMotion ? { duration: 0 } : FADE }}
@@ -353,8 +398,11 @@ function StepSplit({
 	body,
 	children,
 	preview,
+	centered = false,
 }: {
 	icon?: ReactNode;
+	/** The stage is closed on this step: centre the copy in the window. */
+	centered?: boolean;
 	title: string;
 	body?: ReactNode;
 	children?: ReactNode;
@@ -364,7 +412,12 @@ function StepSplit({
 		<>
 			{/* Fixed top anchor: the title sits at the same height on every step;
 			    only what is under it changes. */}
-			<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-10 pl-12 pr-10 pt-[max(5rem,18vh)]">
+			<div
+				className={cn(
+					"flex min-h-0 w-full flex-col overflow-y-auto bg-background",
+					centered ? "items-center justify-center px-12 py-10" : "pb-10 pl-12 pr-10 pt-[max(5rem,18vh)]",
+				)}
+			>
 				<div className="flex w-full max-w-md flex-col">
 					{icon ? <div className="pb-5">{icon}</div> : null}
 					<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
@@ -1017,6 +1070,7 @@ function ProjectStep({ onDone }: { onDone: () => void }) {
 
 	return (
 		<StepSplit
+			centered
 			title={t("firstRun.projectTitle")}
 			body={t("firstRun.projectBody")}
 			preview={
