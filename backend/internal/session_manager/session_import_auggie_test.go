@@ -34,7 +34,7 @@ func TestAuggieImportRestorePinsOriginalCacheDespiteLaunchHome(t *testing.T) {
 				source.ResumeConfigDir, want = prepared, prepared
 			}
 			meta := domain.SessionMetadata{AgentSessionID: source.NativeID, ProviderConversationID: source.NativeID, ImportSource: source}
-			argv, _, mode, err := restoreArgv(context.Background(), auggie.New(), "imported", worktree, meta, "", "", ports.AgentConfig{}, domain.SessionKindWorker, domain.HarnessAuggie, t.TempDir(), launchEnv)
+			argv, _, mode, err := restoreArgv(context.Background(), auggie.New(), "imported", worktree, meta, "", "", ports.AgentConfig{}, domain.KindWorker, domain.HarnessAuggie, t.TempDir(), launchEnv)
 			if err != nil || mode != RestoreModeNative {
 				t.Fatalf("adopted=%v prepared=%v: mode=%s err=%v", adopted, preparedCopy, mode, err)
 			}
