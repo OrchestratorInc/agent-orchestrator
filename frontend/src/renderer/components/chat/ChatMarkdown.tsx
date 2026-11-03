@@ -286,7 +286,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>

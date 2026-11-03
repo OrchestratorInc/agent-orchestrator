@@ -3891,5 +3891,6 @@
 	"automations.template.daily_pr_review_v1.description": "Repérez les pull requests qui nécessitent votre attention, avec des priorités et des étapes suggérées.",
 	"automations.template.daily_issue_triage_v1.description": "Transformez les tickets nouveaux et actualisés en une liste de triage ciblée avec des actions claires.",
 	"automations.template.weekly_release_notes_v1.description": "Rédigez des notes de version à partir des pull requests fusionnées, regroupées par fonctionnalités et correctifs.",
-	"automations.templates.setup": "Nécessite un accès GitHub en lecture au projet sélectionné."
+	"automations.templates.setup": "Nécessite un accès GitHub en lecture au projet sélectionné.",
+	"shortcut.find-in-chat": "Rechercher dans le chat"
 }

@@ -2398,6 +2398,7 @@
 	"shortcut.keyboard-shortcuts": "Show keyboard shortcuts",
 	"shortcut.model-picker": "Choose model",
 	"shortcut.dictate": "Dictate",
+	"shortcut.find-in-chat": "Find in chat",
 	"shortcut.modified": "Modified",
 	"shortcut.moreBindings_one": "{{count}} alternative shortcut. Choose Customize to view all bindings.",
 	"shortcut.moreBindings_other": "{{count}} alternative shortcuts. Choose Customize to view all bindings.",

@@ -1,4 +1,7 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
+import { useChatFind } from "../../hooks/useChatFind";
+import type { FindOccurrence } from "../../lib/chat-find";
+import "./chat-find.css";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
@@ -1770,6 +1773,7 @@ function ChatWorkspaceContent({
  <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
 			ref={surfaceRef}
+			data-chat-find-scope=""
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
@@ -1929,6 +1933,7 @@ function ChatWorkspaceContent({
 									snapshot={snapshot}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
+									findUnavailable={Boolean(session?.cloud)}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2674,9 +2679,11 @@ export function Timeline({
 	onAddToChat,
 	onForeignAnnotation,
 	annotationNavigationRef,
-	snapshot,
+	snapshot: sourceSnapshot,
 	assetBaseUrl,
 	remoteHost,
+	findUnavailable = false,
+	sideChat = false,
 	draftScope,
 	draftPersistenceAvailable = true,
 	hasOlder,
@@ -2716,6 +2723,8 @@ export function Timeline({
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
+	findUnavailable?: boolean;
+	sideChat?: boolean;
 	draftScope: ChatDraftScope;
 	/** False when drafts can't be saved; persisted inline edits are then ignored. */
 	draftPersistenceAvailable?: boolean;
@@ -2751,13 +2760,20 @@ export function Timeline({
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
 }) {
+	const findSurface = useRef<HTMLDivElement>(null);
+	const scroller = useRef<HTMLDivElement>(null);
+	const pauseFindFollow = useRef<() => void>(() => {});
+	const findScrollWritten = useRef<(top: number) => void>(() => {});
+	const findPausedFollow = useRef(false);
+	const [findTarget, setFindTarget] = useState<FindOccurrence>();
+	const find = useChatFind({ source: sourceSnapshot, root: findSurface, viewport: scroller, hostId: useContext(ChatHostId), unavailable: findUnavailable, sideChat, pauseFollow: () => pauseFindFollow.current(), onScrollWritten: (top) => findScrollWritten.current(top), reveal: (hit) => setFindTarget({ ...hit }) });
+	const snapshot = find.snapshot;
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
 	if (arriving && !hasTranscript) arrivedEmpty.current = true;
 	const revealTranscript = arrivedEmpty.current && hasTranscript;
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
-	const scroller = useRef<HTMLDivElement>(null);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -2805,7 +2821,15 @@ export function Timeline({
 		cancelScrollFollow();
 		if (pinnedRef.current) setPinnedNow(false);
 	}, [cancelScrollFollow, setPinnedNow]);
+	findScrollWritten.current = markWritten;
+	pauseFindFollow.current = () => {
+		findPausedFollow.current = true;
+		window.clearTimeout(relatchTimer.current);
+		relatchTimer.current = undefined;
+		releaseFollow();
+	};
 	const requestGlideToEnd = useCallback(() => {
+		findPausedFollow.current = false;
 		glideRequested.current = true;
 		setPinnedNow(true);
 	}, [setPinnedNow]);
@@ -3768,6 +3792,17 @@ export function Timeline({
 	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
 	const virtualRows = virtualizer.getVirtualItems();
 	const virtualHeight = virtualizer.getTotalSize();
+	useEffect(() => {
+		if (!find.open || !findTarget) return;
+		const index = groups.findIndex((group) => group.items.some((item) => item.id === findTarget.messageId));
+		if (index < 0) return;
+		const mounted = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? [])
+			.some((element) => element.dataset.findMessageId === findTarget.messageId);
+		if (mounted) return;
+		const disclosureKey = `${groups[index].key}:worked`;
+		if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+	}, [find.open, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
@@ -4184,6 +4219,7 @@ export function Timeline({
 		relatchTimer.current = undefined;
 	}, []);
 	const scheduleRelatch = useCallback(() => {
+		if (findPausedFollow.current) return;
 		clearRelatch();
 		relatchTimer.current = window.setTimeout(() => {
 			relatchTimer.current = undefined;
@@ -4210,7 +4246,7 @@ export function Timeline({
 		// to the end after content shrank is not the reader leaving.
 		// Any scroll of the reader's own ends a settled turn's hold on their row.
 		if (!isOwnScroll(top)) releaseSettleHold();
-		if (isOwnScroll(top)) {
+		if (isOwnScroll(top) || findPausedFollow.current) {
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
@@ -4376,18 +4412,22 @@ export function Timeline({
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
 		<div
-			className="relative min-h-0 flex-1"
+			ref={findSurface}
+			data-chat-find-surface=""
+			className="relative flex min-h-0 flex-1 flex-col"
 			data-testid="chat-timeline"
 			// The timeline is a fixed-size flex item with its own scroll viewport.
 			// Isolating its layout and paint means Lexical selection/composer updates
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
 				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
 				ref={scroller}
+				tabIndex={-1}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
@@ -4397,7 +4437,7 @@ export function Timeline({
 				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
-				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
+				className="chat-scroll-viewport cursor-chat-timeline min-h-0 min-w-0 flex-1 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"

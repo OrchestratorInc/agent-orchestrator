@@ -23,6 +23,30 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
+// ConversationFindParam identifies the chat whose retained text is searched.
+type ConversationFindParam struct {
+	ConversationID string `path:"conversationId" required:"true"`
+}
+
+// ConversationFindQuery defines a literal query, reading anchor and cursor.
+type ConversationFindQuery struct {
+	Query              string `query:"query" description:"Case-insensitive literal substring in displayed message text (maximum 512 characters)."`
+	Cursor             string `query:"cursor,omitempty" description:"Opaque continuation bound to query and transcript revision."`
+	AnchorMessageID    string `query:"anchorMessageId,omitempty" description:"Start at or after this visible message when cursor is absent."`
+	AnchorBlock        int    `query:"anchorBlock,omitempty" minimum:"0"`
+	AnchorOffset       int    `query:"anchorOffset,omitempty" minimum:"0"`
+	AnchorSequence     int64  `query:"anchorSequence,omitempty" minimum:"0" description:"Fallback position when the anchor message was removed."`
+	FallbackToPrevious bool   `query:"fallbackToPrevious,omitempty" description:"Choose the preceding match if a removed anchor has no following match."`
+}
+
+// ConversationFindWindowQuery locates bounded context around one match.
+type ConversationFindWindowQuery struct {
+	Sequence int64 `query:"sequence" required:"true" minimum:"1"`
+}
+
+// ConversationFindResponse returns occurrence positions and complete counts.
+type ConversationFindResponse chatsvc.FindResult
+
 // CreateReportRequest is the local caller-to-daemon report submission contract.
 // SessionID attributes the report; like the rest of AO's unauthenticated
 // loopback API, it is not cryptographic proof of worker authorship. Reports do

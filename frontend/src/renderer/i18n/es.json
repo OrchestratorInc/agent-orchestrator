@@ -3891,5 +3891,6 @@
 	"automations.template.daily_pr_review_v1.description": "Encuentra las solicitudes de cambios que necesitan tu atención, con prioridades y próximos pasos.",
 	"automations.template.daily_issue_triage_v1.description": "Convierte las incidencias nuevas y actualizadas en una lista priorizada con acciones claras.",
 	"automations.template.weekly_release_notes_v1.description": "Redacta notas de versión a partir de solicitudes fusionadas, agrupadas en funciones, correcciones y otros cambios.",
-	"automations.templates.setup": "Requiere acceso de lectura a GitHub para el proyecto seleccionado."
+	"automations.templates.setup": "Requiere acceso de lectura a GitHub para el proyecto seleccionado.",
+	"shortcut.find-in-chat": "Buscar en el chat"
 }

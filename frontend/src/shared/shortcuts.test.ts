@@ -319,7 +319,7 @@ describe("shortcut binding matching and validation", () => {
 
 	it("keeps Windows/Linux defaults off bare terminal-owned chords other than the yielding ones", () => {
 		const readline = ["a", "e", "k", "u", "w", "r", "p", "n", "b", "f", "l", "y", "t", "d", "c", "z"];
-		const yielding = new Set(["k", "p", "w", "t", "b"]);
+		const yielding = new Set(["k", "p", "w", "t", "b", "f"]);
 		for (const key of readline) {
 			if (yielding.has(key)) continue;
 			for (const { id } of APP_SHORTCUTS) {
