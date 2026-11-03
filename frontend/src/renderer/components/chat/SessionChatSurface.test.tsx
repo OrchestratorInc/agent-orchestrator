@@ -1284,6 +1284,19 @@ describe("side command routing", () => {
 		useUiStore.setState({ developerMode: false, sideChats: false });
 	});
 
+	it("reports when side chats appear and the last side closes", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const onSideChatsChange = vi.fn();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} onSideChatsChange={onSideChatsChange} /></Wrapper>);
+		expect(onSideChatsChange).toHaveBeenLastCalledWith(false);
+		sideMocks.sides = [{ id: "side-1", hasWork: false }];
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} /></Wrapper>);
+		expect(onSideChatsChange).toHaveBeenLastCalledWith(true);
+		sideMocks.sides = [];
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} /></Wrapper>);
+		expect(onSideChatsChange).toHaveBeenLastCalledWith(false);
+	});
+
 	it.each([
 		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
 		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],

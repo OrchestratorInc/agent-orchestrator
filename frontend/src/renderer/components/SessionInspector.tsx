@@ -261,13 +261,13 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
+	const availableViewDefs = VIEW_DEFS.filter((entry) => (!onlyBrowser || entry.id === "browser" || entry.id === "sideChat")
+			&& (!hostId || entry.id !== "browser" || browserView || onlyBrowser) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			// The tab is contextual: an artifact click opens it; leaving it hides it.
 			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : onlyBrowser ? "browser" : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.

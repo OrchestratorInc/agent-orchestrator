@@ -98,6 +98,7 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
+	onSideChatsChange,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -145,6 +146,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
+	onSideChatsChange?: (hasSides: boolean) => void;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -453,6 +455,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	useEffect(() => onSideChatsChange?.(sideChats.sides.length > 0), [onSideChatsChange, sideChats.sides.length]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
 	// A pending action owns its destination; an unanswered creation owns only its
 	// request identity. Reselecting text must not turn a lost reply into a new fork.
