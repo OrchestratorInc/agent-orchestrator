@@ -97,6 +97,13 @@ func TestMemcodeImportAcceptsExactSourceHistoryTransferredByGit(t *testing.T) {
 	}
 }
 
+func TestMemcodeNativeProbeWithoutProjectLocationIsUnknown(t *testing.T) {
+	status, err := (&Plugin{}).ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: testID})
+	if err != nil || status != ports.NativeSessionAvailabilityUnknown {
+		t.Fatalf("unknown project location treated as missing history: %s, %v", status, err)
+	}
+}
+
 func TestMemcodeImportRejectsEscapingSourceAndWrongID(t *testing.T) {
 	for _, mode := range []string{"symlink", "wrong-id", "wrong-path"} {
 		t.Run(mode, func(t *testing.T) {
