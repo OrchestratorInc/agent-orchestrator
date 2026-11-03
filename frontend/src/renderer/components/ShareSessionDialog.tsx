@@ -8,6 +8,7 @@ import { useCloudSession } from "../lib/cloud-session";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import {
 	invalidateTeamsAndShares,
+	looksLikeEmail,
 	shareAccessQueryKey,
 	teamShareAccessQueryKey,
 } from "../hooks/useTeams";
@@ -78,7 +79,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
 	const [stagedCap, setStagedCap] = useState<ShareModeCap>("read-only");
-	const [newTeamFor, setNewTeamFor] = useState<Recipient[] | null>(null);
+	const [newTeamFor, setNewTeamFor] = useState<{ people: Recipient[]; name: string } | null>(null);
 	const scopeSession = scope === "session" ? sessionId : undefined;
 	const accessKey = shareAccessQueryKey(baseUrl, orgId, projectId, scopeSession);
 	const access = useQuery({
@@ -239,7 +240,15 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 						workspaceHasAccess
 						placeholder={t("share.addPeopleOrTeams")}
 						ariaLabel={t("share.addPeopleOrTeams")}
-						onNewTeam={(people) => setNewTeamFor(people)}
+						onNewTeam={(people, typed) => {
+							// A typed email joins the new team; other text names it.
+							const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
+							const picked = people.filter((recipient) => recipient.kind === "person");
+							setNewTeamFor({
+								people: email && !picked.some((recipient) => recipient.kind === "person" && recipient.email === email) ? [...picked, { kind: "person", email }] : picked,
+								name: email ? "" : typed,
+							});
+						}}
 						onSubmit={() => share.mutate()}
 						trailing={staging ? (
 							<AccessMenu
@@ -302,7 +311,8 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 					<NewTeamDialog
 						orgId={orgId}
 						open
-						initialPeople={newTeamFor.filter((recipient) => recipient.kind === "person")}
+						initialPeople={newTeamFor.people}
+						initialName={newTeamFor.name}
 						onOpenChange={(next) => {
 							if (!next) setNewTeamFor(null);
 						}}

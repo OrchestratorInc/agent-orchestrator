@@ -1,6 +1,6 @@
 import { Plus, Search, X } from "lucide-react";
 import { Popover as PopoverPrimitive } from "radix-ui";
-import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareCandidate } from "../../lib/cloud-cp";
@@ -27,6 +27,11 @@ type Option =
  * the people it knows, or a full email to add anyone. Picks become tokens in
  * the field. Arrow keys move through suggestions, Enter or comma picks,
  * Backspace on an empty field removes the last pick, Escape closes.
+ *
+ * Enter picks the first suggestion only once the suggestions are for what is
+ * typed (a fast paste must not pick a match for the text before it), else it
+ * adds the typed email. "New team…" is never the first suggestion; it is
+ * reached with the arrow keys or the pointer.
  */
 export function PeopleField({
 	orgId,
@@ -44,6 +49,7 @@ export function PeopleField({
 	ariaLabel,
 	invalid,
 	className,
+	inputRef: externalInputRef,
 }: {
 	orgId: string;
 	value: Recipient[];
@@ -57,18 +63,21 @@ export function PeopleField({
 	placeholder: string;
 	/** Sits at the field's trailing edge, such as an access menu. */
 	trailing?: ReactNode;
-	/** Offered as "New team…", with whoever is picked so far. */
-	onNewTeam?: (people: Recipient[]) => void;
+	/** Offered as "New team…", with whoever is picked so far and what is typed. */
+	onNewTeam?: (people: Recipient[], typed: string) => void;
 	/** Enter in an empty field with picks in it. */
 	onSubmit?: () => void;
 	autoFocus?: boolean;
 	ariaLabel: string;
 	invalid?: boolean;
 	className?: string;
+	/** The text input, for a caller that moves focus back to the field. */
+	inputRef?: RefObject<HTMLInputElement | null>;
 }) {
 	const { t } = useTranslation();
 	const listId = useId();
-	const inputRef = useRef<HTMLInputElement>(null);
+	const ownInputRef = useRef<HTMLInputElement>(null);
+	const inputRef = externalInputRef ?? ownInputRef;
 	const fieldRef = useRef<HTMLDivElement>(null);
 	// The list is portaled outside any modal dialog, whose scroll lock cancels
 	// wheel events there; scroll it directly, as SearchablePicker does.
@@ -85,13 +94,20 @@ export function PeopleField({
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [highlight, setHighlight] = useState(0);
+	// The suggestion the person moved to with the arrow keys or the pointer;
+	// until they do, the highlight is the default one below.
+	const [moved, setMoved] = useState<string | null>(null);
 	useEffect(() => {
 		const handle = window.setTimeout(() => setQuery(text.trim()), 120);
 		return () => window.clearTimeout(handle);
 	}, [text]);
-	const candidates = useShareCandidates(orgId, query, open);
+	// Loads from the start, so the suggestions are there when the list opens
+	// instead of the list growing under the pointer.
+	const candidates = useShareCandidates(orgId, query, true);
 	const picked = useMemo(() => new Set(value.map(recipientKey)), [value]);
+	const typed = text.trim();
+	// The suggestions answer what is typed, not text from before the last keystrokes.
+	const fresh = query === typed && candidates.data !== undefined && !candidates.isPlaceholderData;
 
 	const options = useMemo<Option[]>(() => {
 		const list: Option[] = [];
@@ -108,32 +124,38 @@ export function PeopleField({
 				list.push({ id: key, kind: "person", candidate, disabled: inWorkspace || (unavailable?.has(key) ?? false), inWorkspace });
 			}
 		}
-		const typed = text.trim().toLowerCase();
-		if (looksLikeEmail(typed) && !picked.has(`email:${typed}`) && !list.some((option) => option.id === `email:${typed}`)) {
-			list.push({ id: `email:${typed}`, kind: "email", email: typed, disabled: false });
+		const email = text.trim().toLowerCase();
+		if (looksLikeEmail(email) && !picked.has(`email:${email}`) && !list.some((option) => option.id === `email:${email}`)) {
+			list.push({ id: `email:${email}`, kind: "email", email, disabled: false });
 		}
 		if (onNewTeam && allowTeams) list.push({ id: "new-team", kind: "newTeam", disabled: false });
 		return list;
 	}, [allowTeams, candidates.data, onNewTeam, picked, text, unavailable, workspaceHasAccess]);
 
-	const selectable = options.map((option, index) => (option.disabled ? -1 : index)).filter((index) => index >= 0);
-	useEffect(() => {
-		setHighlight(selectable[0] ?? 0);
-		// Reset to the first pickable option whenever the list changes.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [options.length, query]);
+	// With something typed, the first suggestion that answers it is
+	// highlighted: a match once the results are current, else the typed email.
+	// With nothing typed nothing is, so Enter shares what is picked.
+	const defaultOption = typed
+		? options.find((option) => !option.disabled && (option.kind === "email" || ((option.kind === "team" || option.kind === "person") && fresh)))
+		: undefined;
+	const movedOption = moved ? options.find((option) => option.id === moved && !option.disabled) : undefined;
+	const highlighted = movedOption ?? defaultOption;
+	const highlight = highlighted ? options.indexOf(highlighted) : -1;
 
 	// Keep the highlighted suggestion in view as the arrow keys move it.
 	useEffect(() => {
-		if (!open) return;
+		if (!open || highlight < 0) return;
 		document.getElementById(`${listId}-${highlight}`)?.scrollIntoView({ block: "nearest" });
 	}, [highlight, listId, open]);
 
 	const pick = (option: Option) => {
 		if (option.disabled) return;
+		setMoved(null);
 		if (option.kind === "newTeam") {
 			setOpen(false);
-			onNewTeam?.(value);
+			onNewTeam?.(value, typed);
+			setText("");
+			setQuery("");
 			return;
 		}
 		const next: Recipient =
@@ -156,6 +178,7 @@ export function PeopleField({
 		if (!looksLikeEmail(typed)) return false;
 		if (!picked.has(`email:${typed}`)) onChange([...value, { kind: "person", email: typed }]);
 		setText("");
+		setMoved(null);
 		return true;
 	};
 
@@ -163,18 +186,21 @@ export function PeopleField({
 		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 			event.preventDefault();
 			setOpen(true);
+			const selectable = options.filter((option) => !option.disabled);
 			if (selectable.length === 0) return;
-			const at = selectable.indexOf(highlight);
-			const step = event.key === "ArrowDown" ? 1 : -1;
-			setHighlight(selectable[(at + step + selectable.length) % selectable.length]!);
+			const down = event.key === "ArrowDown";
+			const at = highlighted ? selectable.indexOf(highlighted) : -1;
+			const next = at < 0 ? (down ? 0 : selectable.length - 1) : (at + (down ? 1 : -1) + selectable.length) % selectable.length;
+			setMoved(selectable[next]!.id);
 			return;
 		}
 		if (event.key === "Enter") {
+			// Enter that confirms an input method's composition isn't a pick.
+			if (event.nativeEvent.isComposing) return;
 			event.preventDefault();
-			const option = options[highlight];
-			if (open && text.trim() && option && !option.disabled) {
-				pick(option);
-			} else if (!commitTyped() && !text.trim() && value.length > 0) {
+			if (showList && highlighted) {
+				pick(highlighted);
+			} else if (!commitTyped() && !typed && value.length > 0) {
 				onSubmit?.();
 			}
 			return;
@@ -193,7 +219,10 @@ export function PeopleField({
 		}
 	};
 
-	const showList = open && options.length > 0;
+	// Until the first suggestions arrive, the list stays shut rather than
+	// opening with "New team…" alone and growing.
+	const loadingFirst = candidates.data === undefined && candidates.fetchStatus === "fetching";
+	const showList = open && options.length > 0 && !loadingFirst;
 	const firstPerson = options.findIndex((option) => option.kind !== "team" && option.kind !== "newTeam");
 	const firstTeam = options.findIndex((option) => option.kind === "team");
 
@@ -212,6 +241,7 @@ export function PeopleField({
 							if (event.target === event.currentTarget) {
 								event.preventDefault();
 								inputRef.current?.focus();
+								setOpen(true);
 							}
 						}}
 						data-people-field=""
@@ -244,9 +274,12 @@ export function PeopleField({
 							autoFocus={autoFocus}
 							onChange={(event) => {
 								setText(event.target.value);
+								setMoved(null);
 								setOpen(true);
 							}}
-							onFocus={() => setOpen(true)}
+							// Focus alone doesn't open the suggestions: a dialog opening
+							// with focus here would cover what it shows. A click, typing
+							// or an arrow key does.
 							onClick={() => setOpen(true)}
 							onBlur={() => {
 								window.setTimeout(() => setOpen(false), 120);
@@ -259,7 +292,7 @@ export function PeopleField({
 							aria-expanded={showList}
 							aria-controls={listId}
 							aria-autocomplete="list"
-							aria-activedescendant={showList && options[highlight] ? `${listId}-${highlight}` : undefined}
+							aria-activedescendant={showList && highlight >= 0 ? `${listId}-${highlight}` : undefined}
 							autoComplete="off"
 							spellCheck={false}
 							className="h-6.5 min-w-10 flex-[1_1_40px] bg-transparent text-control text-foreground outline-none placeholder:text-muted-foreground"
@@ -306,7 +339,7 @@ export function PeopleField({
 										option.disabled ? "text-muted-foreground" : "text-foreground",
 										index === highlight && !option.disabled ? "bg-foreground/10" : "",
 									)}
-									onMouseEnter={() => !option.disabled && setHighlight(index)}
+									onMouseEnter={() => !option.disabled && setMoved(option.id)}
 									onClick={() => pick(option)}
 									data-people-option={option.kind}
 								>

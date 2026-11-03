@@ -21,11 +21,11 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	}),
 }));
 
-function Harness({ onNewTeam, unavailable, workspaceHasAccess }: { onNewTeam?: (people: Recipient[]) => void; unavailable?: Set<string>; workspaceHasAccess?: boolean }) {
+function Harness({ onNewTeam, onSubmit, unavailable, workspaceHasAccess }: { onNewTeam?: (people: Recipient[], typed: string) => void; onSubmit?: () => void; unavailable?: Set<string>; workspaceHasAccess?: boolean }) {
 	const [value, setValue] = useState<Recipient[]>([]);
 	return (
 		<>
-			<PeopleField orgId="org" value={value} onChange={setValue} placeholder="Add people or teams" ariaLabel="Add people or teams" onNewTeam={onNewTeam} unavailable={unavailable} workspaceHasAccess={workspaceHasAccess} />
+			<PeopleField orgId="org" value={value} onChange={setValue} placeholder="Add people or teams" ariaLabel="Add people or teams" onNewTeam={onNewTeam} onSubmit={onSubmit} unavailable={unavailable} workspaceHasAccess={workspaceHasAccess} />
 			<output data-testid="value">{JSON.stringify(value)}</output>
 		</>
 	);
@@ -134,6 +134,66 @@ describe("PeopleField", () => {
 		fireEvent.focus(input);
 		await type(input, "riya");
 		fireEvent.click(await screen.findByText("New team…"));
-		expect(onNewTeam).toHaveBeenCalledWith([{ kind: "person", email: "dana@northwind.dev", name: "Dana Kim" }]);
+		// What was typed goes along, for the new team's name.
+		expect(onNewTeam).toHaveBeenCalledWith([{ kind: "person", email: "dana@northwind.dev", name: "Dana Kim" }], "riya");
+	});
+
+	it("adds a pasted email on Enter instead of a match for the text before it", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "dana");
+		await screen.findByText("Dana Kim");
+		// Pasted and entered before the suggestions for it arrive.
+		fireEvent.change(input, { target: { value: "riya@acme.co" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(value()).toEqual([{ kind: "person", email: "riya@acme.co" }]);
+	});
+
+	it("picks the suggestion moved to in an empty field rather than sharing", async () => {
+		const onSubmit = vi.fn();
+		renderField({ onSubmit });
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "dana");
+		await screen.findByText("Dana Kim");
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(value()).toEqual([{ kind: "person", email: "dana@northwind.dev", name: "Dana Kim" }]);
+		await type(input, "");
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		await screen.findByRole("listbox");
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(value().map((recipient) => (recipient.kind === "team" ? recipient.teamId : recipient.email))).toEqual(["dana@northwind.dev", "t-platform"]);
+		expect(onSubmit).not.toHaveBeenCalled();
+		// With the list shut and nothing typed, Enter shares.
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+	});
+
+	it("never opens New team by default; it takes an arrow key", async () => {
+		const onNewTeam = vi.fn();
+		renderField({ onNewTeam });
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "zzz");
+		await screen.findByText("New team…");
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(onNewTeam).not.toHaveBeenCalled();
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(onNewTeam).toHaveBeenCalledWith([], "zzz");
+	});
+
+	it("loads the suggestions before they are asked for, and doesn't open them on focus alone", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		expect(mocks.queries).toEqual([""]);
+		fireEvent.focus(input);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+		expect(screen.queryByRole("listbox")).toBeNull();
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		expect(await screen.findByRole("listbox")).toBeInTheDocument();
 	});
 });

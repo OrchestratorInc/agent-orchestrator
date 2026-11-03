@@ -190,6 +190,18 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(onOpenChange).not.toHaveBeenCalledWith(false);
 	});
 
+	it("names a new team after what was typed when New team is picked", async () => {
+		renderDialog();
+		await screen.findByText("Platform");
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		fireEvent.change(input, { target: { value: "Payments" } });
+		await screen.findByText("New team…");
+		fireEvent.keyDown(input, { key: "ArrowUp" });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue("Payments");
+	});
+
 	it("shares the whole project without naming a session", async () => {
 		renderDialog();
 		await screen.findByText("Platform");

@@ -34,17 +34,19 @@ export function teamErrorMessage(error: unknown, fallback: string): string {
  * renaming, removing) lives on the team page, so making a team is quick. The
  * person creating it becomes its owner.
  */
-export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeople = [] }: {
+export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeople = [], initialName = "" }: {
 	orgId: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onCreated: (team: CloudCpTeamDetail) => void;
 	initialPeople?: Recipient[];
+	/** What was typed in the field "New team…" was picked from. */
+	initialName?: string;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
-	const [name, setName] = useState("");
+	const [name, setName] = useState(initialName);
 	const [people, setPeople] = useState<Recipient[]>(initialPeople);
 	const create = useMutation({
 		mutationFn: () =>
