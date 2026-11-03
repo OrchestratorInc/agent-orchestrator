@@ -5,10 +5,12 @@ import {
 	accessibilityElement,
 	accessibilityIdentifier,
 	accessibilityLabel,
+	contentShape,
 	foregroundStyle,
 	frame,
 	offset,
 	onTapGesture,
+	shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { glassCircle } from "./glass";
 import { nativeHeaderGlyphs, type NativeHeaderButtonProps } from "./native-header-button.types";
@@ -47,6 +49,7 @@ export function NativeHeaderButton({ icon, label, onPress, badge = 0 }: NativeHe
 				modifiers={[
 					frame({ width: GLASS_CIRCLE_SIZE, height: GLASS_CIRCLE_SIZE }),
 					glassCircle(),
+					contentShape(shapes.circle(), ["interaction", "accessibility"]),
 					onTapGesture(() => onPress()),
 					// One element for the whole circle. A ZStack, not a Group: a Group
 					// is no view of its own and hands its modifiers to its child, so
@@ -61,6 +64,10 @@ export function NativeHeaderButton({ icon, label, onPress, badge = 0 }: NativeHe
 					accessibilityIdentifier(`header-${icon}`),
 				]}
 			>
+				{/* Clear, full size: VoiceOver sizes the element from its content, not
+				    from `frame`, so without this its box was the bare glyph (9.7×17pt
+				    for Back) though the whole circle takes the tap. */}
+				<Circle modifiers={[frame({ width: GLASS_CIRCLE_SIZE, height: GLASS_CIRCLE_SIZE }), foregroundStyle("transparent")]} />
 				{badge > 0 ? (
 					// The dot sits on the glyph's shoulder, inside the circle, where the
 					// system puts a badge on a bar button.

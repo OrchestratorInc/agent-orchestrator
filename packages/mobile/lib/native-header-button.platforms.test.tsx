@@ -35,10 +35,12 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 		accessibilityElement: record("accessibilityElement"),
 		accessibilityIdentifier: record("accessibilityIdentifier"),
 		accessibilityLabel: record("accessibilityLabel"),
+		contentShape: record("contentShape"),
 		foregroundStyle: record("foregroundStyle"),
 		frame: record("frame"),
 		offset: record("offset"),
 		onTapGesture: record("onTapGesture"),
+		shapes: { circle: () => ({ shape: "circle" }) },
 	};
 });
 
@@ -90,6 +92,11 @@ describe("NativeHeaderButton on Android", () => {
 });
 
 describe("NativeHeaderButton on iOS", () => {
+	// The unread dot is the red circle; the clear one is what sizes the element.
+	const dots = (root: ReactTestRenderer["root"]) => root.findAllByType("Circle" as never)
+		.filter((circle) => (circle.props.modifiers as Modifier[]).some((entry) => entry.modifier === "foregroundStyle" && entry.args[0] === "#red"));
+
+
 	it("is one VoiceOver button the size of a touch target, with the unread dot inside it", async () => {
 		const root = await render(<IOSHeaderButton icon="bell" label="Notifications, 3 unread" badge={3} onPress={() => {}} />);
 
@@ -98,11 +105,20 @@ describe("NativeHeaderButton on iOS", () => {
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityLabel")?.args).toEqual(["Notifications, 3 unread"]);
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityAddTraits")).toBeDefined();
 		expect(modifiers.find((entry) => entry.modifier === "frame")?.args).toEqual([{ width: touchTarget, height: touchTarget }]);
-		expect(root.findAllByType("ZStack" as never)[1].findAllByType("Circle" as never)).toHaveLength(1);
+		expect(dots(root.findAllByType("ZStack" as never)[1])).toHaveLength(1);
+	});
+
+	// VoiceOver sizes the element from its content, not from `frame`.
+	it("gives VoiceOver the whole circle, not the glyph", async () => {
+		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
+		const stack = root.findAllByType("ZStack" as never)[0];
+		expect((stack.props.modifiers as Modifier[]).find((entry) => entry.modifier === "contentShape")?.args).toEqual([{ shape: "circle" }, ["interaction", "accessibility"]]);
+		const fill = stack.findAllByType("Circle" as never).find((circle) => (circle.props.modifiers as Modifier[]).some((entry) => entry.modifier === "frame" && (entry.args[0] as { width: number }).width === touchTarget));
+		expect(fill).toBeDefined();
 	});
 
 	it("draws no dot without unread", async () => {
 		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
-		expect(root.findAllByType("Circle" as never)).toHaveLength(0);
+		expect(dots(root)).toHaveLength(0);
 	});
 });
