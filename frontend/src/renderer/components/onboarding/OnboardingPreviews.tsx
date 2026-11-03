@@ -1063,7 +1063,7 @@ function AgentPickerMenus({ agents, selectedId }: { agents: Array<{ id: string; 
 	const defaults = selected ? composerAgent(selected.id, selected.label) : undefined;
 	return (
 		<>
-			<div className={cn(MENU_SURFACE_CLASS, "absolute bottom-[calc(100%+6px)] left-0 min-w-[14rem] w-64")}>
+			<div data-preview-focus="" className={cn(MENU_SURFACE_CLASS, "absolute bottom-[calc(100%+6px)] left-0 min-w-[14rem] w-64")}>
 				<div className="flex min-h-0 flex-col">
 					<div className="relative shrink-0 pb-1 mb-1 border-b border-border">
 						<div className="relative">
@@ -1104,7 +1104,7 @@ function AgentPickerMenus({ agents, selectedId }: { agents: Array<{ id: string; 
 			</div>
 			{/* The Agent submenu, opened beside its row (positions as Radix places
 			    them, relative to the trigger). */}
-			<div className={cn(MENU_SURFACE_CLASS, "absolute left-[257px] top-[-99px] h-fit! overflow-hidden! min-w-48")}>
+			<div data-preview-focus="" className={cn(MENU_SURFACE_CLASS, "absolute left-[257px] top-[-99px] h-fit! overflow-hidden! min-w-48")}>
 				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-hidden">
 					{agents.map((agent) => (
 						<div
@@ -1169,7 +1169,7 @@ export function PreviewNewChat({
 										))}
 									</ul>
 								</div>
-								<div className="relative z-10" data-composer-tray="">
+								<div className="relative z-10" data-composer-tray="" data-preview-focus="">
 									<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 										<div className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 pt-3 pb-3">
 											<div className="relative">
