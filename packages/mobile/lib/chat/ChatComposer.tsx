@@ -37,7 +37,8 @@ import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { EffortSliderOverlay } from "../effort-slider";
 import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
-import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
+import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
+import { HardwareReturn } from "./HardwareReturn";
 import { contextMeterModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
@@ -227,6 +228,14 @@ export function ChatComposer({
 	// `bottom` resolves against the pill's content box, which leaves out its
 	// padding, and sat the slider that far down over the pill's top edge.
 	const [pillHeight, setPillHeight] = useState(0);
+	// Set when Return on a hardware keyboard sent: the field goes read-only while
+	// the send is in flight, and typing should carry on in it once it is back.
+	const refocusAfterSubmit = useRef(false);
+	useEffect(() => {
+		if (submitting || !refocusAfterSubmit.current) return;
+		refocusAfterSubmit.current = false;
+		inputRef.current?.focus();
+	}, [submitting]);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
@@ -349,7 +358,7 @@ export function ChatComposer({
 	}, [completedRetry, draftKey, onAcknowledgeSend, clearAttachments]);
 
 
-	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send") => {
+	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
 		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
@@ -360,7 +369,10 @@ export function ChatComposer({
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
 		// answer arrived — which read as the keyboard being taken away mid-sentence.
-		Keyboard.dismiss();
+		// Return on a hardware keyboard keeps the field: the next message is typed
+		// straight after, as at a desk.
+		if (from === "keyboard") refocusAfterSubmit.current = true;
+		else Keyboard.dismiss();
 		setLocalError(undefined);
 		dismissAttachmentNotice();
 		setSubmitting(true);
@@ -660,28 +672,32 @@ export function ChatComposer({
 				    draft the transcript will be added to. */}
 				<Animated.View style={[styles.composerRow, fieldSize.row, fieldInsets]}>
 					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
-					<TextInput
-						ref={inputRef}
-						onLayout={pasteLayout}
-						accessibilityLabel="Message the agent"
-						editable={!stopped && !submitting}
-						value={text}
-						onChangeText={(value) => { latestText.current = value; setText(value); }}
-						onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
-						onFocus={() => setFocused(true)}
-						onBlur={() => setFocused(false)}
-						placeholder={placeholder}
-						placeholderTextColor={t.textFaint}
-						maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
-						{...textSelectionColors(t)}
-						// No height of its own: a multiline field grows with its text
-						// between the rule's min and max and then scrolls. Setting the
-						// height from the content-size event lagged a line behind, so
-						// each new line first scrolled the field and cut off its top line.
-						style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}
-						multiline
-						maxLength={40_000}
-					/>
+					{/* Return on a hardware keyboard (iPad); the wrapper holds the field's
+					    place in the row, so it hides with the field while dictating. */}
+					<HardwareReturn style={[styles.inputSlot, dictating && styles.hiddenField]} enabled={!stopped && !submitting} onReturn={(modifiers) => { void submit(hardwareReturnIntent(modifiers), "keyboard"); }}>
+						<TextInput
+							ref={inputRef}
+							onLayout={pasteLayout}
+							accessibilityLabel="Message the agent"
+							editable={!stopped && !submitting}
+							value={text}
+							onChangeText={(value) => { latestText.current = value; setText(value); }}
+							onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
+							onFocus={() => setFocused(true)}
+							onBlur={() => setFocused(false)}
+							placeholder={placeholder}
+							placeholderTextColor={t.textFaint}
+							maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
+							{...textSelectionColors(t)}
+							// No height of its own: a multiline field grows with its text
+							// between the rule's min and max and then scrolls. Setting the
+							// height from the content-size event lagged a line behind, so
+							// each new line first scrolled the field and cut off its top line.
+							style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}
+							multiline
+							maxLength={40_000}
+						/>
+					</HardwareReturn>
 				</Animated.View>
 				{/* Mounted closed too, at no height, so the settings are already
 				    drawn when the row opens rather than appearing partway through. */}
