@@ -593,7 +593,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 }
 
 const getSessionNumFloor = `-- name: GetSessionNumFloor :one
-SELECT max_num FROM session_num_floors WHERE id_prefix = ?
+SELECT max_num FROM session_num_floors WHERE id_prefix = ?1
 `
 
 func (q *Queries) GetSessionNumFloor(ctx context.Context, idPrefix string) (int64, error) {
