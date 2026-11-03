@@ -3539,8 +3539,9 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
-// A shared session's link (ao-app://share/<orgId>/<token>) the renderer has
-// not taken yet: one that arrived before the window was ready waits here.
+// A shared session's link (ao-app://share/<code>, or ao-app://share/<orgId>/<token>
+// from before codes) the renderer has not taken yet: one that arrived before
+// the window was ready waits here. The renderer parses and checks it.
 let pendingShareLink: string | undefined;
 
 ipcMain.handle("cloud:takePendingShareLink", () => {
