@@ -7,6 +7,9 @@ const { withAppDelegate } = require("@expo/config-plugins");
 // when it reaches a window, and an edge later set back to `automatic` (as
 // react-native-screens does for the scroll view it finds in a screen) is soft
 // too. Hard and hidden edges are left as chosen.
+//
+// Installed on iOS 27 only: iOS 26 already resolves `automatic` to soft, so
+// there the app keeps UIKit's own methods.
 
 const MARKER = "// withIosSoftScrollEdge";
 
@@ -25,7 +28,7 @@ private func ao_swizzle(_ cls: AnyClass, _ original: Selector, _ replacement: Se
 
 extension UIScrollView {
   static func adoptSoftTopEdge() {
-    guard #available(iOS 26, *) else { return }
+    guard #available(iOS 27, *) else { return }
     ao_swizzle(UIScrollView.self, #selector(UIView.didMoveToWindow), #selector(UIScrollView.ao_softTopEdgeDidMoveToWindow))
     ao_swizzle(UIScrollEdgeEffect.self, #selector(setter: UIScrollEdgeEffect.style), #selector(UIScrollEdgeEffect.ao_setSoftStyle(_:)))
   }

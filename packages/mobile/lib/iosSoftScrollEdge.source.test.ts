@@ -26,6 +26,13 @@ describe("iOS soft scroll edge", () => {
 		expect(out).toContain("ao_setSoftStyle(style == .automatic ? .soft : style)");
 	});
 
+	// iOS 26 already resolves automatic to soft; only iOS 27 needs UIKit patched.
+	it("swaps UIKit's methods on iOS 27 only", () => {
+		const out = adoptSoftScrollEdge(TEMPLATE);
+		expect(out).toContain("guard #available(iOS 27, *) else { return }\n    ao_swizzle(");
+		expect(out).not.toContain("guard #available(iOS 26, *)");
+	});
+
 	it("applies once", () => {
 		const once = adoptSoftScrollEdge(TEMPLATE);
 		expect(adoptSoftScrollEdge(once)).toBe(once);
