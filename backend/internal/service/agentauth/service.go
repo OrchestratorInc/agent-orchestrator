@@ -151,8 +151,14 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 		republish := map[string]string{}
 		for name, value := range keys {
 			// Recorded first, so a value the user exported before starting AO
-			// still reaches the sessions that must not receive AO's copy.
-			_ = providerkeys.ExportForProbes(name, value)
+			// still reaches the sessions that must not receive AO's copy. A
+			// key AO published itself comes back from the OS user environment
+			// after a restart; that copy is AO's, not the user's.
+			var published []string
+			if device[name] {
+				published = []string{value}
+			}
+			_ = providerkeys.ExportForProbes(name, value, published...)
 			if device[name] && runtime.GOOS != "windows" {
 				republish[name] = value
 			}

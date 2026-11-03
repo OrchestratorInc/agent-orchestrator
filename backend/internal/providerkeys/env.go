@@ -2,6 +2,7 @@ package providerkeys
 
 import (
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -22,11 +23,20 @@ type inheritedValue struct {
 
 // ExportForProbes sets name to value in this process's environment, first
 // recording the value it inherited.
-func ExportForProbes(name, value string) error {
+//
+// published lists values AO itself published for name to the OS user
+// environment (the stored value of a key whose "also set for apps outside
+// AO" marker is on). After a restart AO inherits its own publication from
+// that environment; an inherited value equal to one of them is AO's, not the
+// user's, so it is recorded as unset and never handed back as theirs.
+func ExportForProbes(name, value string, published ...string) error {
 	envMu.Lock()
 	defer envMu.Unlock()
 	if _, ok := inherited[name]; !ok {
 		previous, set := os.LookupEnv(name)
+		if set && slices.Contains(published, previous) {
+			previous, set = "", false
+		}
 		inherited[name] = inheritedValue{value: previous, set: set}
 	}
 	return os.Setenv(name, value)
