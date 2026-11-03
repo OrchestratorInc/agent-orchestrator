@@ -6134,7 +6134,8 @@ async function ensureDebugger(entry: BrowserEntry): Promise<void> {
       );
     }
   }
-  await debug.sendCommand("Runtime.enable");
+  // No Runtime.enable: none of these callers needs it, and an enabled Runtime
+  // is visible to pages and scored as automation by bot managers.
   await debug.sendCommand("DOM.enable");
 }
 
