@@ -70,7 +70,15 @@ export const NO_GITHUB_STATE: GitHubState = { known: true, hasGitHub: false, nee
 export function WithGitHubState({ children }: { children: (state: GitHubState) => ReactNode }) {
 	const { query, requirements } = useSystemRequirementsGate();
 	const auth = useGitHubAuthRequirement();
-	const known = query.isSuccess && (auth.isSuccess || auth.isError);
+	// A probe that errors, never starts (preview builds) or hangs must not leave
+	// the source step on its placeholder: after a short wait, treat GitHub as unavailable.
+	const [gaveUp, setGaveUp] = useState(false);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setGaveUp(true), 4000);
+		return () => window.clearTimeout(timer);
+	}, []);
+	const answered = (query.isSuccess || query.isError) && (auth.isSuccess || auth.isError);
+	const known = answered || gaveUp;
 	const installed = requirements.find((requirement) => requirement.id === "gh")?.satisfied !== false;
 	const hasGitHub = known && installed && auth.data?.satisfied === true;
 	return <>{children({ known, hasGitHub, needsSetup: known && !hasGitHub })}</>;

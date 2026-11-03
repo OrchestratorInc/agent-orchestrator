@@ -169,6 +169,8 @@ function HomePageContent() {
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
 	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
+	// True once we know whether this launch shows the prompt, so the agent-updates notice only waits for that decision.
+	const [firstRunDecided, setFirstRunDecided] = useState(false);
 	const firstRunOfferedThisMount = useRef(false);
 	const firstRunVariant = useRef<FirstRunPromptVariant | null>(null);
 	const firstRunActionRecorded = useRef(false);
@@ -201,6 +203,7 @@ function HomePageContent() {
 		if (showStartup || !workspaceQuery.isSuccess || firstRunStatus !== "pending") return;
 		if (!usesPreviewWorkspaceData && migrationOffer.isPending) return;
 		if (projects.length > 0 || migrationOffer.data?.show) {
+			setFirstRunDecided(true);
 			void aoBridge.appState.markFirstRunProjectPromptSeen().then(() => setFirstRunStatus("seen")).catch(() => undefined);
 			return;
 		}
@@ -211,6 +214,7 @@ function HomePageContent() {
 			const variant = firstRunPromptVariant(cohort);
 			firstRunOfferedThisMount.current = true;
 			firstRunVariant.current = variant;
+			setFirstRunDecided(true);
 			void aoBridge.appState.claimFirstRunExperimentExposure().then((claimed) => {
 				if (claimed) void captureRendererEvent("ao.onboarding.first_run_experiment_exposed", { variant });
 			}).catch(() => undefined);
@@ -226,10 +230,14 @@ function HomePageContent() {
 	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
 
 	const setFirstRunPromptActive = useUiStore((state) => state.setFirstRunPromptActive);
+	// Shell notices wait while the prompt is showing or still being decided. Once the
+	// user starts a clone the prompt closes, so a failed or abandoned clone cannot
+	// hold them back for the rest of the session.
+	const firstRunBlocksNotices = firstRunStatus === "loading" || firstRunPromptOpen || (firstRunStatus === "pending" && !firstRunDecided);
 	useEffect(() => {
-		setFirstRunPromptActive(firstRunStatus !== "seen");
+		setFirstRunPromptActive(firstRunBlocksNotices);
 		return () => setFirstRunPromptActive(false);
-	}, [firstRunStatus, setFirstRunPromptActive]);
+	}, [firstRunBlocksNotices, setFirstRunPromptActive]);
 
 	const recordFirstRunPromptAction = (action: FirstRunPromptAction) => {
 		if (firstRunVariant.current !== "prompt" || firstRunActionRecorded.current) return;

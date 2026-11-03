@@ -3138,26 +3138,32 @@ async function refreshGitHubOwners(): Promise<GitHubOwner[]> {
 
 type GitHubRepoSummary = { fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string };
 
-// Repositories the signed-in `gh` account can access. An empty query lists the
-// user's own and organization repos by recent push; a query searches every
-// repository the account is allowed to see.
+type GitHubRepoRow = { fullName?: string; full_name?: string; description?: string | null; isPrivate?: boolean; private?: boolean; url?: string; html_url?: string; owner?: { login?: string } };
+
+// Repositories the signed-in `gh` account can access. An empty query lists
+// everything it can reach (its own, collaborations and organization repos) by
+// recent push; a query searches every repository the account is allowed to see.
+// `gh repo list` is not used for the empty query: it only lists the signed-in
+// user's own repositories and leaves organization repositories out.
 async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 	await ensureShellEnv();
 	const term = query.trim().slice(0, 100);
 	const args = term
-		? ["search", "repos", term, "--limit", "30", "--json", "fullName,description,isPrivate,url,owner"]
-		: ["repo", "list", "--limit", "100", "--json", "nameWithOwner,description,isPrivate,url,owner"];
+		// `--` keeps a query that starts with "-" (a GitHub exclusion qualifier) from being read as a gh flag.
+		? ["search", "repos", "--limit", "30", "--json", "fullName,description,isPrivate,url,owner", "--", term]
+		: ["api", "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member"];
 	try {
 		const { stdout } = await execFileAsync("gh", args, { env: daemonEnv(), timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
-		const rows = JSON.parse(stdout) as Array<{ fullName?: string; nameWithOwner?: string; description?: string | null; isPrivate?: boolean; url?: string; owner?: { login?: string } }>;
+		const rows = JSON.parse(stdout) as GitHubRepoRow[];
 		return rows.flatMap((row) => {
-			const fullName = row.fullName ?? row.nameWithOwner;
-			if (!fullName || !row.url) return [];
+			const fullName = row.fullName ?? row.full_name;
+			const url = row.url ?? row.html_url;
+			if (!fullName || !url) return [];
 			return [{
 				fullName,
 				description: row.description ?? "",
-				isPrivate: row.isPrivate === true,
-				url: row.url,
+				isPrivate: (row.isPrivate ?? row.private) === true,
+				url,
 				avatarUrl: `https://github.com/${encodeURIComponent(row.owner?.login ?? fullName.split("/")[0] ?? "")}.png?size=40`,
 			}];
 		});

@@ -108,6 +108,7 @@ export function GitHubRepoPicker({
 					id="cloneRepositoryUrl"
 					type="button"
 					role="combobox"
+					aria-haspopup="listbox"
 					aria-expanded={open}
 					disabled={disabled}
 					className="flex h-control-form w-full items-center gap-2 rounded-md border border-transparent bg-[var(--color-bg-import-card)] px-3 text-left text-[13px] outline-none transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50"
