@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -111,7 +112,7 @@ func TestCopyKeepsSourceAndExistingNativeCopy(t *testing.T) {
 		t.Fatalf("source changed: %v", err)
 	}
 	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("copy permissions = %v, %v", info, err)
 	}
 	// A later open must keep AO's already modified copy.
