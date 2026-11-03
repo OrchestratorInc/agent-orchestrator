@@ -3832,5 +3832,6 @@
 	"firstRun.exampleComposerDraft": "이 기능의 다음 단계를 계획해 줘",
 	"firstRun.exampleTask4": "검색 속도 개선",
 	"firstRun.phoneInReview": "검토 중",
-	"firstRun.phonePrOpen": "열림"
+	"firstRun.phonePrOpen": "열림",
+	"firstRun.projectCreating": "프로젝트를 설정하는 중…"
 }

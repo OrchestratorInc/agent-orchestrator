@@ -3832,5 +3832,6 @@
 	"firstRun.exampleComposerDraft": "この機能の次のステップを計画して",
 	"firstRun.exampleTask4": "検索を高速化",
 	"firstRun.phoneInReview": "レビュー中",
-	"firstRun.phonePrOpen": "オープン"
+	"firstRun.phonePrOpen": "オープン",
+	"firstRun.projectCreating": "プロジェクトを設定しています…"
 }

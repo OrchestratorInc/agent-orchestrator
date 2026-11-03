@@ -3832,5 +3832,6 @@
 	"firstRun.exampleComposerDraft": "Plane den nächsten Schritt für dieses Feature",
 	"firstRun.exampleTask4": "Suche beschleunigen",
 	"firstRun.phoneInReview": "In Prüfung",
-	"firstRun.phonePrOpen": "offen"
+	"firstRun.phonePrOpen": "offen",
+	"firstRun.projectCreating": "Dein Projekt wird eingerichtet…"
 }
