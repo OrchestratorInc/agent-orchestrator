@@ -57,10 +57,12 @@ describe("the iOS settings form", () => {
 		}
 	});
 
-	it("uses the native controls: Toggle, menu and inline Pickers, and a role-carrying Button", () => {
+	it("uses the native controls: Toggle, a menu Picker, checked choice rows, and a role-carrying Button", () => {
 		expect(ios).toContain("<Toggle ");
 		expect(ios).toContain('pickerStyle("menu")');
-		expect(ios).toContain('pickerStyle("inline")');
+		// An inline Picker's checkmark stayed system blue; the rows draw their own.
+		expect(ios).not.toContain('pickerStyle("inline")');
+		expect(ios).toContain('accessibilityAddTraits(selected ? ["isSelected"] : [])');
 		expect(ios).toContain('role={destructive ? "destructive" : undefined}');
 	});
 });

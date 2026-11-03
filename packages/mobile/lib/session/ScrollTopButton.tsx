@@ -1,5 +1,5 @@
 import { Host } from "@expo/ui";
-import { Group, Image } from "@expo/ui/swift-ui";
+import { Image, ZStack } from "@expo/ui/swift-ui";
 import { accessibilityAddTraits, accessibilityElement, accessibilityLabel, frame, onTapGesture } from "@expo/ui/swift-ui/modifiers";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
@@ -32,24 +32,25 @@ export function ScrollTopButton({ onPress }: ScrollTopButtonProps) {
 		return (
 			<View style={s.anchor}>
 				<Host style={s.circle} colorScheme={scheme}>
-					{/* The gesture sits on the glass group, as in the header's glass
+					{/* The gesture sits on the glass stack, as in the header's glass
 					    buttons, so the whole circle takes the tap and the material
 					    gives its own press response. */}
-					<Group
+					<ZStack
 						modifiers={[
 							frame({ width: touchTarget, height: touchTarget }),
 							glassCircle(),
 							onTapGesture(() => onPress()),
-							// A Group passes its modifiers on to its child, so without this
-							// VoiceOver's element is the bare glyph, about 15×20pt. Ignoring
-							// the children makes the framed circle the element: 44pt.
+							// A ZStack, not a Group: a Group hands its modifiers to its
+							// child, so VoiceOver's element was the bare glyph, about
+							// 15×20pt. Ignoring the children makes the framed circle the
+							// element: 44pt.
 							accessibilityElement("ignore"),
 							accessibilityAddTraits(["isButton"]),
 							accessibilityLabel(SCROLL_TOP_LABEL),
 						]}
 					>
 						<Image systemName={SCROLL_TOP_GLYPH.ios} size={iconSize.lg} color={t.textPrimary} />
-					</Group>
+					</ZStack>
 				</Host>
 			</View>
 		);

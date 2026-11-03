@@ -77,6 +77,17 @@ export function compactCount(value: number): string {
 	return `${Math.round(value / 1000)}k`;
 }
 
+/**
+ * The branch a ref names, as a person would say it: "main" for
+ * refs/remotes/origin/main or refs/heads/main. The daemon reports the full ref
+ * it compared against.
+ */
+export function branchName(ref: string): string {
+	const remote = /^refs\/remotes\/[^/]+\/(.+)$/.exec(ref);
+	if (remote) return remote[1];
+	return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+}
+
 export function plural(count: number, noun: string): string {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }

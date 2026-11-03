@@ -27,7 +27,7 @@ vi.mock("@expo/ui", async () => {
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Group: host("Group"), Image: host("Image") };
+	return { Image: host("Image"), ZStack: host("ZStack") };
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	accessibilityAddTraits: (traits: string[]) => ({ traits }),
@@ -72,7 +72,7 @@ describe("the iOS scroll-to-top button", () => {
 		const { ScrollTopButton } = await import("./ScrollTopButton");
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<ScrollTopButton onPress={onPress} />); });
-		const group = renderer!.root.findByType("Group" as never);
+		const group = renderer!.root.findByType("ZStack" as never);
 		expect(group.props.modifiers).toEqual(expect.arrayContaining([{ frame: { width: 44, height: 44 } }, { glass: "circle" }, { traits: ["isButton"] }, { label: "Scroll to top" }]));
 		// The framed circle is VoiceOver's element, not the glyph inside it, and
 		// the frame comes first so the element is the 44pt one.
@@ -90,7 +90,7 @@ describe("the iOS scroll-to-top button", () => {
 		const { ScrollTopButton } = await import("./ScrollTopButton");
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<ScrollTopButton onPress={onPress} />); });
-		expect(renderer!.root.findAllByType("Group" as never)).toHaveLength(0);
+		expect(renderer!.root.findAllByType("ZStack" as never)).toHaveLength(0);
 		const button = renderer!.root.findByType("Pressable" as never);
 		expect(button.props).toMatchObject({ accessibilityRole: "button", accessibilityLabel: "Scroll to top" });
 		expect(renderer!.root.findByType("SymbolView" as never).props.name).toEqual({ ios: "arrow.up.to.line", android: "vertical_align_top" });

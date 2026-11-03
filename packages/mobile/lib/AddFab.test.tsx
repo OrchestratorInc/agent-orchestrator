@@ -43,18 +43,18 @@ afterEach(async () => {
 });
 
 describe("AddFab on Android", () => {
-	it("is Material's extended FAB with the add symbol and its label, named by that text until it folds", async () => {
+	it("is Material's extended FAB with the add symbol and its label, named for TalkBack in both states", async () => {
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<AndroidAddFab label="New task" onPress={onPress} bottomInset={0} testID="spawn-worker" />); });
 		const fab = renderer!.root.findByType("ExtendedFloatingActionButton" as never);
 		expect(fab.props).toMatchObject({ containerColor: "#bgElevated", expanded: true });
 		expect(fab.props.modifiers).toContainEqual({ testID: "spawn-worker" });
 		const icon = fab.findByType("FabIconSlot" as never).findByType("Icon" as never);
-		expect(icon.props).toMatchObject({ source: "drawable:add", tint: "#textPrimary", contentDescription: undefined });
+		expect(icon.props).toMatchObject({ source: "drawable:add", tint: "#textPrimary", contentDescription: "New task" });
 		expect(fab.findByType("FabTextSlot" as never).findByType("ComposeText" as never).props).toMatchObject({ children: "New task", color: "#textPrimary" });
 		act(() => fab.props.onClick());
 		expect(onPress).toHaveBeenCalledOnce();
-		// Folded to the glyph, the text is gone, so the glyph carries the name.
+		// The Text slot never reaches the accessibility tree, so the glyph names it folded too.
 		await act(async () => renderer!.update(<AndroidAddFab label="New task" onPress={onPress} bottomInset={0} expanded={false} />));
 		expect(renderer!.root.findByType("FabIconSlot" as never).findByType("Icon" as never).props.contentDescription).toBe("New task");
 	});

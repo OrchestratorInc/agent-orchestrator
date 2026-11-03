@@ -11,7 +11,6 @@ import {
 	frame,
 	foregroundStyle,
 	imageScale,
-	labelsHidden,
 	lineLimit,
 	listRowBackground,
 	pickerStyle,
@@ -249,32 +248,33 @@ export function SettingsPickerRow<T extends string>({ icon, label, options, sele
 }
 
 /**
- * An inline picker: every option is a row, the chosen one checked, and
- * VoiceOver reads each as selected or not.
+ * A whole section that picks one: every option a row, the chosen one checked
+ * in the theme's accent, and VoiceOver reading each as selected or not. Rows
+ * of our own rather than an inline Picker: its checkmark is the system accent
+ * and follows neither the picker's tint nor the section's, so it stayed blue.
  */
-export function SettingsChoiceSection<T extends string>({ label, options, selectedValue, onValueChange, footer, testID }: SettingsChoiceSectionProps<T>) {
+export function SettingsChoiceSection<T extends string>({ options, selectedValue, onValueChange, footer, testID }: SettingsChoiceSectionProps<T>) {
 	const t = useTheme();
 	return (
-		// An inline picker's rows join the Form's list and take the section's
-		// tint, not the picker's: tinted only there, the checkmark was system blue.
-		<SettingsSection footer={footer} modifiers={[tint(t.accent)]}>
-			<Picker
-				label={label}
-				selection={selectedValue}
-				onSelectionChange={(next) => onValueChange(String(next) as T)}
-				testID={testID}
-				// The checkmark in the theme's accent rather than system blue.
-				modifiers={[pickerStyle("inline"), labelsHidden(), tint(t.accent), listRowBackground(t.bgElevated)]}
-			>
-				{options.map((option) => (
-					// Each option is a row of its own, so it takes the row background
-					// too rather than relying on the Picker's reaching it.
-					<HStack key={option.value} spacing={space.md} testID={testID ? `${testID}-${option.value}` : undefined} modifiers={[tag(option.value), listRowBackground(t.bgElevated)]}>
-						{option.accessory ?? null}
-						<Text modifiers={[foregroundStyle(t.textPrimary)]}>{option.label}</Text>
-					</HStack>
-				))}
-			</Picker>
+		<SettingsSection footer={footer} testID={testID}>
+			{options.map((option) => {
+				const selected = option.value === selectedValue;
+				return (
+					<Button
+						key={option.value}
+						onPress={() => onValueChange(option.value)}
+						testID={testID ? `${testID}-${option.value}` : undefined}
+						modifiers={[...rowModifiers(t), accessibilityAddTraits(selected ? ["isSelected"] : [])]}
+					>
+						<HStack spacing={space.md}>
+							{option.accessory ?? null}
+							<Text modifiers={[foregroundStyle(t.textPrimary)]}>{option.label}</Text>
+							<Spacer />
+							{selected ? <Image systemName="checkmark" color={t.accent} modifiers={[font({ textStyle: "body", weight: "semibold" }), accessibilityHidden(true)]} /> : null}
+						</HStack>
+					</Button>
+				);
+			})}
 		</SettingsSection>
 	);
 }

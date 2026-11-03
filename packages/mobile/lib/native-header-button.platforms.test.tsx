@@ -26,7 +26,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({ testID: (tag: string) => 
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Circle: host("Circle"), Group: host("Group"), Image: host("Image"), ZStack: host("ZStack") };
+	return { Circle: host("Circle"), Image: host("Image"), ZStack: host("ZStack") };
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
@@ -102,9 +102,10 @@ describe("NativeHeaderButton on iOS", () => {
 	it("keeps the glass circle with the SF Symbol and the button trait", async () => {
 		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
 
-		const group = root.findByType("Group" as never);
-		// The framed circle is VoiceOver's element, not the glyph a Group would
-		// otherwise hand its modifiers to: 44pt, not the symbol's own size.
+		const group = root.findAllByType("ZStack" as never)[0];
+		// The framed circle is VoiceOver's element: a ZStack is a view of its
+		// own, where a Group handed its modifiers to the glyph. 44pt, not the
+		// symbol's own size.
 		expect(modifierNames(group.props.modifiers)).toEqual(["frame", "glassCircle", "onTapGesture", "accessibilityElement", "accessibilityAddTraits", "accessibilityLabel", "accessibilityIdentifier"]);
 		// The whole circle takes the tap, so it is the touch target.
 		expect(GLASS_CIRCLE_SIZE).toBe(touchTarget);
@@ -117,11 +118,11 @@ describe("NativeHeaderButton on iOS", () => {
 	it("draws the unread dot inside the circle and stays one VoiceOver element", async () => {
 		const root = await render(<IOSHeaderButton icon="bell" label="Notifications, 3 unread" badge={3} onPress={() => {}} />);
 
-		const group = root.findByType("Group" as never);
+		const group = root.findAllByType("ZStack" as never)[0];
 		const modifiers = group.props.modifiers as Modifier[];
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityElement")?.args).toEqual(["ignore"]);
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityLabel")?.args).toEqual(["Notifications, 3 unread"]);
-		const stack = group.findByType("ZStack" as never);
+		const stack = root.findAllByType("ZStack" as never)[1];
 		expect(stack.props.alignment).toBe("topTrailing");
 		const dot = stack.findByType("Circle" as never);
 		expect((dot.props.modifiers as Modifier[]).find((entry) => entry.modifier === "foregroundStyle")?.args).toEqual(["#red"]);

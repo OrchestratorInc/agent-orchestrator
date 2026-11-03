@@ -45,9 +45,10 @@ export function AddFab({ label, onPress, bottomInset, expanded = true, testID }:
 				<ExtendedFloatingActionButton.Icon>
 					{/* Set outright: the card surface is not one of the Material
 					    scheme's container roles, so Compose has no content colour
-					    to pair with it. Named by the text beside it, and by itself
-					    only once the button folds to the glyph. */}
-					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.textPrimary} contentDescription={expanded ? undefined : label} />
+					    to pair with it. Named in both states: the label in the Text
+					    slot never reaches the accessibility tree, so without this
+					    the expanded button has no name for TalkBack. */}
+					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.textPrimary} contentDescription={label} />
 				</ExtendedFloatingActionButton.Icon>
 				<ExtendedFloatingActionButton.Text>
 					<Text color={t.textPrimary} style={{ typography: "labelLarge", fontFamily: font.semibold }}>{label}</Text>

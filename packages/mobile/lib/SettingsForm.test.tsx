@@ -219,7 +219,8 @@ describe("the iOS settings form", () => {
 		expect(render(quiet.props.supportingText).findByType("Image" as never).props.color).toBe("#tertiary");
 	});
 
-	it("lists a choice section as an inline picker, each option with its accessory", () => {
+	// Rows of our own: an inline Picker's checkmark stayed system blue.
+	it("lists a choice section as rows, the chosen one checked in the accent", () => {
 		const onValueChange = vi.fn();
 		const root = render(
 			<SettingsChoiceSection
@@ -230,15 +231,19 @@ describe("the iOS settings form", () => {
 				testID="themes"
 			/>,
 		);
-		const picker = root.findByType("Picker" as never);
-		expect(picker.props).toMatchObject({ label: "Theme", selection: "nord", testID: "themes" });
-		expect(has(picker, "pickerStyle", "inline")).toBe(true);
-		expect(has(picker, "labelsHidden")).toBe(true);
-		const options = picker.findAllByType("HStack" as never);
-		expect(options.map((option) => (option.props.modifiers as Modifier[])[0])).toEqual([{ $type: "tag", args: ["nord"] }, { $type: "tag", args: ["ayu"] }]);
+		expect(root.findAllByType("Picker" as never)).toHaveLength(0);
+		const rows = root.findAllByType("Button" as never);
+		expect(rows.map((row) => row.props.testID)).toEqual(["themes-nord", "themes-ayu"]);
 		// Each option is its own row, on the row background like the rest.
-		expect(options.every((option) => has(option, "listRowBackground", "#elevated"))).toBe(true);		expect(options[0].findAllByType("Swatch" as never)).toHaveLength(1);
-		picker.props.onSelectionChange("ayu");
+		expect(rows.every((row) => has(row, "listRowBackground", "#elevated"))).toBe(true);
+		expect(has(rows[0], "accessibilityAddTraits", ["isSelected"])).toBe(true);
+		expect(has(rows[1], "accessibilityAddTraits", [])).toBe(true);
+		const checks = root.findAllByType("Image" as never).filter((image) => image.props.systemName === "checkmark");
+		expect(checks).toHaveLength(1);
+		expect(checks[0].props.color).toBe("#accent");
+		expect(rows[0].findAllByType("Swatch" as never)).toHaveLength(1);
+		rows[1].props.onPress();
 		expect(onValueChange).toHaveBeenCalledWith("ayu");
 	});
+
 });

@@ -2,7 +2,7 @@ import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AgentLogo } from "../AgentLogo";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { radius, space, type } from "../tokens";
+import { fontScaleCap, radius, space, type } from "../tokens";
 
 /**
  * What the bar leaves the title between its back button and actions menu: two
@@ -54,13 +54,14 @@ export function ConversationTitle({
 		>
 			<AgentLogo harness={harness} size={22} />
 			<View style={styles.copy}>
-				<Text numberOfLines={1} style={styles.title}>{title}</Text>
+				{/* Capped: past them the title grew out of the bar into the status bar. */}
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.title} style={styles.title}>{title}</Text>
 				<View style={styles.subtitleRow}>
-					<Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text>
+					<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.subtitle}>{subtitle}</Text>
 					{stateLabel ? (
 						<View style={styles.state}>
 							<View style={[styles.dot, { backgroundColor: stateColor }]} />
-							<Text numberOfLines={1} style={styles.stateLabel}>{stateLabel}</Text>
+							<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.stateLabel}>{stateLabel}</Text>
 						</View>
 					) : null}
 				</View>

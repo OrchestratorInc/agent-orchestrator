@@ -17,7 +17,7 @@ import { useToast } from "../../../lib/useToast";
 import { LineCounts } from "../../../lib/files/components";
 import { FileSearchBar, useFileSearch } from "../../../lib/files/FileSearch";
 import { FolderList, SearchResults } from "../../../lib/files/FolderList";
-import { changeGroups, plural, type ChangeEntry } from "../../../lib/files/model";
+import { branchName, changeGroups, plural, type ChangeEntry } from "../../../lib/files/model";
 import { REVIEW_BUTTON_CLEARANCE, REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
 import { ReviewButton } from "../../../lib/files/ReviewButton";
 import { reviewKey } from "../../../lib/files/reviewStore";
@@ -149,7 +149,7 @@ function ChangesSummary({ manifest }: { manifest: NonNullable<ReturnType<typeof 
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { summary } = manifest;
-	const base = manifest.compareMode === "head_fallback" ? "last commit" : manifest.compareBaseRef || "base branch";
+	const base = manifest.compareMode === "head_fallback" ? "last commit" : manifest.compareBaseRef ? branchName(manifest.compareBaseRef) : "base branch";
 	const notes = [
 		manifest.compareMode === "head_fallback" ? "The base branch isn't available, so this compares against the last commit." : null,
 		manifest.degraded ? "Git answered slowly; some changes may be missing. Pull to refresh." : null,
