@@ -37,6 +37,20 @@ describe("UsageLimitNotice", () => {
 		expect(onResume).toHaveBeenCalledOnce();
 	});
 
+	// The limit belonged to the account the chat used before it moved. The new
+	// account has quota now, and AO refuses auto-resume once the account changed.
+	it("offers Resume right away once the chat moved to another account", () => {
+		const onResume = vi.fn();
+		const moved = { resetsAt, autoResume: false, accountChanged: true };
+		render(<UsageLimitNotice usageLimit={moved} onResume={onResume} onAutoResumeChange={vi.fn()} />);
+
+		expect(screen.getByRole("status")).toHaveTextContent("This chat now uses another account. You can resume now.");
+		expect(screen.queryByText("1m 5s")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(onResume).toHaveBeenCalledOnce();
+	});
+
 	it("opts into automatic resume and lets the user cancel it", () => {
 		const onAutoResumeChange = vi.fn();
 		const onResume = vi.fn();

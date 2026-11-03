@@ -111,6 +111,8 @@ export interface ConversationUsageLimit {
 	resetsAt?: string;
 	autoResume: boolean;
 	resumeError?: string;
+	/** The session moved to another account after this limit, so it can resume now. */
+	accountChanged?: boolean;
 }
 
 export interface ConversationTurn {

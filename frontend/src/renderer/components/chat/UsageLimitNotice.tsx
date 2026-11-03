@@ -16,6 +16,8 @@ export interface UsageLimitNoticeProps {
 	error?: string;
 	/** A historical marker; current resume controls belong by the composer. */
 	compact?: boolean;
+	/** Another signed-in account that still has quota: move there and send again. */
+	continueOn?: { account: string; onContinue: () => void; pending?: boolean; error?: string };
 }
 
 const resetTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -41,19 +43,23 @@ export function UsageLimitNotice({
 	disabled = false,
 	error,
 	compact = false,
+	continueOn,
 }: UsageLimitNoticeProps) {
 	const { t } = useTranslation();
 	const [now, setNow] = useState(Date.now);
 	const parsedReset = usageLimit.resetsAt ? Date.parse(usageLimit.resetsAt) : NaN;
 	const resetAt = Number.isFinite(parsedReset) ? parsedReset : undefined;
-	const ready = resetAt === undefined || now >= resetAt;
-	const actionError = error ?? usageLimit.resumeError;
+	// The quota that ran out belonged to the account this chat has since left.
+	const moved = Boolean(usageLimit.accountChanged);
+	const ready = moved || resetAt === undefined || now >= resetAt;
+	const actionError = error ?? continueOn?.error ?? usageLimit.resumeError;
 	const scheduled = usageLimit.autoResume;
 	const showResume = onResume && ready && !scheduled;
-	const showAutoResume = onAutoResumeChange && (scheduled || (resetAt !== undefined && !ready));
+	const showAutoResume = !moved && onAutoResumeChange && (scheduled || (resetAt !== undefined && !ready));
+	const showContinue = Boolean(continueOn) && !moved && !ready && !scheduled;
 
 	useEffect(() => {
-		if (compact || resetAt === undefined) return;
+		if (compact || moved || resetAt === undefined) return;
 		const update = () => setNow(Date.now());
 		update();
 		const timer = window.setInterval(() => {
@@ -67,7 +73,7 @@ export function UsageLimitNotice({
 			window.removeEventListener("focus", update);
 			document.removeEventListener("visibilitychange", update);
 		};
-	}, [compact, resetAt]);
+	}, [compact, moved, resetAt]);
 
 	return (
 		<div
@@ -83,7 +89,9 @@ export function UsageLimitNotice({
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 						<strong className="text-balance text-xs font-medium text-foreground">{t("chat.usageLimit.title")}</strong>
-						{!compact && resetAt !== undefined && (!ready || !scheduled) ? (
+						{!compact && moved ? (
+							<span role="status" className="text-pretty text-xs text-muted-foreground">{t("chat.usageLimit.accountChanged")}</span>
+						) : !compact && resetAt !== undefined && (!ready || !scheduled) ? (
 							<span className="text-pretty text-xs text-muted-foreground">
 								{ready ? <span role="status">{t("chat.usageLimit.ready")}</span> : (
 									<Trans
@@ -95,7 +103,7 @@ export function UsageLimitNotice({
 							</span>
 						) : null}
 					</div>
-					{!compact ? (
+					{!compact && !moved ? (
 						<p className="mt-1 text-pretty text-xs leading-5 text-muted-foreground">
 							{scheduled ? <span role="status" className="mr-2 text-foreground">{t(ready ? "chat.usageLimit.waiting" : "chat.usageLimit.scheduled")}</span> : null}
 							{resetAt === undefined ? <span>{t("chat.usageLimit.unknownReset")}</span> : (
@@ -111,8 +119,18 @@ export function UsageLimitNotice({
 					{actionError ? <p role="alert" className="mt-1 whitespace-pre-wrap wrap-anywhere text-pretty text-xs text-destructive">{actionError}</p> : null}
 				</div>
 			</div>
-			{!compact && (showResume || showAutoResume) ? (
+			{!compact && (showResume || showAutoResume || showContinue) ? (
 				<div className="ml-auto flex flex-wrap items-center gap-1">
+					{showContinue && continueOn ? (
+						<Button
+							type="button" size="sm" variant="primary" onClick={continueOn.onContinue}
+							disabled={pending || disabled || continueOn.pending}
+							className="focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							{continueOn.pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Play aria-hidden="true" className="size-3.5" />}
+							{t("chat.usageLimit.continueOn", { account: continueOn.account })}
+						</Button>
+					) : null}
 					{showResume ? (
 						<Button
 							type="button" size="sm" variant="primary" onClick={onResume}

@@ -14,6 +14,9 @@ type ConversationUsageLimit struct {
 	ResetsAt    *time.Time `json:"resetsAt,omitempty"`
 	AutoResume  bool       `json:"autoResume"`
 	ResumeError string     `json:"resumeError,omitempty"`
+	// AccountChanged marks a limit hit on an account the session has since
+	// moved off. The quota that ran out is not the session's any more.
+	AccountChanged bool `json:"accountChanged,omitempty"`
 }
 
 var usageLimitMessage = regexp.MustCompile(`(?i)^(?:you(?:'ve| have) (?:hit|reached) your (?:session |weekly |daily |usage |individual spend )?limit\b|usage limit (?:reached|exceeded)\b|(?:session|weekly|daily) usage limit (?:reached|exceeded)\b|the Claude account has no available quota\b)`)
