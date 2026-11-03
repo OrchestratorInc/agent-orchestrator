@@ -15,6 +15,7 @@ type terminalImportAgent struct {
 	fakeAgent
 	restores    []ports.RestoreConfig
 	relocations []ports.ImportedSessionRelocation
+	probes      []ports.SessionRef
 	native      bool
 }
 
@@ -26,6 +27,11 @@ func (a *terminalImportAgent) GetRestoreCommand(_ context.Context, cfg ports.Res
 func (a *terminalImportAgent) RelocateImportedSession(_ context.Context, r ports.ImportedSessionRelocation) error {
 	a.relocations = append(a.relocations, r)
 	return nil
+}
+
+func (a *terminalImportAgent) NativeConversationExists(_ context.Context, ref ports.SessionRef, _ string, _ map[string]string) (bool, error) {
+	a.probes = append(a.probes, ref)
+	return true, nil
 }
 
 func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
@@ -58,6 +64,14 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 			}
 			if len(a.restores) != 1 || a.restores[0].Session.Metadata[ports.MetadataKeyAgentSessionID] != "native-terminal" || a.restores[0].Session.WorkspacePath != child {
 				t.Fatalf("restore configs = %#v", a.restores)
+			}
+			if a.restores[0].Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || len(a.probes) != 2 {
+				t.Fatalf("restore/preflight import context missing: restores=%#v probes=%#v", a.restores, a.probes)
+			}
+			for _, probe := range a.probes {
+				if probe.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || probe.Metadata[ports.MetadataKeyImportConfigDir] != rec.Metadata.ImportSource.ConfigDir || probe.WorkspacePath != child {
+					t.Fatalf("strict probe lost import identity/worktree: %#v", probe)
+				}
 			}
 			if len(a.relocations) != 1 || a.relocations[0].LaunchCWD != child || result.Session.Metadata.WorkspacePath != workspace || result.Session.Metadata.ImportSource.ResumeCwd != child {
 				t.Fatalf("relocation = %#v, metadata = %#v", a.relocations, result.Session.Metadata)

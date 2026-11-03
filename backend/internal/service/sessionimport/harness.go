@@ -24,12 +24,22 @@ type harnessImporter struct {
 	// mode can force Terminal import when a provider's Chat driver cannot load
 	// the native format being imported. Empty preserves capability selection.
 	mode domain.SessionMode
+	// Global stores can also need registered paths to resolve older metadata.
+	discoverWithProjects func(context.Context, string, []string) ([]sourceFiles, error)
+	readWithProjects     func(context.Context, string, []string, ...string) (transcript, error)
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCrush:  {root: crushRoot, discover: discoverCrush, read: readCrushTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript},
+	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
+}
+
+func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {
+	if read := harnessImporters[harness].readWithProjects; read != nil {
+		return read(ctx, root, projects, paths...)
+	}
+	return readTranscript(ctx, harness, root, paths...)
 }
 
 // importTitle keeps list titles compact without cutting UTF-8 characters.

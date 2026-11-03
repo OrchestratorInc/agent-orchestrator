@@ -100,6 +100,22 @@ func TestOpenCodeDiscoverSkipsChildAndArchived(t *testing.T) {
 	}
 }
 
+func TestScanDoesNotOfferOpenCodeWithReadableHistory(t *testing.T) {
+	root, db := newOpenCodeStore(t)
+	project := t.TempDir()
+	addSession(t, db, "ses_deferred", "", project, "Deferred import", 9000, nil)
+	addMessage(t, db, "ses_deferred", "msg_deferred", "user", 1000, "text:keep tools in AO")
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessOpenCode: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Candidates) != 0 {
+		t.Fatalf("OpenCode must not be offered until tools run in AO's worktree: %+v", preview.Candidates)
+	}
+}
+
 func TestOpenCodeTranscriptKeepsOnlyUserAssistantText(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	addSession(t, db, "ses_abc123", "", "/work/repo", "Fix the parser", 9000, nil)
