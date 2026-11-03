@@ -6,7 +6,8 @@ import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
-import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { globalSettingsItemsFor, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { CloudCpError } from "../lib/cloud-cp";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
@@ -529,6 +530,24 @@ describe("SettingsDialog", () => {
 			const ids = pages({ customCoder: true, selfServeBilling: true, cloudEnabled: false });
 			expect(ids).not.toContain("coder");
 			expect(ids).not.toContain("billing");
+		});
+
+		it("shows Teams only where sharing is on, or for teams the person is in elsewhere", () => {
+			const withTeams = (teams: TeamsPage, cloudEnabled = true) =>
+				visibleGlobalSettings({ cloudEnabled, developerMode: false, diagnostics: false, customCoder: false, selfServeBilling: false, teams }).map((item) => item.id);
+			expect(withTeams("manage")).toContain("teams");
+			expect(withTeams("member")).toContain("teams");
+			expect(withTeams("none")).not.toContain("teams");
+			expect(withTeams("manage", false)).not.toContain("teams");
+
+			const elsewhere = { isPending: false, error: null, data: [{ orgId: "org-acme" }] };
+			const here = { isPending: false, error: null, data: [{ orgId: "org-north" }] };
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: here })).toBe("manage");
+			expect(teamsPageFor({ share: false, orgId: "org-north", mine: elsewhere })).toBe("member");
+			expect(teamsPageFor({ share: false, orgId: "org-north", mine: here })).toBe("none");
+			// Not shown until the person's teams are known, nor by a control plane from before teams.
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: true, error: null } })).toBe("none");
+			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: false, error: new CloudCpError("404 page not found", { status: 404 }) } })).toBe("none");
 		});
 	});
 

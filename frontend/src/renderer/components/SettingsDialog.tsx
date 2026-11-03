@@ -8,6 +8,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useMyTeams } from "../hooks/useTeams";
+import { SHARE_FEATURE } from "../lib/cloud-offering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useSectionHistory } from "../hooks/useSectionHistory";
 import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation";
@@ -28,13 +30,25 @@ import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, setti
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
-import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
+}
+
+/**
+ * What Settings › Teams offers: managing the workspace's teams where it can
+ * share (as the Share button), only the teams the person is in elsewhere
+ * where it can't, and nothing against a control plane from before teams.
+ * Hidden until the person's teams are known, so the rail never shows an
+ * item that then goes away.
+ */
+function useTeamsPage(enabled: boolean, share: boolean, orgId: string | undefined): TeamsPage {
+	const mine = useMyTeams(enabled);
+	return enabled ? teamsPageFor({ share, orgId, mine }) : "none";
 }
 
 // How long global Settings waits after opening before forcing the Codex account
@@ -52,7 +66,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { cloudEnabled } = useCloudGate();
 	// The org's offering decides the cloud pages: the bring-your-own-Coder page
 	// only when it includes coder, Upgrade only for self-serve billing.
-	const { customCoder, selfServeBilling } = useCloudOffering();
+	const offering = useCloudOffering();
+	const { customCoder, selfServeBilling } = offering;
+	const teams = useTeamsPage(cloudEnabled && settingsModal?.scope === "global", offering.features?.includes(SHARE_FEATURE) === true, offering.org?.id);
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -76,7 +92,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -147,7 +163,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -196,12 +212,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id;
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams }).id;
 			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
 			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
 			globalRequestRef.current = { modal: settingsModal, section };
 		}
-	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal, globalHistory.reset, globalHistory.visit]);
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
@@ -336,7 +352,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} teams={teams} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} showDiagnostics={showDiagnostics} section={activeSection} />;
 		},
 	};
 }
