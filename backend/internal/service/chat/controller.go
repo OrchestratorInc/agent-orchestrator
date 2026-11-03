@@ -81,6 +81,7 @@ type Store interface {
 	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
+	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -221,6 +222,7 @@ type Controller struct {
 	newID                  IDFactory
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
+	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 
 	// sendMu serializes command dispatch so only one operation mutates the
@@ -388,6 +390,7 @@ func newController(
 	newID IDFactory,
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
+	recheckAccount func(domain.SessionID, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
 ) *Controller {
@@ -405,6 +408,7 @@ func newController(
 		newID:                  newID,
 		now:                    now,
 		onAccountChanged:       onAccountChanged,
+		recheckAccount:         recheckAccount,
 		onCodexCapacityChanged: onCodexCapacityChanged,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
@@ -493,6 +497,7 @@ type nativeHistoryHighWater struct {
 // completed while Chat was not attached; the AO high-water mark covers an
 // immediate round trip before a resumed TUI has emitted another hook.
 type nativeHistoryCheckpoint struct {
+	harness                 domain.AgentHarness
 	latestUserPromptAt      time.Time
 	latestAssistantUpdateAt time.Time
 	requireNewerTurn        bool
@@ -666,7 +671,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 	}
 	p.retireSupersededLegacyFacts(sessionID, turnsByID, messages, latest)
 	p.aoHighWater = evidence(latest)
-	p.replayIndex = indexNativeHistoryTurns(turns, messages, activities)
+	p.replayIndex = indexNativeHistoryTurnsForHarness(p.harness, turns, messages, activities)
 }
 
 func (p *nativeHistoryCheckpoint) retireSupersededLegacyFacts(sessionID domain.SessionID, turns map[string]*domain.ConversationTurn, messages []domain.ConversationMessage, latest *domain.ConversationTurn) {
@@ -805,7 +810,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 	}
 	index := p.replayIndex
 	if index == nil {
-		index = indexNativeHistoryTurns(existingTurns, existingMessages, existingActivities)
+		index = indexNativeHistoryTurnsForHarness(p.harness, existingTurns, existingMessages, existingActivities)
 	}
 	mappedTurns, _ := index.mapReplay(events)
 	boundaries := make(map[string]nativeHistoryHighWater, len(p.aoHighWaterPeers)+1)
@@ -1030,12 +1035,23 @@ func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) strin
 	return string(role) + "\x00" + text
 }
 
+func nativeHistoryFingerprintForHarness(harness domain.AgentHarness, role domain.MessageRole, text string) string {
+	if harness == domain.HarnessHermes {
+		text = strings.TrimSpace(text)
+	}
+	return nativeHistoryMessageFingerprint(role, text)
+}
+
 func nativeHistoryEventMessageFingerprint(event ports.ChatEvent) (string, bool) {
+	return nativeHistoryEventFingerprintForHarness("", event)
+}
+
+func nativeHistoryEventFingerprintForHarness(harness domain.AgentHarness, event ports.ChatEvent) (string, bool) {
 	switch event.Kind {
 	case ports.ChatEventUserMessageCompleted:
-		return nativeHistoryMessageFingerprint(domain.MessageRoleUser, event.Text), true
+		return nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, event.Text), true
 	case ports.ChatEventMessageCompleted:
-		return nativeHistoryMessageFingerprint(domain.MessageRoleAssistant, event.Text), true
+		return nativeHistoryFingerprintForHarness(harness, domain.MessageRoleAssistant, event.Text), true
 	default:
 		return "", false
 	}
@@ -1050,20 +1066,10 @@ func nativeHistoryActivityFingerprint(
 	return string(kind) + "\x00" + string(status) + "\x00" + summary + "\x00" + string(detail)
 }
 
-// mapNativeHistoryTurns identifies which durable AO turn owns each raw replay
-// turn before reconciliation rewrites provider turn ids or drops duplicates.
-func mapNativeHistoryTurns(
-	events []ports.ChatEvent,
-	existingTurns []domain.ConversationTurn,
-	existingMessages []domain.ConversationMessage,
-	existingActivities []domain.ConversationActivity,
-) (map[string]*nativeHistoryTurn, map[string]*nativeHistoryTurn) {
-	return indexNativeHistoryTurns(existingTurns, existingMessages, existingActivities).mapReplay(events)
-}
-
 // The durable snapshot is invariant during history settling. Keep its index
 // separate from per-replay matching so refreshes do not rebuild it.
 type nativeHistoryTurnIndex struct {
+	harness          domain.AgentHarness
 	byProviderTurnID map[string]*nativeHistoryTurn
 	providerItems    map[string]*nativeHistoryTurn
 	ordered          []*nativeHistoryTurn
@@ -1094,6 +1100,15 @@ func indexNativeHistoryTurns(
 	existingMessages []domain.ConversationMessage,
 	existingActivities []domain.ConversationActivity,
 ) *nativeHistoryTurnIndex {
+	return indexNativeHistoryTurnsForHarness("", existingTurns, existingMessages, existingActivities)
+}
+
+func indexNativeHistoryTurnsForHarness(
+	harness domain.AgentHarness,
+	existingTurns []domain.ConversationTurn,
+	existingMessages []domain.ConversationMessage,
+	existingActivities []domain.ConversationActivity,
+) *nativeHistoryTurnIndex {
 	if len(existingTurns) == 0 {
 		return nil
 	}
@@ -1113,7 +1128,7 @@ func indexNativeHistoryTurns(
 		}
 		if turn.ProviderInputText != "" {
 			candidate.text = turn.ProviderInputText
-			candidate.messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, turn.ProviderInputText)]++
+			candidate.messages[nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, turn.ProviderInputText)]++
 		}
 		byAOTurnID[turn.ID] = candidate
 		byProviderTurnID[turn.ProviderTurnID] = candidate
@@ -1143,7 +1158,7 @@ func indexNativeHistoryTurns(
 		if candidate == nil {
 			continue
 		}
-		candidate.messages[nativeHistoryMessageFingerprint(message.Role, nativeHistoryMessageText(message))]++
+		candidate.messages[nativeHistoryFingerprintForHarness(harness, message.Role, nativeHistoryMessageText(message))]++
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
 			candidate.text = nativeHistoryMessageText(message)
@@ -1162,14 +1177,14 @@ func indexNativeHistoryTurns(
 		}
 		if json.Unmarshal(activity.Detail, &steerInput) == nil &&
 			steerInput.ProviderInputText != "" && !steerInput.ProviderInputStoredOnTurn {
-			candidate.messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, steerInput.ProviderInputText)]++
+			candidate.messages[nativeHistoryFingerprintForHarness(harness, domain.MessageRoleUser, steerInput.ProviderInputText)]++
 		}
 		candidate.activities[nativeHistoryActivityFingerprint(
 			activity.Kind, activity.Status, activity.Summary, activity.Detail,
 		)]++
 		rememberProviderItem(activity.ProviderItemID, candidate)
 	}
-	return &nativeHistoryTurnIndex{byProviderTurnID: byProviderTurnID, providerItems: providerItems, ordered: ordered}
+	return &nativeHistoryTurnIndex{harness: harness, byProviderTurnID: byProviderTurnID, providerItems: providerItems, ordered: ordered}
 }
 
 func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[string]*nativeHistoryTurn, map[string]*nativeHistoryTurn) {
@@ -1257,7 +1272,13 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		if match == nil && event.Text != "" {
 			for _, candidate := range ordered {
-				if !used[candidate] && candidate.text == event.Text {
+				if used[candidate] || candidate.text == "" {
+					continue
+				}
+				// Hermes strips persisted text. Other providers keep exact
+				// prompt matching so whitespace-distinct turns stay distinct.
+				if candidate.text == event.Text ||
+					(index.harness == domain.HarnessHermes && nativeHistoryTextMatches(candidate.text, event.Text)) {
 					match = candidate
 					break
 				}
@@ -1283,11 +1304,21 @@ func reconcileNativeHistory(
 	existingMessages []domain.ConversationMessage,
 	existingActivities []domain.ConversationActivity,
 ) []ports.ChatEvent {
+	return reconcileNativeHistoryForHarness("", events, existingTurns, existingMessages, existingActivities)
+}
+
+func reconcileNativeHistoryForHarness(
+	harness domain.AgentHarness,
+	events []ports.ChatEvent,
+	existingTurns []domain.ConversationTurn,
+	existingMessages []domain.ConversationMessage,
+	existingActivities []domain.ConversationActivity,
+) []ports.ChatEvent {
 	if len(events) == 0 || len(existingTurns) == 0 {
 		return events
 	}
 
-	mapped, providerItems := mapNativeHistoryTurns(events, existingTurns, existingMessages, existingActivities)
+	mapped, providerItems := indexNativeHistoryTurnsForHarness(harness, existingTurns, existingMessages, existingActivities).mapReplay(events)
 	if len(mapped) == 0 {
 		return events
 	}
@@ -1332,7 +1363,7 @@ func reconcileNativeHistory(
 			// new outer id.
 			matched = true
 		}
-		if fingerprint, ok := nativeHistoryEventMessageFingerprint(event); ok && candidate.messages[fingerprint] > 0 {
+		if fingerprint, ok := nativeHistoryEventFingerprintForHarness(harness, event); ok && candidate.messages[fingerprint] > 0 {
 			candidate.messages[fingerprint]--
 			matched = true
 		}
@@ -1539,6 +1570,7 @@ func (c *Controller) sendLocked(
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		SpawnOpeningPrompt:  msg.SpawnOpeningPrompt,
 		Continuation:        msg.Continuation,
 		InteractionAt:       msg.InteractionAt,
 	}
@@ -3054,6 +3086,7 @@ func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project
 		"providerItemAliases":    event.ProviderItemAliases,
 		"clientMessageId":        event.ClientMessageID,
 		"turnState":              event.TurnState,
+		"failureCode":            event.FailureCode,
 		"delta":                  event.Delta,
 		"text":                   event.Text,
 		"activityKind":           event.ActivityKind,
@@ -3205,8 +3238,8 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			message = event.Err.Error()
 		}
 		state := settledTurnState(event)
-		if err := c.store.SettleTurn(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, now); err != nil {
+		if err := c.store.SettleTurnWithFailureCode(
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, now); err != nil {
 			return err
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
@@ -3568,6 +3601,14 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
+			// A turn after a refused login hints the login is back. Reading the
+			// account again confirms it and clears the sign-in notice now, not
+			// when this turn ends.
+			if c.recheckAccount != nil {
+				if account, err := c.store.ConversationAccount(ctx, c.conversation.ID); err == nil && account != nil && account.ReauthRequiredAt != nil {
+					c.recheckAccount(c.sessionID, c.harness)
+				}
+			}
 		}
 	case ports.ChatEventTurnCompleted:
 		reauthRequired := errors.Is(event.Err, ports.ErrChatAuthRequired)

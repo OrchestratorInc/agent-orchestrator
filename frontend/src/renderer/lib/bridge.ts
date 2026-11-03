@@ -6,6 +6,12 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,
@@ -95,6 +101,9 @@ export const aoBridge: AoBridge =
 				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
 				return new Uint8Array(await response.arrayBuffer());
 			},
+			openFolder: async () => {
+				throw new Error("Opening a folder needs the desktop app");
+			},
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
@@ -136,8 +145,8 @@ export const aoBridge: AoBridge =
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
-			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
-			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
+			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
+			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
@@ -387,6 +396,10 @@ export const aoBridge: AoBridge =
 			request: async () => {
 				throw new Error("AO Cloud requests require the desktop app.");
 			},
+			requestBinary: async () => {
+				throw new Error("AO Cloud requests require the desktop app.");
+			},
+			cancelBinary: () => undefined,
 			openStream: async () => {
 				throw new Error("AO Cloud event streams require the desktop app.");
 			},

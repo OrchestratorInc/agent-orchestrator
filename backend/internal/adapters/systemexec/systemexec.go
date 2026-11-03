@@ -21,7 +21,12 @@ import (
 // Adapter implements the host executable and command-runner ports.
 type Adapter struct {
 	installerRoot string
-	httpClient    *http.Client
+	// binDir holds release binaries AO downloads itself (<data dir>/bin).
+	binDir     string
+	httpClient *http.Client
+	// downloadStall overrides how long a managed binary download may go
+	// without a byte. Zero uses managedBinaryStallTimeout.
+	downloadStall time.Duration
 }
 
 var (
@@ -31,6 +36,7 @@ var (
 	_ ports.InstallScriptRunner    = Adapter{}
 	_ ports.InstallCapabilityProbe = Adapter{}
 	_ ports.PathWritableProbe      = Adapter{}
+	_ ports.ManagedBinaryInstaller = Adapter{}
 )
 
 // New creates a host adapter whose installer scratch space stays inside AO's
@@ -48,6 +54,7 @@ func (Adapter) PathWritable(ctx context.Context, path string) (bool, error) {
 func newAdapter(dataDir string, client *http.Client) Adapter {
 	return Adapter{
 		installerRoot: filepath.Join(dataDir, "installers", "tmp"),
+		binDir:        filepath.Join(dataDir, "bin"),
 		httpClient:    client,
 	}
 }

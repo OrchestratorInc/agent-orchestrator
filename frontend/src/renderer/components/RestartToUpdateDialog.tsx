@@ -10,6 +10,8 @@ import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
+import { displayableUpdateError } from "../../shared/update-error-message";
+import { localizedUpdateError } from "../lib/update-error-copy";
 import {
 	Dialog,
 	DialogContent,
@@ -51,6 +53,7 @@ function RestartToUpdateDialogBody() {
 	const [targetChanged, setTargetChanged] = useState(false);
 	const [failureDetail, setFailureDetail] = useState<string | null>(null);
 	const installing = useRef(false);
+	const installStartedStatus = useRef(status);
 	const mounted = useRef(true);
 	// Keep the confirmed build details visible when preparation emits a status
 	// without release metadata (for example a download progress event).
@@ -65,6 +68,11 @@ function RestartToUpdateDialogBody() {
 		};
 	}, []);
 
+	// The rejection crosses IPC as English text. When the broadcast status
+	// describes the same failure, show its localized sentence instead (#5755).
+	const failureText = failureDetail && status.state === "error" && status.message === failureDetail
+		? localizedUpdateError(status.message, status.errorInfo, failureDetail, t)
+		: failureDetail;
 	const version = confirmedBuild?.version ?? status.staged?.version ?? status.version;
 	// The top-level notes follow status.version, which can be a newer build
 	// downloading over the staged one; the staged build's own notes ride on
@@ -90,9 +98,20 @@ function RestartToUpdateDialogBody() {
 	);
 
 	const hasFailed = failureDetail !== null;
+	// Native staging can finish after the watchdog rejected the install request.
+	// A fresh ready status for the displayed target restores explicit install
+	// confirmation instead of leaving a recovered update behind a relaunch action.
+	useEffect(() => {
+		if (
+			status !== installStartedStatus.current &&
+			status.state === "downloaded" && status.staged?.ready !== false &&
+			(status.staged?.version ?? status.version) === version && !pending
+		) {
+			setFailureDetail(null);
+		}
+	}, [status, pending, version]);
 
-	// Squirrel can't be reset in-process, so retry restarts AO like a manual
-	// quit-and-reopen.
+	// Start a fresh process when native staging has not recovered.
 	const retry = async () => {
 		if (installing.current) return;
 		installing.current = true;
@@ -111,6 +130,7 @@ function RestartToUpdateDialogBody() {
 		// A ref guards same-turn clicks before React commits the disabled state.
 		if (installing.current || !version) return;
 		installing.current = true;
+		installStartedStatus.current = status;
 		setConfirmedBuild({ version, releaseNotes });
 		setPending(true);
 		setFailureDetail(null);
@@ -127,9 +147,11 @@ function RestartToUpdateDialogBody() {
 		} catch (error) {
 			if (mounted.current) {
 				// Electron wraps IPC rejections with transport details. Keep the
-				// actionable main-process message, rendered as bounded plain text.
+				// actionable main-process message, rendered as plain text, and drop
+				// an updater dump (overlong text counts, as in Settings) in favor of
+				// the heading alone (#5755).
 				setFailureDetail(error instanceof Error
-					? error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim().slice(0, 1000)
+					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim(), "")
 					: "");
 			}
 		} finally {
@@ -206,7 +228,7 @@ function RestartToUpdateDialogBody() {
 					{failureDetail !== null && (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
 							<p>{t("update.restart.prepareFailed")}</p>
-							{failureDetail && <p className="whitespace-pre-line break-words">{failureDetail}</p>}
+							{failureDetail && <p className="whitespace-pre-line break-words">{failureText}</p>}
 						</div>
 					)}
 					{/* On failure the main process turns off install-on-quit, so hide

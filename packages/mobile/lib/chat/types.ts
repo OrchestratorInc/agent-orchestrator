@@ -21,7 +21,12 @@ export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permiss
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };
-export type ConversationPlan = { explanation?: string; steps: PlanStep[] };
+export type ConversationPlan = {
+	explanation?: string;
+	steps: PlanStep[];
+	/** A list the agent keeps across turns (Claude's task list): every later turn carries a copy. */
+	spansTurns?: boolean;
+};
 export type DiffFile = {
 	path: string;
 	oldPath?: string;

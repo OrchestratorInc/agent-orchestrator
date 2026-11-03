@@ -19,6 +19,13 @@ export type MarkdownBlocks = {
 	stableCount: number;
 };
 
+// Definitions and footnotes have document-wide scope. The tree, not the text,
+// says where they are: `dict[str, int]:` in a code block is not one.
+function containsDefinition(node: Nodes): boolean {
+	return node.type === "definition" || node.type === "footnoteDefinition"
+		|| ("children" in node && node.children.some(containsDefinition));
+}
+
 // Formulas are as literal as code: emphasis repair would rewrite their TeX.
 function containsCode(node: Nodes): boolean {
 	return node.type === "code" || node.type === "math" || node.type === "inlineMath"
@@ -28,16 +35,17 @@ function containsCode(node: Nodes): boolean {
 /** Per-message, immutable state; concurrent replies never evict each other. */
 export function splitStreamingMarkdown(source: string, previous?: MarkdownBlocks, math = false): MarkdownBlocks {
 	if (previous?.source === source && previous.math === math) return previous;
-	// Definitions and footnotes have document-wide scope. Keep one document so
-	// later definitions resolve earlier links and footnote IDs stay unique.
-	if (/\]\s*:|\[\^/.test(source)) {
-		return { source, math, blocks: [{ source, start: 0, repairInline: false }], stableCount: 0 };
-	}
 	const keep = previous?.math === math && source.startsWith(previous.source) ? previous.stableCount : 0;
 	const blocks = previous?.blocks.slice(0, keep) ?? [];
 	const offset = previous?.blocks[keep]?.start ?? 0;
 	const tail = source.slice(offset);
 	const tree = (math ? mathParser : parser).parse(tail);
+	// Keep one document so later definitions resolve earlier links and footnote
+	// IDs stay unique. Committed blocks were in the tail when they were cut, so a
+	// definition in them already kept the reply whole.
+	if (tree.children.some(containsDefinition)) {
+		return { source, math, blocks: [{ source, start: 0, repairInline: false }], stableCount: 0 };
+	}
 	const starts = tree.children.map((node) => {
 		const position = node.position?.start;
 		// Include indentation in the next block, rather than leaving it on the

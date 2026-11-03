@@ -116,7 +116,7 @@ export default function SettingsScreen() {
 	// errorStatus is null too, which on its own would read as unreachable.
 	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
 	const failure =
-		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
+		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, { kind: config?.endpointKind, host: config?.host }, connection === "open")
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
 	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });

@@ -1,19 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
+import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
@@ -23,7 +24,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
-import { topbarDragStyle } from "./ShellTopbar";
+import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -38,6 +39,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const navigate = useNavigate();
 	const router = useRouter();
 	const queryClient = useQueryClient();
+	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
@@ -47,6 +49,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
 	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -110,7 +113,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		attachmentsProject.current = projectId;
 		writeChatAttachments(draftScope, []);
 	}
-	const skills = useMemo(() => readChatSkills(task.agent.value, hostId), [hostId, task.agent.value]);
+	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -120,7 +124,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const harness = task.agent.value;
 	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
-		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.isCloudProject) : undefined;
+		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
 			harness,
 			projectId: task.catalogProjectId,
@@ -128,7 +132,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			models: providerOptions ? [] : task.chatModels,
 			settings,
 			configOptions: providerOptions,
-			showApprovalMode: !task.isCloudProject,
+			showApprovalMode: !task.approvalModes || task.approvalModes.length > 0,
+			approvalModes: task.approvalModes,
+			// A Cloud task with no model picked runs the project's or the agent's
+			// default, as the New Task picker words it; it needs no choice.
+			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
@@ -191,12 +199,12 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		};
 	}, [router]);
 
-	// Cloud projects keep the New Task dialog for now: a link here hands over to it.
+	// A Coder project keeps the New Task dialog and its own start-up: a link here hands over to it.
 	useEffect(() => {
-		if (!task.isCloudProject) return;
+		if (!task.isCoderCloudProject) return;
 		void navigate({ to: "/new", search: { host: hostId }, replace: true });
 		useUiStore.getState().requestNewTask(projectId, hostId);
-	}, [hostId, navigate, projectId, task.isCloudProject]);
+	}, [hostId, navigate, projectId, task.isCoderCloudProject]);
 
 	// Load the session page's code now: a first visit otherwise renders the
 	// router's empty pending frame between this page and the session.
@@ -218,7 +226,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
 			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
 		}
-		await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
+		// A Cloud task is already on the board (the launch refreshed the Cloud list).
+		if (!taskRef.current.isCloudProject) await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
 		// After the composer settles this send, so its draft never outlives the page.
 		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
@@ -320,12 +329,25 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
 	pendingRef.current = pending;
-	const notice = pending ? null : task.fallbackAction ? (
+	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
+		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
+			<span>{task.error}</span>
+			{task.errorAction ? <div className="flex items-center gap-2">
+				{task.errorAction.input ? <input
+					aria-label={task.errorAction.input.label}
+					value={task.errorAction.input.value}
+					onChange={(event) => task.errorAction?.input?.onChange(event.target.value)}
+					className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
+				/> : null}
+				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
+			</div> : null}
+		</div>
+	) : task.status ? (
+		<p role="status" className="px-1 text-xs text-foreground">{task.status}</p>
+	) : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
 			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
 		</div>
-	) : fallbackFailed && task.error ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
 	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
@@ -341,9 +363,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			{/* No topbar yet: the strip only holds the session header's place, so the
-			    chat does not move when the session takes over, and drags the window. */}
-			<div aria-hidden="true" className="h-inspector-tabs w-full shrink-0" style={topbarDragStyle} />
+			{/* No session yet: the shared session frame with no tabs holds the header's
+			    place and surface, so nothing moves or changes colour at handoff. */}
+			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+				<SessionTabsTopbar hideActions tabs={null} />
+			</div>
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above).
@@ -357,7 +381,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				holdAttachments
+				// A Cloud task cannot carry files yet, so its composer offers none.
+				holdAttachments={!task.isCloudProject}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
@@ -371,6 +396,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				}
 				onSend={send}
 				busy={pending}
+				// The Cloud session started for this task is still coming up.
 				// The session's own composer controls from the start: the same bar, held
 				// still once sent, with the agent at the top of the model menu.
 				draftSettings={frozen ? (frozenSettings ? <LaunchSettingsBar {...frozenSettings} /> : null) : (
@@ -383,6 +409,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							configOptions={providerOptions}
 							onChangeConfigOption={providerOptions ? chooseProviderOption : undefined}
 							showApprovalMode={barSettings.showApprovalMode}
+							unsetModelLabel={barSettings.unsetModelLabel}
+							approvalModes={barSettings.approvalModes}
 							// The session's own picker, so the bar is the one the chat keeps. With no
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
@@ -409,7 +437,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
-function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, cloud: boolean): ChatConfigOption[] | undefined {
+function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, approvalModes?: ApprovalMode[]): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
@@ -435,10 +463,10 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		if (listedEfforts.length !== offered.size || listedEfforts.some((value) => !offered.has(value))) return undefined;
 		out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
 	}
-	// Cloud tasks do not send a permission choice, so none is offered.
-	if (grouped.mode && !cloud) {
+	// A Cloud task sends its permission choice with the opening prompt, as a local one does.
+	if (grouped.mode) {
 		// Only choices a new task can start with: those with an AO permission equivalent.
-		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode);
+		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode && (!approvalModes || approvalModes.includes(choice.permissionMode)));
 		const value = choices.find((choice) => choice.permissionMode === settings.approvalMode)?.value;
 		if (!value) return undefined;
 		out.push({ ...grouped.mode, choices, currentValue: value });
@@ -453,10 +481,18 @@ const POST_START_ERRORS = new Set([
 	"SPAWN_SUPERVISOR_FAILED", "SPAWN_PREPARE_LAUNCH_FAILED", "RUNTIME_CREATE_FAILED",
 ]);
 
-/** A send whose outcome is unknown: no answer, or a failure after the session may exist. */
+/**
+ * A send whose outcome is unknown: no answer, a server error (the create may
+ * have gone through before it failed), a rate limit that names no plan limit,
+ * or a failure after the session may exist.
+ */
 function sendIsUncertain(error: unknown): boolean {
 	if (!(error instanceof Error)) return true;
 	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
+	const status = "status" in error && typeof error.status === "number" ? error.status : undefined;
+	if (status !== undefined && (status === 0 || status >= 500)) return true;
+	// A plan's limit has its own message and its Upgrade; any other 429 is retried.
+	if (status === 429) return !(code && PLAN_REFUSAL_CODES.has(code));
 	if (code) return POST_START_ERRORS.has(code);
 	return error.name !== "TaskCreateError";
 }
@@ -526,10 +562,14 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	// Cloud projects start tasks from the New Task dialog for now.
+	// A Cloud project's page lists Cloud projects beside local ones; a local
+	// project's page lists local projects only, as it always has.
+	const onCloudProject = workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND);
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND && workspace.kind !== CLOUD_PROJECT_KIND,
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND &&
+			(onCloudProject || workspace.kind !== CLOUD_PROJECT_KIND),
 	);
+	const cloudProjectIds = new Set(projects.filter((project) => project.kind === CLOUD_PROJECT_KIND).map((project) => project.id));
 	const projectOptions = [
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
 		...projects.map((project) => ({ value: project.id, label: project.name })),
@@ -562,14 +602,14 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			}}
 			renderTrigger={() => (
 				<span className="inline-flex min-w-0 items-center gap-1.5">
-					<ProjectIcon projectId={projectId} className="size-3.5 text-muted-foreground" />
+					<ProjectIcon projectId={projectId} cloud={cloudProjectIds.has(projectId)} className="size-3.5 text-muted-foreground" />
 					<span className="min-w-0 truncate">{selectedProjectName}</span>
 					{hostLabel ? <span className="shrink-0 text-muted-foreground">· {hostLabel}</span> : null}
 				</span>
 			)}
 			renderMenuItem={(option) => (
 				<>
-					<ProjectIcon projectId={option.value} className="size-icon-sm" />
+					<ProjectIcon projectId={option.value} cloud={cloudProjectIds.has(option.value)} className="size-icon-sm" />
 					<span className="min-w-0 truncate">{option.label}</span>
 				</>
 			)}
@@ -577,8 +617,8 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	);
 }
 
-function ProjectIcon({ projectId, className }: { projectId: string; className: string }) {
-	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : Folder;
+function ProjectIcon({ projectId, cloud, className }: { projectId: string; cloud?: boolean; className: string }) {
+	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : cloud ? Cloud : Folder;
 	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 

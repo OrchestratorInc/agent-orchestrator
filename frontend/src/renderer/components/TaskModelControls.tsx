@@ -50,7 +50,16 @@ export function TaskModelPicker({
 	onModeChange,
 	onRefresh,
 	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
+	allowNativeSelection = false,
+	footer,
+}: TaskComposerModelControl & {
+	onRefresh?: () => Promise<void>;
+	showFollowAgentAction: boolean;
+	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
+	allowNativeSelection?: boolean;
+	/** Where the listed models come from. */
+	footer?: ReactNode;
+}) {
 	const { t } = useTranslation();
 
 	// Keep the no-agent placeholder until there is an agent to configure.
@@ -94,8 +103,13 @@ export function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={false}
-			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			allowCustom={allowNativeSelection && catalog?.allowCustom}
+			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : catalog?.customModelEntry === "configured" ? "configured" : "none"}
+			onCustom={allowNativeSelection ? onModelChange : undefined}
+			// Default sends no model, so the project's or the agent's own applies.
+			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
+			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
+			footer={footer}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

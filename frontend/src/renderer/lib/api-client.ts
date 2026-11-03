@@ -21,6 +21,33 @@ export function getApiBaseUrl(): string {
 	return runtimeApiBaseUrl ?? "";
 }
 
+// Chromium allows six HTTP/1.1 connections per host, and every EventSource
+// holds one for its whole life. The renderer keeps three to five streams open
+// on the daemon, which left two or three connections for every other request,
+// so one slow request queued the rest (Settings among them). A *.localhost name
+// resolves to loopback in Chromium but is a separate host, so streams opened on
+// it get their own connections. Only the loopback daemon address is remapped.
+//
+// Chromium resolves a *.localhost name to ::1 first, and the daemon's main
+// listener is 127.0.0.1, so another process on [::1] at the daemon's port (or
+// on a dual-stack ::) would receive these streams. The name is used only while
+// the daemon reports that it serves [::1] at its port too (ipv6Loopback in its
+// status); otherwise streams stay on 127.0.0.1.
+const eventStreamHostname = "ao-events.localhost";
+let daemonServesIPv6Loopback = false;
+
+/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
+export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
+	try {
+		const url = new URL(baseUrl);
+		if (!ipv6Loopback || url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
+		url.hostname = eventStreamHostname;
+		return url.href.replace(/\/+$/, "");
+	} catch {
+		return baseUrl.replace(/\/+$/, "");
+	}
+}
+
 export function hasTrustedApiBaseUrl(): boolean {
 	return runtimeApiBaseUrl !== null;
 }
@@ -49,6 +76,7 @@ export function setApiBaseUrl(nextBaseUrl: string | null): void {
 // availability message.
 export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 	daemonStatus = nextStatus;
+	daemonServesIPv6Loopback = nextStatus.state === "ready" && nextStatus.ipv6Loopback === true;
 }
 
 // Route templates from the generated OpenAPI schema (frontend/src/api/schema.ts).
@@ -260,7 +288,9 @@ function reportApiError(
 		error_category: category,
 		status,
 	});
-	captureApiErrorToSentry(operation, category, status, code, requestId);
+	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
+		captureApiErrorToSentry(operation, category, status, code, requestId);
+	}
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {

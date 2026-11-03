@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
 	source.indexOf("function TurnStatusRow"),
-	source.indexOf("function TurnPlan"),
+	source.indexOf("function ChangedFiles"),
 );
 
 describe("chat turn summary styling", () => {
@@ -20,9 +20,16 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 
-	it("holds the working indicator still under Reduce Motion", () => {
-		expect(turnSummarySource).toContain('<Spinning enabled><Feather name="loader"');
+	it("draws the desktop's lattice as the working indicator", () => {
+		expect(turnSummarySource).toContain("<LatticeLoader color={t.textTertiary} />");
+		expect(turnSummarySource).not.toContain('<Feather name="loader"');
 		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+	});
+
+	it("shows only the ticking timer while running, like the desktop, and still says Working to screen readers", () => {
+		expect(turnSummarySource).toContain(': workingDuration ?? "";');
+		expect(turnSummarySource).not.toContain("`Working · ${workingDuration}`");
+		expect(turnSummarySource).toContain("`Working for ${workingDuration}`");
 	});
 });
 
@@ -81,3 +88,14 @@ describe("message edit list identity", () => {
 	});
 });
 
+
+describe("plan activity row", () => {
+	const planActivity = source.slice(source.indexOf("function PlanActivity"), source.indexOf("function ActivityRun"));
+
+	it("draws the plan as the desktop does, without the summary as a title or a live state", () => {
+		// The summary repeats the count and current step ("Plan 3/7: <step>"), and the
+		// row's status is "running" while any step is unfinished, not while the turn runs.
+		expect(planActivity).toContain("<TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />");
+		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
+	});
+});

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	UsageFlush         func(context.Context)
 	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
@@ -63,6 +65,7 @@ type APIDeps struct {
 	// TelemetryIdentity is the live telemetry identity, served to the phone by
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
 	TelemetryIdentity        ports.TelemetryIdentityStore
+	LifetimeSessions         func(context.Context) (int64, error)
 	Mobile                   *controllers.MobileController
 	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
@@ -210,14 +213,14 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
-		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
@@ -427,4 +430,11 @@ func agentBrowserURL(raw string) *url.URL {
 		return nil
 	}
 	return u
+}
+
+// userMessageRecorder reuses the session service, which owns session telemetry,
+// to report human chat sends. Nil when the service cannot record.
+func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
+	recorder, _ := sessions.(controllers.UserMessageRecorder)
+	return recorder
 }

@@ -8,6 +8,8 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),
@@ -311,10 +313,9 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		// Scripts are project settings on Cloud projects too; environment and cues stay local.
-		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
-		for (const section of ["Environment", "Cues"]) {
-			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
+		// Scripts, environment and cues are project settings on Cloud projects too.
+		for (const section of ["Scripts", "Environment", "Cues"]) {
+			expect(screen.getByRole("button", { name: section })).toBeInTheDocument();
 		}
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
 	});
@@ -376,10 +377,20 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
+		// The cached account read goes out at once; the slow forced
+		// reconciliation follows once the page's own reads have been sent.
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true } },
+		));
+		expect(postMock).not.toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		);
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
-		));
+		), { timeout: 3_000 });
 	});
 
 	it("scrolls to and briefly highlights the setting a deep link names", async () => {

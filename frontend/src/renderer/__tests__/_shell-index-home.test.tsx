@@ -8,6 +8,8 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
 		existingProjectPaths?: readonly string[];
@@ -116,8 +118,9 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
-	it("swaps standalone for cloud project creation when Developer Mode and Cloud are enabled", () => {
-		useUiStore.setState({ developerMode: true });
+	// Cloud is on for everyone: Developer Mode does not decide it.
+	it.each([{ developerMode: false }, { developerMode: true }])("swaps standalone for cloud project creation whenever Cloud is on: %j", ({ developerMode }) => {
+		useUiStore.setState({ developerMode });
 		routeMocks.cloudEnabled = true;
 		render(<HomePage />);
 
@@ -126,12 +129,9 @@ describe("shell index route", () => {
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 	});
 
-	it.each([
-		{ developerMode: false, cloudEnabled: true },
-		{ developerMode: true, cloudEnabled: false },
-	])("keeps standalone creation when either toggle is off: %j", ({ developerMode, cloudEnabled }) => {
+	it.each([{ developerMode: false }, { developerMode: true }])("keeps standalone creation while Cloud is off: %j", ({ developerMode }) => {
 		useUiStore.setState({ developerMode });
-		routeMocks.cloudEnabled = cloudEnabled;
+		routeMocks.cloudEnabled = false;
 		render(<HomePage />);
 
 		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
@@ -140,7 +140,6 @@ describe("shell index route", () => {
 	});
 
 	it("shows cloud creation when standalone sessions exist without a registered project", () => {
-		useUiStore.setState({ developerMode: true });
 		routeMocks.cloudEnabled = true;
 		routeMocks.workspaces = [{
 			id: STANDALONE_WORKSPACE_ID,

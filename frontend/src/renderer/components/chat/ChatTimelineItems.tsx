@@ -11,6 +11,8 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { CloudMessageAttachments } from "./CloudMessageAttachments";
+import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
@@ -142,16 +144,33 @@ function originReportPreview(text: string): string {
 }
 
 /**
- * Each update reveals the share of the backlog that decays over STREAM_SETTLE_MS, so
+ * Each update reveals the share of the backlog that decays over the settle time, so
  * bursts of provider text spread across the gap before the next one instead of landing
- * at once. Updates are capped at ~30 Hz: every one re-parses the message's markdown.
+ * at once. The settle time follows how far apart the bursts arrive: a stream that
+ * lands every ~50ms settles in STREAM_SETTLE_MS, while one that lands a second at a
+ * time (a slow link, a polled transcript) is spread over most of that second rather
+ * than revealed in a fraction of it and then left still. Updates are capped at ~30 Hz:
+ * every one re-parses the message's markdown.
  */
 const STREAM_SETTLE_MS = 140;
+const STREAM_MAX_SETTLE_MS = 700;
+// The share of the gap between bursts the reveal is spread over; less than all of it,
+// so text stays close behind the stream instead of trailing a whole burst.
+const STREAM_SETTLE_GAP_SHARE = 0.6;
+const STREAM_MAX_GAP_MS = 1_500;
 const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
+// Long open Markdown blocks are reparsed on each reveal. Beyond this size,
+// coalesce provider snapshots rather than adding intermediate renders.
+const STREAM_SMOOTH_MAX_CHARS = 4000;
+const STREAM_LONG_UPDATE_MS = 100;
 // No frame for this long means the tab was occluded or throttled: nobody watched the
 // animation, so show the current text instead of replaying it.
 const STREAM_STALL_MS = 1000;
+// Once the reply is done, what is still unrevealed plays out quickly rather than
+// landing at once; a backlog beyond this is shown whole.
+const STREAM_FINISH_SETTLE_MS = 90;
+const STREAM_FINISH_MAX_BACKLOG = 2000;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function streamGraphemes(text: string): string[] {
@@ -170,24 +189,40 @@ function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) 
 	return { text: visibleText.slice(0, boundary), count };
 }
 
+/**
+ * Whether replies pace their reveal to how far apart bursts arrive and play
+ * out their last burst (Cloud chat, whose text can arrive a poll at a time).
+ * Elsewhere a reply settles in STREAM_SETTLE_MS and shows whole once done.
+ */
+export const AdaptiveStreamPacingContext = createContext(false);
+
 function useSmoothStreamingText(message: ConversationMessage): string {
+	const adaptive = useContext(AdaptiveStreamPacingContext);
+	const [reducedMotion, setReducedMotion] = useState(
+		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+	);
+	// Set while a finished reply's last burst is still playing out.
+	const [finishing, setFinishing] = useState(false);
+	const smooth = (message.streaming || finishing) && !reducedMotion && message.text.length <= STREAM_SMOOTH_MAX_CHARS;
 	// A snapshot can first reach the renderer after the provider has already emitted
 	// text. Keep that first durable burst visible; only later deltas need smoothing.
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
 	const targetGraphemes = useMemo(
-		() => message.streaming ? streamGraphemes(message.text) : [],
-		[message.text, message.streaming],
+		() => smooth ? streamGraphemes(message.text) : [],
+		[message.text, smooth],
 	);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
 	const frameRef = useRef<number | undefined>(undefined);
 	const lastFrameAtRef = useRef<number | undefined>(undefined);
-	const [reducedMotion, setReducedMotion] = useState(
-		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-	);
+	const snapshotTimerRef = useRef<number | undefined>(undefined);
+	const settleMsRef = useRef(STREAM_SETTLE_MS);
+	const lastGrowthAtRef = useRef<number | undefined>(undefined);
+	const gapMsRef = useRef<number | undefined>(undefined);
+	const finishingRef = useRef(false);
 
 	useEffect(() => {
 		const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -197,11 +232,21 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	}, []);
 
 	const cancelDrain = useCallback(() => {
+		if (snapshotTimerRef.current !== undefined) {
+			window.clearTimeout(snapshotTimerRef.current);
+			snapshotTimerRef.current = undefined;
+		}
 		if (frameRef.current !== undefined) {
 			window.cancelAnimationFrame(frameRef.current);
 			frameRef.current = undefined;
 		}
 		lastFrameAtRef.current = undefined;
+	}, []);
+
+	const endFinishing = useCallback(() => {
+		if (!finishingRef.current) return;
+		finishingRef.current = false;
+		setFinishing(false);
 	}, []);
 
 	const scheduleDrain = useCallback(() => {
@@ -215,6 +260,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			const backlog = target.length - currentCount;
 			if (backlog <= 0) {
 				lastFrameAtRef.current = undefined;
+				endFinishing();
 				return;
 			}
 
@@ -223,6 +269,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 				visibleGraphemeCountRef.current = target.length;
 				setVisibleText(targetRef.current);
 				cancelDrain();
+				endFinishing();
 				return;
 			}
 
@@ -233,48 +280,100 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			}
 			lastFrameAtRef.current = now;
 			const elapsedMs = Math.min(STREAM_MAX_FRAME_DELTA_MS, previousFrameAt === undefined ? STREAM_MIN_FRAME_MS : now - previousFrameAt);
-			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / STREAM_SETTLE_MS)));
+			const settleMs = finishingRef.current ? STREAM_FINISH_SETTLE_MS : settleMsRef.current;
+			const count = Math.ceil(backlog * (1 - Math.exp(-elapsedMs / settleMs)));
 			const nextCount = Math.min(target.length, currentCount + count);
 			const next = visibleRef.current + target.slice(currentCount, nextCount).join("");
 			visibleRef.current = next;
 			visibleGraphemeCountRef.current = nextCount;
 			setVisibleText(next);
 			if (nextCount < target.length) frameRef.current = window.requestAnimationFrame(tick);
-			else lastFrameAtRef.current = undefined;
+			else {
+				lastFrameAtRef.current = undefined;
+				endFinishing();
+			}
 		};
 
 		frameRef.current = window.requestAnimationFrame(tick);
-	}, [cancelDrain]);
+	}, [cancelDrain, endFinishing]);
 
 	useEffect(() => {
-		if (message.id !== messageIdRef.current) {
-			cancelDrain();
-			messageIdRef.current = message.id;
-			targetRef.current = message.text;
-			targetGraphemesRef.current = targetGraphemes;
-			const initial = message.text;
-			visibleRef.current = initial;
-			visibleGraphemeCountRef.current = targetGraphemes.length;
-			setVisibleText(initial);
-			return;
-		}
-
-		targetRef.current = message.text;
-		targetGraphemesRef.current = targetGraphemes;
-		if (!message.streaming || reducedMotion) {
+		const showWhole = () => {
 			cancelDrain();
 			visibleRef.current = message.text;
 			visibleGraphemeCountRef.current = targetGraphemes.length;
 			setVisibleText(message.text);
+			endFinishing();
+		};
+		if (message.id !== messageIdRef.current) {
+			cancelDrain();
+			endFinishing();
+			messageIdRef.current = message.id;
+			targetRef.current = message.text;
+			targetGraphemesRef.current = targetGraphemes;
+			lastGrowthAtRef.current = undefined;
+			gapMsRef.current = undefined;
+			settleMsRef.current = STREAM_SETTLE_MS;
+			visibleRef.current = message.text;
+			visibleGraphemeCountRef.current = targetGraphemes.length;
+			setVisibleText(message.text);
 			return;
+		}
+
+		const grew = message.text !== targetRef.current && message.text.startsWith(targetRef.current);
+		targetRef.current = message.text;
+		targetGraphemesRef.current = targetGraphemes;
+		if (reducedMotion) {
+			showWhole();
+			return;
+		}
+		if (!message.streaming) {
+			// The reply is done. A short remainder plays out; anything else, a reply
+			// too long to reveal smoothly, or one that was never being revealed,
+			// shows whole.
+			const remaining = message.text.startsWith(visibleRef.current) ? message.text.length - visibleRef.current.length : -1;
+			if (!adaptive || remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG || message.text.length > STREAM_SMOOTH_MAX_CHARS) {
+				showWhole();
+				return;
+			}
+			if (!finishingRef.current) {
+				finishingRef.current = true;
+				setFinishing(true);
+				// The graphemes are computed once `finishing` is set.
+				return;
+			}
+		}
+		if (adaptive && grew && message.streaming) {
+			// Spread each burst over most of the gap since the last one.
+			const now = performance.now();
+			if (lastGrowthAtRef.current !== undefined) {
+				// A pause (the agent running a tool) is not a burst rhythm; past a
+				// second and a half it counts as no longer than that.
+				const gap = Math.min(now - lastGrowthAtRef.current, STREAM_MAX_GAP_MS);
+				gapMsRef.current = gapMsRef.current === undefined ? gap : gapMsRef.current * 0.6 + gap * 0.4;
+				settleMsRef.current = Math.min(STREAM_MAX_SETTLE_MS, Math.max(STREAM_SETTLE_MS, gapMsRef.current * STREAM_SETTLE_GAP_SHARE));
+			}
+			lastGrowthAtRef.current = now;
 		}
 		// A provider correction or rollback can replace the current prefix. In that
 		// case the durable snapshot is authoritative and should be shown immediately.
 		if (!message.text.startsWith(visibleRef.current)) {
-			cancelDrain();
-			visibleRef.current = message.text;
-			visibleGraphemeCountRef.current = targetGraphemes.length;
-			setVisibleText(message.text);
+			showWhole();
+			return;
+		}
+		if (message.text.length > STREAM_SMOOTH_MAX_CHARS) {
+			if (frameRef.current !== undefined) cancelDrain();
+			if (visibleRef.current === message.text) return;
+			if (visibleRef.current.length <= STREAM_SMOOTH_MAX_CHARS) {
+				visibleRef.current = message.text;
+				setVisibleText(message.text);
+			} else if (snapshotTimerRef.current === undefined) {
+				snapshotTimerRef.current = window.setTimeout(() => {
+					snapshotTimerRef.current = undefined;
+					visibleRef.current = targetRef.current;
+					setVisibleText(targetRef.current);
+				}, STREAM_LONG_UPDATE_MS);
+			}
 			return;
 		}
 		// A later combining mark or ZWJ can merge the last visible grapheme into a
@@ -287,7 +386,8 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			setVisibleText(reconciled.text);
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
-	}, [cancelDrain, message.id, message.text, message.streaming, reducedMotion, scheduleDrain, targetGraphemes]);
+		else endFinishing();
+	}, [adaptive, cancelDrain, endFinishing, message.id, message.text, message.streaming, reducedMotion, scheduleDrain, targetGraphemes]);
 
 	useEffect(
 		() => cancelDrain,
@@ -458,6 +558,8 @@ const TURN_OUTCOME_COPY = {
 export function TurnOutcome({
 	state,
 	error,
+	failureCode,
+	onConfigure,
 	retry,
 	usageLimit,
 	copyText,
@@ -468,6 +570,8 @@ export function TurnOutcome({
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
+	failureCode?: "provider_key_missing";
+	onConfigure?: () => void;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -496,13 +600,27 @@ export function TurnOutcome({
 	}
 	const copy = TURN_OUTCOME_COPY[state];
 	const Icon = copy.icon;
+	const needsDeepSeekKey = state === "failed" && failureCode === "provider_key_missing" && onConfigure;
 	return (
 		<div className="group/message flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
-				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>{copy.label}</span>
+				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>
+					{needsDeepSeekKey ? "DeepSeek needs an API key for this model route" : copy.label}
+				</span>
 			</div>
-			{error ? (
+			{needsDeepSeekKey ? (
+				<>
+					<p className="pl-[22px] text-sm text-foreground">Set up the key in DeepSeek Harness, then retry this turn.</p>
+					<button type="button" onClick={onConfigure} className="ml-[22px] w-fit rounded px-2 py-1 text-sm text-primary hover:bg-interactive-hover">Set up DeepSeek</button>
+					{error ? (
+						<details className="pl-[22px] text-sm text-muted-foreground">
+							<summary className="cursor-pointer">Technical details</summary>
+							<div className="whitespace-pre-wrap wrap-anywhere pt-1">{linkifiedProviderErrorText(error)}</div>
+						</details>
+					) : null}
+				</>
+			) : error ? (
 				<div
 					className={cn(
 						"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
@@ -875,7 +993,9 @@ export function HumanMessage({
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
-	const visibleMessageText = humanVisibleText(message.text);
+	// A cloud message's files are listed by the message itself; the references
+	// its local echo carries until the server's copy arrives are not prose.
+	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
@@ -951,6 +1071,7 @@ export function HumanMessage({
 						ariaLabel="Attached files"
 						className={cn(body && "mt-2")}
 					/>
+					<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
 				</div>
 			)}
 			{editing ? null : (
@@ -1747,6 +1868,14 @@ function CommandOutput({
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
+	// A scroll container still lays out all its text. Bound both a single long
+	// line and newline-heavy logs before Chromium measures the expanding row.
+	const preview = useMemo(() => {
+		let tail = output.slice(-64 * 1024);
+		const first = tail.charCodeAt(0);
+		if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+		return tail.split("\n").slice(-400).join("\n");
+	}, [output]);
 	const streaming = activity.status === "running";
 
 	useEffect(() => {
@@ -1770,8 +1899,13 @@ function CommandOutput({
 						: "border border-border bg-background px-2.5 py-2 text-caption",
 				)}
 			>
-				{output}
+				{preview}
 			</pre>
+			{preview.length < output.length ? (
+				<p className="px-2.5 py-1 text-xs text-muted-foreground">
+					Showing the end of this large output.
+				</p>
+			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in

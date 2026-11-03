@@ -226,8 +226,8 @@ beforeEach(async () => {
 	setKeybindings.mockImplementation(async (overrides) => overrides);
 	setKeybindingRecording.mockResolvedValue(undefined);
 	setMacDifferentialUpdates.mockResolvedValue(undefined);
-	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
-	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
+	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
+	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
 	onTelemetryPolicy.mockReturnValue(() => undefined);
 	getAnalyticsOptOut.mockResolvedValue(false);
 	setAnalyticsOptOut.mockImplementation(async (optedOut: boolean) => optedOut);
@@ -249,8 +249,8 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: false });
-	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
+	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -433,6 +433,24 @@ describe("GlobalSettingsForm", () => {
 		expect(useLocaleStore.getState().locale).toBe("zh-CN");
 	});
 
+	it("selects and persists both chat send key modes in General settings", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const preference = await screen.findByLabelText("Chat send key");
+		expect(preference).toHaveTextContent("Enter sends; Shift+Enter inserts newline");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter inserts newline; Cmd/Ctrl+Enter sends" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("mod-enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("mod-enter");
+		expect(preference).toHaveTextContent("Enter inserts newline; Cmd/Ctrl+Enter sends");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter sends; Shift+Enter inserts newline" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("enter");
+	});
+
 	it("toggles sound notifications on and persists the change", async () => {
 		const user = userEvent.setup();
 		renderForm();
@@ -446,8 +464,8 @@ describe("GlobalSettingsForm", () => {
 	});
 
 	it("shows pending daemon cleanup without claiming opt-out completed", async () => {
-		setTelemetryEvents.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off-2", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: false, consentRenewalRequired: false, state: "cleanup_pending", environmentVeto: false, durabilitySupported: true, reason: "cleanup_failed" });
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true });
+		setTelemetryEvents.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off-2", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: false, state: "cleanup_pending", environmentVeto: false, durabilitySupported: true, reason: "cleanup_failed" });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true });
 		const user = userEvent.setup(); renderForm();
 		await user.click(await screen.findByRole("switch", { name: "Share error events" }));
 		expect(await screen.findByText("Telemetry is off locally. Daemon cleanup is still pending.")).toBeInTheDocument();
@@ -477,21 +495,21 @@ describe("GlobalSettingsForm", () => {
 	});
 
 	it("names the platform restriction instead of claiming cleanup keeps retrying", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: false, durabilitySupported: false, reason: "durability_unsupported" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: false, state: "cleanup_failed", environmentVeto: false, durabilitySupported: false, reason: "durability_unsupported" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Enabling is unavailable on this platform because durable consent writes are not supported.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
 	});
 
 	it("does not promise retries for the fail-closed view when the controller is unavailable", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Enabling is unavailable on this platform because durable consent writes are not supported.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
 	});
 
 	it("names the release gate when a saved opt-in cannot be honoured", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true, reason: "release_blocked" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true, reason: "release_blocked" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Error reporting is disabled by this release's safety gate.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry is off locally. Daemon cleanup is still pending.")).not.toBeInTheDocument();

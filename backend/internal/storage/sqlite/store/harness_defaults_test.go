@@ -42,7 +42,7 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 	if err != nil || len(reset.HarnessDefaults) != 1 || reset.HarnessDefaults["claude-code"].IsZero() {
 		t.Fatalf("reset changed another harness: %+v, %v", reset, err)
 	}
-	if reset.DefaultSessionMode != initial.DefaultSessionMode || reset.CloudOffering != initial.CloudOffering {
+	if reset.DefaultSessionMode != initial.DefaultSessionMode || reset.VersionRefresh != initial.VersionRefresh {
 		t.Fatal("harness defaults changed unrelated settings")
 	}
 }

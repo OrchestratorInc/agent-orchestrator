@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -85,6 +86,59 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	"ao.automation.created": {"use_case": {}, "template_id": {}},
+
+	// count is direct human Chat messages; steer_count and send_count are the
+	// other human sends; the surface counts split all three by client.
+	"ao.usage.messages_sent": {
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"count":                {},
+		"steer_count":          {},
+		"send_count":           {},
+		"desktop_count":        {},
+		"mobile_count":         {},
+		"cli_count":            {},
+		"kind":                 {},
+		"harness":              {},
+	},
+	// Historical backfill is grouped; new outcomes are one per PR with detail.
+	"ao.usage.worker_pr_associated": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"first_for_install":    {},
+	},
+	"ao.usage.worker_pr_merged": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
+		"merged_via":           {},
+		"first_for_install":    {},
+	},
+	"ao.prs.closed": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
+	},
 	// Reported by the LAN listener on the first authenticated request per
 	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
 	// closed vocabulary — lan / tailscale / loopback / other — never an address.
@@ -130,26 +184,23 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"window_start":      {},
 		"window_end":        {},
 	},
+	// Install lifecycle anchors. Segmentation (install_source, installed_at,
+	// $os, arch, is_ci, ...) rides every event as a common property; launcher
+	// says whether the desktop app or the CLI started the daemon that sent it.
+	"ao.app.installed": {
+		"launcher": {},
+	},
+	"ao.install.created": {
+		"launcher": {},
+	},
 	"ao.daemon.started": {
 		"agent": {},
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":          {},
-		"duration":           {},
-		"error_code":         {},
-		"error_kind":         {},
-		"fingerprint":        {},
-		"method":             {},
-		"operation":          {},
-		"path":               {},
-		"status":             {},
-		"status_family":      {},
-		"browser_command":    {},
-		"runtime_link_state": {},
-		"count":              {},
-		"window_start":       {},
-		"window_end":         {},
+		"count":        {},
+		"window_start": {},
+		"window_end":   {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
@@ -162,6 +213,9 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
+	"ao.app.first_opened":      {},
+	"ao.cli.first_used":        {},
+	"ao.app.next_day_returned": {},
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
@@ -186,10 +240,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"cancelled_runs": {},
 	},
 	"ao.projects.created": {
-		"has_git_remote": {},
-		"kind":           {},
-		"github_org":     {},
-		"scm_provider":   {},
+		"first_for_install": {},
+		"has_git_remote":    {},
+		"kind":              {},
+		"github_org":        {},
+		"scm_provider":      {},
 	},
 	"ao.session.spawn_failed": {
 		"component":   {},
@@ -212,10 +267,26 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"step":        {},
 	},
 	"ao.session.spawned": {
-		"duration_ms":  {},
-		"harness":      {},
-		"kind":         {},
-		"github_actor": {},
+		"created_by":        {},
+		"duration_ms":       {},
+		"first_for_install": {},
+		"harness":           {},
+		"kind":              {},
+		"github_actor":      {},
+		"surface":           {},
+	},
+	// Whether a session delivered: outcome is pr_opened, completed, killed,
+	// failed or abandoned (internal/deliverytelemetry).
+	"ao.sessions.ended": {
+		"created_by":           {},
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"duration_ms":          {},
+		"had_pr":               {},
+		"harness":              {},
+		"kind":                 {},
+		"outcome":              {},
+		"waiting_input_count":  {},
 	},
 	"ao.session.waiting_input_entered": {
 		"state": {},
@@ -237,10 +308,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"mode":       {},
 		"result":     {},
 	},
-	"ao.harness.stale_sessions": {
-		"harness":  {},
-		"sessions": {},
-	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
 		"exited_to": {},
@@ -254,10 +321,19 @@ type postHogClient interface {
 
 // PostHogSink exports allowlisted telemetry events to PostHog.
 type PostHogSink struct {
-	apiKey       string
-	host         string
-	defaultAgent string
-	tenure       *tenureTracker
+	apiKey           string
+	host             string
+	defaultAgent     string
+	tenure           *tenureTracker
+	lifetimeSessions func(context.Context) (int64, error)
+	// env and install carry the segmentation context (OS, arch, CI, install
+	// source, release channel) stamped on every event. See environment.go.
+	env     staticEnvironment
+	install *installContext
+	// experimentCohort is this install's fixed 0-99 bucket (cohort.go). Unset
+	// when it could not be read or assigned, which omits the property.
+	experimentCohort    int
+	hasExperimentCohort bool
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
@@ -272,7 +348,7 @@ type PostHogSink struct {
 	appVersion string
 	client     postHogClient
 	log        *slog.Logger
-	ch         chan ports.TelemetryEvent
+	ch         chan queuedPostHogEvent
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
 	queueMu    sync.RWMutex
@@ -283,6 +359,16 @@ type PostHogSink struct {
 	// long HTTP timeout.
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+type queuedPostHogEvent struct {
+	event            ports.TelemetryEvent
+	lifetimeSessions *int64
+}
+
+// SetLifetimeSessions reads the durable counter when an event enters the sink.
+func (s *PostHogSink) SetLifetimeSessions(read func(context.Context) (int64, error)) {
+	s.lifetimeSessions = read
 }
 
 // NewPostHogSink starts a buffered PostHog exporter with a stable install ID.
@@ -307,16 +393,32 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
+		env:          detectStaticEnvironment(),
+		install:      newInstallContext("", time.Now),
 		client:       client,
 		log:          telemetryLogger(log),
 		appVersion:   strings.TrimSpace(appVersion),
-		ch:           make(chan ports.TelemetryEvent, postHogBufferSize),
+		ch:           make(chan queuedPostHogEvent, postHogBufferSize),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	s.experimentCohort, s.hasExperimentCohort = loadOrAssignExperimentCohort(dataDir)
 	s.wg.Add(1)
 	go s.loop()
 	return s, nil
+}
+
+// SetInstallStateDir points the sink at the directory holding the desktop
+// app's app-state.json and update-settings.json (dirname of running.json).
+// Unset, install_source and release_channel report "unknown".
+func (s *PostHogSink) SetInstallStateDir(dir string) {
+	if s.install == nil {
+		return
+	}
+	s.install.mu.Lock()
+	s.install.stateDir = dir
+	s.install.loadedAt = time.Time{}
+	s.install.mu.Unlock()
 }
 
 // Identity returns the live identity (install ID, signed-in user, opt-out).
@@ -327,7 +429,7 @@ func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.Expor
 
 // Emit enqueues an event for best-effort export. An opted-out install exports
 // nothing, so the stream stops the moment the user flips the switch.
-func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
 		return
 	}
@@ -336,14 +438,28 @@ func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 		s.queueMu.RUnlock()
 		return
 	}
+	entry := queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)}
 	queued := false
-	select {
-	case s.ch <- ev:
-		queued = true
-	default:
+	if strings.HasPrefix(ev.Name, "ao.usage.") || ev.Name == "ao.prs.closed" {
+		// Usage summaries have already been reserved in SQLite. Wait for queue
+		// capacity so a burst cannot discard them behind the caller's back.
+		select {
+		case s.ch <- entry:
+			queued = true
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case s.ch <- entry:
+			queued = true
+		default:
+		}
 	}
 	s.queueMu.RUnlock()
 	if !queued {
+		if ctx.Err() != nil {
+			return
+		}
 		s.log.Warn("telemetry posthog sink buffer full; dropping event", "name", ev.Name, "source", ev.Source)
 	}
 }
@@ -377,9 +493,20 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 
 func (s *PostHogSink) loop() {
 	defer s.wg.Done()
-	for ev := range s.ch {
-		s.send(s.ctx, ev)
+	for entry := range s.ch {
+		s.sendQueued(s.ctx, entry)
 	}
+}
+
+func (s *PostHogSink) snapshotLifetimeSessions(ctx context.Context) *int64 {
+	if s.lifetimeSessions == nil {
+		return nil
+	}
+	count, err := s.lifetimeSessions(ctx)
+	if err != nil {
+		return nil
+	}
+	return &count
 }
 
 // Bounded retry for a single event. A dropped send is a permanent gap,
@@ -395,6 +522,11 @@ const (
 )
 
 func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
+	s.sendQueued(ctx, queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)})
+}
+
+func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) {
+	ev := entry.event
 	eventName := remoteEventName(ev.Name)
 	// A stable per-event UUID, reused across every attempt, is PostHog's
 	// idempotency key. A transport error only means AO received no response;
@@ -403,7 +535,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
-	props := s.properties(ev)
+	props := s.propertiesWithCount(ev, entry.lifetimeSessions)
 	// A signed-in install reports as the AO Cloud user, so its events never
 	// depend on which account the anonymous install ID was once merged into.
 	// Signed out, the current anonymous install ID is used.
@@ -487,6 +619,10 @@ func (s *PostHogSink) sendOnce(ctx context.Context, payload []byte) (retryable b
 }
 
 func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
+	return s.propertiesWithCount(ev, s.snapshotLifetimeSessions(context.Background()))
+}
+
+func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessions *int64) map[string]any {
 	props := map[string]any{
 		"source":                   ev.Source,
 		"level":                    string(ev.Level),
@@ -530,11 +666,21 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		props["active_days"] = activeDays
 		props["tenure"] = string(bucket)
 	}
+	if s.env.platform != "" {
+		s.env.stamp(props)
+	}
+	s.install.stamp(props)
+	if s.hasExperimentCohort {
+		props["experiment_cohort"] = s.experimentCohort
+	}
+	if lifetimeSessions != nil {
+		props["lifetime_sessions"] = *lifetimeSessions
+	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}
-	if ev.ProjectID != nil {
-		props["project_id_hash"] = sha256String(string(*ev.ProjectID))
+	if ev.ProjectID != nil && s.ident != nil {
+		props["project_id_hash"] = sha256String(s.ident.InstallID() + ":" + string(*ev.ProjectID))
 	}
 	if ev.SessionID != nil {
 		props["session_id_hash"] = sha256String(string(*ev.SessionID))
@@ -545,6 +691,12 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	s.stampIdentity(props)
 	if s.ident != nil {
 		props["install_id"] = s.ident.InstallID()
+		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
+			props["days_since_install"] = age
+		}
+		if snap := s.ident.Snapshot(); snap.CloudUserKnown {
+			props["is_signed_in"] = snap.CloudUserID != ""
+		}
 	}
 	return props
 }
@@ -617,6 +769,12 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
+		if name == "ao.automation.created" {
+			text, ok := value.(string)
+			if !ok || (key == "use_case" && !domain.ValidAutomationUseCase(text)) || (key == "template_id" && !domain.ValidAutomationTemplateID(text)) {
+				continue
+			}
+		}
 		if safe, ok := sanitizeRemoteValue(key, value); ok {
 			sanitized[key] = safe
 		}
@@ -666,6 +824,19 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		if value == "" {
 			return nil, false
 		}
+		if key == "merged_via" {
+			switch value {
+			case "desktop", "mobile", "cli", "github":
+			default:
+				return nil, false
+			}
+		}
+		if key == "project_telemetry_id" && !uuidPattern.MatchString(value) {
+			return nil, false
+		}
+		if key == "session_telemetry_id" && !sessionTelemetryIDPattern.MatchString(value) {
+			return nil, false
+		}
 		if (key == "command" || key == "command_path") && !isAllowedCommandValue(key, value) {
 			return "sha256:" + sha256String(value)[:16], true
 		}
@@ -706,6 +877,9 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		return nil, false
 	}
 }
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var sessionTelemetryIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // agentSlugPattern is the shape of a real adapter id (claude-code, codex, ...).
 // AO_AGENT is free text and cfg.Agent is only validated against the registry

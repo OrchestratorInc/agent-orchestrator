@@ -69,6 +69,17 @@ const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: str
 	"bypass-permissions": { label: "Auto-approve" },
 };
 
+// Hermes' default mode governs only its file-edit tool; ordinary shell commands
+// still run without asking, so the copy states what Default actually asks
+// about instead of reading stronger than Hermes behaves.
+const HERMES_APPROVAL_COPY: Record<ApprovalMode, { label: string; description: string }> = {
+	...APPROVAL_COPY,
+	default: {
+		label: "Use agent permissions",
+		description: "Asks before file edits; shell commands run without asking",
+	},
+};
+
 // Codex has three distinct permission profiles. Its default is already full
 // access in AO's isolated worktree posture, so expose it as that rather than a
 // fourth, ambiguous "default" option.
@@ -122,6 +133,7 @@ export function TurnSettingsBar({
 	beforePicker,
 	modelsLoading,
 	lastModel,
+	unsetModelLabel,
 	children,
 }: {
 	models: ChatModel[];
@@ -176,6 +188,8 @@ export function TurnSettingsBar({
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
 	lastModel?: string;
+	/** What no chosen model means here, such as a Cloud task's project or agent default, in place of "Choose a model". */
+	unsetModelLabel?: string;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -207,7 +221,7 @@ export function TurnSettingsBar({
 	// A catalog miss must not relabel an explicit choice or borrow another model's
 	// effort settings. Custom or newly available models may not be listed yet.
 	const chosenLabel =
-		selected?.displayName ?? settings.model ?? fallback?.displayName ?? "Choose a model";
+		selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
 	const rerouted = reroute
 		? displayModels.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
 		: undefined;
@@ -219,7 +233,11 @@ export function TurnSettingsBar({
 			? settings.reasoningEffort
 			: (selected ?? fallback)?.defaultEffort;
 	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
-	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
+	const approvalCopy =
+		harness === "codex" ? CODEX_APPROVAL_COPY
+		: harness === "agy" ? AGY_APPROVAL_COPY
+		: harness === "hermes" ? HERMES_APPROVAL_COPY
+		: APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const approvalUnavailable = (mode: ApprovalMode) =>
@@ -341,41 +359,57 @@ export function TurnSettingsBar({
 		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
 	);
 	const offersAutoCompact = Boolean(autoCompact) && compactsEarly(harness, primaryModelOption?.currentValue);
+	// A model the installed CLI is too old for is shown, disabled, but never sent.
+	const nativeUnavailable = (id: string) => Boolean(displayModels.find((model) => model.id === id)?.unavailableReason);
+	const choiceUnavailable = (id: string) => Boolean(primaryModelOption?.choices.find((choice) => choice.value === id)?.unavailableReason);
 	const current: PickerSource = nativeModelMenu && onChange
 		? {
 			models: (harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels)
-				.map((model) => ({ id: model.id, label: model.displayName })),
+				.map((model) => ({ id: model.id, label: model.displayName, unavailableReason: model.unavailableReason })),
 			modelId: settings.model ?? fallback?.id,
 			modelLabel,
 			// Fast mode is kept only where the newly picked model offers it.
-			onPickModel: (id) => onChange({
-				...settings,
-				model: id,
-				reasoningEffort: undefined,
-				fastMode: displayModels.find((model) => model.id === id)?.supportsFast ? settings.fastMode : undefined,
-			}),
+			onPickModel: (id) => {
+				if (nativeUnavailable(id)) return;
+				onChange({
+					...settings,
+					model: id,
+					reasoningEffort: undefined,
+					fastMode: displayModels.find((model) => model.id === id)?.supportsFast ? settings.fastMode : undefined,
+				});
+			},
 			efforts: efforts.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 			effort: effortLabel,
 			onPickEffort: (value) => onChange({ ...settings, reasoningEffort: value }),
-			onPickSetup: (setup) => onChange({
-				...settings,
-				model: setup.model,
-				reasoningEffort: setup.effort,
-				fastMode: (setup.fast && displayModels.find((model) => model.id === setup.model)?.supportsFast) || undefined,
-			}),
+			onPickSetup: (setup) => {
+				if (nativeUnavailable(setup.model)) return;
+				onChange({
+					...settings,
+					model: setup.model,
+					reasoningEffort: setup.effort,
+					fastMode: (setup.fast && displayModels.find((model) => model.id === setup.model)?.supportsFast) || undefined,
+				});
+			},
 			...nativeFastControls,
 		}
 		: {
 			models: (primaryModelOption?.choices ?? [])
-				.map((choice) => ({ id: choice.value, label: choice.name, group: choice.groupName || choice.group, aliases: (choice as ChatConfigOption["choices"][number] & { aliases?: string[] }).aliases })),
+				.map((choice) => ({
+					id: choice.value, label: choice.name, group: choice.groupName || choice.group,
+					aliases: (choice as ChatConfigOption["choices"][number] & { aliases?: string[] }).aliases,
+					unavailableReason: choice.unavailableReason,
+				})),
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
-			onPickModel: primaryModelOption && onChangeConfigOption ? (id) => applyOption(primaryModelOption.id, { value: id }) : undefined,
+			onPickModel: primaryModelOption && onChangeConfigOption
+				? (id) => { if (!choiceUnavailable(id)) applyOption(primaryModelOption.id, { value: id }); }
+				: undefined,
 			// The effort, Thinking and Fast are set after the model, because the agent offers them
 			// per model: each is read from the options the previous write returned, not the outgoing
 			// model's. Fast is set either way, so a saved setup without it turns a paid Fast off.
 			onPickSetup: primaryModelOption && onChangeConfigOption
 				? (setup) => {
+					if (choiceUnavailable(setup.model)) return;
 					ultracode?.onChange(false);
 					let catalog = configOptions ?? [];
 					const write = async (optionId: string, value: ChatConfigOptionValue) => {
@@ -399,7 +433,8 @@ export function TurnSettingsBar({
 			efforts: [
 				...(acpEffortOption?.choices ?? [])
 					.filter((choice) => choice.value && choice.value !== "default")
-					.map((choice) => ({ value: choice.value, label: choice.name })),
+					// A level the provider leaves unnamed is named as AO names it, never left blank.
+					.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
 				...(offersUltracode ? [{ value: ULTRACODE, label: "Ultracode" }] : []),
 			],
 			effort: offersUltracode && ultracode?.on
@@ -624,10 +659,13 @@ export function TurnSettingsBar({
 	);
 }
 
-function dedupeChoicesByName<T extends { value: string; name: string; group?: string }>(choices: T[], current: string | undefined): (T & { aliases?: string[] })[] {
+function dedupeChoicesByName<T extends { value: string; name: string; group?: string; unavailableReason?: string }>(choices: T[], current: string | undefined): (T & { aliases?: string[] })[] {
 	return choices.flatMap((choice) => {
 		// One model from two providers (Pi's openai and openai-codex) stays two rows.
-		const twins = choices.filter((other) => other.name === choice.name && other.group === choice.group);
+		// So do an alias the CLI can run and a concrete id it is too old for: folding
+		// them would leave only one row, enabled or disabled for both.
+		const twins = choices.filter((other) => other.name === choice.name && other.group === choice.group
+			&& Boolean(other.unavailableReason) === Boolean(choice.unavailableReason));
 		const kept = twins.find((other) => other.value === current) ?? twins[0];
 		if (choice !== kept) return [];
 		// The values folded into this one, so a favourite starred on any of them still shows.
@@ -775,7 +813,7 @@ function ModelEffortPicker({
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
-						<ModelMenuChoices models={catalog}>
+						<ModelMenuChoices models={catalog} selectedId={settings.model}>
 							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
 									key={model.id}
@@ -783,10 +821,11 @@ function ModelEffortPicker({
 									active={model.id === settings.model}
 									searchActive={model.id === searchActiveID}
 									radio
+									disabled={Boolean(model.unavailableReason)}
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
-									{model.displayName}
+									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
 								</OptionMenuItem>
 							))}
 						</ModelMenuChoices>
@@ -1223,7 +1262,7 @@ function ConfigModelChoices({
 	const showOther = otherOpen || selectedIsOther;
 	const menuModels = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : models;
 	return (
-		<ModelMenuChoices models={menuModels}>
+		<ModelMenuChoices models={menuModels} selectedId={option.currentValue}>
 			{(matches, searchActiveID, optionID) => (
 				<>
 					<ConfigOptionChoices
@@ -1251,6 +1290,17 @@ function ConfigModelChoices({
 				</>
 			)}
 		</ModelMenuChoices>
+	);
+}
+
+/** A model row's name, with why it cannot be picked beneath it when it cannot. */
+function UnavailableLabel({ label, reason }: { label: string; reason?: string }) {
+	if (!reason) return <>{label}</>;
+	return (
+		<span className="block min-w-0">
+			<span className="block truncate">{label}</span>
+			<span className="block whitespace-normal text-[10px] text-muted-foreground">{reason}</span>
+		</span>
 	);
 }
 
@@ -1307,6 +1357,7 @@ function ConfigOptionChoices({
 							active={choice.value === option.currentValue}
 							searchActive={choice.value === searchActiveID}
 							radio
+							disabled={Boolean(choice.unavailableReason)}
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
 						>
@@ -1319,7 +1370,7 @@ function ConfigOptionChoices({
 											: "text-muted-foreground",
 									)}
 								>
-									{choice.name}
+									<UnavailableLabel label={choice.name} reason={choice.unavailableReason} />
 								</span>
 							</span>
 						</OptionMenuItem>

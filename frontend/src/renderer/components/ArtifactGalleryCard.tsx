@@ -1,7 +1,6 @@
 import { BrowserIcon } from "./icons";
-import { File, FileText, Loader2 } from "lucide-react";
+import { File, FileText } from "lucide-react";
 import type { ReactNode } from "react";
-import { useTranslation } from "react-i18next";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
@@ -13,7 +12,6 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	actions: ReactNode;
 	previewLive?: boolean;
 }) {
-	const { t } = useTranslation();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 	return (
 		<li className="group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10">
@@ -29,9 +27,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 				<span className="relative block aspect-[16/9] border-b border-border bg-[var(--solid-muted,var(--muted))]" />
 				<span className="block space-y-1 px-3 py-2.5">
 					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
-						{row.generating ? (
-							<Loader2 aria-label={t("artifacts.generating")} className="size-icon-sm shrink-0 animate-spin text-status-working motion-reduce:animate-none" />
-						) : <KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+						<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="truncate">{row.name}</span>
 					</span>
 					<span className="flex min-w-0 items-center gap-1.5 text-caption leading-4 text-muted-foreground">

@@ -458,6 +458,9 @@ type ChatUserMessage struct {
 	// InteractionAt preserves initial acceptance across transition outbox replay.
 	InteractionAt time.Time
 	Text          string
+	// SpawnOpeningPrompt excludes the task brief delivered during session creation
+	// from direct Chat message usage, regardless of who requested the spawn.
+	SpawnOpeningPrompt bool
 	// SenderSessionID identifies the AO session that authored an automation steer.
 	// It is presentation metadata only and is never sent to the provider.
 	SenderSessionID string
@@ -1101,6 +1104,8 @@ type ChatEvent struct {
 
 	// TurnState is set on turn.completed.
 	TurnState domain.TurnState
+	// FailureCode is set only when an adapter recognizes a specific failed-turn cause.
+	FailureCode domain.ConversationFailureCode
 
 	// Delta is the text appended by a message.delta, a reasoning.delta, a
 	// command.output.delta, a command.input or an activity.text.

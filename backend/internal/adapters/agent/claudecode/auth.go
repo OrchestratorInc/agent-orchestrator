@@ -119,6 +119,16 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return status, report.account(), steps, err
 }
 
+// AuthStatusForRuntime is AuthStatusWithDiagnostics for the credential a local
+// session launched from dataDir will actually use: with a setup-token login
+// chosen in AO, that token, which the native CLI check alone cannot see.
+func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	env := make(map[string]string)
+	p.AugmentRuntimeEnv(env, dataDir)
+	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", env, false)
+	return status, report.account(), steps, err
+}
+
 // authStatusAndDiagnostics runs the ladder and also returns the CLI report
 // when it describes the credential the agent uses; otherwise the report is
 // empty.

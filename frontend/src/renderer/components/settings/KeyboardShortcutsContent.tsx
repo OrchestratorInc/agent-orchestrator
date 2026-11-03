@@ -20,6 +20,7 @@ import { isMacPlatform } from "../../lib/platform";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import { useKeybindingsStore } from "../../stores/keybindings-store";
+import { useUiStore } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -218,9 +219,12 @@ export function KeyboardShortcutsContent({
 		return () => body.removeEventListener("scroll", toTop);
 	}, [bounded]);
 
+	const developerMode = useUiStore((state) => state.developerMode);
 	const filteredShortcuts = useMemo(() => {
 		const needles = searchText(query).split(/\s+/).filter(Boolean);
 		return APP_SHORTCUTS.filter((shortcut) => {
+			// Dictation is in preview behind Developer mode.
+			if (shortcut.id === "dictate" && !developerMode) return false;
 			if (modifiedOnly && !Object.hasOwn(overrides, shortcut.id)) return false;
 			const labels = effectiveShortcutBindings(shortcut.id, isMac, overrides)
 				.map((candidate) => `${shortcutBindingLabel(candidate, isMac)} ${bindingDescription(candidate, isMac)}`)
@@ -228,7 +232,7 @@ export function KeyboardShortcutsContent({
 			const haystack = searchText(`${shortcutLabel(shortcut.id, t)} ${shortcutCategoryLabel(shortcut.category, t)} ${labels}`);
 			return needles.every((needle) => haystack.includes(needle));
 		});
-	}, [isMac, overrides, query, modifiedOnly, t]);
+	}, [developerMode, isMac, overrides, query, modifiedOnly, t]);
 
 	const mutate = async (id: AppShortcutId, operation: () => Promise<void>) => {
 		if (savingRef.current) return false;
@@ -400,7 +404,7 @@ export function KeyboardShortcutsContent({
 						</div>
 					}
 				>
-					<div className="flex min-w-0 flex-col gap-3">
+					<div className="shortcut-list-column flex min-w-0 flex-col gap-3">
 						<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
 							<p className="min-w-0 flex-1 text-xs leading-5 text-settings-muted">{t("shortcut.settingsIntro")}</p>
 							<Button type="button" variant="ghost" size="sm" className="h-8 text-settings-muted" disabled={Object.keys(overrides).length === 0 || saving || Boolean(recording)} onClick={() => setConfirmResetAll(true)}><RotateCcw className="size-4" aria-hidden="true" />{t("shortcut.resetAll")}</Button>

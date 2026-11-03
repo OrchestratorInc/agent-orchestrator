@@ -207,6 +207,18 @@ describe("buildCommands attention", () => {
 		expect(ids.has("attention:w-merge")).toBe(false);
 		expect(ids.has("attention:w-action")).toBe(true);
 	});
+
+	it("leaves archived sessions out of Needs attention", () => {
+		const rows = workspaces();
+		rows[0].sessions.push(
+			session({ id: "w-archived-action", status: "needs_input", isTerminated: true }),
+			session({ id: "w-archived-merge", status: "merged", isTerminated: true }),
+		);
+		const map = byId(buildCommands({ workspaces: rows }));
+		expect(map.has("attention:w-archived-action")).toBe(false);
+		expect(map.has("attention:w-archived-merge")).toBe(false);
+		expect(map.get("session:w-archived-action")?.searchOnly).toBe(true);
+	});
 });
 
 describe("buildCommands sessions", () => {
