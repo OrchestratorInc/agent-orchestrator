@@ -91,7 +91,7 @@ const SLIDE_SPRING = { type: "spring", visualDuration: 0.4, bounce: 0.12 } as co
 /** Rows and cards settling into place: quick, with the faintest overshoot. */
 const ROW_SPRING = { type: "spring", visualDuration: 0.35, bounce: 0.1 } as const;
 /** Pages sliding across the center panel. */
-const PAGE_SPRING = { type: "spring", visualDuration: 0.5, bounce: 0.05 } as const;
+const PAGE_FADE = { duration: 0.24, ease: EASE_OUT } as const;
 
 /** A plain iPhone body: thin titanium band, black bezel, the display, and the
  * side buttons. No gloss. The screen lays out at the phone's logical width
@@ -161,7 +161,9 @@ function layoutRect(box: HTMLElement, element: HTMLElement): AppRect | null {
 }
 
 /** How far the camera may zoom past the fitted window, so text stays crisp. */
-const MAX_ZOOM = 2;
+/** How far the camera may zoom past the fitted window: enough to read a menu,
+ * not so far that the window stops reading as the app. */
+const MAX_ZOOM = 1.35;
 /** The camera: a soft spring that eases into a framing and can retarget mid-move. */
 const CAMERA_SPRING = { type: "spring", visualDuration: 0.6, bounce: 0.08 } as const;
 
@@ -718,7 +720,7 @@ function useCardFlip(rootRef: RefObject<HTMLElement | null>, signature: string, 
 			if (!previous) {
 				const delay = 0.1 * entering++;
 				element.style.opacity = "0";
-				void animateElement(element, { y: [26, 0], scale: [0.95, 1], opacity: [0, 1] }, { ...ROW_SPRING, delay });
+				void animateElement(element, { y: [10, 0], scale: [0.98, 1], opacity: [0, 1] }, { ...ROW_SPRING, delay });
 				continue;
 			}
 			const dx = previous.left - rect.left;
@@ -740,17 +742,14 @@ const CARD_SPRING = { type: "spring", visualDuration: 0.6, bounce: 0.12 } as con
 /** The board page as SessionsBoard.tsx renders it: the page topbar (Board,
  * Task, Orchestrator) over the real SessionsBoardGridView with all four lanes,
  * each card the real SessionCardView with BoardSessionCardAdapter's props.
- * Cards move between lanes, rise in and lift as the story changes them. */
+ * Cards settle in and glide between lanes as the story changes them. */
 export function PreviewBoard({
 	cards,
 	focus = false,
-	liftedId,
 }: {
 	cards: PreviewCard[];
 	/** Frame the cards with the stage's camera. */
 	focus?: boolean;
-	/** The card that needs the person: it lifts off the board. */
-	liftedId?: string;
 }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion() ?? false;
@@ -825,17 +824,9 @@ export function PreviewBoard({
 					sessions={sessions}
 					renderSessionCard={(session) => {
 						const card = byId.get(session.id)!;
-						const lifted = card.id === liftedId;
 						return (
 							<div data-flip-id={card.id} data-preview-focus={focus ? "" : undefined} className="relative">
-								<motion.div
-									className="rounded-lg"
-									initial={false}
-									animate={lifted
-										? { y: -4, scale: 1.03, boxShadow: "0 18px 36px -12px rgba(0,0,0,0.55)" }
-										: { y: 0, scale: 1, boxShadow: "0 0px 0px 0px rgba(0,0,0,0)" }}
-									transition={reduceMotion ? { duration: 0 } : ROW_SPRING}
-								>
+								<div className="rounded-lg">
 									<SessionCardView
 										artifacts={<Fragment />}
 										externalLink={ProductExternalLink}
@@ -859,7 +850,7 @@ export function PreviewBoard({
 										session={session}
 										translate={translate}
 									/>
-								</motion.div>
+								</div>
 							</div>
 						);
 					}}
@@ -1369,7 +1360,6 @@ export function PreviewNewChat({
 // ── The scene: one window whose parts animate between steps ────────────────
 
 export type ScenePage = "chat" | "board" | "new";
-const PAGE_ORDER: Record<ScenePage, number> = { chat: 0, board: 1, new: 2 };
 const PAGES: readonly ScenePage[] = ["chat", "board", "new"];
 
 /**
@@ -1403,17 +1393,19 @@ export function PreviewScene({
 		<PreviewWindow page={page === "chat" ? "session" : page} sidebar={sidebar}>
 			<div className="absolute inset-0 overflow-hidden">
 				{PAGES.map((candidate) => {
-					const side = Math.sign(PAGE_ORDER[candidate] - PAGE_ORDER[page]);
-					const travels = candidate === page || candidate === leaving;
+					const shown = candidate === page;
+					const travels = shown || candidate === leaving;
+					// The app swaps its center panel in place; here the swap is a short
+					// blurred cross-fade so it reads as one change, not a cut.
 					return (
 						<motion.div
 							key={candidate}
 							data-scene-page={candidate}
-							aria-hidden={candidate !== page}
-							className="absolute inset-0 flex flex-col"
+							aria-hidden={!shown}
+							className={cn("absolute inset-0 flex flex-col", !shown && "pointer-events-none")}
 							initial={false}
-							animate={{ x: `${side * 100}%` }}
-							transition={reduceMotion || !travels ? { duration: 0 } : PAGE_SPRING}
+							animate={shown ? { opacity: 1, filter: "blur(0px)" } : { opacity: 0, filter: "blur(4px)" }}
+							transition={reduceMotion || !travels ? { duration: 0 } : PAGE_FADE}
 						>
 							{content[candidate]}
 						</motion.div>

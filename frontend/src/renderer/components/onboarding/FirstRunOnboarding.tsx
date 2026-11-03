@@ -517,10 +517,11 @@ function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStag
 
 /**
  * The flow's one app window. Its state comes from the step (and, on Welcome,
- * the story's current part), and every change animates in place: the chat
- * page, the board and New chat slide across the center panel; session rows
- * unfold in the sidebar; cards rise onto the board and glide between lanes;
- * the agent picker opens like the app's menus; the account row rolls over.
+ * the story's current part). It looks exactly like the app; only the changes
+ * are eased: the center panel swaps pages with a short blurred cross-fade,
+ * session rows unfold in the sidebar, cards settle onto the board and glide
+ * between lanes, the agent picker opens like the app's menus, and the account
+ * row rolls over.
  */
 function OnboardingScene({
 	step,
@@ -544,6 +545,11 @@ function OnboardingScene({
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
 	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
 	const cards = exampleCards(tasks, stage);
+	// While the chat leads a new loop, the board (fading out behind it) keeps
+	// the last loop's work instead of flashing empty; the next loop's board
+	// mounts fresh so its cards arrive again.
+	const boardCards = stage === "none" ? exampleCards(tasks, "sorted") : cards;
+	const boardKey = stage === "none" ? `${cycle}-previous` : `${cycle}`;
 	const sidebarProject: PreviewSidebarProject = {
 		name: project,
 		active: page === "board",
@@ -559,7 +565,6 @@ function OnboardingScene({
 			sidebar={<PreviewSidebar projects={[sidebarProject]} account={account} />}
 			chat={
 				<PreviewChat
-					focus={page === "chat"}
 					runId={cycle}
 					title={t("shell.orchestrator")}
 					provider="claude-code"
@@ -569,9 +574,8 @@ function OnboardingScene({
 			}
 			board={
 				<PreviewBoard
-					cards={cards}
-					focus={welcome && page === "board"}
-					liftedId={stage === "sorted" && welcome ? tasks[1].id : undefined}
+					key={boardKey}
+					cards={boardCards}
 				/>
 			}
 			newChat={
