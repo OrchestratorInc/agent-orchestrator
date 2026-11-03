@@ -5,6 +5,7 @@ package omp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,64 @@ import (
 )
 
 const ompTestID = "01a17cf3-99d0-76cd-b084-4cdce17a0fec"
+
+func requireUnreadableOMPDirectory(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("directory permissions are not enforced for this user")
+	} else if !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+}
+
+func TestOMPLocateSkipsUnreadableSibling(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "sessions", "aaa")
+	target := filepath.Join(root, "sessions", "zzz", "2026-10-27_"+ompTestID+".jsonl")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireUnreadableOMPDirectory(t, blocked)
+	ref := ports.NativeSessionRef{NativeSessionID: ompTestID, ConfigDir: root}
+	p := New()
+	if got, ok, err := p.LocateTranscript(context.Background(), ref); err != nil || !ok || got != target {
+		t.Fatalf("readable sibling transcript = %q, %v, %v", got, ok, err)
+	}
+	if got, err := p.ProbeNativeSession(context.Background(), ref); err != nil || got != ports.NativeSessionAvailabilityAvailable {
+		t.Fatalf("readable sibling availability = %v, %v", got, err)
+	}
+}
+
+func TestOMPLocateReportsUnreadableSessionsRoot(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	if err := os.Mkdir(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requireUnreadableOMPDirectory(t, sessions)
+	ref := ports.NativeSessionRef{NativeSessionID: ompTestID, ConfigDir: root}
+	if _, ok, err := New().LocateTranscript(context.Background(), ref); ok || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("unreadable root: found=%v, err=%v", ok, err)
+	}
+}
+
+func TestOMPLocatePreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok, err := New().LocateTranscript(ctx, ports.NativeSessionRef{NativeSessionID: ompTestID, ConfigDir: t.TempDir()}); ok || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lookup: found=%v, err=%v", ok, err)
+	}
+}
 
 // TestOMPSessionDir pins the folder encoder empirically derived from omp
 // 18.14.0 (the binary ships no source). Paths below do not exist, so symlink

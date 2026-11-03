@@ -682,13 +682,14 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 
 // RefreshArchive rereads an imported conversation just before its first open,
 // so turns added in another app since the import stay in the visible history.
-// The store ignores it once the session's conversation exists.
+// A relocation checkpoint pins the matching native copy and archive; later
+// source turns must not enter the archive while that copy is kept on retry.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
 	replacer, ok := s.store.(interface {
 		ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
 	})
-	if source == nil || source.Adopted || !ok {
+	if source == nil || source.Adopted || source.ResumeCwd != "" || !ok {
 		return nil
 	}
 	paths := []string{rec.Metadata.NativeTranscriptPath}
