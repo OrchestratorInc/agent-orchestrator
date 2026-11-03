@@ -250,7 +250,7 @@ func (s *Store) CompleteSessionInterfaceTransition(
 			return err
 		}
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
-			TransitionID: id, ClientMessageID: "interface-transition:" + id + ":context-boundary",
+			TransitionID: id, ClientMessageID: domain.SessionInterfaceTransitionBoundaryMessageID(id),
 			Message: message, CreatedAt: now,
 		}); err != nil {
 			return err

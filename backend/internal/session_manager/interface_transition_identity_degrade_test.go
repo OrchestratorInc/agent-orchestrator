@@ -68,8 +68,11 @@ func TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat(t *test
 			if len(messages) != 1 || messages[0].Message != degradedHandoffMarkerText {
 				t.Fatalf("marker messages = %+v, want exactly the fresh-start boundary", messages)
 			}
-			if got := chat.relayMessages; len(got) != 1 || got[0] != degradedHandoffMarkerText {
-				t.Fatalf("chat relay = %v, want the fresh-start boundary", got)
+			if got := chat.boundaries; len(got) != 1 || got[0] != degradedHandoffMarkerText {
+				t.Fatalf("timeline boundaries = %v, want the fresh-start boundary", got)
+			}
+			if got := chat.relayMessages; len(got) != 0 {
+				t.Fatalf("boundary notice was sent to the agent as a prompt: %v", got)
 			}
 			return
 		}
@@ -133,10 +136,10 @@ func (a *hermesDegradedTransitionAgent) GetRestoreCommand(ctx context.Context, c
 // upstream-hermes-main runtime in the Chat→TUI direction: the installed adapter
 // never declares a compatible TUI+Chat identity pair, but the recorded native
 // conversation is still resumable, so the switch must restore THAT terminal,
-// mark the row identity-reset, and deliver an honest boundary turn — exactly
-// once — into the resumed terminal.
+// mark the row identity-reset, and record an honest boundary notice — exactly
+// once — in the Chat timeline, without typing it into the resumed terminal.
 func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T) {
-	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
+	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
 	agent := &hermesDegradedTransitionAgent{resumeFound: true}
 	manager.agents = singleAgent{agent: agent}
@@ -188,15 +191,15 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T)
 	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
 		t.Fatalf("controller order = %s", got)
 	}
-	awaitDegradedMarker(t, store, transition.ID, degradedTerminalResumeMarkerText)
+	awaitDegradedMarker(t, store, chat, transition.ID, degradedTerminalResumeMarkerText)
 }
 
 // TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI covers the missing
 // native terminal: nothing resumable exists, so the switch starts an ordinary
 // fresh TUI for the workspace, still marked identity-reset with its own honest
-// boundary turn. The Chat conversation stays archived as-is.
+// boundary notice. The Chat conversation stays archived as-is.
 func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
-	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
+	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
 	agent := &hermesDegradedTransitionAgent{}
 	manager.agents = singleAgent{agent: agent}
@@ -240,13 +243,13 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
 		t.Fatalf("controller order = %s", got)
 	}
-	awaitDegradedMarker(t, store, transition.ID, degradedTerminalFreshMarkerText)
+	awaitDegradedMarker(t, store, chat, transition.ID, degradedTerminalFreshMarkerText)
 }
 
 // awaitDegradedMarker polls the transition outbox until the degraded boundary
-// turn has been delivered, then asserts it was delivered exactly once with the
-// expected text.
-func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, want string) {
+// notice has been delivered, then asserts it was recorded in the timeline
+// exactly once with the expected text and never sent to the agent.
+func awaitDegradedMarker(t *testing.T, store *transitionStore, chat *transitionChat, transitionID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -258,6 +261,12 @@ func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, wan
 			messages := store.messages[transitionID]
 			if len(messages) != 1 || messages[0].Message != want {
 				t.Fatalf("marker messages = %+v, want exactly %q", messages, want)
+			}
+			if got := chat.boundaries; len(got) != 1 || got[0] != want {
+				t.Fatalf("timeline boundaries = %v, want exactly %q", got, want)
+			}
+			if sent := store.messenger.msgs; len(sent) != 0 || len(chat.relayMessages) != 0 {
+				t.Fatalf("boundary notice was sent to the agent: terminal=%v chat=%v", sent, chat.relayMessages)
 			}
 			return
 		}
