@@ -737,18 +737,16 @@ func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
+}
+
 func (c chatLauncher) PreflightChat(
 	ctx context.Context,
 	harness domain.AgentHarness,
 	permissions ports.PermissionMode,
 ) error {
 	return c.svc.PreflightChat(ctx, harness, permissions)
-}
-
-// PermissionModes lists the permission modes harness can run a chat in,
-// strictest first, so an imported chat opens in one its harness accepts.
-func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
-	return c.svc.PermissionModes(ctx, harness)
 }
 
 func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {

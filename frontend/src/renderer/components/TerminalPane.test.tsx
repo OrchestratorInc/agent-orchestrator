@@ -67,6 +67,16 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
+// What the pane hands the terminal for dropped files, and the session organization's attachment limit.
+const dropSetup = vi.hoisted(() => ({
+	maxAttachmentBytes: undefined as number | undefined,
+	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
+}));
+// Read through a function: an assignment in a test would otherwise narrow it for the checks that follow.
+const droppedFileProps = () => dropSetup.props;
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
+}));
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
@@ -103,8 +113,11 @@ vi.mock("./XtermTerminal", () => ({
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 		supportsCursorColorScheme?: boolean;
+		saveDroppedFile?: unknown;
+		droppedFileMaxBytes?: number;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		dropSetup.props = { saveDroppedFile: props.saveDroppedFile, droppedFileMaxBytes: props.droppedFileMaxBytes };
 		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
@@ -261,6 +274,45 @@ describe("cloud terminal routing", () => {
 			expect(cloudTicketMock).toHaveBeenCalledWith("cloud-org", cloudSession.id, {
 				kind: "workspace",
 			});
+		} finally {
+			view.restore();
+		}
+	});
+});
+
+describe("TerminalPane dropped files", () => {
+	it("takes drops on a Cloud terminal only while the control plane takes files, up to its limit", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		dropSetup.maxAttachmentBytes = undefined;
+		const without = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			// A path on this machine means nothing in the sandbox: no drops at all.
+			expect(droppedFileProps()?.saveDroppedFile).toBeNull();
+		} finally {
+			without.restore();
+			without.unmount();
+		}
+		dropSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		dropSetup.props = undefined;
+		const withFiles = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()?.saveDroppedFile).toBeTypeOf("function"));
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
+		} finally {
+			withFiles.restore();
+			withFiles.unmount();
+			dropSetup.maxAttachmentBytes = undefined;
+		}
+	});
+
+	it("leaves a local terminal's drops to this machine", async () => {
+		dropSetup.props = undefined;
+		const view = renderPane(worker);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			expect(droppedFileProps()?.saveDroppedFile).toBeUndefined();
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBeUndefined();
 		} finally {
 			view.restore();
 		}
