@@ -3899,5 +3899,8 @@
 	"newTask.chooseNewBranch": "Elegir rama nueva",
 	"newTask.newBranchPrompt": "Nombre de la rama nueva",
 	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea.",
-	"firstRun.exampleComposerDraft": "Planifica el siguiente paso de esta función"
+	"firstRun.exampleComposerDraft": "Planifica el siguiente paso de esta función",
+	"firstRun.exampleTask4": "Acelerar la búsqueda",
+	"firstRun.phoneInReview": "En revisión",
+	"firstRun.phonePrOpen": "abierto"
 }

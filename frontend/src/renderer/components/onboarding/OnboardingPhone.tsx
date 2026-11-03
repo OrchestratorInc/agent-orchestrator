@@ -1,4 +1,4 @@
-import { Bell, CircleCheckBig, ListFilter, Loader, Menu, MessageSquare, Plus, type LucideIcon } from "lucide-react";
+import { Bell, CircleCheckBig, GitPullRequest, ListFilter, Loader, Menu, MessageSquare, Plus, type LucideIcon } from "lucide-react";
 import { useId, useMemo, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { statusColor, themeFor, type MobileTheme } from "../../lib/mobile-theme";
@@ -19,13 +19,15 @@ const SAFE_TOP = 59;
 const SAFE_BOTTOM = 34;
 
 const SANS = "var(--font-family-base)";
+/** theme.fontMono: Geist Mono, which the desktop also loads. */
+const MONO = "var(--font-family-mono)";
 /** iOS draws the status bar in SF Pro, not the app's font. */
 const SYSTEM = "-apple-system, BlinkMacSystemFont, system-ui, sans-serif";
 
 /** tokens.ts `space`. */
 const space = { hair: 2, xxs: 4, xs: 6, sm: 8, md: 12, lg: 16 } as const;
 
-export type PhoneWorkerStatus = "working" | "needs_input" | "approved";
+export type PhoneWorkerStatus = "working" | "needs_input" | "mergeable" | "review_pending";
 
 export type PhoneWorker = {
 	id: string;
@@ -33,13 +35,16 @@ export type PhoneWorker = {
 	title: string;
 	status: PhoneWorkerStatus;
 	minutesAgo: number;
+	branch?: string;
+	pr?: number;
 };
 
 /** agentsView.ts workerStatusGlyph, as lucide's matches for the Feather names. */
 const STATUS_GLYPH: Record<PhoneWorkerStatus, LucideIcon> = {
 	working: Loader,
 	needs_input: MessageSquare,
-	approved: CircleCheckBig,
+	mergeable: CircleCheckBig,
+	review_pending: GitPullRequest,
 };
 
 function usePhoneTheme(): { theme: MobileTheme; dark: boolean } {
@@ -147,8 +152,8 @@ function SectionHeader({ label, theme }: { label: string; theme: MobileTheme }) 
 	);
 }
 
-/** worker-list-row.tsx WorkerRowContents: eyebrow and title (the details line
- * shows only with a branch or pull request, which the sample work has none of). */
+/** worker-list-row.tsx WorkerRowContents: eyebrow, title and the details line
+ * (the pull request, else the branch). */
 function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: string; theme: MobileTheme }) {
 	const { t } = useTranslation();
 	const color = statusColor(theme, worker.status);
@@ -158,7 +163,12 @@ function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: s
 			? t("displayStatus.working")
 			: worker.status === "needs_input"
 				? t("firstRun.phoneNeedsInput")
-				: t("displayStatus.approved");
+				: worker.status === "mergeable"
+					? t("displayStatus.mergeable")
+					: t("firstRun.phoneInReview");
+	// agentsView.ts prLine: "PR #42 open" in the success tone, else the branch.
+	const details = worker.pr ? `${t("pr.short")} #${worker.pr} ${t("firstRun.phonePrOpen")}` : worker.branch;
+	const detailsColor = worker.pr ? theme.green : theme.textTertiary;
 	const caption: CSSProperties = { fontFamily: SANS, fontSize: 12, lineHeight: "16px", fontWeight: 500 };
 	return (
 		<div
@@ -187,6 +197,11 @@ function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: s
 			>
 				{worker.title}
 			</span>
+			{details ? (
+				<span className="truncate" style={{ fontFamily: MONO, fontSize: 12, lineHeight: "16px", color: detailsColor }}>
+					{details}
+				</span>
+			) : null}
 		</div>
 	);
 }

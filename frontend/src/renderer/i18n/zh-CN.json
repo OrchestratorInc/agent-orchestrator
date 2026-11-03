@@ -3812,5 +3812,8 @@
 	"newTask.chooseNewBranch": "选择新分支",
 	"newTask.newBranchPrompt": "新分支名称",
 	"newTask.newBranchReady": "已为下一个任务选择分支 {{branch}}。",
-	"firstRun.exampleComposerDraft": "规划这个功能的下一步"
+	"firstRun.exampleComposerDraft": "规划这个功能的下一步",
+	"firstRun.exampleTask4": "加快搜索速度",
+	"firstRun.phoneInReview": "审核中",
+	"firstRun.phonePrOpen": "已打开"
 }
