@@ -28,7 +28,10 @@ export function MachineSymbolPicker({
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button");
 	return (
-		<View accessibilityRole="radiogroup" style={[styles.choices, disabled && styles.disabled]}>
+		// Never flattened: the disabled opacity would otherwise add and remove this
+		// view under its cells mid-save, which Android's Fabric mounting crashes on
+		// ("The specified child already has a parent").
+		<View accessibilityRole="radiogroup" collapsable={false} style={[styles.choices, disabled && styles.disabled]}>
 			{machineAppearancePalette.symbols.map((symbol) => {
 				const isSelected = symbol === selected;
 				return (

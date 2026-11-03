@@ -59,6 +59,13 @@ describe("MachineSymbolPicker", () => {
 		expect(renderer!.root.findByProps({ accessibilityRole: "radiogroup" })).toBeTruthy();
 	});
 
+	// The disabled opacity used to flatten and unflatten the grid mid-save,
+	// which crashed Android's Fabric mounting.
+	it("keeps the grid a real view whether or not it is disabled", () => {
+		render();
+		expect(renderer!.root.findByProps({ accessibilityRole: "radiogroup" }).props.collapsable).toBe(false);
+	});
+
 	// The choice is ringed and filled, with the glyph in the accent, rather
 	// than a faint border alone.
 	it("marks the chosen shape with a ring, a fill and an accent glyph", () => {
