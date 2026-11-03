@@ -34,6 +34,8 @@ export type DaemonProbe = {
 	startupWorkingDirectory?: string;
 	/** Stable outer .AppImage path (AO_APPIMAGE), present only when the daemon's launcher runs under AppImage. */
 	appImagePath?: string;
+	/** The daemon also serves [::1] at its port; absent from an older daemon. */
+	ipv6Loopback?: boolean;
 };
 
 /** A /healthz|/readyz probe of a loopback port; resolves null when nothing valid answers. */
@@ -69,6 +71,7 @@ export function parseDaemonProbe(endpoint: "healthz" | "readyz", body: unknown):
 		startupWorkingDirectory:
 			typeof candidate.startupWorkingDirectory === "string" ? candidate.startupWorkingDirectory : undefined,
 		appImagePath: typeof candidate.appImagePath === "string" ? candidate.appImagePath : undefined,
+		...(candidate.ipv6Loopback === true ? { ipv6Loopback: true } : {}),
 	};
 }
 
@@ -176,5 +179,6 @@ async function readinessStatus(
 		pid,
 		executablePath: ready.executablePath,
 		workingDirectory: ready.workingDirectory,
+		...(ready.ipv6Loopback === true ? { ipv6Loopback: true } : {}),
 	};
 }
