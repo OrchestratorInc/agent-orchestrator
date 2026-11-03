@@ -234,7 +234,11 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							className="absolute inset-0 flex"
 							initial={reduceMotion ? false : { opacity: 0 }}
 							animate={{ opacity: 1 }}
-							exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0 }}
+							// The outgoing copy leaves at once (the column is see-through in a
+							// translucent window, so two steps' text must never overlap). Its
+							// preview keeps its own fade in the stage, and the step stays
+							// mounted until that finishes.
+							exit={{ opacity: 0, transition: { duration: 0 } }}
 							transition={FADE}
 						>
 							{step === "welcome" ? <WelcomeStep onNext={goNext} /> : null}
