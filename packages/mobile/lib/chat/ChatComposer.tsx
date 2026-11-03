@@ -224,6 +224,10 @@ export function ChatComposer({
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
 	const [focused, setFocused] = useState(false);
+	// The pill's height, for the effort slider floating over it. A percentage
+	// `bottom` resolves against the pill's content box, which leaves out its
+	// padding, and sat the slider that far down over the pill's top edge.
+	const [pillHeight, setPillHeight] = useState(0);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
@@ -645,7 +649,7 @@ export function ChatComposer({
 			</View> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]}>
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => setPillHeight(event.nativeEvent.layout.height)}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -703,7 +707,7 @@ export function ChatComposer({
 					{roundButton}
 				</View>
 				{/* The effort slider floats just above the pill, over the conversation. */}
-				{effort.open ? <EffortSliderOverlay choices={effort.choices} onChoose={effort.choose} onRelease={effort.release} bottom="100%" /> : null}
+				{effort.open && pillHeight ? <EffortSliderOverlay choices={effort.choices} onChoose={effort.choose} onRelease={effort.release} bottom={pillHeight} /> : null}
 			</View>}
 		</Animated.View>
 	);
