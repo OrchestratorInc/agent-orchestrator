@@ -3310,6 +3310,10 @@ ipcMain.handle("updates:relaunch", () => {
 	// never settles leaves this process running and the dialog waiting (#6911).
 	updateRelaunchRequested = true;
 	desktopQuit.quitCompletely();
+	// before-quit runs inside quitCompletely(), so this already says whether the
+	// quit went ahead or was cancelled at the unsent-draft prompt. The dialog
+	// gives its buttons back at once when it was cancelled.
+	return updateRelaunchRequested;
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
