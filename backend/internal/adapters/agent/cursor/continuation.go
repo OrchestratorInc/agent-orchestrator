@@ -59,6 +59,11 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 // Cursor's direct --resume path uses process.cwd() for this lookup and creates
 // tools from the launch workspace, independently of the saved conversation graph.
 func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	if path, found, err := cursorstore.PreparedCopy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
+		return ports.NativeSessionRef{}, err
+	} else if found {
+		return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+	}
 	archive, err := cursorstore.Read(ctx, r.ConfigDir, r.TranscriptPath)
 	if err != nil {
 		return ports.NativeSessionRef{}, err

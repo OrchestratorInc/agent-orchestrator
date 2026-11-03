@@ -314,13 +314,16 @@ func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
 // CopySelected additionally verifies the discovery evidence before snapshotting
 // and before publishing the completed copy. Empty evidence supports old imports.
 func CopySelected(ctx context.Context, root, source, launchCWD, expected string) (string, error) {
-	return copyWithPublisher(ctx, root, source, launchCWD, expected, publishDirectory)
+	return copyWithPublisher(ctx, root, source, launchCWD, expected, nil)
 }
 
 func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
 	root, err := providerRoot(root)
 	if err != nil {
 		return "", err
+	}
+	if target, found, err := PreparedCopy(ctx, root, source, launchCWD, filepath.Base(filepath.Dir(source)), expected); err != nil || found {
+		return target, err
 	}
 	if err := checkFingerprint(ctx, root, source, expected); err != nil {
 		return "", err
@@ -399,6 +402,19 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	if err := os.WriteFile(filepath.Join(stage, "meta.json"), metaBytes, 0o600); err != nil {
 		return "", err
 	}
+	if expected != "" {
+		record, err := preparationFor(root, actual, launchCWD, archive.ID, expected)
+		if err != nil {
+			return "", err
+		}
+		body, err := json.Marshal(record)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(stage, preparationFile), body, 0o600); err != nil {
+			return "", err
+		}
+	}
 	relTarget, err := filepath.Rel(root, target)
 	if err != nil || !filepath.IsLocal(relTarget) {
 		return "", errors.New("cursor target is outside provider home")
@@ -408,10 +424,15 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	}
 	// The complete directory appears in one no-replace operation. A failure or
 	// interruption before publication leaves no reservation blocking a retry.
+	if publish != nil {
+		if err := publish(stage, filepath.Dir(target)); err != nil {
+			return "", err
+		}
+	}
 	if err := checkFingerprint(ctx, root, actual, expected); err != nil {
 		return "", err
 	}
-	if err := publish(stage, filepath.Dir(target)); err != nil {
+	if err := publishDirectory(stage, filepath.Dir(target)); err != nil {
 		return "", fmt.Errorf("publish cursor target: %w", err)
 	}
 	return target, nil

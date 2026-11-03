@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 )
 
 const testID = "11111111-1111-4111-8111-111111111111"
@@ -209,8 +208,18 @@ func TestSelectedCopyRefusesChangedNativeInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp := info.ModTime().Add(time.Second)
-	if err := os.Chtimes(sidecar, stamp, stamp); err != nil {
+	body, err := os.ReadFile(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.ReplaceAll(body, []byte("Synthetic chat"), []byte("Different chat"))
+	if len(changed) != len(body) || bytes.Equal(changed, body) {
+		t.Fatal("fixture must change content without changing size")
+	}
+	if err := os.WriteFile(sidecar, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sidecar, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := CopySelected(context.Background(), root, source, launch, expected); err == nil {
@@ -229,6 +238,89 @@ func TestSelectedCopyRefusesChangedNativeInputs(t *testing.T) {
 	}
 	if _, err := CopySelected(context.Background(), root, source, launch, fresh); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSelectedCopyRefusesWALShiftBeforePublication(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	source := fixture(t, root, cwd)
+	db, err := sql.Open("sqlite", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := Fingerprint(context.Background(), root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = copyWithPublisher(context.Background(), root, source, launch, expected, func(_, _ string) error {
+		_, err := db.Exec("INSERT INTO blobs (id,data) VALUES ('concurrent-turn',?)", []byte("changed during snapshot"))
+		return err
+	})
+	if err == nil {
+		t.Fatal("published a snapshot after its WAL changed")
+	}
+	target, pathErr := SessionPath(root, launch, testID)
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale target exists: %v", err)
+	}
+	fresh, err := Fingerprint(context.Background(), root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, fresh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelectedCopyRetryRequiresMatchingProvenance(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	source := fixture(t, root, cwd)
+	expected, err := Fingerprint(context.Background(), root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := CopySelected(context.Background(), root, source, launch, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO blobs (id,data) VALUES ('later-ao-turn',?)", []byte("keep this")); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if err := os.RemoveAll(filepath.Dir(source)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, expected); err != nil {
+		t.Fatalf("proven copy cannot be retried after source removal: %v", err)
+	}
+	db, err = sql.Open("sqlite", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM blobs WHERE id='later-ao-turn'").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("later native state lost: %d, %v", count, err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, "different-selection"); err == nil {
+		t.Fatal("reused a copy from another selection")
+	}
+	if err := os.Remove(filepath.Join(filepath.Dir(target), preparationFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, expected); err == nil {
+		t.Fatal("reused an unproven native target")
 	}
 }
 
