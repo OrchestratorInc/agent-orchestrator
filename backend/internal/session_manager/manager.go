@@ -3619,6 +3619,8 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		)
 	}
 
+	var env map[string]string
+	preparedImportEnv := false
 	launchPath := ws.Path
 	if source := rec.Metadata.ImportSource; source != nil {
 		if source.ResumeCwd != "" {
@@ -3634,7 +3636,20 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			if forceFresh {
 				return RestoreResult{}, ErrNotResumable
 			}
-			relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath)
+			agent, ok := m.agents.Agent(rec.Harness)
+			if !ok {
+				return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
+			}
+			var prepareErr error
+			rec, env, prepareErr = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+			if prepareErr != nil {
+				return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, prepareErr))
+			}
+			m.augmentAgentRuntimeEnv(agent, env)
+			m.applyImportedConfigEnv(ctx, rec, env)
+			pinRuntimePermissionEnv(env, restoredAgentConfig(rec, project.Config).Permissions)
+			preparedImportEnv = true
+			relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath, env)
 			if relocateErr != nil {
 				return RestoreResult{}, relaunchFailed("import relocation", relocateErr)
 			}
@@ -3669,10 +3684,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		promptOverride, savedNote = &note, true
 	}
 	agentConfig.Launch.HandoffNote = ""
-	var env map[string]string
-	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
-	if err != nil {
-		return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
+	if !preparedImportEnv {
+		rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+		if err != nil {
+			return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
+		}
 	}
 	if rec.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
 		customEndpoint, err := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
@@ -3683,7 +3699,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			agentConfig.Model = ""
 		}
 	}
-	m.augmentAgentRuntimeEnv(agent, env)
+	if !preparedImportEnv {
+		m.augmentAgentRuntimeEnv(agent, env)
+	}
 	m.applyImportedConfigEnv(ctx, rec, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
