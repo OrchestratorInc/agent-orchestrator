@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const menu = vi.hoisted(() => ({ show: vi.fn() }));
 const haptics = vi.hoisted(() => ({ press: vi.fn() }));
 
-vi.mock("react-native", () => ({ Platform: { OS: "android" }, Pressable: "Pressable" }));
+vi.mock("react-native", () => ({ Platform: { OS: "android" }, Pressable: "Pressable", View: "View", StyleSheet: { create: <T,>(styles: T) => styles } }));
 vi.mock("@expo/ui/community/menu", () => ({
 	MenuView: function MenuView({ ref, ...props }: Record<string, any>) {
 		useImperativeHandle(ref, () => ({ show: menu.show }));
@@ -45,15 +45,23 @@ function mount(onPress = vi.fn(), onAction = vi.fn()) {
 	return renderer!;
 }
 
-// The menu listens for the long press on a Pressable of its own, which the
-// row's Pressable inside it never lets see one.
-it("opens the native menu from the row's own long press", () => {
+// Anchored to the whole row, Compose opened the menu against the screen's
+// left edge wherever the finger was; its anchor moves under the finger first.
+it("opens the native menu where the row was long-pressed", () => {
+	let frame: (() => void) | undefined;
+	vi.stubGlobal("requestAnimationFrame", (callback: () => void) => { frame = callback; return 1; });
 	const onPress = vi.fn();
-	const row = mount(onPress).root.findByType("Pressable" as never);
+	const view = mount(onPress);
+	const row = view.root.findByType("Pressable" as never);
+	act(() => row.props.onPressIn({ nativeEvent: { locationX: 310, locationY: 42 } }));
 	act(() => row.props.onLongPress());
-	expect(menu.show).toHaveBeenCalledTimes(1);
 	expect(haptics.press).toHaveBeenCalledTimes(1);
+	expect(view.root.findByType("MenuView" as never).props.style[1]).toEqual({ left: 310, top: 42 });
+	expect(menu.show).not.toHaveBeenCalled();
+	act(() => frame?.());
+	expect(menu.show).toHaveBeenCalledTimes(1);
 	expect(onPress).not.toHaveBeenCalled();
+	vi.unstubAllGlobals();
 });
 
 it("marks Archive as destructive", () => {

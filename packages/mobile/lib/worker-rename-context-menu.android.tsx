@@ -1,6 +1,6 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
-import { useRef } from "react";
-import { Pressable } from "react-native";
+import { useRef, useState } from "react";
+import { Pressable, StyleSheet, View, type GestureResponderEvent } from "react-native";
 import { haptics } from "./haptics";
 import { usePressFeedback } from "./pressFeedback";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -9,13 +9,17 @@ import { workerAccessibilityActions, workerActionNamed, type WorkerActionId } fr
 import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
 /**
- * The row and its long-press menu: Compose's DropdownMenu, anchored to the row,
- * with each action's Material Symbol.
+ * The row and its long-press menu: Compose's DropdownMenu, with each action's
+ * Material Symbol.
  *
- * MenuView listens for the long press on a Pressable of its own around the
- * trigger, and that one never sees it: the row's Pressable inside it takes the
- * touch. So the row asks the menu to open, and gives the long-press haptic the
- * system gives a view that opens a menu.
+ * Compose opens the menu at its anchor's start edge, and anchored to the whole
+ * row it always opened against the screen's left edge, wherever the finger
+ * was. The anchor is instead a point placed under the finger as the long press
+ * lands, so the menu opens there, as a long press on any Android list does;
+ * Compose moves it in from an edge it would cross.
+ *
+ * The row asks the menu to open, and gives the long-press haptic the system
+ * gives a view that opens a menu.
  */
 export function WorkerRowContextMenu({
 	children,
@@ -30,6 +34,9 @@ export function WorkerRowContextMenu({
 	const { scheme } = useThemeState();
 	const feedback = usePressFeedback("row");
 	const menu = useRef<MenuComponentRef>(null);
+	// Where the finger came down, in the row, and where the anchor sits.
+	const touch = useRef({ x: 0, y: 0 });
+	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
 
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
@@ -45,14 +52,7 @@ export function WorkerRowContextMenu({
 	};
 
 	return (
-		<MenuView
-			ref={menu}
-			colorScheme={scheme}
-			actions={menuActions}
-			shouldOpenOnLongPress
-			onPressAction={chooseAction}
-			testID="worker-row-menu"
-		>
+		<View>
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
@@ -64,14 +64,35 @@ export function WorkerRowContextMenu({
 				}}
 				android_ripple={feedback.android_ripple}
 				onPress={onPress}
+				onPressIn={(event: GestureResponderEvent) => {
+					touch.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
+				}}
 				onLongPress={() => {
 					haptics.press();
-					menu.current?.show();
+					setAnchor(touch.current);
+					// Opened once the anchor has moved under the finger.
+					requestAnimationFrame(() => menu.current?.show());
 				}}
 				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>
 				{children}
 			</Pressable>
-		</MenuView>
+			<MenuView
+				ref={menu}
+				colorScheme={scheme}
+				actions={menuActions}
+				onPressAction={chooseAction}
+				style={[styles.anchor, { left: anchor.x, top: anchor.y }]}
+				testID="worker-row-menu"
+			>
+				<View pointerEvents="none" style={styles.point} />
+			</MenuView>
+		</View>
 	);
 }
+
+const styles = StyleSheet.create({
+	// Takes no touches: the row under it has them all.
+	anchor: { position: "absolute", pointerEvents: "none" },
+	point: { width: 1, height: 1 },
+});

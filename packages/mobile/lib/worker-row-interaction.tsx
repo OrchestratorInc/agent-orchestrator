@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { AppSymbol } from "./AppSymbol";
-import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
-import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { useTheme } from "./ThemeProvider";
 import { iconSize, space } from "./tokens";
 import { workerActionSymbol, type WorkerActionId } from "./worker-action-model";
 import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
@@ -26,6 +24,10 @@ const DRAG_DISTANCE = 16;
 const NEVER = 10_000;
 /** The action a full swipe runs, as Mail's runs its last one. */
 const FULL_SWIPE_ACTION: WorkerActionId = "delete";
+/** How long the rail takes to turn red, and back, as a full swipe arms. */
+const ARM_DURATION = 160;
+/** How much of the rail a drag uncovers before its controls start to appear. */
+const REVEAL_START = WORKER_ACTION_REVEAL_WIDTH * 0.2;
 
 /**
  * A worker row's touch surface, the same on both platforms: Gesture Handler's
@@ -177,9 +179,11 @@ export function WorkerRowInteraction({
 
 /**
  * What the swipe uncovers: the controls in a fixed rail at the trailing edge,
- * over a fill that follows the row past the rail. Once letting go would
- * archive, the fill takes the destructive tint and the archive glyph rides its
- * leading edge, so the armed state reads by shape as well as colour.
+ * over a fill that follows the row past the rail. At rest the fill is the
+ * list's own background, so the controls sit in the space the row leaves
+ * rather than on a panel, and they grow in as the drag uncovers them. Once
+ * letting go would archive, the fill turns red, the controls give way, and
+ * the archive glyph rides its leading edge, as Mail draws a full swipe.
  */
 function SwipeRail({ translation, armed, children }: {
 	translation: SharedValue<number>;
@@ -187,48 +191,55 @@ function SwipeRail({ translation, armed, children }: {
 	children: ReactNode;
 }) {
 	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
 	const fill = useAnimatedStyle(() => ({
 		width: Math.max(WORKER_ACTION_REVEAL_WIDTH, -translation.value),
-		backgroundColor: armed.value ? t.tintRed : t.bgElevated,
+		backgroundColor: withTiming(armed.value ? t.red : t.bgBase, { duration: ARM_DURATION }),
 	}));
-	const armedGlyph = useAnimatedStyle(() => ({ opacity: armed.value ? 1 : 0 }));
+	const armedGlyph = useAnimatedStyle(() => ({
+		opacity: withTiming(armed.value ? 1 : 0, { duration: ARM_DURATION }),
+		transform: [{ scale: withTiming(armed.value ? 1 : 0.6, { duration: ARM_DURATION }) }],
+	}));
+	const controls = useAnimatedStyle(() => {
+		const uncovered = (-translation.value - REVEAL_START) / (WORKER_ACTION_REVEAL_WIDTH - REVEAL_START);
+		const revealed = Math.min(1, Math.max(0, uncovered));
+		return {
+			opacity: armed.value ? withTiming(0, { duration: ARM_DURATION }) : revealed,
+			transform: [{ scale: 0.6 + 0.4 * revealed }],
+		};
+	});
 	return (
 		<>
 			<Animated.View pointerEvents="none" style={[styles.fill, fill]}>
 				<Animated.View style={[styles.armedGlyph, armedGlyph]}>
-					<AppSymbol name={workerActionSymbol(FULL_SWIPE_ACTION)} size={iconSize.xl} color={t.red} />
+					<AppSymbol name={workerActionSymbol(FULL_SWIPE_ACTION)} size={iconSize.xl} color={t.onDestructive} />
 				</Animated.View>
 			</Animated.View>
 			{/* The rail keeps its width before its controls mount: the swipeable
 			    measures it to resolve the very first drag. */}
-			<View style={styles.rail}>{children}</View>
+			<Animated.View style={[styles.rail, controls]}>{children}</Animated.View>
 		</>
 	);
 }
 
-const makeStyles = (t: Theme) =>
-	StyleSheet.create({
-		fill: {
-			position: "absolute",
-			top: 0,
-			right: 0,
-			bottom: 0,
-			borderLeftWidth: rowDividerWidth,
-			borderLeftColor: t.borderSubtle,
-		},
-		armedGlyph: {
-			position: "absolute",
-			top: 0,
-			bottom: 0,
-			left: space.xl,
-			justifyContent: "center",
-		},
-		rail: {
-			width: WORKER_ACTION_REVEAL_WIDTH,
-			// The rail is the row's full height and its controls one fixed block.
-			// Centred, they stay level with the row's middle when it grows past the
-			// minimum: a rename in progress, a larger text size, a wrapped line.
-			justifyContent: "center",
-		},
-	});
+const styles = StyleSheet.create({
+	fill: {
+		position: "absolute",
+		top: 0,
+		right: 0,
+		bottom: 0,
+	},
+	armedGlyph: {
+		position: "absolute",
+		top: 0,
+		bottom: 0,
+		left: space.xl,
+		justifyContent: "center",
+	},
+	rail: {
+		width: WORKER_ACTION_REVEAL_WIDTH,
+		// The rail is the row's full height and its controls one fixed block.
+		// Centred, they stay level with the row's middle when it grows past the
+		// minimum: a rename in progress, a larger text size, a wrapped line.
+		justifyContent: "center",
+	},
+});

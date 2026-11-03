@@ -41,12 +41,13 @@ vi.mock("react-native-reanimated", () => ({
 	default: { View: "AnimatedView" },
 	useSharedValue: (initial: unknown) => useRef({ value: initial }).current,
 	useAnimatedStyle: (style: () => unknown) => style(),
+	withTiming: (value: unknown) => value,
 }));
 vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args) }));
 vi.mock("./haptics", () => ({ haptics }));
 vi.mock("./worker-rename-context-menu", () => ({ WorkerRowContextMenu: "ContextMenu" }));
 vi.mock("./ThemeProvider", () => {
-	const theme = { bgElevated: "elevated", borderSubtle: "divider", tintRed: "red-tint", red: "red", textSecondary: "secondary" };
+	const theme = { bgBase: "base", red: "red", onDestructive: "on-red" };
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
 
