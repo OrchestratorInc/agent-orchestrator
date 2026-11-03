@@ -16,6 +16,7 @@ it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
 });
 
@@ -84,6 +85,7 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 
 it("gates importable harnesses to the ones with a verified resume path", () => {
 	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
 });
 
 it("reports new, existing and failed imports separately", async () => {
