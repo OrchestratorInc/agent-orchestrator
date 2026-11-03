@@ -34,7 +34,7 @@ type remoteHostStatus struct {
 
 func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 	root := &cobra.Command{Use: "remote-host", Short: "Manage this machine's remote listener"}
-	var tunnel, tunnelOnly bool
+	var tunnel, tunnelOnly, showPassword bool
 	for _, action := range []struct {
 		name, method, path string
 	}{
@@ -130,12 +130,22 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
-				if status.Password != "" {
-					_, err := fmt.Fprintf(cmd.OutOrStdout(), "Password: %s\n", status.Password)
+				if status.Password == "" {
+					return nil
+				}
+				// status is the command people run to check on a host and paste
+				// into chats and bug reports, so it keeps the secret back unless
+				// asked. enable prints it: that is the moment it is issued.
+				if action.name == "status" && !showPassword {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "Password hidden: run `ao remote-host status --show-password` to show it.")
 					return err
 				}
-				return nil
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "Password: %s\n", status.Password)
+				return err
 			},
+		}
+		if action.name == "status" {
+			cmd.Flags().BoolVar(&showPassword, "show-password", false, "Print the connection password; treat the output as a credential")
 		}
 		if action.name == "enable" {
 			cmd.Flags().BoolVar(&tunnel, "tunnel", false, "Start AO's managed Cloudflare tunnel for access beyond the LAN")

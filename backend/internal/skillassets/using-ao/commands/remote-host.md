@@ -7,7 +7,7 @@ to that account.
 ## Syntax
 
 ```
-ao remote-host status
+ao remote-host status [--show-password]
 ao remote-host enable [--tunnel-only | --tunnel]
 ao remote-host disable
 ao remote-host link [--label NAME] [--no-qr]
@@ -17,15 +17,16 @@ ao remote-host link [--label NAME] [--no-qr]
 
 | Command | What it does |
 |---|---|
-| `status` | Show the host ID, addresses, and whether the address is fixed. It also prints the pairing password. |
+| `status` | Show the host ID, addresses, and whether the address is fixed. The pairing password stays hidden unless you pass `--show-password`. |
 | `enable` | Turn on the authenticated remote listener. `--tunnel-only` serves it only through a Cloudflare tunnel. |
 | `disable` | Turn off remote access. Sessions keep running. |
 | `link` | Print a sign-in link and a QR code, wait up to 5 minutes for the user to sign in from any device, then add this machine to their AO account with a fixed `https://h-….useao.dev` address. Turns on tunnel-only remote access if it is off, and adds a Cloudflare tunnel to a LAN-only listener. Safe to run again: the same account keeps its credential and the name it set, unless `--label` gives a new one. |
 
 ## Rules
 
-- Never show the user, or write anywhere, the `Password:` line from `status`,
-  `enable`, or the installer. Filter it: `ao remote-host status | grep -v '^Password'`.
+- Never run `status --show-password`, and never show the user or write anywhere
+  the `Password:` line from `enable` or the installer. Plain `status` already
+  hides it.
 - The user must open the sign-in link themselves. Give them the link and the
   code it shows; never sign in for them.
 - `link` blocks until the sign-in finishes. Without a terminal, run it in the

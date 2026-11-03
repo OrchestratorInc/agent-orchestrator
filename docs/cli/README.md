@@ -47,7 +47,7 @@ does not finish, it prints the host ID, address, and pairing password for
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
 Running `enable` again prints the current details without rotating the
-password. `status` shows the password from the host's local shell. The LAN
+password. `status --show-password` shows the password from the host's local shell; plain `status` hides it. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
 Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is
 linked to an account, by `ao remote-host link` or a signed-in desktop adding
