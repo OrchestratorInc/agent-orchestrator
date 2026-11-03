@@ -1,7 +1,12 @@
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
-export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
+/**
+ * `recovered` is a turn replayed from a provider's stored history whose outcome
+ * the provider did not report; the daemon swaps it for the known result when it
+ * has one.
+ */
+export type TurnState = "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed" | "cancelled";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =
 	| "command"

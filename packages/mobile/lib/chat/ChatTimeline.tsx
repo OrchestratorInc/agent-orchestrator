@@ -64,6 +64,10 @@ import { atTail, openingRow } from "./timelineScroll";
 const JUMP_FADE_MS = 160;
 /** Rows drawn first: the newest ones, enough to fill the screen at the end (see `openingRow`). */
 const OPENING_ROWS = 4;
+// How long the list's size has to hold still before an opening conversation is
+// shown, and the longest it stays hidden whatever it does.
+const OPENING_SETTLE_MS = 90;
+const OPENING_REVEAL_CAP_MS = 600;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -180,6 +184,21 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
+	// The list opens a few rows above the end and scrolls the rest of the way as
+	// those rows measure. Drawn while it did, the conversation showed and then
+	// slid down to the newest message, so it stays hidden until its size holds
+	// still and is shown already at the end.
+	const [opened, setOpened] = useState(false);
+	const openingSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const settleOpening = () => {
+		if (opened) return;
+		clearTimeout(openingSettle.current);
+		openingSettle.current = setTimeout(() => setOpened(true), OPENING_SETTLE_MS);
+	};
+	useEffect(() => {
+		const cap = setTimeout(() => setOpened(true), OPENING_REVEAL_CAP_MS);
+		return () => { clearTimeout(cap); clearTimeout(openingSettle.current); };
+	}, []);
 	// Held above the virtualized list so a "Worked for" fold keeps its state when its row scrolls away and back.
 	const [openWorked, setOpenWorked] = useState<ReadonlySet<string>>(() => new Set());
 	const toggleWorked = useCallback((key: string) => {
@@ -204,8 +223,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
 	// Android has no such inset, so its first message sat behind the header's frost.
 	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
+	// Over the composer, no gap of the list's own: every row ends in its own
+	// padding, and the dock's chips stand off it by their touch slop. The
+	// canvas's end gap on top of the composer's height left an empty band above
+	// the PR chips. Not less either: ending the list inside the composer's
+	// height hid a last activity row, which has no turn padding, under the dock.
 	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
-		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: space.xxxl + bottomInset }]
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset || space.xxxl }]
 		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
@@ -344,7 +368,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 							data={groups}
 							extraData={rowState}
 							keyExtractor={(group) => group.key}
-							style={styles.list}
+							style={[styles.list, !opened && styles.opening]}
 							contentContainerStyle={contentStyle}
 							contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}
 							// Lets `scrollToLatest` rest a short conversation just below the header.
@@ -376,11 +400,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 								const measured = !viewportHeight.current;
 								viewportHeight.current = event.nativeEvent.layout.height;
 								if (measured && followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								settleOpening();
 							}}
 							onContentSizeChange={(_width, height) => {
 								contentHeight.current = height;
 								notifyRenderViewport();
 								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
 								// The opening scroll can ask before its rows have measured; the end is where it was going.
@@ -760,7 +786,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				disabled={!expandable}
 				onPress={() => setOpenOverride(!open)}
 				android_ripple={feedback.android_ripple}
-				style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}
+				style={({ pressed }) => [styles.activityRow, !expandable && styles.activityRowStatic, pressed && feedback.pressed]}
 			>
 				<Feather name={meta.icon} size={iconSize.xs} color={meta.color(t)} />
 				<Text numberOfLines={open ? undefined : 2} style={[styles.activitySummary, activity.status === "failed" && { color: t.red }]}>
@@ -973,7 +999,16 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ?? "";
+					: turn.state === "cancelled"
+						? "Turn cancelled"
+						// Replayed history carries no real duration, so it names only the
+						// work it folds, and with none there is nothing to say.
+						: turn.state === "recovered"
+							? foldable ? "Work recovered" : ""
+							: workingDuration ?? "";
+	// A settled turn with nothing to name draws no row: an unlabelled one was a
+	// blank band the height of a touch target, with only its divider showing.
+	if (!running && !label) return null;
 	const text = <Text
 		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
 		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
@@ -1000,6 +1035,9 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	// Nothing to show draws nothing: an empty one still padded every turn's end,
+	// most of the gap between a reply and the next prompt.
+	if (!plan && !turn.diff?.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
@@ -1296,10 +1334,14 @@ const makeStyles = (t: Theme) => {
 		detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
 		emptySurface: { flex: 1, justifyContent: "center" },
 		list: { flex: 1, backgroundColor: t.bgBase },
+		opening: { opacity: 0 },
 		content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },
 		older: { alignSelf: "center", minHeight: touchTarget, flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, marginBottom: space.xs },
 		olderText: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
-		userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
+		// A turn's gaps: a reply's foot to the next prompt is the one break between
+		// turns, and a prompt sits close over its own reply. Each was a full 16pt,
+		// which with the copy button's row left a screen-height of air per exchange.
+		userRow: { alignItems: "flex-end", paddingTop: space.md, paddingBottom: space.xs },
 		userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: radius.xl, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
 		userText: { fontFamily: "DMSans_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 		delivery: { fontFamily: "DMSans_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.footnote.fontSize },
@@ -1309,7 +1351,7 @@ const makeStyles = (t: Theme) => {
 		attachmentTileImage: { width: "100%", height: "100%" },
 		// alignSelf keeps a chip its own height next to a tile: the row container's
 		// default stretch would otherwise blow it up to the tile's 104/160px.
-		attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
+		attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
 		attachmentName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
 		attachmentRetry: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
@@ -1320,17 +1362,21 @@ const makeStyles = (t: Theme) => {
 		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		steerBubble: { backgroundColor: t.bgSubtle },
 		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
-		assistantRow: { paddingVertical: space.lg },
+		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
 		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
 		responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
-		// The glyph lines up with the reply's left edge. The target reaches into the
-		// row's bottom padding rather than up over the text, where a long press selects.
-		copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -space.md },
+		// The glyph lines up with the reply's left edge, and the row ends at its
+		// foot. The target reaches into the row's bottom padding rather than up
+		// over the text, where a long press selects.
+		copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -(touchTarget - iconSize.md) / 2 },
 		systemSignal: { ...card, marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderColor: t.borderDefault, backgroundColor: t.bgSurface, padding: space.sm },
 		systemTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		systemDetail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 		activityWrap: { paddingVertical: space.hair },
 		activityRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
+		// A row with nothing to open is no touch target, so it is only as tall as
+		// its line: held to one, it left a band of nothing under "Restored a session".
+		activityRowStatic: { minHeight: 0, paddingVertical: space.sm },
 		activitySummary: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
 		server: { color: t.textTertiary, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
 		activityProgress: { fontFamily: "DMSans_400Regular", maxWidth: "28%", color: t.textFaint, fontSize: type.footnote.fontSize },
@@ -1372,7 +1418,7 @@ const makeStyles = (t: Theme) => {
 		changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
 		changedToggle: { flex: 1, minWidth: 0 },
 		changedTitle: { flexShrink: 1 },
-		changedReview: { minHeight: REVIEW_PILL_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, backgroundColor: t.bgElevatedHover, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
+		changedReview: { minHeight: REVIEW_PILL_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgElevatedHover, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
 		changedStat: { fontFamily: "DMSans_400Regular", fontSize: type.footnote.fontSize },
 		changedReviewText: { fontFamily: "DMSans_500Medium", fontSize: type.footnote.fontSize, color: t.textPrimary },
 		planTitle: { fontFamily: "DMSans_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },

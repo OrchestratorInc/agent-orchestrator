@@ -14,6 +14,15 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).not.toContain("<View style={styles.ruleHalf} />");
 	});
 
+	// A turn replayed from the provider's history comes back "recovered", which
+	// the row once had no words for: it drew a blank band a touch target tall.
+	it("names every settled state, and draws no row with nothing to say", () => {
+		expect(turnSummarySource).toContain('turn.state === "recovered"');
+		expect(turnSummarySource).toContain('? foldable ? "Work recovered" : ""');
+		expect(turnSummarySource).toContain('"Turn cancelled"');
+		expect(turnSummarySource).toContain("if (!running && !label) return null;");
+	});
+
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
 		expect(source).toContain("partitionTurnItems(items, group.turn)");
 		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);");
@@ -296,6 +305,15 @@ describe("following the newest message", () => {
 		expect(source).toContain("openedAt.current ??= openingRow(groups.length, OPENING_ROWS);");
 		expect(source).toContain("initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}");
 		expect(source).toContain("if (index === initialScrollIndex && followsTail.current) {");
+	});
+
+	// Drawn while it scrolled the rest of the way as rows measured, the
+	// conversation showed and then slid down to the newest message.
+	it("stays hidden until its opening scroll holds still, and no longer than a moment", () => {
+		expect(source).toContain("style={[styles.list, !opened && styles.opening]}");
+		expect(source).toContain("opening: { opacity: 0 },");
+		expect(source.match(/settleOpening\(\);/g)).toHaveLength(2);
+		expect(source).toContain("const cap = setTimeout(() => setOpened(true), OPENING_REVEAL_CAP_MS);");
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
