@@ -3830,5 +3830,8 @@
 	"newTask.chooseNewBranch": "新しいブランチを選ぶ",
 	"newTask.newBranchPrompt": "新しいブランチ名",
 	"newTask.newBranchReady": "次のタスク用にブランチ {{branch}} を選択しました。",
-	"firstRun.exampleComposerDraft": "この機能の次のステップを計画して"
+	"firstRun.exampleComposerDraft": "この機能の次のステップを計画して",
+	"firstRun.exampleTask4": "検索を高速化",
+	"firstRun.phoneInReview": "レビュー中",
+	"firstRun.phonePrOpen": "オープン"
 }

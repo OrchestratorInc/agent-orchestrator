@@ -3830,5 +3830,8 @@
 	"newTask.chooseNewBranch": "Neuen Branch wählen",
 	"newTask.newBranchPrompt": "Name des neuen Branches",
 	"newTask.newBranchReady": "Branch {{branch}} für die nächste Aufgabe ausgewählt.",
-	"firstRun.exampleComposerDraft": "Plane den nächsten Schritt für dieses Feature"
+	"firstRun.exampleComposerDraft": "Plane den nächsten Schritt für dieses Feature",
+	"firstRun.exampleTask4": "Suche beschleunigen",
+	"firstRun.phoneInReview": "In Prüfung",
+	"firstRun.phonePrOpen": "offen"
 }

@@ -487,9 +487,10 @@ function CheckRow({ icon, label, detail, trailing }: { icon?: ReactNode; label: 
 function useExampleTasks() {
 	const { t } = useTranslation();
 	return useMemo(() => [
-		{ id: "example-1", title: t("firstRun.exampleTask1"), provider: "claude-code" },
-		{ id: "example-2", title: t("firstRun.exampleTask2"), provider: "codex" },
-		{ id: "example-3", title: t("firstRun.exampleTask3"), provider: "claude-code" },
+		{ id: "example-1", title: t("firstRun.exampleTask1"), provider: "claude-code", branch: "tests/sign-in" },
+		{ id: "example-2", title: t("firstRun.exampleTask2"), provider: "codex", branch: "fix/auth-redirect" },
+		{ id: "example-3", title: t("firstRun.exampleTask3"), provider: "claude-code", branch: "docs/readme" },
+		{ id: "example-4", title: t("firstRun.exampleTask4"), provider: "codex", branch: "perf/search" },
 	] as const, [t]);
 }
 
@@ -503,15 +504,18 @@ function useExampleTasks() {
 type WorkStage = "none" | "working" | "sorted";
 
 function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStage): PreviewCard[] {
-	const [task1, task2, task3] = tasks;
+	const [task1, task2, task3, task4] = tasks;
 	if (stage === "none") return [];
 	if (stage === "working") {
 		return tasks.map((task): PreviewCard => ({ ...task, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }));
 	}
+	// Most of the work lands ready to merge; one change is in review and one
+	// worker waits on you.
 	return [
 		{ ...task2, column: "building", status: "needs_input", minutesAgo: 4 },
-		{ ...task3, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 1 },
-		{ ...task1, column: "ready", status: "approved", displayStatus: "Approved", minutesAgo: 2 },
+		{ ...task4, column: "needs_review", status: "review_pending", displayStatus: "Review pending", pr: 43, minutesAgo: 3 },
+		{ ...task1, column: "ready", status: "mergeable", displayStatus: "Mergeable", pr: 41, minutesAgo: 2 },
+		{ ...task3, column: "ready", status: "mergeable", displayStatus: "Mergeable", pr: 42, minutesAgo: 1 },
 	];
 }
 
@@ -593,14 +597,15 @@ function OnboardingScene({
 /** The same example work on the mobile app's Workers tab, as the story ends. */
 function ExamplePhone() {
 	const { t } = useTranslation();
-	const [task1, task2, task3] = useExampleTasks();
+	const [task1, task2, task3, task4] = useExampleTasks();
 	return (
 		<PhoneWorkersScreen
 			project={t("firstRun.projectPlaceholder")}
 			workers={[
-				{ ...task3, status: "working", minutesAgo: 1 },
 				{ ...task2, status: "needs_input", minutesAgo: 4 },
-				{ ...task1, status: "approved", minutesAgo: 2 },
+				{ ...task3, status: "mergeable", pr: 42, minutesAgo: 1 },
+				{ ...task1, status: "mergeable", pr: 41, minutesAgo: 2 },
+				{ ...task4, status: "review_pending", pr: 43, minutesAgo: 3 },
 			]}
 		/>
 	);

@@ -694,6 +694,9 @@ export type PreviewCard = {
 	displayStatus?: string;
 	minutesAgo: number;
 	working?: boolean;
+	branch?: string;
+	/** The worker's open pull request, shown as the card's PR row. */
+	pr?: number;
 };
 
 /**
@@ -768,6 +771,7 @@ export function PreviewBoard({
 		status: card.status,
 		displayStatus: card.displayStatus,
 		kanbanColumn: card.column,
+		branch: card.branch,
 		activity: card.working ? { state: "active", lastActivityAt: new Date(now).toISOString() } : undefined,
 		updatedAt: new Date(now - card.minutesAgo * 60_000).toISOString(),
 	}));
@@ -838,6 +842,7 @@ export function PreviewBoard({
 											updatedAt: (timestamp) => t("shell.lastMessageAt", { time: formatTimeCompact(timestamp, { now }) }),
 										}}
 										onOpen={() => undefined}
+										prs={card.pr ? [{ number: card.pr, state: "open", url: `https://github.com/your-org/your-project/pull/${card.pr}` }] : undefined}
 										overlay={
 											// BoardSessionCardAdapter's hover-only archive button.
 											<span className="inline-flex">

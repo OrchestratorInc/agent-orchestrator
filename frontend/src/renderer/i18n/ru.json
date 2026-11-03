@@ -3961,5 +3961,8 @@
 	"newTask.chooseNewBranch": "Выбрать новую ветку",
 	"newTask.newBranchPrompt": "Имя новой ветки",
 	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи.",
-	"firstRun.exampleComposerDraft": "Спланируй следующий шаг для этой функции"
+	"firstRun.exampleComposerDraft": "Спланируй следующий шаг для этой функции",
+	"firstRun.exampleTask4": "Ускорить поиск",
+	"firstRun.phoneInReview": "На проверке",
+	"firstRun.phonePrOpen": "открыт"
 }

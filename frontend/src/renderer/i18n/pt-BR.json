@@ -3899,5 +3899,8 @@
 	"newTask.chooseNewBranch": "Escolher nova ramificação",
 	"newTask.newBranchPrompt": "Nome da nova ramificação",
 	"newTask.newBranchReady": "Ramificação {{branch}} selecionada para sua próxima tarefa.",
-	"firstRun.exampleComposerDraft": "Planeje o próximo passo deste recurso"
+	"firstRun.exampleComposerDraft": "Planeje o próximo passo deste recurso",
+	"firstRun.exampleTask4": "Acelerar a busca",
+	"firstRun.phoneInReview": "Em revisão",
+	"firstRun.phonePrOpen": "aberto"
 }
