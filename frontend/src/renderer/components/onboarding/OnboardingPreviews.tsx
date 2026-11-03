@@ -1,4 +1,7 @@
 import {
+	SessionInspectorShellView,
+	SessionInspectorSummaryView,
+	type InspectorTab,
 	SessionCardView,
 	SessionsBoardGridView,
 	boardKanbanColumnOrder,
@@ -19,6 +22,9 @@ import {
 	EllipsisVertical,
 	File,
 	FlaskConical,
+	FolderClosed,
+	MessageSquare,
+	SearchCheck,
 	Folder,
 	FolderOpen,
 	GitBranch,
@@ -56,6 +62,9 @@ import { ProductExternalLink } from "../ProductExternalLink";
 import { sessionsBoardLabels } from "../SessionsBoardAdapters";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import { TopbarButton } from "../TopbarButton";
+import { BrowserIcon } from "../icons";
+import { PRSummaryCard } from "../SessionInspector";
+import type { SessionPRSummary } from "../../hooks/useSessionScmSummary";
 
 // The right half of each onboarding step: the real desktop window, drawn at
 // the app's true size (1320x860 CSS px) and scaled down as one piece so every
@@ -686,7 +695,19 @@ export type PreviewLane = { column: KanbanColumn; cards: PreviewCard[] };
 /** The board page as SessionsBoard.tsx renders it: the page topbar (Board,
  * Task, Orchestrator) over the real SessionsBoardGridView with all four lanes,
  * each card the real SessionCardView with BoardSessionCardAdapter's props. */
-export function PreviewBoard({ lanes, stagger = false }: { lanes: PreviewLane[]; stagger?: boolean }) {
+export function PreviewBoard({
+	lanes,
+	stagger = false,
+	focusCards = false,
+	layoutCards = false,
+}: {
+	lanes: PreviewLane[];
+	stagger?: boolean;
+	/** Frame the cards with the stage's camera. */
+	focusCards?: boolean;
+	/** Cards glide to their new lane when it changes, instead of jumping. */
+	layoutCards?: boolean;
+}) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
 	const [now] = useState(() => Date.now());
@@ -763,6 +784,8 @@ export function PreviewBoard({ lanes, stagger = false }: { lanes: PreviewLane[];
 						const card = byId.get(session.id)!;
 						return (
 							<motion.div
+								data-preview-focus={focusCards ? "" : undefined}
+								layoutId={layoutCards && !reduceMotion ? `preview-card-${card.id}` : undefined}
 								initial={reduceMotion || !stagger ? false : { opacity: 0, y: 4 }}
 								animate={{ opacity: 1, y: 0 }}
 								transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: stagger ? (order.get(session.id) ?? 0) * 0.12 : 0 }}
@@ -963,11 +986,14 @@ export function PreviewChat({
 	provider,
 	message,
 	reply,
+	focus = false,
 }: {
 	title: string;
 	provider?: string;
 	message?: string;
 	reply?: string;
+	/** Frame the conversation with the stage's camera. */
+	focus?: boolean;
 }) {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
@@ -983,7 +1009,7 @@ export function PreviewChat({
 						<div className="flex min-h-0 flex-1 flex-col" data-composer-placement="dock">
 							<div className="relative min-h-0 flex-1">
 								<div className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 overflow-hidden px-4 pt-5 pb-0">
-									<div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5">
+									<div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5" data-preview-focus={focus && message ? "" : undefined}>
 										{message ? (
 											<div className="flex min-w-0 flex-col gap-2.5">
 												<div className="group/message flex flex-col items-end gap-1">
@@ -1169,7 +1195,7 @@ export function PreviewNewChat({
 										))}
 									</ul>
 								</div>
-								<div className="relative z-10" data-composer-tray="" data-preview-focus="">
+								<div className="relative z-10" data-composer-tray="">
 									<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 										<div className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 pt-3 pb-3">
 											<div className="relative">
@@ -1206,4 +1232,112 @@ export function PreviewNewChat({
 /** Wraps preview content the step is not about, so the taught part leads. */
 export function PreviewDim({ children }: { children: ReactNode }) {
 	return <div className="flex h-full min-h-0 flex-1 flex-col opacity-35">{children}</div>;
+}
+
+// ── Session page with the inspector (a worker's pull request) ──────────────
+
+/** The inspector rail's width in the preview: SessionInspectorRail's narrowest
+ * utility width, as a 1040px window leaves it. */
+const PREVIEW_INSPECTOR_WIDTH = 340;
+
+/** SessionInspector's tabs (VIEW_DEFS), Summary selected. */
+function inspectorTabs(t: (key: MessageKey) => string): InspectorTab[] {
+	return [
+		{
+			id: "summary",
+			label: t("inspector.summary"),
+			icon: (
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+					<line x1="8" y1="7" x2="20" y2="7" />
+					<line x1="8" y1="12" x2="20" y2="12" />
+					<line x1="8" y1="17" x2="16" y2="17" />
+					<circle cx="4" cy="7" r="1" />
+					<circle cx="4" cy="12" r="1" />
+					<circle cx="4" cy="17" r="1" />
+				</svg>
+			),
+		},
+		{ id: "reviews", label: t("inspector.reviewTab"), icon: <SearchCheck aria-hidden="true" /> },
+		{ id: "browser", label: t("inspector.browser"), icon: <BrowserIcon aria-hidden="true" /> },
+		{ id: "sideChat", label: t("inspector.sideChat"), icon: <MessageSquare aria-hidden="true" /> },
+		{ id: "files", label: t("inspector.files"), icon: <FolderClosed aria-hidden="true" /> },
+		{ id: "artifacts", label: t("artifacts.title"), icon: <File aria-hidden="true" /> },
+	];
+}
+
+/** A worker's session page (SessionView's session-split): its chat, and the
+ * inspector rail open on Summary with the pull request it opened, which is
+ * ready to merge, so the real PRSummaryCard shows its Merge button. The PR
+ * section is the camera's focus. */
+export function PreviewSessionPullRequest({
+	sessionId,
+	title,
+	provider,
+	message,
+	reply,
+	pr,
+}: {
+	sessionId: string;
+	title: string;
+	provider: string;
+	message: string;
+	reply: string;
+	pr: { number: number; title: string; branch: string };
+}) {
+	const { t } = useTranslation();
+	const [now] = useState(() => new Date().toISOString());
+	const url = `https://github.com/owner/repo/pull/${pr.number}`;
+	const summary: SessionPRSummary = {
+		additions: 42,
+		author: "you",
+		changedFiles: 3,
+		ci: { autoInjectCI: false, failingChecks: [], state: "passing" },
+		deletions: 9,
+		headSha: "4f1c2e7",
+		htmlUrl: url,
+		mergeability: { prUrl: url, reasons: [], state: "mergeable" },
+		number: pr.number,
+		provider: "github",
+		repo: "owner/repo",
+		review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		sourceBranch: pr.branch,
+		state: "open",
+		targetBranch: "main",
+		title: pr.title,
+		updatedAt: now,
+		url,
+	};
+	return (
+		<div className="session-split relative flex h-full min-h-0 flex-1 overflow-hidden">
+			<div className="flex min-w-0 flex-1 flex-col">
+				<PreviewChat title={title} provider={provider} message={message} reply={reply} />
+			</div>
+			<div aria-hidden="true" className="relative shrink-0" style={{ width: PREVIEW_INSPECTOR_WIDTH }} />
+			<div className="absolute inset-y-0 right-0 z-chrome flex h-full flex-col overflow-hidden border-l border-border-strong bg-background" style={{ width: PREVIEW_INSPECTOR_WIDTH }}>
+				<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+					<div className="session-inspector contents">
+						<SessionInspectorShellView
+							activeView="summary"
+							ariaLabel={t("inspector.aria")}
+							browserPoppedOut={false}
+							onViewChange={() => undefined}
+							tabs={inspectorTabs(t)}
+							summaryView={
+								<SessionInspectorSummaryView
+									activity={null}
+									activityTitle={t("inspector.activity")}
+									pullRequestTitle={t("inspector.pullRequest")}
+									pullRequestCards={
+										<div data-preview-focus="">
+											<PRSummaryCard canOpenReviews={false} onOpenReviews={() => undefined} pr={summary} sessionId={sessionId} />
+										</div>
+									}
+								/>
+							}
+						/>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
 }

@@ -1,7 +1,7 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Cloud, FolderClosed, GitFork, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
+import { Cloud, FolderClosed, GitFork, GitPullRequest, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -61,6 +61,7 @@ import {
 	PreviewBoard,
 	PreviewChat,
 	PreviewNewChat,
+	PreviewSessionPullRequest,
 	PreviewSidebar,
 	PreviewStage,
 	PreviewWindow,
@@ -70,10 +71,20 @@ import {
 } from "./OnboardingPreviews";
 import { PhoneWorkersScreen } from "./OnboardingPhone";
 
-// Setup first (account, GitHub CLI, agents), then a three-page tutorial that
-// ends with the user's first message to their project's orchestrator.
-const STEPS = ["welcome", "signin", "github", "agents", "orchestrator", "project", "start"] as const;
+// Four pages: what Orchestrator is (with its three-part story playing in the
+// preview), the optional account, the tools a worker needs (GitHub CLI and a
+// coding agent), and the first project, which ends with the user's first
+// message to its orchestrator. Log in and Your tools are skipped when there is
+// nothing to do on them.
+const STEPS = ["welcome", "signin", "tools", "project"] as const;
 type Step = (typeof STEPS)[number];
+// Where a step stored by the earlier seven-page flow resumes.
+const LEGACY_STEPS: Record<string, Step> = {
+	github: "tools",
+	agents: "tools",
+	orchestrator: "project",
+	start: "project",
+};
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 // Always listed so a machine with no agents still has something to install.
@@ -108,7 +119,8 @@ type InstallJob = components["schemas"]["InstallJob"];
 function readStoredStep(): Step {
 	try {
 		const stored = window.localStorage.getItem(STEP_STORAGE_KEY);
-		return STEPS.includes(stored as Step) ? (stored as Step) : "welcome";
+		if (STEPS.includes(stored as Step)) return stored as Step;
+		return (stored && LEGACY_STEPS[stored]) || "welcome";
 	} catch {
 		return "welcome";
 	}
@@ -188,8 +200,6 @@ const PRESS_CLASS =
 function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	const { t } = useTranslation();
 	const [step, setStepState] = useState<Step>(readStoredStep);
-	// Which point of "How Orchestrator works" is showing.
-	const [point, setPoint] = useState(0);
 	const setStep = (next: Step) => {
 		storeStep(next);
 		setStepState(next);
@@ -220,19 +230,36 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		previousCollapsed.current = stageCollapsed;
 	}, [stageCollapsed]);
 	const collapseTransition = reduceMotion || !collapseChanged ? { duration: 0 } : COLLAPSE_SPRING;
+	// Pages with nothing to do are passed over in both directions, decided when
+	// the person moves (these checks start on the welcome page, so they have
+	// usually settled by then); a page still checking is shown, never flashed.
+	const cloud = useCloudSession();
+	const toolsGate = useSystemRequirementsGate();
+	const ghAuth = useGitHubAuthRequirement();
+	const agentReadiness = useAgentReadinessQuery();
+	const ghReady = toolsGate.requirements.find((requirement) => requirement.id === "gh")?.satisfied === true && ghAuth.data?.satisfied === true;
+	const agentReady = agentReadiness.data?.agents.some((agent) => agent.effectiveReadiness === "ready") ?? false;
+	const skips = (candidate: Step) =>
+		candidate === "signin" ? cloud.status === "authenticated"
+		: candidate === "tools" ? ghReady && agentReady
+		: false;
 	const goNext = () => {
-		const next = STEPS[Math.min(index + 1, STEPS.length - 1)]!;
-		if (next === "orchestrator") setPoint(0);
-		setStep(next);
+		for (let i = index + 1; i < STEPS.length; i++) {
+			const next = STEPS[i]!;
+			if (i === STEPS.length - 1 || !skips(next)) {
+				setStep(next);
+				return;
+			}
+		}
 	};
 	const goBack = () => {
-		if (step === "orchestrator" && point > 0) {
-			setPoint(point - 1);
-			return;
+		for (let i = index - 1; i >= 0; i--) {
+			const previous = STEPS[i]!;
+			if (i === 0 || !skips(previous)) {
+				setStep(previous);
+				return;
+			}
 		}
-		const previous = STEPS[Math.max(index - 1, 0)]!;
-		if (previous === "orchestrator") setPoint(ORCH_POINTS.length - 1);
-		setStep(previous);
 	};
 	useOnboardingStep("welcome", step === "welcome");
 	const first = step === "welcome";
@@ -280,11 +307,8 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 						>
 							{step === "welcome" ? <WelcomeStep onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
-							{step === "github" ? <GitHubStep onNext={goNext} /> : null}
-							{step === "agents" ? <AgentsStep onNext={goNext} /> : null}
-							{step === "orchestrator" ? <OrchestratorStep point={point} onPoint={setPoint} onNext={goNext} /> : null}
-							{step === "project" ? <ProjectStep onDone={goNext} /> : null}
-							{step === "start" ? <StartStep onFinish={onFinish} /> : null}
+							{step === "tools" ? <ToolsStep onNext={goNext} /> : null}
+							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
 						</motion.div>
 					</AnimatePresence>
 				</motion.div>
@@ -533,20 +557,97 @@ function ExamplePhone() {
 	);
 }
 
+/** How long each part of the story holds before the next plays. */
+const POINT_HOLD_MS = [3800, 3800, 4600] as const;
+
+/** "How Orchestrator works", played by the app itself: the person's message to
+ * the orchestrator, the workers it starts on the board, then their pull
+ * requests waiting for review and merge. One window throughout; the camera
+ * moves to each part and the content changes in place (cards glide between
+ * lanes), with no fades. */
+function OrchestratorShowcase({ point }: { point: number }) {
+	const { t } = useTranslation();
+	const [task1, task2, task3] = useExampleCards();
+	const workers = (statuses: Array<Pick<PreviewSidebarSession, "status" | "working" | "minutesAgo">>): PreviewSidebarProject[] => [{
+		name: t("firstRun.projectPlaceholder"),
+		active: true,
+		sessions: [task1, task2, task3].map((task, i) => ({ title: task.title, ...statuses[i]! })),
+	}];
+	if (point === 0) {
+		return (
+			<PreviewWindow page="session" sidebar={<PreviewSidebar projects={[{ name: t("firstRun.projectPlaceholder"), active: true, orchestratorActive: true }]} />}>
+				<PreviewChat focus title={t("shell.orchestrator")} provider="claude-code" message={t("firstRun.exampleMessage")} reply={t("firstRun.exampleReply")} />
+			</PreviewWindow>
+		);
+	}
+	const building = point === 1;
+	return (
+		<PreviewWindow
+			sidebar={
+				<PreviewSidebar
+					projects={workers(building
+						? [{ status: "working", working: true }, { status: "working", working: true }, { status: "working", working: true }]
+						: [{ status: "review_pending", minutesAgo: 6 }, { status: "mergeable", minutesAgo: 8 }, { status: "approved", minutesAgo: 11 }])}
+				/>
+			}
+		>
+			<PreviewBoard
+				focusCards
+				layoutCards
+				stagger={building}
+				lanes={building ? [
+					{ column: "building", cards: [
+						card(task1, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
+						card(task2, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
+						card(task3, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
+					] },
+				] : [
+					{ column: "needs_review", cards: [
+						card(task1, { status: "review_pending", displayStatus: "Review pending", minutesAgo: 6, prs: [{ number: 12, state: "open" }] }),
+					] },
+					{ column: "ready", cards: [
+						card(task2, { status: "mergeable", displayStatus: "Mergeable", minutesAgo: 8, prs: [{ number: 13, state: "open" }] }),
+						card(task3, { status: "approved", displayStatus: "Approved", minutesAgo: 11, prs: [{ number: 14, state: "open" }] }),
+					] },
+				]}
+			/>
+		</PreviewWindow>
+	);
+}
+
 function WelcomeStep({ onNext }: { onNext: () => void }) {
 	const { t } = useTranslation();
-	const exampleProjects = useExampleSidebarProjects();
+	// The story plays on its own and loops; the list beside it follows along.
+	const [point, setPoint] = useState(0);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setPoint((current) => (current + 1) % ORCH_POINTS.length), POINT_HOLD_MS[point]);
+		return () => window.clearTimeout(timer);
+	}, [point]);
 	return (
 		<StepSplit
 			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
-			preview={
-				<PreviewWindow sidebar={<PreviewSidebar projects={exampleProjects} />}>
-					<ExampleBoard />
-				</PreviewWindow>
-			}
+			preview={<OrchestratorShowcase point={point} />}
 		>
+			<div className="flex flex-col gap-2">
+				<p className="text-xs font-medium text-muted-foreground">{t("firstRun.orchTitle")}</p>
+				<ol className="flex flex-col gap-1">
+					{ORCH_POINTS.map((key, i) => (
+						<li
+							key={key}
+							aria-current={i === point ? "step" : undefined}
+							className={cn(
+								"flex gap-3 py-1 text-sm leading-relaxed transition-colors duration-normal",
+								i === point ? "text-foreground" : "text-muted-foreground",
+							)}
+						>
+							<span className="w-3 shrink-0 tabular-nums">{i + 1}</span>
+							<span className="text-pretty">{t(key)}</span>
+						</li>
+					))}
+				</ol>
+			</div>
 			<StepAction>
 				<Button variant="primary" onClick={onNext} autoFocus>{t("firstRun.getStarted")}</Button>
 			</StepAction>
@@ -652,10 +753,10 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 	);
 }
 
-// ── 2. GitHub CLI ───────────────────────────────────────────────────────────
+// ── 2. Your tools: GitHub CLI and coding agents ─────────────────────────────
 
 /** Starts and polls a one-click system install (gh or an agent CLI). */
-function useSystemInstall(onSucceeded: () => void) {
+function useSystemInstall(onSucceeded: (target: SystemInstallTarget) => void) {
 	const [jobs, setJobs] = useState<Partial<Record<SystemInstallTarget, InstallJob>>>({});
 	const [errors, setErrors] = useState<Partial<Record<SystemInstallTarget, string>>>({});
 	const timers = useRef(new Map<SystemInstallTarget, number>());
@@ -673,7 +774,7 @@ function useSystemInstall(onSucceeded: () => void) {
 			return;
 		}
 		setJobs((current) => ({ ...current, [target]: data }));
-		if (data.status === "succeeded") onSucceededRef.current();
+		if (data.status === "succeeded") onSucceededRef.current(target);
 		if (!active(data)) return;
 		const timer = window.setInterval(() => {
 			void (async () => {
@@ -683,7 +784,7 @@ function useSystemInstall(onSucceeded: () => void) {
 				if (active(next.data)) return;
 				window.clearInterval(timer);
 				timers.current.delete(target);
-				if (next.data.status === "succeeded") onSucceededRef.current();
+				if (next.data.status === "succeeded") onSucceededRef.current(target);
 				else setErrors((current) => ({ ...current, [target]: next.data.error || "The install did not finish." }));
 			})();
 		}, INSTALL_POLL_MS);
@@ -691,80 +792,6 @@ function useSystemInstall(onSucceeded: () => void) {
 	}, []);
 	return { start, isRunning: (target: SystemInstallTarget) => active(jobs[target]), error: (target: SystemInstallTarget) => errors[target] };
 }
-
-function GitHubStep({ onNext }: { onNext: () => void }) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const gate = useSystemRequirementsGate();
-	const auth = useGitHubAuthRequirement();
-	const [task1, task2] = useExampleCards();
-	const install = useSystemInstall(() => {
-		void queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey });
-		void auth.refetch();
-	});
-	const gh = gate.requirements.find((requirement) => requirement.id === "gh");
-	const installed = gh?.satisfied === true;
-	const signedIn = auth.data?.satisfied === true;
-	const checking = gate.checking || auth.isPending;
-	const installing = install.isRunning("gh");
-	return (
-		<StepSplit
-			title={t("firstRun.githubConnectTitle")}
-			body={t("firstRun.githubDescription")}
-			preview={
-				// What gh gives a worker: a pushed branch and a pull request on its card.
-				<PreviewWindow sidebar={<PreviewSidebar dimBody projects={[{ name: t("firstRun.projectPlaceholder"), active: true, sessions: [
-					{ title: task1.title, status: "review_pending", minutesAgo: 3 },
-					{ title: task2.title, status: "mergeable", minutesAgo: 9 },
-				] }]} />}>
-					<PreviewBoard
-						lanes={[
-							{ column: "needs_review", cards: [
-								card(task1, { status: "review_pending", displayStatus: "Review pending", minutesAgo: 3, prs: [{ number: 128, state: "open" }] }),
-							] },
-							{ column: "ready", cards: [
-								card(task2, { status: "mergeable", displayStatus: "Mergeable", minutesAgo: 9, prs: [{ number: 127, state: "open" }] }),
-							] },
-						]}
-					/>
-				</PreviewWindow>
-			}
-		>
-			{checking ? (
-				<Waiting>{t("firstRun.githubChecking")}</Waiting>
-			) : (
-				<>
-					<ul className="overflow-hidden rounded-lg bg-card">
-						<CheckRow
-							label={t("firstRun.githubTitle")}
-							detail={install.error("gh")}
-							trailing={installed ? <RowState>{t("settings.harness.installed")}</RowState>
-								: installing ? <RowSpinner />
-								: (
-									<Button size="sm" variant="primary" onClick={() => void install.start("gh")}>
-										{t("firstRun.install")}
-									</Button>
-								)}
-						/>
-						<CheckRow
-							label={t("firstRun.ghAccount")}
-							detail={installed && !signedIn ? t("firstRun.ghSignInHint") : undefined}
-							trailing={signedIn ? <RowState>{t("firstRun.signedIn")}</RowState> : null}
-						/>
-					</ul>
-					{/* The existing login flow: an embedded `gh auth login` terminal. */}
-					{installed && !signedIn ? <GitHubOnboardingNotice embedded /> : null}
-				</>
-			)}
-			{/* Optional: Continue works either way, and leads once both are done. */}
-			<StepAction>
-				<Button variant={installed && signedIn ? "primary" : "secondary"} onClick={onNext}>{t("firstRun.continue")}</Button>
-			</StepAction>
-		</StepSplit>
-	);
-}
-
-// ── 3. Agents ───────────────────────────────────────────────────────────────
 
 type AgentRowState = "ready" | "signin" | "missing" | "checking";
 
@@ -777,12 +804,15 @@ function agentRowState(agent: AgentReadinessSnapshot): AgentRowState {
 
 const AGENT_STATE_ORDER: Record<AgentRowState, number> = { ready: 0, signin: 1, checking: 2, missing: 3 };
 
-function AgentsStep({ onNext }: { onNext: () => void }) {
+function ToolsStep({ onNext }: { onNext: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const gate = useSystemRequirementsGate();
+	const ghAuth = useGitHubAuthRequirement();
 	const readiness = useAgentReadinessQuery();
 	const authPlans = useAgentAuthPlans();
 	const startAuth = useStartAgentAuth();
+	const [task1, task2] = useExampleCards();
 	const [workflow, setWorkflow] = useState<AuthTerminalWorkflow | null>(null);
 	const [authError, setAuthError] = useState<string | null>(null);
 	const [checking, setChecking] = useState(false);
@@ -794,7 +824,18 @@ function AgentsStep({ onNext }: { onNext: () => void }) {
 			await readiness.refetch();
 		}
 	}, [queryClient, readiness]);
-	const install = useSystemInstall(() => void refresh());
+	const install = useSystemInstall((target) => {
+		if (target === "gh") {
+			void queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey });
+			void ghAuth.refetch();
+		} else void refresh();
+	});
+
+	const gh = gate.requirements.find((requirement) => requirement.id === "gh");
+	const ghInstalled = gh?.satisfied === true;
+	const ghSignedIn = ghAuth.data?.satisfied === true;
+	const ghChecking = gate.checking || ghAuth.isPending;
+	const ghInstalling = install.isRunning("gh");
 
 	const agents = useMemo(() => {
 		const all = readiness.data?.agents ?? [];
@@ -857,7 +898,7 @@ function AgentsStep({ onNext }: { onNext: () => void }) {
 	const checkAgain = async () => {
 		setChecking(true);
 		try {
-			await refresh();
+			await Promise.all([refresh(), queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey }), ghAuth.refetch()]);
 		} finally {
 			setChecking(false);
 		}
@@ -868,23 +909,53 @@ function AgentsStep({ onNext }: { onNext: () => void }) {
 	const pickerAgents = (anyReady ? agents.filter((row) => row.state === "ready") : agents)
 		.map(({ agent }) => ({ id: agent.id, label: agent.label, dimmed: !anyReady }));
 	const selectedAgent = anyReady ? pickerAgents[0] : undefined;
+	// The preview follows the first thing left to do: until gh is set up, what it
+	// gives a worker (its pull request, ready to merge); then the agent picker.
+	const showGitHub = !ghChecking && !(ghInstalled && ghSignedIn);
 
 	return (
 		<StepSplit
-			title={t("firstRun.agentsTitle")}
-			// Ready rows speak for themselves; say more only when Continue is blocked.
-			body={anyReady || readiness.isPending ? undefined : t("firstRun.agentsBodyNone")}
-			preview={
+			title={t("firstRun.toolsTitle")}
+			body={t("firstRun.toolsBody")}
+			preview={showGitHub ? (
+				<PreviewWindow
+					page="session"
+					sidebar={<PreviewSidebar projects={[{ name: t("firstRun.projectPlaceholder"), active: true, sessions: [
+						{ title: task1.title, status: "working", working: true, minutesAgo: 1 },
+						{ title: task2.title, status: "mergeable", minutesAgo: 9 },
+					] }]} />}
+				>
+					<PreviewSessionPullRequest
+						sessionId={task2.id}
+						title={task2.title}
+						provider={task2.provider}
+						message={task2.title}
+						reply={t("firstRun.toolsPrReply", { number: 127 })}
+						pr={{ number: 127, title: task2.title, branch: task2.branch }}
+					/>
+				</PreviewWindow>
+			) : (
 				<PreviewWindow page="new" sidebar={<PreviewSidebar dimBody dimFooter projects={[{ name: t("firstRun.projectPlaceholder") }]} />}>
 					<PreviewNewChat agents={pickerAgents} selectedId={selectedAgent?.id} project={t("firstRun.projectPlaceholder")} />
 				</PreviewWindow>
-			}
+			)}
 		>
-			{readiness.isPending ? (
-				<Waiting>{t("firstRun.agentChecking")}</Waiting>
+			{ghChecking || readiness.isPending ? (
+				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
 			) : (
 				<div className="flex flex-col gap-2">
 					<ul className="overflow-hidden rounded-lg bg-card">
+						<CheckRow
+							icon={<GitPullRequest className="size-icon-base text-muted-foreground" aria-hidden="true" />}
+							label={t("firstRun.githubTitle")}
+							detail={install.error("gh") ?? (ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined)}
+							trailing={ghInstalling ? <RowSpinner />
+								: !ghInstalled ? (
+									<Button size="sm" variant="secondary" onClick={() => void install.start("gh")}>{t("firstRun.install")}</Button>
+								)
+								: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
+								: null}
+						/>
 						{agents.map(({ agent, state }) => {
 							const target = AGENT_INSTALL_TARGET[agent.id];
 							const installing = target ? install.isRunning(target) : false;
@@ -907,6 +978,9 @@ function AgentsStep({ onNext }: { onNext: () => void }) {
 							);
 						})}
 					</ul>
+					{/* The existing login flow: an embedded `gh auth login` terminal. */}
+					{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
+					{anyReady ? null : <p className="text-xs text-muted-foreground">{t("firstRun.agentsBodyNone")}</p>}
 					<Button variant="ghost" size="sm" className="self-end text-muted-foreground" onClick={() => void checkAgain()} disabled={checking}>
 						<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
 						{t("firstRun.checkAgain")}
@@ -927,112 +1001,15 @@ function AgentsStep({ onNext }: { onNext: () => void }) {
 			) : null}
 			{authError ? <p className="text-xs text-destructive" role="alert">{authError}</p> : null}
 			<StepAction>
-				{/* At least one ready agent is needed to orchestrate anything. */}
+				{/* At least one ready agent is needed to orchestrate anything; GitHub
+				    stays optional (local work still runs without pull requests). */}
 				<Button variant="primary" onClick={onNext} disabled={!anyReady}>{t("firstRun.continue")}</Button>
 			</StepAction>
 		</StepSplit>
 	);
 }
 
-// ── 4. Tutorial: what the orchestrator is ───────────────────────────────────
-
-function OrchestratorStep({ point, onPoint, onNext }: { point: number; onPoint: (point: number) => void; onNext: () => void }) {
-	const { t } = useTranslation();
-	const reduceMotion = useReducedMotion();
-	const [task1, task2, task3] = useExampleCards();
-	const last = point >= ORCH_POINTS.length - 1;
-	const workers = (statuses: Array<Pick<PreviewSidebarSession, "status" | "working" | "minutesAgo">>): PreviewSidebarProject[] => [{
-		name: t("firstRun.projectPlaceholder"),
-		active: true,
-		sessions: [task1, task2, task3].map((task, i) => ({ title: task.title, ...statuses[i]! })),
-	}];
-	const preview = [
-		// 1. The user's message to the orchestrator.
-		<PreviewWindow key="chat" page="session" sidebar={<PreviewSidebar projects={[{ name: t("firstRun.projectPlaceholder"), active: true, orchestratorActive: true }]} />}>
-			<PreviewChat title={t("shell.orchestrator")} provider="claude-code" message={t("firstRun.exampleMessage")} reply={t("firstRun.exampleReply")} />
-		</PreviewWindow>,
-		// 2. Three workers appear, each on its own branch.
-		<PreviewWindow
-			key="workers"
-			sidebar={<PreviewSidebar projects={workers([{ status: "working", working: true }, { status: "working", working: true }, { status: "working", working: true }])} />}
-		>
-			<PreviewBoard
-				stagger
-				lanes={[
-					{ column: "building", cards: [
-						card(task1, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-						card(task2, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-						card(task3, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-					] },
-					{ column: "needs_review", cards: [] },
-				]}
-			/>
-		</PreviewWindow>,
-		// 3. Their pull requests wait for review, then merge.
-		<PreviewWindow
-			key="review"
-			sidebar={<PreviewSidebar projects={workers([{ status: "review_pending", minutesAgo: 6 }, { status: "mergeable", minutesAgo: 8 }, { status: "approved", minutesAgo: 11 }])} />}
-		>
-			<PreviewBoard
-				lanes={[
-					{ column: "needs_review", cards: [
-						card(task1, { status: "review_pending", displayStatus: "Review pending", minutesAgo: 6, prs: [{ number: 12, state: "open" }] }),
-					] },
-					{ column: "ready", cards: [
-						card(task2, { status: "mergeable", displayStatus: "Mergeable", minutesAgo: 8, prs: [{ number: 13, state: "open" }] }),
-						card(task3, { status: "approved", displayStatus: "Approved", minutesAgo: 11, prs: [{ number: 14, state: "open" }] }),
-					] },
-				]}
-			/>
-		</PreviewWindow>,
-	];
-	return (
-		<StepSplit
-			title={t("firstRun.orchTitle")}
-			preview={
-				// The points cross-fade over the stage's glass plate.
-				<AnimatePresence initial={false}>
-					<motion.div
-						key={point}
-						className="absolute inset-0"
-						initial={reduceMotion ? false : { opacity: 0 }}
-						animate={{ opacity: 1 }}
-						exit={{ opacity: 0, transition: reduceMotion ? { duration: 0 } : FADE }}
-						transition={FADE}
-					>
-						{preview[point]}
-					</motion.div>
-				</AnimatePresence>
-			}
-		>
-			<ol className="flex flex-col gap-1">
-				{ORCH_POINTS.map((key, i) => (
-					<li key={key}>
-						<button
-							type="button"
-							aria-current={i === point ? "step" : undefined}
-							className={cn(
-								"flex w-full gap-3 rounded-md py-1.5 text-left text-sm leading-relaxed outline-none focus-visible:ring-focus focus-visible:ring-ring/60",
-								i === point ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-							)}
-							onClick={() => onPoint(i)}
-						>
-							<span className="w-3 shrink-0 tabular-nums">{i + 1}</span>
-							<span className="text-pretty">{t(key)}</span>
-						</button>
-					</li>
-				))}
-			</ol>
-			<StepAction>
-				<Button variant="primary" onClick={last ? onNext : () => onPoint(point + 1)}>
-					{t(last ? "firstRun.continue" : "firstRun.next")}
-				</Button>
-			</StepAction>
-		</StepSplit>
-	);
-}
-
-// ── 5. Tutorial: set up a project ───────────────────────────────────────────
+// ── 3. Your first project, then its first task ──────────────────────────────
 
 // Same tile as Add Project's source step (CreateProjectFlow), so this page
 // reads as the start of that flow.
@@ -1060,7 +1037,15 @@ function useLocalProjects() {
 	);
 }
 
-function ProjectStep({ onDone }: { onDone: () => void }) {
+/** One page in two phases: add a project (open or clone a repo), and once it
+ * exists the same page asks for the first task and hands it to the project's
+ * orchestrator. The stage is closed here, so both phases sit centred. */
+function FirstProjectStep({ onFinish }: { onFinish: () => void }) {
+	const project = useLocalProjects()[0];
+	return project ? <FirstTask project={project} onFinish={onFinish} /> : <ProjectChooser />;
+}
+
+function ProjectChooser() {
 	const { t } = useTranslation();
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const projects = useWorkspaceQuery().data ?? [];
@@ -1089,7 +1074,7 @@ function ProjectStep({ onDone }: { onDone: () => void }) {
 				</PreviewWindow>
 			}
 		>
-			{/* Adding a project moves on by itself; Continue holds the strip steady. */}
+			{/* Adding a project moves the page on by itself; Continue holds the strip steady. */}
 			<StepAction>
 				<Button variant="primary" disabled>{t("firstRun.continue")}</Button>
 			</StepAction>
@@ -1112,34 +1097,25 @@ function ProjectStep({ onDone }: { onDone: () => void }) {
 				existingProjectPaths={projects.map((project) => project.path)}
 				mode="choose"
 				onCloneProject={cloneProject}
-				onCreateProject={async (input) => {
-					await createProject(input);
-					onDone();
-				}}
-				onInitializeProject={async (path) => {
-					await initializeProjectRepository(path);
-					onDone();
-				}}
+				// The new project turns this page into the first-task composer.
+				onCreateProject={createProject}
+				onInitializeProject={initializeProjectRepository}
 				sourceSignal={sourceSignal}
 			/>
 		</StepSplit>
 	);
 }
 
-// ── 6. Tutorial: start orchestrating ────────────────────────────────────────
-
-function StartStep({ onFinish }: { onFinish: () => void }) {
+function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalProjects>[number]; onFinish: () => void }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const workspaces = useWorkspaceQuery().data ?? [];
-	const project = useLocalProjects()[0];
-	const orchestrator = project ? findProjectOrchestrator(workspaces, project.id) : undefined;
-	const provisioning = useUiStore((state) => (project ? state.provisioningProjectIds.has(project.id) : false));
+	const orchestrator = findProjectOrchestrator(workspaces, project.id);
+	const provisioning = useUiStore((state) => state.provisioningProjectIds.has(project.id));
 	const completeTask = useOnboardingStep("first_task", true);
 	const [prompt, setPrompt] = useState(() => t(STARTER_PROMPTS[0].prompt));
 
 	const send = () => {
-		if (!project) return;
 		completeTask();
 		onFinish();
 		if (!orchestrator) {
@@ -1154,8 +1130,9 @@ function StartStep({ onFinish }: { onFinish: () => void }) {
 
 	return (
 		<StepSplit
+			centered
 			title={t("firstRun.startTitle")}
-			body={project ? t("firstRun.startBody", { project: project.name }) : undefined}
+			body={t("firstRun.startBody", { project: project.name })}
 			preview={
 				// The orchestrator's chat, with the first message as it will be sent.
 				<PreviewWindow
@@ -1163,7 +1140,7 @@ function StartStep({ onFinish }: { onFinish: () => void }) {
 					sidebar={
 						<PreviewSidebar
 							projects={[{
-								name: project?.name ?? t("firstRun.projectPlaceholder"),
+								name: project.name,
 								active: true,
 								orchestratorActive: true,
 							}]}
@@ -1200,9 +1177,9 @@ function StartStep({ onFinish }: { onFinish: () => void }) {
 					))}
 				</div>
 			</div>
-			{!project || provisioning || !orchestrator ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
+			{provisioning || !orchestrator ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
 			<StepAction>
-				<Button variant="primary" onClick={send} disabled={!project || !prompt.trim() || (provisioning && !orchestrator)}>
+				<Button variant="primary" onClick={send} disabled={!prompt.trim() || (provisioning && !orchestrator)}>
 					{t("firstRun.openOrchestrator")}
 				</Button>
 			</StepAction>
