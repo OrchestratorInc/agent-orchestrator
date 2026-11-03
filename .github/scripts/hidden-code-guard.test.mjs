@@ -405,3 +405,53 @@ test("runs the real script on two Git commits without executing an install hook"
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("flags Unicode padding in source without flagging short indentation", () => {
+	for (const space of ["\u00a0", "\ufeff", "\u2003", "\u202f", "\u3000"]) {
+		assert.deepEqual(rules(check("source.ts", `};${space.repeat(150)}code();`)), ["R1"]);
+		assert.deepEqual(check("source.ts", `${space.repeat(149)}code();`), []);
+	}
+});
+
+test("flags native install definitions but ignores deletion", () => {
+	for (const file of ["binding.gyp", "packages/native/binding.gyp"]) {
+		assert.deepEqual(rules(scanDiff(diff(file, "{'targets': []}"))), ["R4"]);
+	}
+	const deleted = "diff --git a/binding.gyp b/binding.gyp\n--- a/binding.gyp\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+	assert.deepEqual(scanDiff(deleted), []);
+});
+
+test("checks registry tarball identity against installed package names", () => {
+	for (const file of ["package-lock.json", "npm-shrinkwrap.json"]) {
+		for (const name of ["node_modules/lodash", "node_modules/parent/node_modules/lodash", "node_modules/@scope/lodash"]) {
+			const head = { packages: { [name]: { resolved: "https://registry.npmjs.org/evil-pkg/-/evil-pkg-1.0.0.tgz" } } };
+			assert.deepEqual(rules(compare({}, head, file)), ["R5"], name);
+			assert.deepEqual(compare(head, head, file), []);
+		}
+		for (const name of ["lodash", "@scope/lodash"]) {
+			const resolved = `https://registry.npmjs.org/${name}/-/lodash-1.0.0.tgz`;
+			assert.deepEqual(compare({}, { packages: { [`node_modules/${name}`]: { resolved } } }, file), []);
+		}
+		assert.deepEqual(rules(compare({}, { dependencies: { lodash: { resolved: "https://registry.npmjs.org/evil-pkg/-/evil-pkg-1.0.0.tgz" } } }, file)), ["R5"]);
+	}
+});
+
+test("flags added or changed lock entries with install scripts", () => {
+	for (const file of ["package-lock.json", "npm-shrinkwrap.json"]) {
+		const entry = { version: "1.0.0", hasInstallScript: true };
+		const base = { packages: { "node_modules/x": entry } };
+		assert.deepEqual(rules(compare({}, base, file)), ["R4"]);
+		assert.deepEqual(rules(compare(base, { packages: { "node_modules/x": { ...entry, version: "1.0.1" } } }, file)), ["R4"]);
+		assert.deepEqual(compare(base, base, file), []);
+		assert.deepEqual(compare(base, { packages: {} }, file), []);
+	}
+});
+
+test("allows C-quoted non-manifest paths and still scans their added code", () => {
+	for (const path of ['"b/docs/caf\\303\\251.png"', '"b/src/caf\\303\\251.ts"']) {
+		const patch = diff("source.ts", "safe").replace("+++ b/source.ts", `+++ ${path}`);
+		assert.deepEqual(scanDiff(patch, { load: () => assert.fail("not a manifest") }), []);
+	}
+	const patch = diff("source.ts", `x${" ".repeat(150)}y`).replace("+++ b/source.ts", '+++ "b/src/caf\\303\\251.ts"');
+	assert.deepEqual(rules(scanDiff(patch)), ["R1"]);
+});

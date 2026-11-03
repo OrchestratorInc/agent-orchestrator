@@ -2,7 +2,7 @@ name: Hidden code guard
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -25,6 +25,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
       - name: Scan added PR lines
         shell: bash
         env:
@@ -41,4 +46,4 @@ jobs:
           # Compare against the merge base, the same tree the PR's diff starts from.
           BASE_SHA="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           export BASE_SHA
-          git diff --text --no-renames --no-ext-diff --no-textconv --unified=0 "$BASE_SHA" "$HEAD_SHA" -- . | node .github/scripts/hidden-code-guard.mjs
+          git -c core.quotePath=false diff --text --no-renames --no-ext-diff --no-textconv --unified=0 "$BASE_SHA" "$HEAD_SHA" -- . | node .github/scripts/hidden-code-guard.mjs

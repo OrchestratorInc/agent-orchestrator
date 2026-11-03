@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const registryHosts = new Set(["registry.npmjs.org", "registry.yarnpkg.com"]);
 
@@ -49,6 +50,7 @@ export function parseAddedLines(diffText, paths = new Map()) {
 }
 
 function whitespaceKind(run) {
+	if (/[^ \t]/.test(run)) return "whitespace characters";
 	return run.includes("\t") ? (run.includes(" ") ? "spaces/tabs" : "tabs") : "spaces";
 }
 
@@ -87,7 +89,7 @@ export function scan(lines) {
 	const findings = [];
 	for (const { file, line, text } of lines) {
 		const add = (rule, message) => findings.push({ file, line, text, rule, message });
-		const padding = text.match(/([ \t]{150,})\S/);
+		const padding = text.match(/([^\S\r\n\u2028\u2029]{150,})\S/u);
 		if (padding && !/\.md$/.test(file)) {
 			add("R1", `padding: ${padding[1].length} ${whitespaceKind(padding[1])} inside a line (limit 150)`);
 		}
@@ -115,7 +117,7 @@ function allowedSpec(value) {
 		|| value.startsWith("workspace:") || (/^(file|link):/.test(value) && !tarball.test(value));
 }
 
-function allowedLockSource(value, key, entry) {
+function allowedLockSource(value, key, entry, packageName) {
 	if (key === "from") return allowedSpec(value);
 	if (key === "resolved" && entry?.link === true) {
 		return !/[:?#\\]/.test(value) && !value.startsWith("//") && !tarball.test(value);
@@ -124,7 +126,8 @@ function allowedLockSource(value, key, entry) {
 	try {
 		const url = new URL(value);
 		return url.protocol === "https:" && registryHosts.has(url.host)
-			&& !url.username && !url.password && tarball.test(url.pathname);
+			&& !url.username && !url.password && tarball.test(url.pathname)
+			&& (!packageName || decodeURIComponent(url.pathname).startsWith(`/${packageName}/-/`));
 	} catch {
 		return false;
 	}
@@ -141,16 +144,21 @@ function changedSpecs(head, base, path, bad) {
 	}
 }
 
-function changedLockSources(head, base, path, keys, bad) {
+function changedLockSources(head, base, path, keys, bad, hooks) {
 	for (const [name, entry] of Object.entries(head ?? {})) {
+		const previous = base?.[name];
+		const packageName = path === "packages" ? name.match(/(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)$/)?.[1] : name;
+		if (entry?.hasInstallScript === true && !isDeepStrictEqual(entry, previous)) {
+			hooks.push(`${path}.${name}.hasInstallScript = true`);
+		}
 		for (const key of keys) {
 			const value = entry?.[key];
-			if (typeof value === "string" && value !== base?.[name]?.[key] && !allowedLockSource(value, key, entry)) {
+			if (typeof value === "string" && value !== previous?.[key] && !allowedLockSource(value, key, entry, packageName)) {
 				bad.push(`${path}.${name}.${key} = ${JSON.stringify(value)}`);
 			}
 		}
 		if (keys.includes("version")) {
-			changedLockSources(entry?.dependencies, base?.[name]?.dependencies, `${path}.${name}.dependencies`, keys, bad);
+			changedLockSources(entry?.dependencies, previous?.dependencies, `${path}.${name}.dependencies`, keys, bad, hooks);
 		}
 	}
 }
@@ -169,10 +177,15 @@ export function loadManifest(sha, path) {
 export function scanDiff(diffText, { baseSha = process.env.BASE_SHA, headSha = process.env.HEAD_SHA, load = loadManifest } = {}) {
 	const paths = new Map();
 	const findings = scan(parseAddedLines(diffText, paths));
-	for (const [file, quoted] of paths) {
+	for (const [path, quoted] of paths) {
+		const file = quoted ? parsePath(path) : path;
 		const add = (rule, message, details = []) => findings.push({ file, line: 1, text: "", rule, message, details });
-		if (quoted) {
+		if (quoted && /\p{C}/u.test(file) && /(?:package(?:-lock)?\.json|npm-shrinkwrap\.json)$/.test(file)) {
 			add("R4/R5", "odd-path: cannot verify a Git C-quoted path");
+			continue;
+		}
+		if (/(^|\/)binding\.gyp$/.test(file)) {
+			add("R4", "native-install: binding.gyp added or changed");
 			continue;
 		}
 		if (!/(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json)$/.test(file)) continue;
@@ -200,8 +213,8 @@ export function scanDiff(diffText, { baseSha = process.env.BASE_SHA, headSha = p
 				changedSpecs(head?.[key], base?.[key], key, sources);
 			}
 		} else {
-			changedLockSources(head?.packages, base?.packages, "packages", ["resolved", "version"], sources);
-			changedLockSources(head?.dependencies, base?.dependencies, "dependencies", ["resolved", "version", "from"], sources);
+			changedLockSources(head?.packages, base?.packages, "packages", ["resolved", "version"], sources, hooks);
+			changedLockSources(head?.dependencies, base?.dependencies, "dependencies", ["resolved", "version", "from"], sources, hooks);
 		}
 		if (hooks.length) add("R4", `lifecycle-hook: ${hooks.length} install-time script value(s) added or changed`, hooks.slice(0, 20));
 		if (sources.length) add("R5", `non-registry-source: ${sources.length} dependency source value(s) added or changed (up to 20 shown)`, sources.slice(0, 20));
@@ -212,7 +225,7 @@ export function scanDiff(diffText, { baseSha = process.env.BASE_SHA, headSha = p
 export function formatFindings(findings) {
 	const output = findings.map(({ file, line, text, details, message }) => {
 		const excerpts = (details ?? [text]).map((value) => {
-			let excerpt = value.replace(/[ \t]{2,}/g, (run) => `<${run.length} ${whitespaceKind(run)}>`)
+			let excerpt = value.replace(/[^\S\r\n\u2028\u2029]{2,}/gu, (run) => `<${run.length} ${whitespaceKind(run)}>`)
 				.replace(/\p{C}/gu, "");
 			if (excerpt.length > 120) excerpt = `${excerpt.slice(0, 117)}...`;
 			return `\n  ${excerpt}`;
