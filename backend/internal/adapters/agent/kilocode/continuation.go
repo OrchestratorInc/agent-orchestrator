@@ -43,11 +43,11 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return strings.TrimSpace(os.Getenv(key))
 	}
-	if dataHome := lookup("XDG_DATA_HOME"); len(dataHome) > 0 {
+	if dataHome := lookup("XDG_DATA_HOME"); dataHome != "" {
 		return filepath.Join(dataHome, "kilo"), nil
 	}
 	home := lookup("HOME")
-	if len(home) == 0 {
+	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
 			return "", fmt.Errorf("kilo: resolve data dir: %w", err)
@@ -63,7 +63,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	configDir := strings.TrimSpace(ref.ConfigDir)
 	sessionID := strings.TrimSpace(ref.NativeSessionID)
-	if len(configDir) == 0 || len(sessionID) == 0 {
+	if configDir == "" || sessionID == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	if !kiloCodeSessionID.MatchString(sessionID) {

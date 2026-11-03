@@ -28,13 +28,13 @@ var kiloCodeNativeID = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
 // kiloCodeRoot resolves KiloCode's data directory exactly as the provider does:
 // $XDG_DATA_HOME/kilo, else ~/.local/share/kilo.
 func kiloCodeRoot(home string) string {
-	if path := strings.TrimSpace(os.Getenv("KILO_DB")); len(path) > 0 && path != "kilo.db" {
+	if path := strings.TrimSpace(os.Getenv("KILO_DB")); path != "" && path != "kilo.db" {
 		return ""
 	}
-	if dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); len(dataHome) > 0 {
+	if dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dataHome != "" {
 		return filepath.Join(dataHome, "kilo")
 	}
-	if len(home) == 0 {
+	if home == "" {
 		return ""
 	}
 	return filepath.Join(home, ".local", "share", "kilo")
@@ -155,7 +155,7 @@ func kiloCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 		if dropped[messageID] {
 			continue
 		}
-		if existing := textByMessage[messageID]; len(existing) > 0 {
+		if existing := textByMessage[messageID]; existing != "" {
 			textByMessage[messageID] = existing + "\n\n" + chunk
 			held += len("\n\n" + chunk)
 		} else {
@@ -279,7 +279,7 @@ func readKiloCodeTranscript(ctx context.Context, root string, paths ...string) (
 	if !hasUser {
 		return t, errors.New("no readable native conversation")
 	}
-	if len(t.cwd) > 0 && !filepath.IsAbs(t.cwd) {
+	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
 		return t, errors.New("transcript working directory must be absolute")
 	}
 	if t.last.IsZero() && timeUpdated.Valid {
@@ -293,7 +293,7 @@ func readKiloCodeTranscript(ctx context.Context, root string, paths ...string) (
 	// KiloCode titles an untitled chat "New session - <ISO>"; treat that
 	// placeholder as no title and fall back to the opening prompt.
 	t.title = strings.TrimSpace(title)
-	if len(t.title) == 0 || strings.HasPrefix(t.title, "New session - ") {
+	if t.title == "" || strings.HasPrefix(t.title, "New session - ") {
 		t.title = ""
 		for _, m := range t.messages {
 			if m.Role == domain.MessageRoleUser {
