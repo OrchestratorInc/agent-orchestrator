@@ -9,13 +9,16 @@ DROP TRIGGER IF EXISTS usage_bindings_cdc_insert;
 DROP TRIGGER IF EXISTS usage_bindings_cdc_update;
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
 
--- SQLite cannot widen a CHECK constraint in place. Rebuild only the two
--- collection tables; the current event table (including measurement, bounded
--- provider usage, billing attribution, and cost columns) remains untouched.
+-- Stop enumerating harnesses and source kinds in the schema. Every usage
+-- harness used to widen these CHECK lists with its own table rebuild, so
+-- parallel harness changes each dropped the others' kinds. The Go store now
+-- validates both (domain.AgentHarness.IsKnown, domain.UsageSourceKind.IsKnown)
+-- and the collector only binds harnesses usage.SupportedHarness accepts.
+-- Rebuild only the two collection tables; model_usage_events is untouched.
 CREATE TABLE usage_bindings_next (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id         TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
-    harness            TEXT NOT NULL CHECK (harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen', 'gemini')),
+    harness            TEXT NOT NULL CHECK (trim(harness) <> ''),
     native_root_id     TEXT NOT NULL CHECK (trim(native_root_id) <> ''),
     initial_model_id   TEXT NOT NULL DEFAULT '',
     state              TEXT NOT NULL CHECK (state IN ('discovering', 'active', 'finalizing', 'complete', 'partial')),
@@ -28,10 +31,7 @@ CREATE TABLE usage_bindings_next (
 CREATE TABLE usage_sources_next (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     binding_id          INTEGER NOT NULL REFERENCES usage_bindings (id) ON DELETE CASCADE,
-    kind                TEXT NOT NULL CHECK (kind IN (
-                            'claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session',
-                            'qwen_monthly', 'gemini_session'
-                        )),
+    kind                TEXT NOT NULL CHECK (trim(kind) <> ''),
     native_session_id   TEXT NOT NULL DEFAULT '',
     subagent_id         TEXT NOT NULL DEFAULT '',
     artifact_path       TEXT NOT NULL CHECK (trim(artifact_path) <> ''),
@@ -106,11 +106,18 @@ DROP TRIGGER IF EXISTS usage_bindings_cdc_insert;
 DROP TRIGGER IF EXISTS usage_bindings_cdc_update;
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
 
--- Remove only Gemini-owned rows before narrowing the collection constraints.
--- All current-schema events owned by Claude, Codex, Kimi, Pi, and Qwen retain
--- their IDs and facts.
+-- Restore the enumerated constraints from the Qwen schema. Usage owned by any
+-- harness or source kind outside that list is removed first; Claude, Codex,
+-- Kimi, Pi, and Qwen events retain their IDs and facts.
 DELETE FROM model_usage_events
-WHERE binding_id IN (SELECT id FROM usage_bindings WHERE harness = 'gemini');
+WHERE binding_id IN (
+    SELECT id FROM usage_bindings
+    WHERE harness NOT IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen')
+)
+   OR usage_source_id IN (
+    SELECT id FROM usage_sources
+    WHERE kind NOT IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly')
+);
 
 CREATE TABLE usage_bindings_previous (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,10 +135,7 @@ CREATE TABLE usage_bindings_previous (
 CREATE TABLE usage_sources_previous (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     binding_id          INTEGER NOT NULL REFERENCES usage_bindings (id) ON DELETE CASCADE,
-    kind                TEXT NOT NULL CHECK (kind IN (
-                            'claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session',
-                            'qwen_monthly'
-                        )),
+    kind                TEXT NOT NULL CHECK (kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly')),
     native_session_id   TEXT NOT NULL DEFAULT '',
     subagent_id         TEXT NOT NULL DEFAULT '',
     artifact_path       TEXT NOT NULL CHECK (trim(artifact_path) <> ''),
@@ -162,9 +166,7 @@ SELECT source.id, source.binding_id, source.kind, source.native_session_id,
        source.next_retry_at, source.last_error_code, source.updated_at
 FROM usage_sources source
 JOIN usage_bindings_previous binding ON binding.id = source.binding_id
-WHERE source.kind IN (
-    'claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly'
-);
+WHERE source.kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly');
 
 DROP TABLE usage_sources;
 DROP TABLE usage_bindings;
