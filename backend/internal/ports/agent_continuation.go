@@ -116,6 +116,12 @@ type ImportedSessionRelocation struct {
 	// inputs it snapshots before copying, including sidecars such as a WAL.
 	// A mismatch is an error; a verified private copy may be reused on retry.
 	SourceFingerprint string
+	// Env is a read-only clone of resolved launch overrides, including the
+	// selected account and project values. Present empty values clear inherited
+	// variables; missing keys inherit the daemon environment. Adapters must not
+	// mutate, persist, log, or include these potentially secret values in errors.
+	// Import-root overrides can change after native preparation returns its ref.
+	Env map[string]string
 }
 
 // AgentImportedSessionRelocator is implemented by adapters whose provider finds
