@@ -3302,7 +3302,9 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
-	app.relaunch();
+	// app.relaunch() is armed in before-quit once the quit is certain: Electron
+	// can't take it back, so arming it here would make a quit the user cancels
+	// at the unsent-draft prompt relaunch AO whenever they next quit.
 	// Relaunch is the documented way out of a stuck update, so it gets the same
 	// exit deadline as an update restart. Without it a quit cleanup step that
 	// never settles leaves this process running and the dialog waiting (#6911).
@@ -3904,6 +3906,7 @@ setUpdateRestartFailureHandler(() => {
 
 let updateQuitDeadlineArmed = false;
 let updateRelaunchRequested = false;
+let updateRelaunchArmed = false;
 const updateExitRequested = () => isUpdateRestartRequested() || updateRelaunchRequested;
 app.on("before-quit", (event) => {
 	if (desktopQuit.handleBeforeQuit(event)) return;
@@ -3923,6 +3926,10 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
+	if (updateRelaunchRequested && !updateRelaunchArmed) {
+		updateRelaunchArmed = true;
+		app.relaunch();
+	}
 	// Never respawn the daemon while the app is shutting down; the daemon's own
 	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
 	cancelDaemonAutoRestart();
