@@ -343,7 +343,10 @@ func requireIPv6Loopback(t *testing.T) {
 // probeIPv6Loopback reads a health probe and its ipv6Loopback flag.
 func probeIPv6Loopback(t *testing.T, base string) (pid int, ipv6Loopback bool) {
 	t.Helper()
-	client := &http.Client{Timeout: 2 * time.Second}
+	// Off the shared DefaultTransport for the same reason as the /shutdown POST:
+	// right after waitForHealth it can dial a spare conn that never carries a
+	// request, and Shutdown then waits out the whole ShutdownTimeout on it.
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	resp, err := client.Get(base + "/healthz")
 	if err != nil {
 		t.Fatalf("GET %s/healthz: %v", base, err)
