@@ -37,7 +37,7 @@ export default function OnboardingScreen() {
 			<View style={styles.hero}>
 				<PairingPicture />
 				<Text accessibilityRole="header" style={styles.title}>Your agents, in your pocket</Text>
-				<Text style={styles.lede}>Pair with your computer to watch and steer your agents from anywhere.</Text>
+				<Text style={styles.lede}>Pair with your computer or cloud to watch and steer your agents from anywhere.</Text>
 			</View>
 
 			{/* Where the thumb already is. */}

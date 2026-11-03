@@ -377,7 +377,7 @@ export default function PairScreen() {
 
 			{/* How to get the code, under the scanner that reads it. */}
 			<View style={styles.steps}>
-				<NumberedStep n={1} total={3} title={repairHost ? `Open Orchestrator on ${repairHost.name}` : "Open Orchestrator on your computer"} compact />
+				<NumberedStep n={1} total={3} title={repairHost ? `Open Orchestrator on ${repairHost.name}` : "Open Orchestrator on your computer or cloud"} compact />
 				<NumberedStep n={2} total={3} title="Go to Settings → Connect Mobile" compact />
 				<NumberedStep n={3} total={3} title="Scan the code with this phone" compact />
 			</View>
