@@ -48,6 +48,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, findProjectOrchestrator, STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { CreateProjectFlow } from "../CreateProjectFlow";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
@@ -193,6 +194,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	const reduceMotion = useReducedMotion();
 	const [footerSlot, setFooterSlot] = useState<HTMLDivElement | null>(null);
 	const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
+	const [confirmingSkip, setConfirmingSkip] = useState(false);
 	const goNext = () => {
 		const next = STEPS[Math.min(index + 1, STEPS.length - 1)]!;
 		if (next === "orchestrator") setPoint(0);
@@ -263,7 +265,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 				<Progress index={index} />
 				<div className="flex items-center gap-2">
 					{/* Kept in place on the first page so nothing shifts later. */}
-					<Button type="button" variant="ghost" className={cn("text-muted-foreground", first && "invisible")} onClick={onFinish}>
+					<Button type="button" variant="ghost" className={cn("text-muted-foreground", first && "invisible")} onClick={() => setConfirmingSkip(true)}>
 						{t("firstRun.skipSetup")}
 					</Button>
 					<Button type="button" variant="ghost" className={cn(first && "invisible")} onClick={goBack}>
@@ -273,6 +275,18 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 					<div ref={setFooterSlot} className="contents" />
 				</div>
 			</div>
+			<ConfirmDialog
+				open={confirmingSkip}
+				title={t("firstRun.skipConfirmTitle")}
+				description={t("firstRun.skipConfirmBody")}
+				confirmLabel={t("firstRun.skipSetup")}
+				cancelLabel={t("firstRun.skipConfirmCancel")}
+				onConfirm={() => {
+					setConfirmingSkip(false);
+					onFinish();
+				}}
+				onOpenChange={setConfirmingSkip}
+			/>
 		</div>
 		</PreviewSlotContext.Provider>
 		</FooterSlotContext.Provider>
