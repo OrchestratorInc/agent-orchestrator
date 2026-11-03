@@ -1197,6 +1197,9 @@ func (r *Runtime) runOnSocket(ctx context.Context, socketName string, args ...st
 		r.confirmCompatibleClient(ctx, binary, "", false)
 		return out, err
 	}
+	if err == nil {
+		return out, nil
+	}
 	// A protocol mismatch is reported before tmux runs the command, so any
 	// command can be replayed with another client. An unexpected server exit
 	// proves no such rejection: send-keys may already be in the pane and
@@ -1254,8 +1257,8 @@ func readOnlyCommand(args []string) bool {
 	return false
 }
 
-// probeAfterAmbiguousExit handles a mutating command whose server exited
-// unexpectedly. A read-only probe still selects a compatible client for later
+// probeAfterAmbiguousExit handles a mutating command with an unknown result.
+// A read-only probe still selects a compatible client for later
 // operations, but the original command is never replayed: tmux may already
 // have applied it, so its outcome stays inconclusive for the caller.
 func (r *Runtime) probeAfterAmbiguousExit(ctx context.Context, socketName string, rawArgs []string, failedBinary string, out []byte, err error) ([]byte, error) {
@@ -1265,7 +1268,7 @@ func (r *Runtime) probeAfterAmbiguousExit(ctx context.Context, socketName string
 	}
 	probe := []string{"-L", socketName, "list-sessions", "-F", "#{session_name}"}
 	_, probeErr := r.runWithRetainedClient(ctx, socketName, probe, failedBinary, out, err)
-	command := fmt.Errorf("tmux runtime: %s may have reached private server %q before it exited unexpectedly: %w",
+	command := fmt.Errorf("tmux runtime: %s may have reached private server %q before its result was confirmed: %w",
 		name, socketName, errors.Join(ports.ErrRuntimeProbeInconclusive, err))
 	if probeErr != nil {
 		// The probe's classification describes the candidate clients, not the
@@ -1288,7 +1291,7 @@ func (r *Runtime) runWithRetainedClient(ctx context.Context, socketName string, 
 		case serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)):
 			r.clearRetainedAssociation(ctx, candidate)
 			return out, err
-		case serverExitedUnexpectedlyOutput(string(out)) && !readOnlyCommand(args[2:]):
+		case !readOnlyCommand(args[2:]) && !protocolVersionMismatchOutput(string(out)):
 			// This client may have applied the command. Only probe further clients.
 			return r.probeAfterAmbiguousExit(ctx, socketName, args[2:], candidate.path, out, err)
 		default:
