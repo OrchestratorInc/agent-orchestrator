@@ -151,7 +151,7 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: resolve sessions directory: %w", err)
 	}
-	locator := nativeSessionLocator{SessionsDir: sessionsDir, RuntimeDir: runtimeDir}
+	locator := nativeSessionLocator{SessionsDir: sessionsDir, RuntimeDir: runtimeDir, SessionID: cfg.NativeSessionID}
 	locatorData, err := json.Marshal(locator)
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: encode native session locator: %w", err)

@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
 const restoreTestID = "88888888-8888-4888-8888-888888888888"
@@ -134,5 +136,41 @@ func TestImportedFirstOpenThenSecondNativeRestart(t *testing.T) {
 	got, err = p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, false, filepath.Join(t.TempDir(), "second-generation"))
 	if err != nil || got != first {
 		t.Fatalf("second native restart = %q, %v", got, err)
+	}
+}
+
+func TestNativeRestoreLocatorSelectsExactConversationInSharedRuntime(t *testing.T) {
+	dataDir, root, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	runtimeDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRuntimeOwner(t, runtimeDir)
+	writeRestoreSnapshot(t, root, workspace, restoreTestID, runtimeDir)
+	writeRestoreSnapshot(t, root, workspace, "99999999-9999-4999-8999-999999999999", runtimeDir)
+	runPath := filepath.Join(dataDir, "running.json")
+	if err := runfile.Write(runPath, runfile.Info{PID: 42, Port: 43123, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{codewhaleHomeEnv: root, "AO_RUNTIME_LAUNCH_ID": "selected-launch", "AO_RUN_FILE": runPath}
+	p := &Plugin{resolvedBinary: "/synthetic/codewhale"}
+	if err := p.PrepareRuntimeLaunch(context.Background(), ports.WorkspaceHookConfig{
+		DataDir: dataDir, SessionID: "ao-selected", WorkspacePath: workspace, Env: env,
+		NativeSessionID: restoreTestID, RestoreMode: ports.WorkspaceRestoreNative,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if env[codewhaleRuntimeDirEnv] != runtimeDir {
+		t.Fatalf("runtime = %q, want %q", env[codewhaleRuntimeDirEnv], runtimeDir)
+	}
+	id, ok, err := p.ResolveNativeSessionID(context.Background(), ports.NativeSessionResolveConfig{DataDir: dataDir, SessionID: "ao-selected", LaunchID: "selected-launch"})
+	if err != nil || !ok || id != restoreTestID {
+		t.Fatalf("selected native id = %q, %v, %v", id, ok, err)
+	}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}},
+	})
+	if err != nil || !ok || cmd[len(cmd)-2] != "--resume" || cmd[len(cmd)-1] != restoreTestID {
+		t.Fatalf("restore = %#v, %v, %v", cmd, ok, err)
 	}
 }
