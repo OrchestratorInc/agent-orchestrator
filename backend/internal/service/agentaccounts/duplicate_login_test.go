@@ -1,0 +1,211 @@
+package agentaccounts
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// fakeCodex is fakeClaude answering for Codex, so one email can be signed in
+// to both providers.
+type fakeCodex struct{ *fakeClaude }
+
+func (fakeCodex) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderCodex }
+
+func newDuplicateFixture(t *testing.T, device string) (*Service, *fakeClaude, *memStore, string) {
+	t.Helper()
+	root := t.TempDir()
+	signedIn := map[string]string{}
+	if device != "" {
+		signedIn[""] = device
+	}
+	claude := &fakeClaude{signedInAs: signedIn}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	return New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil), claude, store, root
+}
+
+// addSaved adds a signed-in account through AO's own sign-in.
+func addSaved(t *testing.T, svc *Service, claude *fakeClaude, root, email string) string {
+	t.Helper()
+	ctx := context.Background()
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = email
+	status, _, err := svc.VerifyLogin(ctx, start.OperationID)
+	if err != nil || status != LoginComplete {
+		t.Fatalf("add %s = %q, %v", email, status, err)
+	}
+	return start.OperationID
+}
+
+func viewByID(t *testing.T, views []AccountView, id string) AccountView {
+	t.Helper()
+	for _, view := range views {
+		if view.Account.ID == id {
+			return view
+		}
+	}
+	t.Fatalf("no account %q in %+v", id, views)
+	return AccountView{}
+}
+
+// The reported case: an account is added in AO, and the computer's own CLI is
+// later signed in, outside AO, to that same login. Both are signed in as one
+// email, so the CLI's row names the saved account it duplicates.
+func TestListNamesTheAccountTheComputersLoginDuplicates(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		deviceAfter string // "" leaves the computer signed out
+		before      string // the computer's login when the account was added
+		savedHome   func(home string, claude *fakeClaude)
+		deviceFails bool
+		makeDefault string // "device" or "saved"
+		want        bool
+	}{
+		{name: "terminal signs in after the account was added", before: "", deviceAfter: "a@example.com", want: true},
+		{name: "terminal switches from another login", before: "b@example.com", deviceAfter: "a@example.com", want: true},
+		{name: "email differs only in case", before: "", deviceAfter: "A@Example.COM", want: true},
+		{name: "the computer's login is the default", before: "", deviceAfter: "a@example.com", makeDefault: "device", want: true},
+		{name: "the saved account is the default", before: "", deviceAfter: "a@example.com", makeDefault: "saved", want: true},
+		{name: "a failed check keeps the last good reading", before: "", deviceAfter: "a@example.com", deviceFails: true, want: true},
+		{name: "the computer is on another login", before: "", deviceAfter: "b@example.com", want: false},
+		{name: "the computer is signed out", before: "", deviceAfter: "", want: false},
+		{
+			name: "the saved account is signed out", before: "", deviceAfter: "a@example.com", want: false,
+			savedHome: func(home string, claude *fakeClaude) { delete(claude.signedInAs, home) },
+		},
+		{
+			name: "the saved folder now holds another login", before: "", deviceAfter: "a@example.com", want: false,
+			savedHome: func(home string, claude *fakeClaude) { claude.signedInAs[home] = "c@example.com" },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, claude, store, root := newDuplicateFixture(t, tc.before)
+			saved := addSaved(t, svc, claude, root, "a@example.com")
+			if tc.deviceAfter == "" {
+				delete(claude.signedInAs, "")
+			} else {
+				claude.signedInAs[""] = tc.deviceAfter
+			}
+			if tc.savedHome != nil {
+				tc.savedHome(filepath.Join(root, "claude", saved), claude)
+			}
+			switch tc.makeDefault {
+			case "device":
+				store.defaults[domain.AgentAccountProviderClaude] = domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+			case "saved":
+				store.defaults[domain.AgentAccountProviderClaude] = saved
+			}
+			if _, err := svc.List(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+			if tc.deviceFails {
+				claude.failing = map[string]bool{"": true}
+			}
+			views, err := svc.List(ctx, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			device := viewByID(t, views, domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude))
+			got := device.SameLoginAs == saved
+			if got != tc.want || (!tc.want && device.SameLoginAs != "") {
+				t.Fatalf("device SameLoginAs = %q, want duplicate=%v of %q (device %+v)", device.SameLoginAs, tc.want, saved, device)
+			}
+			if view := viewByID(t, views, saved); view.SameLoginAs != "" {
+				t.Fatalf("the saved account is never the folded one: %+v", view)
+			}
+			if tc.makeDefault == "device" && !device.Default {
+				t.Fatal("folding must not hide that the computer's login is the default")
+			}
+		})
+	}
+}
+
+// One email signed in to two providers is two subscriptions, not a duplicate.
+func TestListDoesNotFoldAcrossProviders(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{}}
+	codex := fakeCodex{&fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude, codex}, root, fakeTerminals{}, nil)
+	saved := addSaved(t, svc, claude, root, "a@example.com")
+
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view := viewByID(t, views, domain.DeviceAgentAccountID(domain.AgentAccountProviderCodex)); view.SameLoginAs != "" {
+		t.Fatalf("the Codex login folded into Claude account %s: %+v", saved, view)
+	}
+}
+
+// The terminal was signed in moments before the same login is added in AO.
+// The duplicate check must not trust a cached "signed out" for the computer.
+func TestAddRefusesALoginTheComputerSignedInToSinceTheLastReading(t *testing.T) {
+	ctx := context.Background()
+	svc, claude, store, root := newDuplicateFixture(t, "")
+	if _, err := svc.List(ctx, false); err != nil { // caches the computer as signed out
+		t.Fatal(err)
+	}
+	claude.signedInAs[""] = "a@example.com"
+
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[pending] = "a@example.com"
+	status, view, err := svc.VerifyLogin(ctx, start.OperationID)
+	if err != nil || status != LoginDuplicate || view == nil || !view.Account.Device() {
+		t.Fatalf("add a login the computer holds = %q view=%+v err=%v", status, view, err)
+	}
+	if len(store.accounts) != 0 {
+		t.Fatalf("duplicate saved: %+v", store.accounts)
+	}
+	if _, signedIn := claude.signedInAs[pending]; signedIn {
+		t.Fatal("the refused sign-in kept its token")
+	}
+}
+
+// A saved account that is signed out still belongs to its login: adding that
+// login again would leave two folders once the first is signed in again. It is
+// refused, naming the account to sign in again instead.
+func TestAddRefusesTheLoginOfASignedOutSavedAccount(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		folder func(home string, claude *fakeClaude)
+	}{
+		{name: "signed out", folder: func(home string, claude *fakeClaude) { delete(claude.signedInAs, home) }},
+		{name: "holds another login", folder: func(home string, claude *fakeClaude) { claude.signedInAs[home] = "c@example.com" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, claude, store, root := newDuplicateFixture(t, "")
+			saved := addSaved(t, svc, claude, root, "a@example.com")
+			tc.folder(filepath.Join(root, "claude", saved), claude)
+			if _, err := svc.List(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+
+			start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "A@example.com"
+			status, view, err := svc.VerifyLogin(ctx, start.OperationID)
+			if err != nil || status != LoginDuplicate || view == nil || view.Account.ID != saved {
+				t.Fatalf("re-add a saved account's login = %q view=%+v err=%v", status, view, err)
+			}
+			if len(store.accounts) != 1 {
+				t.Fatalf("accounts = %+v, want only the first", store.accounts)
+			}
+		})
+	}
+}

@@ -3603,6 +3603,7 @@
 	"settings.agentAccounts.checkSignIn": "Check sign-in",
 	"settings.agentAccounts.loginWaiting": "Not signed in yet. Finish in the terminal, then check again.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} is already added.",
+	"settings.agentAccounts.alsoCliLogin": "The {{provider}} CLI on this computer is signed in to this account too.",
 	"settings.agentAccounts.loginMismatch": "This account is {{email}}. Sign in again with that login.",
 	"settings.agentAccounts.signInAgain": "Sign in again",
 	"settings.agentAccounts.aoUsage": "{{tokens}} tokens in AO, last 30 days",

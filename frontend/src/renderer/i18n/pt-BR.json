@@ -3688,6 +3688,7 @@
 	"settings.agentAccounts.checkSignIn": "Verificar login",
 	"settings.agentAccounts.loginWaiting": "Ainda sem login. Conclua no terminal e verifique de novo.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} já foi adicionada.",
+	"settings.agentAccounts.alsoCliLogin": "A CLI do {{provider}} neste computador também está conectada a esta conta.",
 	"settings.agentAccounts.loginMismatch": "Esta conta é {{email}}. Entre de novo com esse login.",
 	"settings.agentAccounts.signInAgain": "Entrar de novo",
 	"settings.agentAccounts.aoUsage": "{{tokens}} tokens no AO, últimos 30 dias",
