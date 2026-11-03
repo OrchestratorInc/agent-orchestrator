@@ -6200,6 +6200,32 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	mask-composite: exclude;
 }
 
+/* The first-run onboarding covers the whole window. It is a dialog for
+ * assistive tech, but visually it is the window's chrome, so in a translucent
+ * window it takes the chrome treatment (clear canvases, the one 70% tint) back
+ * from the floating-surface rule above, and the shell under it is hidden so
+ * the desktop blur shows through instead of the app. */
+html[data-window-translucent="true"]:has([data-testid="first-run-onboarding"]) .app-shell-root {
+	visibility: hidden;
+}
+
+html[data-window-translucent="true"] [data-testid="first-run-onboarding"] {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
 /* First-run onboarding previews draw the app window translucent over a
  * wallpaper, with the same material model as above: the stage keeps solid
  * copies of the theme, the window clears its canvases, blurs the wallpaper
