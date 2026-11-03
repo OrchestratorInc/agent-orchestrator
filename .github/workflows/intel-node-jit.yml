@@ -1,0 +1,46 @@
+name: Intel Node JIT
+
+# TEMPORARY: remove before merge.
+# Reproduces #6621 on real Intel hardware: a Node signed with the hardened
+# runtime but without allow-unsigned-executable-memory crashes when V8 compiles
+# JavaScript, and the daemon must re-sign a working copy. Linux and Apple
+# Silicon cannot reproduce the crash, so this runs only on an Intel runner and
+# only when the code involved changes.
+
+on:
+  pull_request:
+    paths:
+      - "backend/internal/adapters/chatdriver/claudeacp/**"
+      - ".github/workflows/intel-node-jit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  intel-node-jit:
+    # macOS 26 Intel does not enforce the entitlement; the reports are on 15.
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the runner is Intel
+        run: test "$(uname -m)" = x86_64
+      - name: Reproduce the crash and the repair
+        env:
+          AO_REQUIRE_NODE_JIT_REPRO: "1"
+        run: go test -count=1 -v -run 'TestJITCapableNode' ./internal/adapters/chatdriver/claudeacp/

@@ -50,6 +50,9 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 		// Not every Intel Mac enforces it: macOS 26 runners run this Node
 		// fine, while the #6621 reports are on macOS 15. Without the crash
 		// there is nothing to repair, and jitCapableNode keeps the Node.
+		if os.Getenv("AO_REQUIRE_NODE_JIT_REPRO") == "1" {
+			t.Fatal("Node signed without allow-unsigned-executable-memory did not crash, but AO_REQUIRE_NODE_JIT_REPRO=1 requires the #6621 crash")
+		}
 		t.Skip("Node signed without allow-unsigned-executable-memory did not crash on this Mac; #6621 does not reproduce here")
 	}
 
