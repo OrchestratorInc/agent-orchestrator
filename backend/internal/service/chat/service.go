@@ -439,7 +439,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.HistoryMode = ports.ChatHistoryRequired
 	}
 
-	replayCheckpoint := nativeHistoryCheckpoint{}
+	replayCheckpoint := nativeHistoryCheckpoint{harness: cfg.Harness}
 	nativeEvidence := ""
 	if cfg.HistoryMode == ports.ChatHistoryRequired {
 		if s.sessions == nil {
@@ -571,6 +571,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			verified.userMismatch = replayCheckpoint.userMismatch
 			verified.assistantMismatch = replayCheckpoint.assistantMismatch
 		}
+		verified.harness = cfg.Harness
 		replayCheckpoint = verified
 	}
 
@@ -580,7 +581,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		if err != nil {
 			return nil, err
 		}
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			return nil, err
 		}
 	}
@@ -783,7 +784,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.Permissions = conversation.Settings.ApprovalMode
 	}
 	if cfg.ProviderConversationID == "" {
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			return nil, err
 		}
 		conversation.Settings.Model = cfg.Model
@@ -910,7 +911,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			}
 			caps[ports.ChatCapabilityResume] = true
 		}
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, err
 		}
@@ -1120,7 +1121,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, err
 		}
-		events = reconcileNativeHistory(events, existing.Turns, existing.Messages, existing.Activities)
+		events = reconcileNativeHistoryForHarness(cfg.Harness, events, existing.Turns, existing.Messages, existing.Activities)
 		if providerBoundary != nil {
 			if cfg.ProviderHandoff != nil {
 				// Visible, boundary-keyed provenance: earlier rows are retained but
@@ -2248,7 +2249,7 @@ func (s *Service) PreflightChat(
 	if err != nil {
 		return err
 	}
-	return capabilityAdmissionError(harness, caps, permissions)
+	return chatAdmissionError(driver, harness, caps, permissions)
 }
 
 // PermissionModes lists, strictest first, the permission modes harness can run a
@@ -2271,6 +2272,18 @@ func (s *Service) PermissionModes(ctx context.Context, harness domain.AgentHarne
 		}
 	}
 	return modes, nil
+}
+
+// chatAdmissionError keeps preflight and controller admission on the same
+// transport floor and provider-native permission contract.
+func chatAdmissionError(driver ports.ChatDriver, harness domain.AgentHarness, caps ports.ChatCapabilities, permissions ports.PermissionMode) error {
+	if err := capabilityAdmissionError(harness, caps, permissions); err != nil {
+		return err
+	}
+	if checker, ok := driver.(ports.ChatPermissionModeChecker); ok && !checker.SupportsPermissionMode(ports.NormalizePermissionMode(permissions)) {
+		return fmt.Errorf("%w: %s cannot run with %q", ports.ErrChatPermissionModeUnsupported, harness, permissions)
+	}
+	return nil
 }
 
 func capabilityAdmissionError(

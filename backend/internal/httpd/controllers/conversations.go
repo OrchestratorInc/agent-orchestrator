@@ -1317,6 +1317,10 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_DECISION_NOT_OFFERED", err.Error(), nil)
 
+	case errors.Is(err, ports.ErrChatPermissionModeUnsupported):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_PERMISSION_MODE_UNSUPPORTED", err.Error(), nil)
+
 	case errors.Is(err, ports.ErrChatConfigOptionInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_CONFIG_OPTION_INVALID", err.Error(), nil)
@@ -1595,6 +1599,7 @@ func turnPlanPayload(plan *domain.ConversationPlan) *ConversationPlanResponse {
 		Explanation: plan.Explanation,
 		Steps:       make([]ConversationPlanStepResponse, 0, len(plan.Steps)),
 		SpansTurns:  plan.SpansTurns,
+		Superseded:  plan.Superseded,
 	}
 	for _, step := range plan.Steps {
 		out.Steps = append(out.Steps, ConversationPlanStepResponse{
