@@ -112,6 +112,9 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if root := strings.TrimSpace(env["FX_HOME"]); root != "" {
+		return root, nil
+	}
 	home := strings.TrimSpace(env["HOME"])
 	if home == "" {
 		var err error
