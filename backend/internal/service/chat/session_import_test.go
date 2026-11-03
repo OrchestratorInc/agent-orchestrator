@@ -161,3 +161,38 @@ func TestAdoptedImportShowsArchiveInPlaceOfPartialReplay(t *testing.T) {
 		t.Fatalf("full snapshot = %q more=%v: %v", texts(full.Messages), full.HasMoreBefore, err)
 	}
 }
+
+func TestTerminalImportArchiveIsReadableButCannotSendChat(t *testing.T) {
+	ctx := context.Background()
+	st := sqlitetest.MustOpen(t)
+	now := time.Now()
+	rec, _, err := st.CreateImportedSession(ctx, domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessGemini, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: now, UpdatedAt: now,
+		Metadata: domain.SessionMetadata{AgentSessionID: "native-terminal",
+			ImportSource: &domain.SessionImportSource{NativeID: "native-terminal", ConfigDir: "/provider"}},
+	}, []sessionimport.Message{{Role: domain.MessageRoleUser, Text: "synthetic saved prompt", At: now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st})
+	for _, read := range []func() (chatsvc.Snapshot, error){
+		func() (chatsvc.Snapshot, error) { return svc.Snapshot(ctx, rec.ID) },
+		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 20) },
+	} {
+		snapshot, err := read()
+		if err != nil || snapshot.Mode != domain.SessionModeTUI || len(snapshot.Messages) != 1 || snapshot.Controller != ports.ChatControllerStopped {
+			t.Fatalf("archive = %#v, %v", snapshot, err)
+		}
+	}
+	if _, err := svc.Send(ctx, rec.ID, ports.ChatUserMessage{}); !errors.Is(err, chatsvc.ErrNotChatMode) {
+		t.Fatalf("terminal archive accepted Chat send: %v", err)
+	}
+	rec.Metadata.ImportSource.Adopted = true
+	if err := st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Snapshot(ctx, rec.ID); !errors.Is(err, chatsvc.ErrNotChatMode) {
+		t.Fatalf("adopted terminal still reads as Chat: %v", err)
+	}
+}

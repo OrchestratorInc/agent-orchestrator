@@ -215,9 +215,17 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
-import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+/** A project's environment variables; `value` only for an owner or admin (`editable`). */
+export type CloudCpProjectEnvironment = ProjectEnvironment;
+export type CloudCpProjectIntakeStatus = ProjectIntakeStatus;
+/** A project's issue intake rule (config.trackerIntake). */
+export type CloudCpProjectTrackerIntake = ProjectTrackerIntake;
+export type CloudCpCue = Cue;
+export type CloudCpCueDefinition = CueDefinitionInput;
+export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
@@ -371,7 +379,7 @@ export interface CloudCpCreateSessionRequest {
 	kind: CloudCpSessionKind;
 	/** Coding-agent harness identifier (e.g. "claude-code"), 1-120 characters. */
 	harness: string;
-	/** 1-80 characters. */
+	/** 1-100 characters. */
 	displayName: string;
 	/** Up to 65536 bytes. */
 	prompt: string;
@@ -383,6 +391,11 @@ export interface CloudCpCreateSessionRequest {
 	 */
 	model?: string;
 	reasoningEffort?: string;
+	/**
+	 * Approval mode the opening prompt's turn runs with, for a session that
+	 * starts in Chat. Omitted lets the worker derive it from the session's mode.
+	 */
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -597,6 +610,8 @@ export interface CloudCpSession {
 	displayName: string;
 	branch: string;
 	mode: string;
+	/** Coding-agent model the session launched with; empty or absent means the harness default. */
+	model?: string;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
@@ -648,8 +663,19 @@ export interface CloudCpSession {
 	 * useCloudSessionsQuery for a listed session that has any.
 	 */
 	artifactFiles?: CloudCpSessionArtifact[];
+	/** Whether the caller pinned the session in their sidebar. A pin is one person's. Absent from older control planes. */
+	pinned?: boolean;
+	/** When the caller pinned the session; present only while pinned. */
+	pinnedAt?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** POST/DELETE /orgs/{orgId}/sessions/{sessionId}/pin */
+export interface CloudCpSessionPinResponse {
+	sessionId: string;
+	pinned: boolean;
+	pinnedAt?: string;
 }
 
 /** One committed artifact file of a cloud session. */
@@ -661,6 +687,54 @@ export interface CloudCpSessionArtifact {
 	size: number;
 	sha256: string;
 	updatedAt: string;
+}
+
+/** One kept version of a cloud artifact file, numbered per path; the newest is the committed file. */
+export interface CloudCpArtifactVersionSummary {
+	version: number;
+	createdAt: string;
+	/** Hex SHA-256 of the version's content. */
+	fileFingerprint: string;
+	size: number;
+	/** Who wrote it: the session's agent, or a person through a save or restore. */
+	source: "agent" | "user";
+	harness?: string;
+	/** The version this one restored, when it is a restore. */
+	restoredFrom?: number;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version} */
+export interface CloudCpArtifactVersion extends CloudCpArtifactVersionSummary {
+	path: string;
+	/** The version's text, cut short when truncated is set. */
+	content: string;
+	truncated?: boolean;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/artifacts/content */
+export interface CloudCpSaveArtifactRequest {
+	path: string;
+	content: string;
+	/** The committed file's SHA-256 the edit started from; a changed file answers 409 artifact_changed. */
+	expectedSha256: string;
+}
+
+/** One cloud chat message that matched a search, from GET /orgs/{orgId}/chat-search. */
+export interface CloudCpChatSearchHit {
+	sessionId: string;
+	sessionTitle: string;
+	projectId: string;
+	/** The matching event's sequence in the session's chat. */
+	sequence: number;
+	role: "user" | "assistant";
+	/** The matched text around the match. */
+	snippet: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/chat-search */
+export interface CloudCpChatSearchResponse {
+	results: CloudCpChatSearchHit[];
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
@@ -952,11 +1026,16 @@ export interface CloudCpWorkspaceReviewSearchQuery {
 	query: string;
 	cursor?: string;
 	limit?: number;
+	/** "content" also returns where each file's text matches; a worker that predates it returns paths only. */
+	mode?: "content";
 }
 
 export interface CloudCpWorkspaceReviewSearchResponse {
 	query: string;
-	results: Array<Pick<CloudCpWorkspaceReviewFileSummary, "path" | "status" | "size" | "binary" | "fileFingerprint">>;
+	results: Array<Pick<CloudCpWorkspaceReviewFileSummary, "path" | "status" | "size" | "binary" | "fileFingerprint"> & {
+		/** With mode "content": the matching lines, 1-based. */
+		matches?: Array<{ line: number; text: string }>;
+	}>;
 	nextCursor?: string;
 	truncated: boolean;
 }
@@ -1087,6 +1166,16 @@ export interface CloudCpPullRequestSummary {
 export interface CloudCpSessionPullRequestsResponse {
 	sessionId: string;
 	pullRequests: CloudCpPullRequestSummary[];
+	/** Pull requests the session's agent reported that AO does not track; absent from an older control plane. */
+	linkedPullRequests?: CloudCpLinkedPullRequest[];
+}
+
+/** A GitHub pull request a cloud session's agent reported that AO does not track. */
+export interface CloudCpLinkedPullRequest {
+	url: string;
+	/** owner/name */
+	repository: string;
+	number: number;
 }
 
 export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
@@ -1107,9 +1196,19 @@ export interface CloudCpAOReviewRun {
 	body: string;
 	providerReviewId: string;
 	reviewerTerminalId?: string;
+	/** "chat" for a review that runs as a Chat conversation (an older control plane omits it). */
+	interfaceMode?: "chat";
 	createdAt: string;
 	deliveredAt?: string;
 	autoInjectReview: boolean;
+}
+
+/** The reviewer conversation a Cloud session shows: its newest review that runs in Chat. */
+export interface CloudCpReviewerSurface {
+	mode: "chat";
+	/** The review run whose conversation this is. */
+	reviewId: string;
+	harness: string;
 }
 
 export interface CloudCpPRReviewState {
@@ -1129,6 +1228,8 @@ export interface CloudCpSessionReviewState {
 	availableReviewerHarnesses: string[];
 	reviews: CloudCpPRReviewState[];
 	runs: CloudCpAOReviewRun[];
+	/** Absent from an older control plane, whose reviews all run in a terminal. */
+	reviewerSurface?: CloudCpReviewerSurface;
 }
 
 export interface CloudCpHarnessStatus {
@@ -1197,6 +1298,10 @@ export interface CloudCpSendMessageRequest {
 	 * waiting for it; otherwise it fails with 409 COMPOSER_LOCKED.
 	 */
 	composerEpoch?: number;
+	/** How the message reads in the transcript when `text` carries quotes or file captures inlined for the agent. */
+	displayText?: string;
+	/** The quotes and file captures the message attaches, as the transcript shows them (at most 64 blocks). */
+	content?: Array<{ type: string }>;
 }
 
 export interface CloudCpChatModelsResponse {
@@ -1273,6 +1378,20 @@ export interface CloudCpChatEventsResponse {
 	events: CloudCpClientEvent[];
 	hasMore: boolean;
 	nextAfter: number;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion */
+export interface CloudCpPromptSuggestionRequest {
+	/** The settled turn the suggestion follows; echoed back. */
+	turnId: string;
+	/** The conversation's most recent text messages (at most 8), oldest first. */
+	messages: { role: "user" | "assistant"; text: string }[];
+}
+
+export interface CloudCpPromptSuggestionResponse {
+	turnId: string;
+	/** Empty when there is no clear next step. */
+	prompt: string;
 }
 
 // ---------------------------------------------------------------------------

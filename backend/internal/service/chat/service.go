@@ -63,6 +63,7 @@ type Service struct {
 	newID                  IDFactory
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
+	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
@@ -172,6 +173,10 @@ type Options struct {
 	// OnAccountChanged invalidates daemon-owned account readiness for the
 	// harness that emitted an account/updated notification.
 	OnAccountChanged func(domain.SessionID, string, domain.AgentHarness)
+	// RecheckAccount reads the session's account again when a turn starts while
+	// a refused login is pending, so a login that works clears the notice. It
+	// is not a refusal and leaves readiness alone.
+	RecheckAccount func(domain.SessionID, domain.AgentHarness)
 	// OnCodexCapacityChanged attributes a structured provider update to the one
 	// globally active AO Codex account. The callback owns profile-independent
 	// account state; conversation rows are not the authority for Codex capacity.
@@ -219,6 +224,7 @@ func New(opts Options) *Service {
 		newID:                  opts.NewID,
 		now:                    now,
 		onAccountChanged:       opts.OnAccountChanged,
+		recheckAccount:         opts.RecheckAccount,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
@@ -1037,7 +1043,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
@@ -2024,7 +2030,7 @@ func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID
 // controller state is reported separately so the client can distinguish "no
 // history" from "agent not running".
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -2142,7 +2148,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
