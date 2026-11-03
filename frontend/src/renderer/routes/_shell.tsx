@@ -68,6 +68,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { LAST_PROJECT_KEY, lastProjectId } from "../lib/last-project";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
@@ -106,19 +107,6 @@ function SessionView(props: ComponentProps<typeof LoadedSessionView>) {
 }
 function preloadSessionView(): void {
 	void loadSessionView().catch(() => undefined);
-}
-
-const LAST_PROJECT_KEY = "ao.newTask.lastProject";
-
-/** The last project the user was in, while it still exists. */
-function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
-	let id: string | null = null;
-	try {
-		id = localStorage.getItem(LAST_PROJECT_KEY);
-	} catch {
-		return undefined;
-	}
-	return workspaces.some((workspace) => workspace.id === id && workspace.kind !== STANDALONE_PROJECT_KIND) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({

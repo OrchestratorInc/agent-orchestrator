@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { MigrationPopup } from "../components/MigrationPopup";
 import { NewChatPage } from "../components/NewChatPage";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
@@ -15,5 +16,10 @@ export const Route = createFileRoute("/_shell/new")({
 function NewChatRoute() {
 	const { project, host } = Route.useSearch();
 	// Keyed by host: picks made for one machine never carry over to another.
-	return <NewChatPage key={host ?? "local"} projectId={project ?? STANDALONE_WORKSPACE_ID} hostId={host} />;
+	return (
+		<>
+			<MigrationPopup />
+			<NewChatPage key={host ?? "local"} projectId={project ?? STANDALONE_WORKSPACE_ID} hostId={host} />
+		</>
+	);
 }
