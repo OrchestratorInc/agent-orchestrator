@@ -69,21 +69,35 @@ export const MENU_MODEL_LIMIT = 12;
  * is always among them, so the menu can show it checked.
  */
 export function menuModels(models: readonly AgentModelInfo[], selected: string, limit = MENU_MODEL_LIMIT): { models: { id: string; label: string }[]; total: number; defaultLabel?: string } {
-	const shown = models.slice(0, limit);
+	const fallback = models.find((model) => model.isDefault);
+	// The default row stands for the catalog's default, so no other row repeats
+	// it: Claude Code's catalog lists the newest Opus by alias ("Opus 5.5") and by
+	// id ("Claude Opus 5.5"). A pinned copy stays, so the menu can tick it.
+	const listed = fallback
+		? models.filter((model) => model.id === selected || !sameModelName(model.label, fallback.label))
+		: models;
+	const shown = listed.slice(0, limit);
 	const picked = selected && !shown.some((model) => model.id === selected) ? models.find((model) => model.id === selected) : undefined;
 	return {
 		models: [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: model.label })),
 		total: models.length,
-		defaultLabel: models.find((model) => model.isDefault)?.label,
+		defaultLabel: fallback?.label,
 	};
 }
 
+/** "Opus 5.5" and "Claude Opus 5.5": one model, with and without its maker's name. */
+function sameModelName(a: string, b: string): boolean {
+	const bare = (label: string) => label.trim().toLowerCase().replace(/^claude\s+/, "");
+	return bare(a) === bare(b);
+}
+
 /**
- * An agent's default-model row, worded as chat's: following the agent is not
- * the same choice as pinning the model it names, which keeps its own row.
+ * An agent's default-model row: the catalog's default by name, tagged as the
+ * default, as chat's is. Choosing it follows the agent rather than pinning the
+ * model, which is listed only here.
  */
 export function defaultModelChoice(defaultLabel?: string): string {
-	return defaultLabel ? `Use agent model (${defaultLabel})` : "Use agent model";
+	return defaultLabel ? `${defaultLabel} · Default` : "Default model";
 }
 
 /**

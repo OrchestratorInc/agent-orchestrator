@@ -105,13 +105,11 @@ export function providerTurnControlKind(option: ChatConfigOption): ProviderTurnC
  * effort (#5834). The wire value is kept, so picking it still follows the
  * provider when its default moves.
  *
- * When the choice's description names another choice ("Opus 5.5"), it reads
- * "Use agent model (Opus 5.5)": following the agent and pinning that model are
- * different choices, so both stay, and the model can still be pinned. (Desktop's
- * `resolveImplicitChoice` folds the model into the default, which made the two
- * look the same; review on #7419.) Otherwise "Use agent model" / "Use agent
- * effort" rather than a level we would have to guess. Copies of one model by
- * alias and by id still show once (`withoutDuplicateNames`).
+ * Model and effort follow desktop's `resolveImplicitChoice` (TurnSettingsBar,
+ * #5849): when the choice's description names another choice ("Opus 5.5"), it
+ * takes that name and every copy of it goes, even while that model is the
+ * explicit pick, so the menu never lists a model twice. Otherwise "Use agent
+ * model" / "Use agent effort" rather than a level we would have to guess.
  *
  * Permission modes: see `namePermissionChoice`. A provider's own names stay,
  * as on desktop. Desktop names a placeholder mapped to AO's default mode "Use
@@ -146,17 +144,22 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 		? option.choices.filter((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
 		: [];
 	const concrete = namedChoices.find((choice) => choice.value === option.currentValue) ?? namedChoices[0];
-	const follow = isModelOption(option) ? FOLLOW_AGENT.model : providerTurnControlKind(option) === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
 	if (concrete) {
-		// The agent's own choice says which model it follows; the model keeps its
-		// own row, which pins it. Which of them is ticked is the setting's to say.
+		// One row per model: the agent's own choice takes the name of every copy
+		// it stands for, and is the one ticked while one of them runs. The row
+		// that stays reads exactly like the ones it replaces.
 		const name = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
+		const running = namedChoices.some((choice) => choice.value === option.currentValue);
 		return {
 			...option,
-			choices: option.choices.map((choice) => choice === implicit ? { ...choice, name: `${follow} (${name})`, description: concrete.description } : choice),
+			currentValue: running ? implicit.value : option.currentValue,
+			choices: option.choices
+				.filter((choice) => !namedChoices.includes(choice))
+				.map((choice) => choice === implicit ? { ...choice, name, description: concrete.description } : choice),
 		};
 	}
 	if (!isDefaultPlaceholderLabel(implicit.name)) return option;
+	const follow = isModelOption(option) ? FOLLOW_AGENT.model : providerTurnControlKind(option) === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
 	return {
 		...option,
 		choices: option.choices.map((choice) =>
@@ -352,13 +355,8 @@ function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot): str
 	return named(model ? model.value : readableModelId(snapshot.settings.model ?? ""));
 }
 
-/**
- * The value, or "" when it names nothing: unreported, a bare "default", or a
- * bare "Use agent …". "Use agent model (Opus 5.5)" names its model.
- */
+/** The value, or "" when it names nothing: unreported, a bare "default", or "Use agent …". */
 function named(value: string): string {
-	const follows = /^Use agent [a-z]+ \((.+)\)$/.exec(value);
-	if (follows && followsAgentLabel(value)) return follows[1];
 	return value === NOT_REPORTED || isDefaultValue(value) || followsAgentLabel(value) ? "" : value;
 }
 
@@ -388,7 +386,8 @@ function isPermissionRow(row: TurnSettingRow): boolean {
  * nobody pointed at Opus when its own settings name it.
  */
 function providerRow(option: ChatConfigOption, followsAgentModel: boolean): TurnSettingRow {
-	const follows = followsAgentModel && isModelOption(option) && option.choices.some((choice) => choice.value === "default");
+	const model = isModelOption(option);
+	const follows = followsAgentModel && model && option.choices.some((choice) => choice.value === "default");
 	return {
 		id: `option:${option.id}`,
 		label: option.name,
@@ -398,7 +397,7 @@ function providerRow(option: ChatConfigOption, followsAgentModel: boolean): Turn
 		enabled: Boolean(option.currentBoolean),
 		choices: option.choices.map((choice) => ({
 			value: choice.value,
-			label: choice.name,
+			label: model ? modelChoiceLabel(choice) : choice.name,
 			description: choice.description,
 			selected: follows ? choice.value === "default" : choice.value === option.currentValue,
 			permissionMode: choice.permissionMode,
@@ -406,6 +405,15 @@ function providerRow(option: ChatConfigOption, followsAgentModel: boolean): Turn
 		target: { kind: "option", optionId: option.id },
 		providerKind: providerTurnControlKind(option),
 	};
+}
+
+/**
+ * A model menu's row. The agent's own choice stands in for the model it names
+ * (see `resolveDefaultChoices`) and is tagged as the default, so following the
+ * agent reads apart from a pinned model; the capsule shows the name alone.
+ */
+function modelChoiceLabel(choice: ChatConfigChoice): string {
+	return choice.value === "default" && !followsAgentLabel(choice.name) ? `${choice.name} · Default` : choice.name;
 }
 
 function controlPriority(row: TurnSettingRow): number {

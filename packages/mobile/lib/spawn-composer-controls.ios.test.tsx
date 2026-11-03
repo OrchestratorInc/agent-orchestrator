@@ -154,14 +154,14 @@ describe("iOS spawn selectors", () => {
 		const root = await render(props);
 		const sections = identified(root, "spawn-harness").findAll((node) => hostType(node) === "Section");
 		expect(sections.map((section) => section.props.title)).toEqual(["Codex", "Other agents"]);
-		expect(choices(sections[0]).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Use agent model", false], ["GPT-5", true]]);
+		expect(choices(sections[0]).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false], ["GPT-5", true]]);
 		await act(async () => choices(sections[0])[0].props.onIsOnChange(true));
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
 		expect(root.findAll((node) => modifier(node, "accessibilityIdentifier")?.args[0] === "spawn-model-codex")).toHaveLength(0);
 		const aider = identified(root, "spawn-model-aider");
 		expect(aider.props.label.props.title).toBe("Aider");
 		// An agent without a list yet still offers its default model.
-		expect(choices(aider).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Use agent model", false]]);
+		expect(choices(aider).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false]]);
 		await act(async () => choices(aider)[0].props.onIsOnChange(true));
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("aider", "__auto__");
 	});
@@ -195,7 +195,7 @@ describe("iOS spawn selectors", () => {
 		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
 		const root = await render(props);
 		const codex = identified(root, "spawn-harness").findAll((node) => hostType(node) === "Section" && node.props.title === "Codex")[0];
-		expect(choiceLabel(choices(codex)[0])).toBe("Use agent model (GPT-6.1-Sol)");
+		expect(choiceLabel(choices(codex)[0])).toBe("GPT-6.1-Sol · Default");
 		const all = codex.findAll((node) => hostType(node) === "Button" && String(node.props.label).startsWith("All models"))[0];
 		expect(all.props.label).toBe(`All models (${(8929).toLocaleString()})`);
 		await act(async () => all.props.onPress());

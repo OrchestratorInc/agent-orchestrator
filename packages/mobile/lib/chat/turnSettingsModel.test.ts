@@ -218,13 +218,14 @@ describe("default labels", () => {
 		options.find((option) => option.id === id)?.choices.map((choice) => [choice.value, choice.name]);
 	const claudeChat = snapshot({ harness: "claude-code", settings: {} });
 
-	it("names the model a fresh Claude chat follows and keeps its wire value", () => {
+	it("names the model a fresh Claude chat runs on and keeps its wire value", () => {
 		const options = resolveDefaultChoices(claude({ model: "default", effort: "default" }));
 		expect(choices(options, "model")?.slice(0, 3)).toEqual([
-			["default", "Use agent model (Opus 5.5)"],
-			["opus", "Opus 5.5"],
+			["default", "Opus 5.5"],
 			["claude-fable-5-1", "Fable 5.1"],
+			["sonnet", "Sonnet 5.5"],
 		]);
+		expect(choices(options, "model")?.some(([value]) => value === "opus")).toBe(false);
 		expect(choices(options, "effort")?.[0]).toEqual(["default", "Use agent effort"]);
 	});
 
@@ -232,54 +233,59 @@ describe("default labels", () => {
 		const options = resolveDefaultChoices(claude({ model: "default", effort: "default" }));
 		for (const row of turnSettingsRows(claudeChat, [], options)) {
 			expect(row.value).not.toMatch(/\bdefault\b/i);
-			for (const choice of row.choices) expect(choice.label).not.toMatch(/\bdefault\b/i);
+			// The one "Default" is the tag on the model the agent runs by itself.
+			for (const choice of row.choices) expect(choice.label.replace(/ · Default$/, "")).not.toMatch(/\bdefault\b/i);
 		}
+		const model = turnSettingsRows(claudeChat, [], options).find((row) => row.id === "option:model");
+		expect(model?.choices[0]).toMatchObject({ value: "default", label: "Opus 5.5 · Default", selected: true });
 		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Auto");
 		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Opus 5.5");
 	});
 
-	// Following the agent and pinning the model it names are different choices
-	// (review on #7419): the agent's own says which model it follows, and the
-	// model keeps its row, which pins it.
-	it("lets the model the agent follows be pinned, ticked once it is", () => {
+	// The menu never lists a model twice: the agent's own choice stands in for
+	// the model it names, and is ticked while that model runs.
+	it("lists the agent's model once when it is picked explicitly", () => {
 		const options = resolveDefaultChoices(claude());
-		expect(choices(options, "model")?.filter(([, name]) => name.includes("Opus 5.5"))).toEqual([["default", "Use agent model (Opus 5.5)"], ["opus", "Opus 5.5"]]);
+		expect(choices(options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["default", "Opus 5.5"]]);
 		const picked = snapshot({ harness: "claude-code", settings: { model: "opus" } });
 		const model = turnSettingsRows(picked, [], options).find((row) => row.id === "option:model");
-		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["opus"]);
-		expect(turnSettingsModelLabel(picked, [], options)).toBe("Opus 5.5");
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["default"]);
+		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Xhigh · Auto");
 	});
 
 	// Claude Code reports "opus" for a session nobody pointed at Opus when its
 	// own settings name it. Nothing was picked in AO, so the chat follows the
 	// agent's model, and the menu says so (review on #7419).
-	it("ticks Use agent model when nothing was picked, whatever the provider reports", () => {
+	it("ticks the agent's model when nothing was picked, whatever the provider reports", () => {
 		const options = resolveDefaultChoices(claude());
 		const model = turnSettingsRows(claudeChat, [], options).find((row) => row.id === "option:model");
-		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.label)).toEqual(["Use agent model (Opus 5.5)"]);
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.label)).toEqual(["Opus 5.5 · Default"]);
+		expect(model?.value).toBe("Opus 5.5");
 		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Opus 5.5");
 	});
 
 	// AO hands Claude Code its catalog's full ids on top of the aliases Claude
 	// lists by itself, so the newest Opus arrives twice as "Opus 5.5" (review
-	// on #7419). It shows once beside the agent's own choice: the running copy,
-	// else the alias.
+	// on #7419). Both fold into the agent's own choice, which names them.
 	describe("with a model listed by alias and by id", () => {
 		const twice = (current: string): ChatConfigOption[] => claude({ model: current }).map((option) => option.id === "model"
 			? { ...option, choices: [...option.choices, { value: "claude-opus-5-5", name: "Opus 5.5", description: "Best for everyday, complex tasks" }] }
 			: option);
 		const opusRows = (current: string) => choices(resolveDefaultChoices(twice(current)), "model")?.filter(([, name]) => name.includes("Opus 5.5"));
 
-		it("lists the model once, whichever copy runs", () => {
-			expect(opusRows("opus")).toEqual([["default", "Use agent model (Opus 5.5)"], ["opus", "Opus 5.5"]]);
-			expect(opusRows("claude-opus-5-5")).toEqual([["default", "Use agent model (Opus 5.5)"], ["claude-opus-5-5", "Opus 5.5"]]);
-			expect(opusRows("default")).toEqual([["default", "Use agent model (Opus 5.5)"], ["opus", "Opus 5.5"]]);
+		it("folds both into the agent's own choice, whichever runs", () => {
+			expect(opusRows("opus")).toEqual([["default", "Opus 5.5"]]);
+			expect(opusRows("claude-opus-5-5")).toEqual([["default", "Opus 5.5"]]);
+			expect(opusRows("default")).toEqual([["default", "Opus 5.5"]]);
+			expect(opusRows("sonnet")).toEqual([["default", "Opus 5.5"]]);
 		});
 	});
 
-	it("names the model the agent follows while another model is picked", () => {
+	// Same as desktop: with another model picked, the one Opus row is the
+	// provider's own, so choosing it follows the provider.
+	it("folds the named model into the default choice while another model is picked", () => {
 		const options = resolveDefaultChoices(claude({ model: "sonnet" }));
-		expect(choices(options, "model")?.[0]).toEqual(["default", "Use agent model (Opus 5.5)"]);
+		expect(choices(options, "model")?.filter(([, name]) => name === "Opus 5.5")).toEqual([["default", "Opus 5.5"]]);
 		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Sonnet 5.5");
 	});
 
@@ -297,8 +303,7 @@ describe("default labels", () => {
 			choices: rows.map(([value, name, description]) => ({ value, name, description })),
 		}]);
 		expect(model.choices.map((choice) => [choice.value, choice.name, choice.description])).toEqual([
-			["default", "Use agent model (Opus)", "Opus 5.5 · Best for everyday, complex tasks · ~2× usage vs Sonnet"],
-			rows[1],
+			["default", "Opus", "Opus 5.5 · Best for everyday, complex tasks · ~2× usage vs Sonnet"],
 			rows[2],
 			rows[3],
 		]);

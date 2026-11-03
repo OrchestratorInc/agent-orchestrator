@@ -226,9 +226,9 @@ describe("Android spawn model", () => {
 		const codex = menuOf(trigger(root, "spawn-model-codex"));
 		expect(codex.props.expanded).toBe(true);
 		const models = codex.findByType("DropdownMenuItems" as never);
-		expect(items(models).map((node) => [text(node), isSelected(node)])).toEqual([["Use agent model", false], ["GPT-5", true]]);
+		expect(items(models).map((node) => [text(node), isSelected(node)])).toEqual([["Default model", false], ["GPT-5", true]]);
 
-		await act(async () => item(models, "Use agent model").props.onClick());
+		await act(async () => item(models, "Default model").props.onClick());
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
 		expect(fixtures.select).toHaveBeenCalledOnce();
 		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(false);
@@ -278,7 +278,7 @@ describe("Android spawn model", () => {
 		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
 		const root = await render(props);
 		const models = menuOf(trigger(root, "spawn-model-codex")).findByType("DropdownMenuItems" as never);
-		expect(items(models).map(text)).toEqual(["Use agent model (GPT-6.1-Sol)", "GPT-5", `All models (${(8929).toLocaleString()})`]);
+		expect(items(models).map(text)).toEqual(["GPT-6.1-Sol · Default", "GPT-5", `All models (${(8929).toLocaleString()})`]);
 		await act(async () => item(models, `All models (${(8929).toLocaleString()})`).props.onClick());
 		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
 	});

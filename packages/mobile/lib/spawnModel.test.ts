@@ -99,6 +99,19 @@ describe("menuModels", () => {
 		expect(menuModels(catalog, "__auto__", 3).defaultLabel).toBe("Model 15");
 		expect(menuModels([{ id: "a", label: "A" }], "__auto__").defaultLabel).toBeUndefined();
 	});
+
+	// The default row names the catalog's default, so no row repeats it, even
+	// under the id's longer name; one pinned by the project stays to be ticked.
+	it("leaves the catalog's default and its other names to the default row", () => {
+		const claude = [
+			{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+			{ id: "opus", label: "Opus 5.5", isDefault: true },
+		];
+		expect(menuModels(claude, "__auto__").models.map((model) => model.label)).toEqual(["Claude Fable 5.1"]);
+		expect(menuModels(claude, "__auto__").defaultLabel).toBe("Opus 5.5");
+		expect(menuModels(claude, "claude-opus-5-5").models.map((model) => model.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5"]);
+	});
 });
 
 describe("default effort model", () => {
