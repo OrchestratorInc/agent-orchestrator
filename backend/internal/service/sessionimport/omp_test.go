@@ -161,6 +161,30 @@ func TestOMPDiscoverImportAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, st.messages, "user: original prompt", "assistant: later reply")
+	// A failed first load leaves the relocation checkpoint pending. Its
+	// private native copy and archive must not absorb later original turns.
+	privatePath := writeFile(t, filepath.Join(root, "sessions", "-ao-copy", filepath.Base(path)), body)
+	rec.Metadata.ImportSource.ResumeCwd = t.TempDir()
+	body += `{"type":"message","id":"m3","parentId":"m2","message":{"role":"user","content":"original-only turn after failed load"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RefreshArchive(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, st.messages, "user: original prompt", "assistant: later reply")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RefreshArchive(ctx, rec); err != nil {
+		t.Fatalf("pinned retry reread removed original: %v", err)
+	}
+	wantTexts(t, st.messages, "user: original prompt", "assistant: later reply")
+	if copied, err := readTranscript(ctx, domain.HarnessOMP, root, privatePath); err != nil {
+		t.Fatal(err)
+	} else {
+		wantTexts(t, copied.messages, "user: original prompt", "assistant: later reply")
+	}
 }
 
 func TestOMPOversizedAndTornRecordsKeepTheConversation(t *testing.T) {

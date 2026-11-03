@@ -36,6 +36,9 @@ func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 // refreshImportArchive keeps turns added in another app since the import in the
 // visible history. The copy taken at import remains when the source is unreadable.
 func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
+	if source := rec.Metadata.ImportSource; source != nil && source.ResumeCwd != "" {
+		return // Keep the archive paired with its checkpointed native copy.
+	}
 	if m.importArchive == nil {
 		return
 	}
