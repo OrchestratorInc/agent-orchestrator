@@ -345,7 +345,7 @@
 	"firstRun.startPromptBugLabel": "Fix a bug",
 	"firstRun.startPromptTests": "Find important code without tests and start workers to add them.",
 	"firstRun.startPromptTestsLabel": "Add tests",
-	"firstRun.openOrchestrator": "Open orchestrator",
+	"firstRun.openOrchestrator": "Send to orchestrator",
 	"firstRun.back": "Back",
 	"firstRun.skipSetup": "Skip setup",
 	"firstRun.skipConfirmTitle": "Skip setup?",

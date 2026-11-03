@@ -383,7 +383,7 @@
 	"firstRun.startPromptBugLabel": "버그 수정",
 	"firstRun.startPromptTests": "테스트가 없는 중요한 코드를 찾아 테스트를 추가할 워커를 시작해 줘.",
 	"firstRun.startPromptTestsLabel": "테스트 추가",
-	"firstRun.openOrchestrator": "오케스트레이터 열기",
+	"firstRun.openOrchestrator": "오케스트레이터에게 보내기",
 	"firstRun.back": "뒤로",
 	"firstRun.skipSetup": "설정 건너뛰기",
 	"firstRun.skipConfirmTitle": "설정을 건너뛸까요?",

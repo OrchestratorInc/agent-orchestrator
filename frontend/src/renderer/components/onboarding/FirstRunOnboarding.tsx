@@ -1209,18 +1209,30 @@ function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalP
 	const completeTask = useOnboardingStep("first_task", true);
 	const [prompt, setPrompt] = useState(() => t(STARTER_PROMPTS[0].prompt));
 
-	const send = () => {
+	// Sends the first message to the orchestrator itself, then opens its chat
+	// so the person watches it start. If the orchestrator is still starting,
+	// the send waits for it; if sending fails, the text lands in its composer.
+	const [sending, setSending] = useState(false);
+	const sentRef = useRef(false);
+	const deliver = useCallback(async (session: NonNullable<typeof orchestrator>, message: string) => {
+		if (sentRef.current) return;
+		sentRef.current = true;
+		const { error } = await apiClient
+			.POST("/api/v1/sessions/{sessionId}/send", { params: { path: { sessionId: session.id } }, body: { message, userAuthored: true } })
+			.catch((thrown: unknown) => ({ error: thrown }));
+		// The live chat scopes its draft by session id + createdAt (ChatWorkspace).
+		if (error) writeChatComposerText({ sessionId: session.id, incarnation: session.createdAt ?? session.id }, message);
 		completeTask();
 		onFinish();
-		if (!orchestrator) {
-			// Setup failed or is still running: the board shows its progress.
-			void navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
-			return;
-		}
-		// The live chat scopes its draft by session id + createdAt (ChatWorkspace).
-		writeChatComposerText({ sessionId: orchestrator.id, incarnation: orchestrator.createdAt ?? orchestrator.id }, prompt.trim());
-		void navigate(sessionNavigateTarget(project.id, orchestrator.id));
+		void navigate(sessionNavigateTarget(project.id, session.id));
+	}, [completeTask, navigate, onFinish, project.id]);
+	const send = () => {
+		setSending(true);
+		if (orchestrator) void deliver(orchestrator, prompt.trim());
 	};
+	useEffect(() => {
+		if (sending && orchestrator) void deliver(orchestrator, prompt.trim());
+	}, [sending, orchestrator, deliver, prompt]);
 
 	return (
 		<StepSplit
@@ -1255,7 +1267,8 @@ function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalP
 			</div>
 			{provisioning || !orchestrator ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
 			<StepAction>
-				<Button variant="primary" onClick={send} disabled={!prompt.trim() || (provisioning && !orchestrator)}>
+				<Button variant="primary" onClick={send} disabled={!prompt.trim() || sending}>
+					{sending ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 					{t("firstRun.openOrchestrator")}
 				</Button>
 			</StepAction>

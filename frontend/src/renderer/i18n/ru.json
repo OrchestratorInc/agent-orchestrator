@@ -347,7 +347,7 @@
 	"firstRun.startPromptBugLabel": "Исправить баг",
 	"firstRun.startPromptTests": "Найди важный код без тестов и запусти воркеров, чтобы добавить тесты.",
 	"firstRun.startPromptTestsLabel": "Добавить тесты",
-	"firstRun.openOrchestrator": "Открыть оркестратор",
+	"firstRun.openOrchestrator": "Отправить оркестратору",
 	"firstRun.back": "Назад",
 	"firstRun.skipSetup": "Пропустить настройку",
 	"firstRun.skipConfirmTitle": "Пропустить настройку?",
