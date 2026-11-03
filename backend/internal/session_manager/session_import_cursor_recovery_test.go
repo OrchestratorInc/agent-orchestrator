@@ -119,7 +119,7 @@ func cursorRecoveryFixture(t *testing.T, root, cwd string) string {
 }
 
 func TestCursorResumeRecoversPublishedCopyWithoutCheckpoint(t *testing.T) {
-	for _, scenario := range []string{"removed source", "changed source", "unproven target"} {
+	for _, scenario := range []string{"removed source", "changed source", "unproven target", "bad provenance"} {
 		t.Run(scenario, func(t *testing.T) {
 			root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
 			path := cursorRecoveryFixture(t, root, cwd)
@@ -173,8 +173,15 @@ func TestCursorResumeRecoversPublishedCopyWithoutCheckpoint(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if scenario == "bad provenance" {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(target), ".ao-import.json"), []byte(`{}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Recovery must rely on the durable record, not adapter memory.
+			m.agents = singleAgent{agent: &cursorRecoveryAgent{terminalImportAgent: terminalImportAgent{native: true}, plugin: cursor.New()}}
 			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
-			if scenario == "unproven target" {
+			if scenario == "unproven target" || scenario == "bad provenance" {
 				if err == nil || rt.created != 0 || !st.sessions[rec.ID].NeedsImportResume() {
 					t.Fatalf("unverified target resumed: result=%#v err=%v", result, err)
 				}
