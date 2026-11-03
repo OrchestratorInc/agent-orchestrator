@@ -51,6 +51,10 @@ export type FileAnnotationModel = {
 	setDraft: (target: ActiveFileAnnotationTarget, draft: string) => void;
 	/** Closes the box on `target`, or every box when no target is given. */
 	cancel: (target?: ActiveFileAnnotationTarget) => void;
+	/** True only for the box just opened. Consuming the token keeps a box that
+	 * remounts later (virtualized rows unmount as they scroll away) from
+	 * scrolling the transcript again. */
+	consumeOpened: (target: ActiveFileAnnotationTarget) => boolean;
 	/** Sends the comment on `target` (`text` is that box's local draft), or every written comment when no target is given. */
 	submit: (target?: ActiveFileAnnotationTarget, text?: string) => Promise<void>;
 };
@@ -714,7 +718,12 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	useEffect(() => {
 		if (!newest) return;
 		const frame = window.requestAnimationFrame(() => {
-			containerRef.current?.scrollIntoView({ block: "nearest" });
+			// Only the open that put this box on screen scrolls it into view; a
+			// later remount of the same row (virtualized scrolling) keeps the
+			// transcript where the reader left it.
+			if (annotation.consumeOpened(target)) {
+				containerRef.current?.scrollIntoView({ block: "nearest" });
+			}
 			textareaRef.current?.focus({ preventScroll: true });
 		});
 		return () => window.cancelAnimationFrame(frame);

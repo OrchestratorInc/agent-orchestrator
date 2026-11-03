@@ -46,6 +46,7 @@ function annotation(): FileAnnotationModel {
 		setDraft: vi.fn(),
 		cancel: vi.fn(),
 		submit: vi.fn(),
+	consumeOpened: vi.fn(() => true),
 	};
 }
 

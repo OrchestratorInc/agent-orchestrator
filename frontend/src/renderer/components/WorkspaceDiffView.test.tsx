@@ -57,6 +57,7 @@ function noopAnnotation(): FileAnnotationModel {
 		setDraft: vi.fn(),
 		cancel: vi.fn(),
 		submit: vi.fn(),
+		consumeOpened: vi.fn(() => true),
 	};
 }
 
@@ -252,6 +253,24 @@ describe("ReviewDiffBody", () => {
 		await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" }));
 		expect(focus).toHaveBeenCalled();
 		expect(scrollIntoView.mock.invocationCallOrder[0]).toBeLessThan(focus.mock.invocationCallOrder[0]);
+	});
+
+	// A row that scrolls away and back remounts its box (virtualized diff
+	// rows unmount offscreen). The remount must keep the transcript where the
+	// reader left it — the open token was consumed when the box first opened —
+	// while the caret still returns to the box.
+	it("does not scroll again when a remounted box takes focus", async () => {
+		const model = noopAnnotation();
+		model.targets = [{ path: "src/App.tsx", side: "file", surface: "review" }];
+		vi.mocked(model.consumeOpened).mockReturnValue(false);
+		const { container } = render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
+
+		const box = container.firstElementChild as HTMLElement;
+		const scrollIntoView = vi.fn();
+		box.scrollIntoView = scrollIntoView;
+		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
+		await waitFor(() => expect(textarea).toHaveFocus());
+		expect(scrollIntoView).not.toHaveBeenCalled();
 	});
 
 	it("keeps typing local to the box; ⌘/Ctrl+Enter sends, as its hint says, and plain Enter doesn't", () => {
