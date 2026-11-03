@@ -55,11 +55,11 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 		}
 	}
 	// A harness that owns no subscription variable has nothing to release.
-	if err := ReleaseHarness(ctx, dir, "goose"); err != nil {
-		t.Fatal(err)
+	if released, err := ReleaseHarness(ctx, dir, "goose"); err != nil || released != "" {
+		t.Fatalf("released=%q err=%v", released, err)
 	}
-	if err := ReleaseHarness(ctx, dir, "claude-code"); err != nil {
-		t.Fatal(err)
+	if released, err := ReleaseHarness(ctx, dir, "claude-code"); err != nil || released != "ANTHROPIC_API_KEY" {
+		t.Fatalf("released=%q err=%v", released, err)
 	}
 	if _, withhold, _ := ForSession(dir, "claude-code"); !reflect.DeepEqual(withhold, []string{"ANTHROPIC_API_KEY"}) {
 		t.Fatalf("Claude Code still receives its released key: withhold=%v", withhold)
@@ -72,8 +72,8 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(claims["ANTHROPIC_API_KEY"], []string{"crush"}) {
 		t.Fatalf("claims=%v err=%v", claims, err)
 	}
-	// Releasing again is a no-op.
-	if err := ReleaseHarness(ctx, dir, "claude-code"); err != nil {
-		t.Fatal(err)
+	// Releasing again is a no-op, and says nothing was released.
+	if released, err := ReleaseHarness(ctx, dir, "claude-code"); err != nil || released != "" {
+		t.Fatalf("second release released=%q err=%v", released, err)
 	}
 }

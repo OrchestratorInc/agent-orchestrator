@@ -218,7 +218,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		// A key in the harness's own store replaces an AO-saved key that
 		// would override it; an env_ method is that AO-saved key itself.
 		if !strings.HasPrefix(method, "env_") {
-			if err := s.releaseSubscriptionKey(ctx, agentID); err != nil {
+			if _, err := s.releaseSubscriptionKey(ctx, agentID); err != nil {
 				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The key was saved, but AO could not stop passing this harness its earlier API key. Try again.")
 			}
 		}
@@ -308,7 +308,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		// started after it still gets the key. Best effort, outside s.mu.
 		if err == nil && loginCtx.Err() == nil {
 			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
-			_ = s.releaseSubscriptionKey(releaseCtx, agentID)
+			_, _ = s.releaseSubscriptionKey(releaseCtx, agentID)
 			releaseCancel()
 		}
 		s.mu.Lock()
@@ -342,12 +342,18 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 // The caller holds s.mu. The token never enters the snapshot.
 func (s *Service) saveClaudeSetupToken(token string, expires time.Time) (LoginSnapshot, error) {
 	// Claude Code's own ANTHROPIC_API_KEY would otherwise keep winning over
-	// the token in new sessions. Release it first, so a failure leaves the
-	// previous sign-in fully in place rather than half switched.
-	if err := s.releaseSubscriptionKey(context.Background(), "claude-code"); err != nil {
+	// the token in new sessions. Release it first, and give it back if the
+	// token cannot be written, so a failure leaves the previous sign-in fully
+	// in place rather than half switched.
+	ctx := context.Background()
+	released, err := s.releaseSubscriptionKey(ctx, "claude-code")
+	if err != nil {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "Claude Code's saved Anthropic API key could not be switched off, so the setup token was not saved.")
 	}
 	if err := claudecode.SaveLocalOAuthToken(s.dataDir, []byte(token)); err != nil {
+		if restoreErr := s.restoreSubscriptionKey(ctx, "claude-code", released); restoreErr != nil {
+			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "The setup token could not be saved, and Claude Code's saved Anthropic API key could not be switched back on. Save the key again from this panel.")
+		}
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "The setup token could not be saved.")
 	}
 	done := make(chan struct{})
@@ -449,7 +455,7 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// that would override it, before "succeeded" is visible. The
 			// agent ID never changes after the operation is created.
 			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			_ = s.releaseSubscriptionKey(releaseCtx, op.snapshot.AgentID)
+			_, _ = s.releaseSubscriptionKey(releaseCtx, op.snapshot.AgentID)
 			releaseCancel()
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {

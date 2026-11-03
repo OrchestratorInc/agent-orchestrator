@@ -963,6 +963,24 @@ func TestUILoginClaudeSetupTokenReleasesItsAPIKeyClaim(t *testing.T) {
 	assertClaudeKeyReleased(t, dataDir)
 }
 
+func TestUILoginClaudeSetupTokenKeepsTheAPIKeyWhenTheTokenCannotBeSaved(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	claimAnthropicKeyForClaude(t, dataDir)
+	// A non-empty directory where the token file belongs cannot be replaced.
+	if err := os.MkdirAll(filepath.Join(claudecode.LocalOAuthTokenPath(dataDir), "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unsaved-setup-token"); err == nil {
+		t.Fatal("StartLogin succeeded although the setup token could not be saved")
+	}
+	// The previous sign-in, the API key saved from Claude Code's panel, stays.
+	if inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code"); err != nil || len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" {
+		t.Fatalf("Claude Code lost its API key after a failed token save: withhold=%v err=%v", withhold, err)
+	}
+}
+
 // survivingAuthTerminals models shellterm after a daemon restart in the same
 // app launch: earlier command terminals are still listed and may still run.
 type survivingAuthTerminals struct {
