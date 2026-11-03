@@ -14,7 +14,28 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
+
+type memcodeNativeArchiveStore struct {
+	*fakeStore
+	messages []sessionimport.Message
+}
+
+func (s *memcodeNativeArchiveStore) ListProjects(context.Context) ([]domain.ProjectRecord, error) {
+	return []domain.ProjectRecord{s.projects["mer"]}, nil
+}
+
+func (s *memcodeNativeArchiveStore) CreateImportedSession(_ context.Context, rec domain.SessionRecord, messages []sessionimport.Message) (domain.SessionRecord, bool, error) {
+	rec.ID = "mer-1"
+	s.sessions[rec.ID], s.messages = rec, append([]sessionimport.Message(nil), messages...)
+	return rec, true, nil
+}
+
+func (s *memcodeNativeArchiveStore) ReplaceImportedMessages(_ context.Context, _ domain.SessionID, messages []sessionimport.Message) error {
+	s.messages = append([]sessionimport.Message(nil), messages...)
+	return nil
+}
 
 type memcodeImportRuntime struct {
 	*fakeRuntime
@@ -167,5 +188,74 @@ func TestMemcodeImportUsesActualInteractiveRestorerAfterNativeCopy(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestMemcodePreparedRetryKeepsArchiveAlignedWithNativeSnapshot(t *testing.T) {
+	source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MEMCODE_ENDPOINT_URL", "")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.WriteFile(filepath.Join(binDir, "memcode"), []byte("#!/bin/sh\necho 'memcode synthetic fixture'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id := "sess_01234567"
+	original := `{"session_id":"sess_01234567","messages":[{"role":"user","content":[{"type":"text","text":"original prompt"}]}]}`
+	dir := filepath.Join(source, ".memcode", "sessions", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "messages.json")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, st, rt, msg := interactiveManager(t, false, &interactiveTestAgent{})
+	m.agents = singleAgent{agent: memcode.New()}
+	m.runtime = &memcodeImportRuntime{fakeRuntime: rt, data: m.dataDir, session: "mer-1", target: id, messages: msg}
+	rt.createErr = errors.New("synthetic launch failure after preparation")
+	project := st.projects["mer"]
+	project.Path, project.Kind = source, domain.ProjectKindSingleRepo
+	st.projects["mer"] = project
+	archive := &memcodeNativeArchiveStore{fakeStore: st}
+	svc := sessionimport.New(archive, m.dataDir, nil)
+	m.SetImportArchiveRefresher(svc)
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan = %+v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("import = %+v, %v", results, err)
+	}
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath, rec.Metadata.Branch = workspace, "ao/import"
+	rec.Metadata.ImportSource.Transferred, rec.Metadata.ImportSource.Prepared = true, true
+	st.sessions[rec.ID] = rec
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil {
+		t.Fatal("synthetic first launch did not fail")
+	}
+	prepared := st.sessions[rec.ID].Metadata.ImportSource
+	if prepared.ResumeNativeID != id || prepared.ResumeTranscriptPath == "" || prepared.Adopted || prepared.Fingerprint != memcode.NativeHistoryFingerprint([]byte(original)) {
+		t.Fatalf("failure did not retain prepared native snapshot: %+v", prepared)
+	}
+	changed := `{"session_id":"sess_01234567","messages":[{"role":"user","content":[{"type":"text","text":"original prompt"}]},{"role":"user","content":[{"type":"text","text":"later source turn"}]}]}`
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt.createErr = nil
+	result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+	if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || rt.created != 1 {
+		t.Fatalf("prepared native retry = %#v, %v", result, err)
+	}
+	if len(archive.messages) != 1 || archive.messages[0].Text != "original prompt" {
+		t.Fatalf("archive diverged from restored native context: %+v", archive.messages)
+	}
+	data, err := os.ReadFile(prepared.ResumeTranscriptPath)
+	if err != nil || string(data) != original || rt.lastCfg.WorkspacePath != workspace || result.Session.Metadata.AgentSessionID != id || len(msg.msgs) != 1 || msg.msgs[0] != "/resume "+id {
+		t.Fatalf("prepared native context changed: %q, %v, %+v, %v", data, err, rt.lastCfg, msg.msgs)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != changed {
+		t.Fatalf("source changed during retry: %q, %v", data, err)
 	}
 }
