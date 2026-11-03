@@ -145,6 +145,10 @@ type AgentImportedSessionRelocator interface {
 // must remain untouched. Implementations must reuse their private prepared copy
 // on retries, identify it authoritatively, and fail rather than create an empty
 // conversation. An empty ConfigDir retains the original provider state root.
+// When SourceFingerprint is set, preparation may precede original-source
+// availability/archive reads: verify a private copy against that selection
+// proof, or validate the exact selected source before creating a new copy.
+// Success must identify the proven native target; absence or mismatch fails.
 // AO checkpoints the returned ref before launch; providers using the same id
 // without a new state root can keep AgentImportedSessionRelocator instead.
 type AgentImportedSessionPreparer interface {
