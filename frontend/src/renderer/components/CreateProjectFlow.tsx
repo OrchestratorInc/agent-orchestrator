@@ -112,7 +112,7 @@ type ProjectGitHubRepository = { owner: string; name: string; private: boolean }
 type GitHubOwner = { login: string; avatarUrl: string };
 type GitHubRepositoryAvailability = { state: "idle" | "checking" | "available" | "unavailable"; message?: string };
 
-function GitHubIcon({ className }: { className?: string }) {
+export function GitHubIcon({ className }: { className?: string }) {
 	return (
 		<svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 			<path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.38 7.86 10.9.58.1.79-.25.79-.56v-2.15c-3.2.7-3.88-1.37-3.88-1.37-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.1-.12-.3-.52-1.47.11-3.05 0 0 .97-.31 3.18 1.18A10.96 10.96 0 0 1 12 5.99c.98 0 1.97.13 2.9.38 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.4-5.27 5.69.41.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
@@ -164,6 +164,7 @@ export function CreateProjectFlow({
 	onSelectHost,
 	openSignal,
 	sourceSignal,
+	autoAgent,
 }: {
 	children?: (state: { choosePath: () => void; disabled: boolean; error: string | null; label: string }) => ReactNode;
 	connected?: boolean;
@@ -194,7 +195,12 @@ export function CreateProjectFlow({
 	// create-project flow instead of a separate delegating component.
 	openSignal?: number;
 	// Home-page action cards: each new nonce jumps straight to its source.
-	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
+	/** `cloneDetails` prefills Clone Repository (first-run onboarding collects the URL inline). */
+	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number; cloneDetails?: Partial<CloneRepositoryDetails> } | null;
+	/** Create with this agent as both worker and orchestrator without asking
+	 * (first-run onboarding). The agent sheet still opens when the folder needs
+	 * repository setup or creating fails, so those keep their recovery. */
+	autoAgent?: string;
 }) {
 	const { t } = useTranslation();
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
@@ -295,7 +301,7 @@ export function CreateProjectFlow({
 		transitionToChild(open);
 	};
 
-	const selectSource = async (source: ProjectSource) => {
+	const selectSource = async (source: ProjectSource, cloneDetailsPreset?: Partial<CloneRepositoryDetails>) => {
 		if (preparedClone.current() && !(await abandonPreparedClone())) return;
 		const presetPath = pendingDropPath;
 		setPendingDropPath(null);
@@ -303,7 +309,7 @@ export function CreateProjectFlow({
 		setValidationScan(null);
 		resetProjectImportState();
 		if (source === "clone") {
-			setCloneDetails(initialCloneDetails(hostId));
+			setCloneDetails({ ...initialCloneDetails(hostId), ...cloneDetailsPreset });
 			setCloneSelection(null);
 			transitionToChild(() => setCloneDialogOpen(true));
 			return;
@@ -492,7 +498,7 @@ export function CreateProjectFlow({
 			if (cloudEnabled) startFlow(undefined, "cloud");
 			return;
 		}
-		void selectSource(sourceSignal.source);
+		void selectSource(sourceSignal.source, sourceSignal.cloneDetails);
 	}, [sourceSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
@@ -587,6 +593,21 @@ export function CreateProjectFlow({
 			setIsInitializing(false);
 		}
 	};
+
+	// With an agent chosen up front, a picked folder or finished clone goes
+	// straight to create, once per path.
+	const autoSubmittedPath = useRef<string | null>(null);
+	useEffect(() => {
+		if (!autoAgent || selectedPath === null) {
+			if (selectedPath === null) autoSubmittedPath.current = null;
+			return;
+		}
+		if (autoSubmittedPath.current === selectedPath || repositorySetup !== null || isCreating || isInitializing || error !== null) return;
+		autoSubmittedPath.current = selectedPath;
+		void createProject({ workerAgent: autoAgent, orchestratorAgent: autoAgent });
+	});
+
+
 
 	const prepareClone = async (next: CloneRepositorySelection) => {
 		if (hostId && !connected) {
@@ -1001,7 +1022,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={selectedPath !== null && (!autoAgent || repositorySetup !== null || error !== null)}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}

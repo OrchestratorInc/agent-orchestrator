@@ -16,7 +16,7 @@ const GITHUB_CLI_INSTALL_URL = "https://cli.github.com/";
 /** Onboarding advisory. GitHub is not required for local work, but surfacing
  * missing auth before task creation prevents a late PR-creation failure inside
  * an agent session. */
-export function GitHubOnboardingNotice() {
+export function GitHubOnboardingNotice({ embedded = false }: { embedded?: boolean } = {}) {
 	const { t } = useTranslation();
 	const gate = useSystemRequirementsGate();
 	const startLogin = useStartGitHubAuthTerminal();
@@ -111,18 +111,22 @@ export function GitHubOnboardingNotice() {
 	};
 	const cliMissing = gh?.satisfied === false;
 	return (
-		<div className="flex w-full justify-center px-3">
-			<div className="w-full max-w-[620px] rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-4 py-4" role="status">
+		<div className={embedded ? "w-full" : "flex w-full justify-center px-3"}>
+			<div className={embedded ? "w-full" : "w-full max-w-[620px] rounded-welcome-panel border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] px-4 py-4"} role="status">
 				<div className="flex items-start gap-3">
-					<span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-muted)]">
+					{embedded ? null : <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-muted)]">
 						<GitPullRequest className="size-4" aria-hidden="true" />
-					</span>
+					</span>}
 					<div className="min-w-0 flex-1">
-						<p className="text-[14px] font-semibold text-[var(--color-text-import-title)]">{t("startup.githubSetupTitle")}</p>
-						<p className="mt-0.5 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-							{t(cliMissing ? "startup.githubSetupMissingCli" : "startup.githubSetupSignedOut")}
-						</p>
-						<div className="mt-2 flex flex-wrap items-center gap-2">
+						{embedded ? (
+							cliMissing ? <p className="text-[12px] leading-5 text-[var(--color-text-import-muted)]">{t("startup.githubSetupMissingCli")}</p> : null
+						) : <>
+							<p className="text-[14px] font-semibold text-[var(--color-text-import-title)]">{t("startup.githubSetupTitle")}</p>
+							<p className="mt-0.5 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
+								{t(cliMissing ? "startup.githubSetupMissingCli" : "startup.githubSetupSignedOut")}
+							</p>
+						</>}
+						<div className={embedded ? "flex flex-wrap items-center gap-2" : "mt-2 flex flex-wrap items-center gap-2"}>
 							<TopbarButton
 								disabled={!cliMissing && (startLogin.isPending || Boolean(terminal && !loginEnded))}
 								onClick={() => cliMissing
