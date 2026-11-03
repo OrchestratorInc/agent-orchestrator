@@ -229,6 +229,9 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 
 // ProbeNativeSession reports whether the selected file still holds native history.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
+	if ref.ConfigDir == "" {
+		return ports.NativeSessionAvailabilityUnknown, ctx.Err()
+	}
 	_, found, err := p.LocateTranscript(ctx, ref)
 	if err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err

@@ -128,3 +128,10 @@ func TestAiderMissingOrUnmatchedHistoryNeverBuildsRestore(t *testing.T) {
 		t.Fatalf("mismatched marker = %v, %v", ok, err)
 	}
 }
+
+func TestAiderProbeWithoutKnownLocationIsUnknown(t *testing.T) {
+	availability, err := (&Plugin{}).ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: NativeHistoryID(t.TempDir())})
+	if err != nil || availability != ports.NativeSessionAvailabilityUnknown {
+		t.Fatalf("unknown location = %v, %v", availability, err)
+	}
+}
