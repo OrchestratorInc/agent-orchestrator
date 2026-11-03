@@ -1,6 +1,6 @@
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, LayoutAnimation, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, killSession, killSessionReviewer, sendMessage } from "../api";
@@ -37,7 +37,7 @@ import {
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrollTopReport } from "./terminalViewport";
 import { ScrollTopButton } from "./ScrollTopButton";
-import { sessionHeaderButtons } from "./sessionHeaderButtons";
+import { terminalMenuSections, type TerminalMenuAction } from "./terminalMenuModel";
 import { useSessionPreview } from "./useSessionPreview";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
@@ -615,7 +615,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const authRef = useRef<{ cols: number; rows: number } | null>(null);
 
 	const [status, setStatus] = useState<MuxStatus>("connecting");
-	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
 	// One notice at a time, the newest winning: an inline row on iOS, a snackbar
 	// on Android (see TerminalNotice).
 	const [notice, setNotice] = useState<TerminalNoticeMessage | null>(null);
@@ -835,7 +834,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					// Render the daemon's authoritative grid exactly. The WebView applies
 					// only local crop/zoom, so the phone cannot disturb a desktop owner.
 					authRef.current = { cols, rows };
-					setSize({ cols, rows });
 					xtermRef.current?.resize({ cols, rows });
 				},
 			});
@@ -877,10 +875,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		(cols: number, rows: number) => {
 			lastDimsRef.current = { cols, rows };
 			if (openedRef.current) muxRef.current?.resize(terminalHandleId, cols, rows, projectId);
-			if (!authRef.current) {
-				setSize({ cols, rows });
-				xtermRef.current?.resize({ cols, rows });
-			}
+			if (!authRef.current) xtermRef.current?.resize({ cols, rows });
 		},
 		[terminalHandleId, projectId],
 	);
@@ -1236,90 +1231,88 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		scrollTerminalToTop(xtermRef.current);
 	}, []);
 
-	// The header items reach their handlers through a ref. The transition hook
+	// The menu's rows reach their handlers through a ref. The transition hook
 	// returns a new object every render, so `requestInterfaceSwitch` is new every
 	// render too, and a new toolbar element registers the header's options again:
 	// keyed on it, the header would rebuild on every keystroke.
-	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles, openArtifacts, confirmKill, zoom, fitWidth });
-	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles, openArtifacts, confirmKill, zoom, fitWidth };
-	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
+	const menuActions: Record<TerminalMenuAction, () => void> = {
+		switch_chat: () => void requestInterfaceSwitch(),
+		preview: toggleBrowser,
+		files: openFiles,
+		artifacts: openArtifacts,
+		zoom_out: () => zoom(-1),
+		zoom_in: () => zoom(1),
+		fit_width: fitWidth,
+		archive: confirmKill,
+		close_shell: confirmKill,
+		stop_reviewer: confirmKill,
+	};
+	const menuActionsRef = useRef(menuActions);
+	menuActionsRef.current = menuActions;
 	// A machine picked but never paired: no terminal, and no notice row to say
 	// why an archive failed, so the menu stays out (see the early return below).
 	const unpaired = Boolean(activeConfig && !isConfigured(activeConfig));
-	const chatSwitchReady = Boolean(interfaceSwitch.status?.supported);
-	const grid = size ? `${size.cols} × ${size.rows}` : undefined;
+	const menuSections = useMemo(() => unpaired ? [] : terminalMenuSections({
+		agentSession: !shellOnly,
+		chatReady: Boolean(interfaceSwitch.status?.supported),
+		checkingChat: rechecking,
+		switchingToChat: interfaceSwitch.starting || interfaceTransitionActive,
+		previewReady: hasPreview,
+		artifactCount,
+		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
+		// Pinch and double-tap zoom too.
+		canZoom: !dead,
+		// A dead session's way back is Restore, in the overlay; a dead shell can
+		// still be closed.
+		close: reviewerPane ? "reviewer" : shellOnly ? "shell" : dead ? undefined : "archive",
+	}), [artifactCount, dead, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, interfaceTransitionActive, rechecking, reviewerPane, shellOnly, unpaired]);
+	// The bar holds only "⋯", as Chat's does: switch, preview and files buttons
+	// beside it cut the iOS title to about nine characters. Chat opens its
+	// actions as a sheet; the terminal keeps the platform's menu.
 	const headerItems = useMemo(() => {
 		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
 		// so the bar never draws these over what the Chat renderer left there.
-		if (!headerRightReady) return null;
+		if (!headerRightReady || !menuSections.length) return null;
 		const ios = Platform.OS === "ios";
-		// A dead session's way back is Restore, in the overlay; a dead shell can
-		// still be closed.
-		const canClose = !unpaired && (shellOnly || !dead);
-		const close = reviewerPane
-			? { label: "Stop reviewer", symbol: "stop.circle" as const }
-			: shellOnly
-				? { label: "Close shell", symbol: "xmark" as const }
-				: { label: "Archive session", symbol: "archivebox" as const };
-		// Menu groups, separated the way each platform separates them: the first
-		// sits at the top, each later one in an inline section (a divider on
-		// Android), so no menu opens on a divider.
-		const groups: ReactElement[][] = [];
-		// iOS heads the menu with the shared grid's size; an M3 menu has no title,
-		// so Android lists it as an inert first row.
-		if (grid && !ios && !dead && !unpaired) groups.push([<Stack.Toolbar.MenuAction key="grid" disabled>{`Grid ${grid}`}</Stack.Toolbar.MenuAction>]);
-		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
-		// Pinch and double-tap zoom too.
-		if (!dead && !unpaired) {
-			groups.push([
-				<Stack.Toolbar.MenuAction key="smaller" icon={ios ? "textformat.size.smaller" : undefined} onPress={() => headerActions.current.zoom(-1)}>Smaller</Stack.Toolbar.MenuAction>,
-				<Stack.Toolbar.MenuAction key="larger" icon={ios ? "textformat.size.larger" : undefined} onPress={() => headerActions.current.zoom(1)}>Larger</Stack.Toolbar.MenuAction>,
-				<Stack.Toolbar.MenuAction key="fit" icon={ios ? "arrow.left.and.right" : undefined} onPress={() => headerActions.current.fitWidth()}>Fit width</Stack.Toolbar.MenuAction>,
-			]);
-		}
-		if (artifactCount > 0) {
-			groups.push([
-				<Stack.Toolbar.MenuAction key="artifacts" icon={ios ? "doc.text" : undefined} onPress={() => headerActions.current.openArtifacts()}>
-					{`Artifacts (${artifactCount})`}
-				</Stack.Toolbar.MenuAction>,
-			]);
-		}
-		if (canClose) {
-			groups.push([
-				<Stack.Toolbar.MenuAction key="close" destructive icon={ios ? close.symbol : undefined} onPress={() => headerActions.current.confirmKill()}>
-					{close.label}
-				</Stack.Toolbar.MenuAction>,
-			]);
-		}
-		const menuItems = groups.flatMap((group, index) =>
-			index === 0 ? group : [<Stack.Toolbar.Menu key={`group-${index}`} inline>{group}</Stack.Toolbar.Menu>],
-		);
+		const sections = menuSections.map((section) => ({ ...section, actions: section.items.map((item) => (
+			<Stack.Toolbar.MenuAction
+				key={item.action}
+				icon={ios ? item.icon : undefined}
+				subtitle={item.subtitle}
+				destructive={item.destructive}
+				disabled={item.disabled}
+				onPress={() => menuActionsRef.current[item.action]()}
+			>
+				{item.label}
+			</Stack.Toolbar.MenuAction>
+		)) }));
+		// The first section sits at the top, each later one in an inline section
+		// (a divider on Android), so no menu opens on a divider. On iOS Smaller,
+		// Larger and Fit width share one row as a palette of glyphs, their labels
+		// read by VoiceOver; an M3 menu has no such row, so Android lists them.
+		// UIKit draws no separator around a palette of its own, so the row sits
+		// inside a plain inline section, which has one above and below.
+		const menuItems = sections.flatMap((section, index) => {
+			if (ios && section.kind === "view") {
+				return [
+					<Stack.Toolbar.Menu key={section.kind} inline>
+						<Stack.Toolbar.Menu inline palette>{section.actions}</Stack.Toolbar.Menu>
+					</Stack.Toolbar.Menu>,
+				];
+			}
+			return index === 0 ? section.actions : [<Stack.Toolbar.Menu key={section.kind} inline>{section.actions}</Stack.Toolbar.Menu>];
+		});
 		return (
 			<Stack.Toolbar placement="right">
-				{shellOnly ? null : sessionHeaderButtons({
-					switchTo: "chat",
-					switchReady: chatSwitchReady,
-					switchBusy: chatSwitchBusy,
-					switchBusyLabel: "Checking whether Chat can open",
-					switchDisabled: interfaceTransitionActive,
-					previewReady: hasPreview,
-					onSwitch: () => void headerActions.current.requestInterfaceSwitch(),
-					onPreview: () => headerActions.current.toggleBrowser(),
-					onFiles: () => headerActions.current.openFiles(),
-					t,
-				})}
-				{menuItems.length ? (
-					<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions" title={grid && ios && !dead ? `Grid ${grid}` : undefined}>
-						{/* The bar button's own title, which UIKit shows in the Large
-						    Content Viewer and an overflowing bar. Without a label the
-						    menu's title, the grid size, would stand in for it. */}
-						{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}
-						{menuItems}
-					</Stack.Toolbar.Menu>
-				) : null}
+				<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions">
+					{/* The bar button's own title, which UIKit shows in the Large
+					    Content Viewer and an overflowing bar. */}
+					{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}
+					{menuItems}
+				</Stack.Toolbar.Menu>
 			</Stack.Toolbar>
 		);
-	}, [artifactCount, chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, t, unpaired]);
+	}, [headerRightReady, menuSections]);
 
 	const webViewOptions = useMemo(
 		() => ({

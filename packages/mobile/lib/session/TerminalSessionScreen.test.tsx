@@ -193,7 +193,7 @@ beforeEach(() => {
 	fixtures.mux = undefined;
 	fixtures.getPreview.mockReset().mockResolvedValue(null);
 	fixtures.killSession.mockReset().mockResolvedValue(undefined);
-	for (const fn of [fixtures.alert, fixtures.backOr, fixtures.xterm.injectJavaScript, fixtures.navigation.setOptions]) fn.mockReset();
+	for (const fn of [fixtures.alert, fixtures.backOr, fixtures.xterm.injectJavaScript, fixtures.navigation.setOptions, fixtures.router.push]) fn.mockReset();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -228,32 +228,42 @@ const elements = (children: unknown): ReactElement<Record<string, unknown>>[] =>
 	Array.isArray(children)
 		? children.flatMap(elements)
 		: isValidElement<Record<string, unknown>>(children) ? [children] : [];
-const menuText = (items: ReactElement<Record<string, unknown>>[]) => items.map((item) => (item.props.inline ? elements(item.props.children).map((inner) => inner.props.children) : item.props.children));
+/** An inline section's rows, through any section nested in it (the iOS view row). */
+const rows = (item: ReactElement<Record<string, unknown>>): ReactElement<Record<string, unknown>>[] => (item.props.inline ? elements(item.props.children).flatMap(rows) : [item]);
+const menuText = (items: ReactElement<Record<string, unknown>>[]) => items.map((item) => (item.props.inline ? rows(item).map((inner) => inner.props.children) : item.props.children));
 const action = (menu: ReactTestInstance, label: string) =>
 	elements(menu.props.children)
-		.flatMap((item) => (item.props.inline ? elements(item.props.children) : [item]))
+		.flatMap(rows)
 		.find((item) => item.props.children === label)!;
 
 describe("the terminal screen's header on iOS", () => {
-	it("puts Chat, preview and files in the bar and everything else in one menu", async () => {
+	// The bar holds only "⋯", as Chat's does; everything else is in its menu.
+	it("keeps only the actions menu in the bar, with Chat, preview and files in it", async () => {
 		await mount();
 		await attachGrid(120, 40);
-		expect(toolbarButtons().map((button) => [button.props.icon, button.props.accessibilityLabel])).toEqual([
-			["bubble.left", "Open Chat interface"],
-			["globe", "Open preview"],
-			["doc.text.magnifyingglass", "Session files and changes"],
-		]);
+		expect(toolbarButtons()).toHaveLength(0);
+		expect(find("StackToolbarView")).toHaveLength(0);
 		const menu = rootMenu()!;
-		expect(menu.props).toMatchObject({ icon: "ellipsis.circle", title: "Grid 120 × 40" });
-		// The bar button is named for what it opens; the grid only heads the menu.
+		expect(menu.props.icon).toBe("ellipsis.circle");
+		expect(menu.props.title).toBeUndefined();
 		expect(menuText(elements(menu.props.children))).toEqual([
 			"Terminal actions",
-			"Smaller",
-			"Larger",
-			"Fit width",
+			"Switch to Chat",
+			"Preview",
+			"Files",
+			["Smaller", "Larger", "Fit width"],
 			["Archive session"],
 		]);
 		expect(elements(menu.props.children)[0].type).toBe(Stack.Toolbar.Label);
+		// Smaller, Larger and Fit width share one row of glyphs, set in a plain
+		// section so the row has a separator above and below.
+		const view = elements(menu.props.children).find((item) => elements(item.props.children).some((inner) => inner.props.palette))!;
+		expect(view.props).toMatchObject({ inline: true });
+		expect(view.props.palette).toBeUndefined();
+		expect(elements(view.props.children)[0].props).toMatchObject({ inline: true, palette: true });
+		expect(action(menu, "Smaller").props.icon).toBe("textformat.size.smaller");
+		expect(action(menu, "Switch to Chat").props).toMatchObject({ icon: "bubble.left", subtitle: "Not ready yet" });
+		expect(action(menu, "Files").props.icon).toBe("doc.text.magnifyingglass");
 		expect(action(menu, "Archive session").props).toMatchObject({ destructive: true, icon: "archivebox" });
 	});
 
@@ -270,50 +280,56 @@ describe("the terminal screen's header on iOS", () => {
 		]);
 	});
 
-	it("fills the globe in, not only colours it, once a preview is ready", async () => {
+	it("opens the preview and the session's files from the menu", async () => {
+		await mount();
+		act(() => (action(rootMenu()!, "Preview").props.onPress as () => void)());
+		expect(fixtures.router.push.mock.calls.at(-1)![0]).toMatchObject({ pathname: "/preview/[id]", params: { id: "worker-1" } });
+		act(() => (action(rootMenu()!, "Files").props.onPress as () => void)());
+		expect(JSON.stringify(fixtures.router.push.mock.calls.at(-1)![0])).toContain("worker-1");
+	});
+
+	it("fills the globe in, and says so, once a preview is ready", async () => {
 		fixtures.getPreview.mockResolvedValue({ entry: "dist/index.html", url: "http://dev.local/preview" });
 		await mount();
-		const globe = toolbarButtons()[1];
-		expect(globe.props).toMatchObject({ icon: "globe.americas.fill", tintColor: "#green", accessibilityLabel: "Open preview, preview ready" });
-		// iOS before 26 draws no badge, and an empty one is a blank capsule after.
-		expect(globe.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
+		expect(action(rootMenu()!, "Preview").props).toMatchObject({ icon: "globe.americas.fill", subtitle: "Ready to open" });
 	});
 
 	it("keeps a repo README from reading as a ready preview", async () => {
 		fixtures.getPreview.mockResolvedValue({ entry: "README.md", url: "http://dev.local/preview" });
 		await mount();
-		expect(toolbarButtons()[1].props).toMatchObject({ icon: "globe", tintColor: undefined, accessibilityLabel: "Open preview" });
+		expect(action(rootMenu()!, "Preview").props).toMatchObject({ icon: "globe", subtitle: undefined });
 	});
 
-	it("stands a labelled spinner in for the Chat switch while it checks", async () => {
+	it("holds the switch to Chat while it starts", async () => {
 		fixtures.interfaceSwitch.starting = true;
 		await mount();
-		expect(toolbarButtons().map((button) => button.props.icon)).toEqual(["globe", "doc.text.magnifyingglass"]);
-		const slot = find("StackToolbarView")[0];
-		expect(slot.props.hidesSharedBackground).toBe(true);
-		expect(slot.findByType("Spinner" as never).props.accessibilityLabel).toBe("Checking whether Chat can open");
+		expect(action(rootMenu()!, "Switching to Chat…").props.disabled).toBe(true);
+	});
+
+	it("offers a worktree shell only its view and Close shell", async () => {
+		fixtures.params = { handleId: "shell-1", sessionId: "worker-1" };
+		await mount();
+		expect(menuText(elements(rootMenu()!.props.children))).toEqual(["Terminal actions", ["Smaller", "Larger", "Fit width"], ["Close shell"]]);
 	});
 });
 
 describe("the terminal screen's header on Android", () => {
-	it("lists the grid as an inert first row and sections the rest", async () => {
+	it("sections the menu with dividers, and no grid row", async () => {
 		fixtures.os = "android";
 		await mount();
 		await attachGrid(120, 40);
 		const menu = rootMenu()!;
 		expect(menu.props.title).toBeUndefined();
-		expect(menuText(elements(menu.props.children))).toEqual(["Grid 120 × 40", ["Smaller", "Larger", "Fit width"], ["Archive session"]]);
-		expect(elements(menu.props.children)[0].props.disabled).toBe(true);
+		expect(toolbarButtons()).toHaveLength(0);
+		expect(menuText(elements(menu.props.children))).toEqual([
+			"Switch to Chat",
+			"Preview",
+			"Files",
+			["Smaller", "Larger", "Fit width"],
+			["Archive session"],
+		]);
 		expect(action(menu, "Smaller").props.icon).toBeUndefined();
-	});
-
-	it("marks a ready preview with the badge dot", async () => {
-		fixtures.os = "android";
-		fixtures.getPreview.mockResolvedValue({ entry: "dist/index.html", url: "http://dev.local/preview" });
-		await mount();
-		const globe = toolbarButtons()[1];
-		expect(globe.props.tintColor).toBeUndefined();
-		expect(globe.findByType("StackToolbarBadge" as never).props.style).toEqual({ backgroundColor: "#green" });
+		expect(elements(menu.props.children).some((item) => item.props.palette)).toBe(false);
 	});
 });
 

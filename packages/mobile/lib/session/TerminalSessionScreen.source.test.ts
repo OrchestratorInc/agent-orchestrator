@@ -5,38 +5,29 @@ const source = (path: string) => readFileSync(new URL(path, import.meta.url), "u
 const screen = source("./TerminalSessionScreen.tsx");
 
 describe("the terminal screen's native chrome", () => {
-	it("declares its header actions as native toolbar items, shared with Chat", () => {
-		const buttons = source("./sessionHeaderButtons.tsx");
+	// The bar holds only "⋯", as Chat's does; Chat, the preview and files are rows of its menu.
+	it("keeps only the actions menu in the header, its rows from the menu model", () => {
 		expect(screen).toContain('<Stack.Toolbar placement="right">');
-		expect(screen).toContain("{shellOnly ? null : sessionHeaderButtons({");
-		expect(screen).toContain('switchTo: "chat",');
+		expect(screen).toContain("const menuSections = useMemo(() => unpaired ? [] : terminalMenuSections({");
+		expect(screen).toContain("onPress={() => menuActionsRef.current[item.action]()}");
+		expect(screen).toContain("switch_chat: () => void requestInterfaceSwitch(),");
 		expect(screen).toContain("const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);");
-		expect(buttons).toContain('icon={toolbarIcon(previewReady && ios ? PREVIEW_READY_GLYPH : "globe")}');
-		expect(buttons).toContain('icon={toolbarIcon("fileSearch")}');
-		// The preview-ready dot is the system badge, not a view placed by hand.
-		expect(buttons).toContain("<Stack.Toolbar.Badge style={{ backgroundColor: t.green }} />");
-		// iOS has no empty badge, so the globe changes shape there, not only colour.
-		expect(buttons).toContain('export const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };');
-		expect(screen).not.toContain("headerRight: () =>");
-		expect(screen).not.toContain("browserReadyDot");
+		for (const gone of ["sessionHeaderButtons", "Stack.Toolbar.Button", "headerRight: () =>", "browserReadyDot"]) {
+			expect(screen).not.toContain(gone);
+		}
 	});
 
-	it("keeps the Chat switch's spinner and the swap's empty frame", () => {
-		const buttons = source("./sessionHeaderButtons.tsx");
-		expect(buttons).toMatch(/switchBusy \? \(\s*<Stack\.Toolbar\.View key="switch" hidesSharedBackground>/);
-		expect(screen).toContain("switchBusy: chatSwitchBusy,");
-		expect(screen).toContain("switchDisabled: interfaceTransitionActive,");
+	it("keeps the swap's empty frame", () => {
 		expect(screen).toContain("resetHeaderRightForSwap(");
-		expect(screen).toContain("if (!headerRightReady) return null;");
+		expect(screen).toContain("if (!headerRightReady || !menuSections.length) return null;");
 	});
 
 	it("moves zoom, archive and the grid size into the header's overflow menu", () => {
 		expect(screen).toContain('<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions"');
-		expect(screen).toContain(">Smaller</Stack.Toolbar.MenuAction>");
-		expect(screen).toContain(">Larger</Stack.Toolbar.MenuAction>");
-		expect(screen).toContain(">Fit width</Stack.Toolbar.MenuAction>");
-		expect(screen).toMatch(/<Stack\.Toolbar\.MenuAction key="close" destructive[^>]*onPress=\{\(\) => headerActions\.current\.confirmKill\(\)\}>/);
-		expect(screen).toContain('{ label: "Archive session", symbol: "archivebox" as const }');
+		expect(screen).toContain("zoom_out: () => zoom(-1),");
+		expect(screen).toContain("zoom_in: () => zoom(1),");
+		expect(screen).toContain("fit_width: fitWidth,");
+		expect(screen).toContain("archive: confirmKill,");
 		// The grid size titles the iOS menu, not the bar button that opens it.
 		expect(screen).toContain("{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}");
 		// The old status row is gone; the connection speaks only while it is not live.
@@ -47,8 +38,8 @@ describe("the terminal screen's native chrome", () => {
 
 	it("keeps the overflow menu off a screen with no paired machine", () => {
 		// Nothing there to zoom, and no notice row to explain a failed archive.
-		expect(screen).toContain("const canClose = !unpaired && (shellOnly || !dead);");
-		expect(screen).toContain("if (!dead && !unpaired) {");
+		expect(screen).toContain('close: reviewerPane ? "reviewer" : shellOnly ? "shell" : dead ? undefined : "archive",');
+		expect(screen).toContain("canZoom: !dead,");
 		expect(screen).toMatch(/if \(unpaired\) \{\s*return \(\s*<View style=\{styles\.center\}>\s*\{headerItems\}/);
 	});
 

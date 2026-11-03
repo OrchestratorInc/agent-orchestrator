@@ -35,6 +35,15 @@ describe("conversationMenuGroups", () => {
 		expect(layout({ ...base, artifactCount: 0 })[0][1]).not.toContain("Artifacts");
 	});
 
+	// Only where the agent can carry the conversation on in Terminal UI, and
+	// just before Archive.
+	it("offers Switch to Terminal UI before Archive when the agent supports it", () => {
+		expect(layout({ ...base, canSwitchToTerminal: true }).at(-1)).toEqual(["Session", ["Switch to Terminal UI", "Archive"]]);
+		expect(layout({ ...base, canSwitchToTerminal: true, canDelete: false }).at(-1)).toEqual(["Session", ["Switch to Terminal UI"]]);
+		const switching = conversationMenuGroups({ ...base, canSwitchToTerminal: true, switchingToTerminal: true }).at(-1)!.items[0];
+		expect(switching).toMatchObject({ action: "switch_tui", label: "Switching to Terminal UI…", disabled: true });
+	});
+
 	it("drops what the session cannot do, and never shows an empty group", () => {
 		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false })).toEqual([
 			["Open", ["Terminal", "Preview"]],

@@ -5,28 +5,29 @@ import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
 /**
  * What the conversation's actions sheet offers, and nothing more: the
  * worktree's terminal, the preview and the artifacts, pinning the worker and reviewing its
- * PR, compacting the history (its context use drawn as a ring), and archiving
- * the session. Artifacts and PR Review show only once there is something to
+ * PR, compacting the history (its context use drawn as a ring), switching the
+ * session to Terminal UI, and archiving it. Artifacts and PR Review show only once there is something to
  * open: on an empty session they led to an empty page.
  */
-export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "delete";
+export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "switch_tui" | "delete";
 
 export type ConversationMenuSection = {
-	// Archive acts on the session, not the conversation, so it sits in a section
-	// of its own. The internal action id remains `delete` for compatibility with
+	// Switching to Terminal UI and Archive act on the session, not the
+	// conversation, so they sit in a section of their own, Archive last. The internal action id remains `delete` for compatibility with
 	// the worker row's actions, but the operation is restorable.
 	title: "Open" | "Worker" | "Context" | "Session";
 	actions: ConversationMenuAction[];
 };
 
-export function conversationMenuSections({ canPin, canCompact, canDelete, artifactCount, hasPullRequest }: Pick<ConversationMenuState, "canPin" | "canCompact" | "canDelete" | "artifactCount" | "hasPullRequest">): ConversationMenuSection[] {
+export function conversationMenuSections({ canPin, canCompact, canDelete, canSwitchToTerminal, artifactCount, hasPullRequest }: Pick<ConversationMenuState, "canPin" | "canCompact" | "canDelete" | "canSwitchToTerminal" | "artifactCount" | "hasPullRequest">): ConversationMenuSection[] {
 	const worker: ConversationMenuAction[] = [...(canPin ? ["pin" as const] : []), ...(hasPullRequest ? ["pull_requests" as const] : [])];
+	const session: ConversationMenuAction[] = [...(canSwitchToTerminal ? ["switch_tui" as const] : []), ...(canDelete ? ["delete" as const] : [])];
 	return [
 		{ title: "Open", actions: ["shell", "preview", ...(artifactCount ? ["artifacts" as const] : [])] },
 		// A section only when it has something in it: the sheet never shows an empty group.
 		...(worker.length ? [{ title: "Worker" as const, actions: worker }] : []),
 		...(canCompact ? [{ title: "Context" as const, actions: ["compact" as const] }] : []),
-		...(canDelete ? [{ title: "Session" as const, actions: ["delete" as const] }] : []),
+		...(session.length ? [{ title: "Session" as const, actions: session }] : []),
 	];
 }
 
@@ -35,6 +36,10 @@ export type ConversationMenuState = {
 	canPin: boolean;
 	canCompact: boolean;
 	canDelete: boolean;
+	/** The agent can carry this conversation on in Terminal UI. */
+	canSwitchToTerminal?: boolean;
+	/** A switch to Terminal UI is starting or under way. */
+	switchingToTerminal?: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
 	/** Files in the session's artifact directory, when known. */
@@ -91,6 +96,13 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 			disabled: state.turnInFlight || state.compacting,
 			icon: { ios: "arrow.down.right.and.arrow.up.left", android: "compress" },
 			meter: state.contextPercent,
+		};
+		case "switch_tui": return {
+			action,
+			label: state.switchingToTerminal ? "Switching to Terminal UI…" : "Switch to Terminal UI",
+			subtitle: "Same session, worktree and conversation",
+			disabled: state.switchingToTerminal,
+			icon: { ios: "terminal", android: "terminal" },
 		};
 		case "delete": return { action, label: "Archive", subtitle: ARCHIVE_SESSION_HINT, destructive: true, icon: { ios: "archivebox", android: "archive" } };
 	}

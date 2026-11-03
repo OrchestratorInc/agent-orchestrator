@@ -191,6 +191,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const turnActive = Boolean(
 		conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 	);
+	const turnWaiting = Boolean(
+		conversation.snapshot?.items.some(
+			(item) =>
+				item.kind === "activity" &&
+				(item.activityKind === "approval" || item.activityKind === "user_input") &&
+				item.status === "pending",
+		),
+	);
 
 	// Loaded again when the provider comes up: a chat opened while hibernated or
 	// connecting has no catalog to give, and the composer would otherwise keep the
@@ -398,6 +406,36 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		void resume(true);
 	}, [config, resume, session, terminated]);
 
+	const startInterfaceSwitch = useCallback(
+		async (policy: "drain" | "interrupt") => {
+			try {
+				await interfaceSwitch.start("tui", policy);
+			} catch (cause) {
+				Alert.alert("Couldn't switch interface", userFacingError(cause));
+			}
+		},
+		[interfaceSwitch],
+	);
+
+	// A turn in flight is finished or stopped first, as the person chooses.
+	const requestInterfaceSwitch = useCallback(() => {
+		if (!turnActive) {
+			void startInterfaceSwitch("drain");
+			return;
+		}
+		Alert.alert(
+			"Switch to Terminal UI?",
+			turnWaiting
+				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
+			[
+				{ text: "Keep Chat", style: "cancel" },
+				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
+				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
+			],
+		);
+	}, [startInterfaceSwitch, turnActive, turnWaiting]);
+
 	// Chat sheets take the keyboard's place rather than opening under it.
 	const presentSheet = useCallback(async (entry: ChatSheetEntry) => {
 		await dismissKeyboardBeforeSheet(keyboardVisible);
@@ -422,6 +460,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
 	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
+	// Offered only where the agent can carry the conversation on in Terminal UI.
+	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
+	const menuSwitching = interfaceSwitch.starting || interfaceTransitionActive;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -430,12 +471,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		canPin: !isOrchestrator,
 		canDelete: !isOrchestrator,
 		canCompact: menuCanCompact,
+		canSwitchToTerminal: menuCanSwitch,
+		switchingToTerminal: menuSwitching,
 		pinned: menuPinned,
 		openingShell,
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, openingShell, previewReady, turnActive]);
+	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -469,6 +512,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
+		switch_tui: requestInterfaceSwitch,
 		delete: () => {
 			haptics.warning();
 			Alert.alert(
