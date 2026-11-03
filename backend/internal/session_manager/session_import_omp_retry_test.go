@@ -62,7 +62,7 @@ func TestOMPFailedFirstLoadKeepsArchivePairedWithRelocatedCopy(t *testing.T) {
 	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	launcher := &recordingLauncher{startErr: ports.ErrChatResumeFailed}
+	launcher := &recordingLauncher{startErr: ports.ErrChatResumeFailed, providerConversationID: nativeID}
 	m, st, _ := newChatManager(launcher)
 	m.agents = relocatingAgents{agent: ompRetryAgent{}}
 	archive := &ompRetryArchiveStore{fakeStore: st}
@@ -107,7 +107,7 @@ func TestOMPFailedFirstLoadKeepsArchivePairedWithRelocatedCopy(t *testing.T) {
 	}
 	launcher.startErr = nil
 	result, err := m.ResumeAgentWithMode(ctx, rec.ID)
-	if err != nil || result.Session.NeedsImportResume() || result.Mode != RestoreModeNative {
+	if err != nil || result.Session.NeedsImportResume() || result.Mode != RestoreModeNative || result.Session.Metadata.ProviderConversationID != nativeID {
 		t.Fatalf("retry = %+v, %v", result, err)
 	}
 	if len(archive.messages) != 1 || archive.messages[0].Text != "copied native turn" {

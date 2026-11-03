@@ -76,6 +76,9 @@ type recordingLauncher struct {
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
 
+	// Harness-specific resume tests must report the native ID they loaded.
+	providerConversationID string
+
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode
 	started              []ChatStart
@@ -198,6 +201,9 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
+	}
+	if l.providerConversationID != "" {
+		started.ProviderConversationID = l.providerConversationID
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration
