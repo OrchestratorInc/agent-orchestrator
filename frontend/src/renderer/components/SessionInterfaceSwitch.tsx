@@ -96,6 +96,7 @@ export function SessionInterfaceSwitchButton({
 	onClick,
 	onCancel,
 	showLabel = false,
+	mayStartFresh = false,
 	className,
 }: {
 	target: SessionInterfaceMode;
@@ -109,6 +110,7 @@ export function SessionInterfaceSwitchButton({
 	onCancel?: () => void;
 	/** Cloud uses a text label so the return-to-TUI action is discoverable. */
 	showLabel?: boolean;
+	mayStartFresh?: boolean;
 	className?: string;
 }) {
 	if (transition && interfaceTransitionIsActive(transition)) {
@@ -168,7 +170,9 @@ export function SessionInterfaceSwitchButton({
 	}
 
 	const label = `Switch to ${targetLabel(target)}`;
-	const tooltipLabel = supported ? `${label} using this agent's native conversation.` : disabledReason || label;
+	const tooltipLabel = supported
+		? mayStartFresh ? `${label}. Hermes may start a fresh conversation.` : `${label} using this agent's native conversation.`
+		: disabledReason || label;
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -203,6 +207,7 @@ export function SessionInterfaceSwitchDialog({
 	open,
 	target,
 	requireExplicitTerminalStop,
+	mayStartFresh = false,
 	waitingForInput,
 	busy,
 	error,
@@ -212,6 +217,7 @@ export function SessionInterfaceSwitchDialog({
 	open: boolean;
 	target: SessionInterfaceMode;
 	requireExplicitTerminalStop?: boolean;
+	mayStartFresh?: boolean;
 	waitingForInput?: boolean;
 	busy?: boolean;
 	error?: string;
@@ -228,8 +234,13 @@ export function SessionInterfaceSwitchDialog({
 						Switch to {targetName}?
 					</DialogTitle>
 					<DialogDescription className="pt-1 text-xs leading-5">
-						The same AO session, worktree, and agent-native conversation continue in the other interface.
-						Completed messages and tool work stay in the agent's context.
+						{mayStartFresh ? (
+							<>The same AO session and worktree continue, but Hermes may start a fresh conversation.
+								Messages and tool results may not transfer into the target agent's context; the source history stays in its original interface.</>
+						) : (
+							<>The same AO session, worktree, and agent-native conversation continue in the other interface.
+								Completed messages and tool work stay in the agent's context.</>
+						)}
 					</DialogDescription>
 				</DialogHeader>
 

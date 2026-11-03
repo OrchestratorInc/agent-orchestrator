@@ -60,7 +60,7 @@ export async function checkDesktopVersionFloor(): Promise<void> {
       defaultId: 0,
       cancelId: 1,
       title: "Update Required",
-      message: `Agent Orchestrator v${running} is no longer supported.`,
+      message: `Orchestrator v${running} is no longer supported.`,
       detail:
         `Version ${minVersion} or later is required. ` +
         "Download the latest release to continue using the app.",
@@ -80,7 +80,7 @@ export async function checkDesktopVersionFloor(): Promise<void> {
       defaultId: 0,
       cancelId: 1,
       title: "Update Available",
-      message: "A newer version of Agent Orchestrator is available.",
+      message: "A newer version of Orchestrator is available.",
       detail:
         `You are on v${running}. Version ${latestVersion} is recommended. ` +
         "You can update now or continue using the current version.",

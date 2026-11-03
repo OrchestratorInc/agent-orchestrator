@@ -103,6 +103,8 @@ export type SessionStaleBinary = { version: string; since: string; switchFailedA
 
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
+	/** The cleanup was started by a sweep, not an archive: its state raises no app feedback. */
+	workspaceCleanupReportOnly?: boolean;
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;

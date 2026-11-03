@@ -50,13 +50,14 @@ describe("normalizeInstallSource", () => {
 
 describe("detectCiEnvironment", () => {
 	const none = () => false;
-	it("flags CI env vars and containers, and honors CI=false", () => {
-		expect(detectCiEnvironment({}, none)).toEqual({ isCi: false });
-		expect(detectCiEnvironment({ CI: "true" }, none)).toEqual({ isCi: true, ciSignal: "ci_env" });
-		expect(detectCiEnvironment({ CI: "false" }, none)).toEqual({ isCi: false });
-		expect(detectCiEnvironment({ GITHUB_ACTIONS: "true" }, none)).toEqual({ isCi: true, ciSignal: "ci_env" });
-		expect(detectCiEnvironment({}, (f) => f === "/.dockerenv")).toEqual({ isCi: true, ciSignal: "container" });
-		expect(detectCiEnvironment({ KUBERNETES_SERVICE_HOST: "10.0.0.1" }, none)).toEqual({ isCi: true, ciSignal: "container" });
+	it("classifies CI and containers independently", () => {
+		expect(detectCiEnvironment({}, none)).toEqual({ isCi: false, isContainer: false });
+		expect(detectCiEnvironment({ CI: "true" }, none)).toEqual({ isCi: true, isContainer: false });
+		expect(detectCiEnvironment({ CI: "false" }, none)).toEqual({ isCi: false, isContainer: false });
+		expect(detectCiEnvironment({ GITHUB_ACTIONS: "true" }, none)).toEqual({ isCi: true, isContainer: false });
+		expect(detectCiEnvironment({}, (f) => f === "/.dockerenv")).toEqual({ isCi: false, isContainer: true });
+		expect(detectCiEnvironment({ KUBERNETES_SERVICE_HOST: "10.0.0.1" }, none)).toEqual({ isCi: false, isContainer: true });
+		expect(detectCiEnvironment({ CI: "true" }, (f) => f === "/.dockerenv")).toEqual({ isCi: true, isContainer: true });
 	});
 });
 

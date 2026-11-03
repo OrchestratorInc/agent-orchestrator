@@ -8,6 +8,7 @@ import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
+import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
@@ -17,6 +18,7 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
+import { seedCloudOpening } from "../lib/cloud-opening";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -41,6 +43,7 @@ const cloudGetSessionMock = cloudCpClientMock.getSession;
 const getCloudSessionMock = cloudCpClientMock.getSession;
 const listSessionEventsMock = cloudCpClientMock.listChatEvents;
 const autoAttachSessionTerminal = vi.hoisted(() => ({ current: true }));
+const refreshCloudSessionLifecycleMock = vi.hoisted(() => vi.fn(async () => undefined));
 const subscribeSessionEventsMock = vi.hoisted(() => vi.fn(async (_options: {
 	onEvent: (event: { type: string; createdAt: string; sessionId: string; sequence: number; payload: unknown }) => void;
 }) => undefined));
@@ -121,6 +124,19 @@ vi.mock("../hooks/useWindowFullScreen", () => ({
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: cloudGateState.cloudEnabled, localEnabled: true, client: "" }),
 }));
+// A test that names the session organization's features gets them; the rest
+// read the offering as the real hook does.
+const sessionOfferingFeatures = vi.hoisted(() => ({ current: undefined as string[] | undefined }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return {
+		...actual,
+		useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => {
+			const offering = actual.useCloudOffering(...args);
+			return sessionOfferingFeatures.current ? { ...offering, features: sessionOfferingFeatures.current } : offering;
+		},
+	};
+});
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
@@ -258,10 +274,9 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 });
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
-// the split under test. (ShellTopbar is shell-owned on Win/Linux; when the
-// platform hides the shell topbar, SessionView mounts it in-panel.)
-vi.mock("./ShellTopbar", () => ({
-	ShellTopbar: ({
+// the split under test.
+vi.mock("./SessionTopbarActions", () => ({
+	SessionTopbarActions: ({
 		sessionAction,
 		compactActions,
 	}: {
@@ -437,8 +452,9 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string } }) => (
+	CloudSessionChatSurface: ({ headerActions, sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string }; headerActions?: ReactNode }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
+			<div data-testid="cloud-chat-header-actions">{headerActions}</div>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
 			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
@@ -783,6 +799,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
 	refetchCloudProjectsForUnknownSessions: vi.fn(),
+	refreshCloudSessionLifecycle: refreshCloudSessionLifecycleMock,
 	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean, poll?: boolean) => {
 		cloudSessionLookup(orgId, sessionId, enabled);
 		cloudSessionPoll(poll);
@@ -904,7 +921,7 @@ function render(ui: ReactNode) {
 			wrapper: ({ children }) => (
 				<QueryClientProvider client={client}>
 					<TooltipProvider>
-						<SessionTopbarProvider>{children}</SessionTopbarProvider>
+						<SessionTopbarProvider><PageTopbarSurface notifications>{children}</PageTopbarSurface></SessionTopbarProvider>
 					</TooltipProvider>
 				</QueryClientProvider>
 			),
@@ -999,6 +1016,7 @@ describe("SessionView", () => {
 		cloudReviewGetMock.mockResolvedValue({ sessionId: "sess-2", reviews: [], runs: [] });
 		cloudGetSessionMock.mockReset();
 		subscribeSessionEventsMock.mockClear();
+		refreshCloudSessionLifecycleMock.mockClear();
 		listSessionEventsMock.mockReset();
 		listSessionEventsMock.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		getCloudSessionMock.mockReset();
@@ -1149,9 +1167,11 @@ describe("SessionView", () => {
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
+		const priorToast = useUiStore.getState().globalToast;
 		const view = render(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		expect(useUiStore.getState().globalToast).toBe(priorToast);
 		expect(chatSurfaceTransitionRenders[0]).toBe(true);
 		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);
@@ -1226,6 +1246,44 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 		expect(screen.queryByTestId("cloud-chat-surface")).not.toBeInTheDocument();
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
+	});
+
+	it("offers Share only where the session's organization may share", async () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		try {
+			sessionOfferingFeatures.current = ["share"];
+			const shared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(within(await screen.findByTestId("cloud-chat-header-actions")).getByRole("button", { name: "Share" })).toBeInTheDocument();
+			shared.unmount();
+
+			// WorkOS has not enabled sharing for the organization.
+			sessionOfferingFeatures.current = ["attachments"];
+			const notShared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+			notShared.unmount();
+
+			// A deleted session is not shared, whatever the organization may do.
+			sessionOfferingFeatures.current = ["share"];
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [{ ...cloudSession, isTerminated: true }] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+		} finally {
+			sessionOfferingFeatures.current = undefined;
+		}
 	});
 
 	it("keeps a Cloud Chat session's shell on the Cloud surface", () => {
@@ -1722,6 +1780,19 @@ describe("SessionView", () => {
 		expect(cloudResumeMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not ask a waking session's absent worker to prepare its workspace", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		checkout.mockClear();
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
+		// The checkout would follow the resume; let that chain settle first.
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
 	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
 		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
 		const id = "sess-2";
@@ -1810,6 +1881,33 @@ describe("SessionView", () => {
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
+	});
+
+	it("refreshes the sessions list once the loader's own poll sees the worker connect", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" };
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "bootstrapping", runtimeConnected: false } });
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(cloudGetSessionMock).toHaveBeenCalled());
+		expect(refreshCloudSessionLifecycleMock).not.toHaveBeenCalled();
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "running", runtimeConnected: true } });
+		await waitFor(() => expect(refreshCloudSessionLifecycleMock).toHaveBeenCalled(), { timeout: 3_000 });
+	});
+
+	it("refreshes the sessions list when the loader's stream reports this worker connecting", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" };
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "bootstrapping", runtimeConnected: false } });
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		const { onEvent } = subscribeSessionEventsMock.mock.lastCall![0];
+		// An earlier worker's connect, replayed from before this loader, is not this one.
+		act(() => onEvent({ type: "worker.connected", createdAt: new Date(Date.now() - 10 * 60_000).toISOString(), sessionId: "sess-2", sequence: 1, payload: {} }));
+		expect(refreshCloudSessionLifecycleMock).not.toHaveBeenCalled();
+		act(() => onEvent({ type: "worker.connected", createdAt: new Date().toISOString(), sessionId: "sess-2", sequence: 2, payload: {} }));
+		expect(refreshCloudSessionLifecycleMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("advances the active phrase when a later startup event arrives", async () => {
@@ -2026,6 +2124,122 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	describe("the first message of a session starting behind the startup screen", () => {
+		const queued = "Your message, sent when the workspace is ready";
+		const opening = (interfaceMode?: "chat" | "tui") => ({ clientMessageId: "req-1", text: "Fix the flaky login test", createdAt: new Date().toISOString(), ...(interfaceMode ? { interfaceMode } : {}) });
+
+		it("shows on a new Coder Chat session's startup screen", async () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening("chat")));
+			const loader = screen.getByTestId("cloud-session-loader-screen");
+			expect(await within(loader).findByRole("figure", { name: queued })).toHaveTextContent("Fix the flaky login test");
+			// The checklist stays.
+			expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
+		});
+
+		it("shows from the first frame, before a just-created Chat session resolves", async () => {
+			workspaceQueryState.data = [];
+			cloudSessionQueryState.isLoading = true;
+			try {
+				const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("chat")));
+				expect(await within(screen.getByTestId("cloud-session-loader-screen")).findByRole("figure", { name: queued })).toBeInTheDocument();
+				// One started in the terminal does not show it: the agent gets it as its prompt.
+				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("tui")));
+				await waitFor(() => expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument());
+			} finally {
+				cloudSessionQueryState.isLoading = false;
+			}
+		});
+
+		it("does not show on a terminal session's startup screen", async () => {
+			const session = workerSession("sess-2");
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening()));
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
+		});
+
+		it("leaves a Freestyle Chat session starting in place on its conversation", async () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening("chat")));
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
+	});
+
+	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			// Just created: the list does not have it yet.
+			workspaceQueryState.data = [];
+			cloudSessionQueryState.isLoading = true;
+			const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+			expect(listSessionEventsMock).not.toHaveBeenCalled();
+			// It resolves as a Chat session whose Coder workspace boots for minutes.
+			workspaceQueryState.data = [...workspaces, {
+				id: "cloud-project", name: "Cloud project", kind: "cloud", path: "",
+				sessions: [{
+					...workerSession("sess-1"), workspaceId: "cloud-project", mode: "chat", runtimeConnected: false,
+					cloud: { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" },
+				}],
+			}];
+			cloudSessionQueryState.isLoading = false;
+			view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+			// The chat under the screen reads them (mocked here); the screen reads none itself.
+			expect(listSessionEventsMock).not.toHaveBeenCalled();
+			// Its steps follow the chat's list.
+			act(() => view.client.setQueryData(["cloud-chat-events", "cloud-org", "sess-1"], [
+				{ type: "worker.connected", createdAt: new Date().toISOString(), sequence: 1, sessionId: "sess-1", payload: {} },
+			]));
+			await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
+		} finally {
+			vi.useRealTimers();
+			cloudSessionQueryState.isLoading = false;
+		}
+	});
+
+	it("reads a booting terminal session's events once, then only as a safety net while its stream is open", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		subscribeSessionEventsMock.mockImplementation(async (options) => {
+			const { onOpen, signal } = options as unknown as { onOpen?: () => void; signal: AbortSignal };
+			onOpen?.();
+			await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+		});
+		try {
+			const session = workerSession("sess-2");
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			render(<SessionView sessionId="sess-2" />);
+			await waitFor(() => expect(listSessionEventsMock).toHaveBeenCalledTimes(1));
+			await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
+			expect(listSessionEventsMock).toHaveBeenCalledTimes(1);
+			await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+			expect(listSessionEventsMock).toHaveBeenCalledTimes(2);
+		} finally {
+			subscribeSessionEventsMock.mockImplementation(async () => undefined);
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps the startup screen for a new terminal-mode cloud session", () => {
@@ -5041,7 +5255,7 @@ describe("SessionView", () => {
 	it("keeps the inspector toggle and trailing notification pinned while the panel changes state", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);
-		const actions = screen.getByTestId("session-pinned-actions");
+		const actions = screen.getByTestId("panel-topbar-controls");
 		const toggle = within(actions).getByRole("button", { name: "Close inspector panel" });
 		const notification = within(actions).getByRole("button", { name: "Notifications" });
 		const buttons = within(actions).getAllByRole("button");
@@ -5051,7 +5265,7 @@ describe("SessionView", () => {
 		fireEvent.click(toggle);
 
 		expect(inspectorOpen("sess-1")).toBe(false);
-		expect(screen.getByTestId("session-pinned-actions")).toBe(actions);
+		expect(screen.getByTestId("panel-topbar-controls")).toBe(actions);
 		expect(screen.getByRole("button", { name: "Notifications" })).toBe(notification);
 		expect(screen.getByRole("button", { name: "Open inspector panel" })).toBe(toggle);
 		expect(toggle).toHaveAttribute("aria-pressed", "false");

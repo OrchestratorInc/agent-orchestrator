@@ -7,6 +7,8 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, NO_PRESS_EFFECT, WithGitHubState } from "./FirstRunSteps";
+import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -30,6 +32,9 @@ type DestinationCheck =
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	firstRun = false,
+	onOpenLocalFolder,
+	onStartStandaloneAgent,
 	cloning = false,
 	disabled,
 	error,
@@ -49,6 +54,9 @@ export default function CloneRepositoryDialog({
 	existingProjectPaths = [],
 	value,
 }: {
+	firstRun?: boolean;
+	onOpenLocalFolder?: () => void;
+	onStartStandaloneAgent?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
@@ -82,6 +90,7 @@ export default function CloneRepositoryDialog({
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
+	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
@@ -203,7 +212,7 @@ export default function CloneRepositoryDialog({
 		try {
 			const selected = await aoBridge.app.chooseDirectory({
 				title: t("createProject.cloneChooseDestination"),
-				defaultPath: "~/ao/projects",
+				...(value.destinationParent ? { defaultPath: value.destinationParent } : {}),
 			});
 			if (requestId !== destinationPickerRequest.current) return;
 			if (!selected) return;
@@ -252,9 +261,45 @@ export default function CloneRepositoryDialog({
 	};
 
 	return (
-		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && onClose()}>
+		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && !firstRun && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+					{(() => {
+						const render = (gh: GitHubState) => {
+						const showRepoPicker = firstRun && gh.hasGitHub;
+						// Setup is offered only once the user reaches something git-related.
+						const gate = (run: () => void) => {
+							if (gh.needsSetup) setFirstRunStep("github");
+							else run();
+						};
+						const stepContent = (<>
+					{firstRun && firstRunStep === "welcome" ? (
+						<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+					) : null}
+					{firstRun && firstRunStep === "github" ? <FirstRunGitHubStep
+						onBack={() => setFirstRunStep("sources")}
+						onClose={onClose}
+						onDone={() => setFirstRunStep("clone")}
+					/> : null}
+					{firstRun && firstRunStep === "sources" ? (
+						<FirstRunSources
+							disabled={disabled}
+							gh={gh}
+							onBack={() => setFirstRunStep("welcome")}
+							onClose={onClose}
+							onPickRepo={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								setFirstRunStep("clone");
+							}}
+							onSubmitUrl={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								gate(() => setFirstRunStep("clone"));
+							}}
+							onOpenLocalFolder={onOpenLocalFolder}
+							onStartStandaloneAgent={onStartStandaloneAgent}
+						/>
+					) : null}
+					{!firstRun || firstRunStep === "clone" ? <>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
 						<Button
 							type="button"
@@ -262,16 +307,16 @@ export default function CloneRepositoryDialog({
 							size="icon"
 							aria-label={t("createProject.cloneBack")}
 							disabled={disabled || choosingDestination}
-							onClick={onBack}
+							onClick={firstRun ? () => setFirstRunStep("sources") : onBack}
 						>
 							<ChevronLeft className="size-4" aria-hidden="true" />
 						</Button>
 						<div className="min-w-0 flex-1 pr-8">
-							<Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-								{t("createProject.cloneTitle")}
+							<Dialog.Title className="text-[18px] text-balance font-semibold text-[var(--color-text-import-title)]">
+								{firstRun ? t("firstRun.startProject") : t("createProject.cloneTitle")}
 							</Dialog.Title>
-							<Dialog.Description className="sr-only">
-								{t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
+							<Dialog.Description className={firstRun ? "mt-1 text-[13px] leading-5 text-muted-foreground" : "sr-only"}>
+								{firstRun ? t("firstRun.description") : t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
 							</Dialog.Description>
 						</div>
 						<button
@@ -296,7 +341,7 @@ export default function CloneRepositoryDialog({
 							<div className="space-y-2">
 								<div className="relative">
 									<Label htmlFor="cloneRepositoryUrl" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-										{t("createProject.cloneRepositoryUrl")}
+										{showRepoPicker ? t("firstRun.pickRepo") : t("createProject.cloneRepositoryUrl")}
 									</Label>
 									<AnimatePresence initial={false}>
 										{inlineRepositoryError ? (
@@ -315,7 +360,9 @@ export default function CloneRepositoryDialog({
 										) : null}
 									</AnimatePresence>
 								</div>
-								<div className="relative">
+								{showRepoPicker ? (
+									<GitHubRepoPicker disabled={disabled} value={value.remoteUrl} onChange={(remoteUrl) => onChange({ ...value, remoteUrl })} />
+								) : <div className="relative">
 									<Input
 										id="cloneRepositoryUrl"
 										autoFocus
@@ -323,7 +370,7 @@ export default function CloneRepositoryDialog({
 										autoComplete="off"
 										aria-describedby={`cloneRepositoryUrlHelp${inlineRepositoryError ? " cloneRepositoryUrlError" : ""}`}
 										aria-invalid={urlError || duplicateError ? true : undefined}
-										className="bg-[var(--color-bg-import-card)] pl-10 pr-10 font-mono text-[13px]"
+										className={`bg-[var(--color-bg-import-card)] pl-10 pr-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 										disabled={disabled}
 										placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
 										spellCheck={false}
@@ -335,7 +382,7 @@ export default function CloneRepositoryDialog({
 										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking destination" })} />
 									) : null}
 									<RepositoryOwnerIcon owner={repositoryAvatar?.owner ?? null} avatarUrl={repositoryAvatar?.url ?? null} />
-								</div>
+								</div>}
 								<span id="cloneRepositoryUrlHelp" className="sr-only">
 									{t("createProject.cloneRepositoryUrlHelp")}
 								</span>
@@ -350,7 +397,7 @@ export default function CloneRepositoryDialog({
 										<Folder className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 										<Input
 											id="cloneDestination"
-											className="border-transparent bg-transparent pl-10 font-mono text-[13px]"
+											className={`border-transparent bg-transparent pl-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 											aria-describedby={`cloneDestinationHelp${destinationError ? " cloneDestinationError" : ""}`}
 											aria-invalid={Boolean(destinationError)}
 											disabled={disabled || choosingDestination}
@@ -407,12 +454,18 @@ export default function CloneRepositoryDialog({
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
 								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
-								<Button type="submit" variant="primary" disabled={!canContinue}>
+								<Button type="submit" variant="primary" className={firstRun ? NO_PRESS_EFFECT : undefined} disabled={!canContinue}>
 									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>
 					</form>
+					</> : null}
+						</>);
+						return firstRun ? <AnimatedStepBody>{stepContent}</AnimatedStepBody> : stepContent;
+						};
+						return firstRun ? <WithGitHubState>{render}</WithGitHubState> : render(NO_GITHUB_STATE);
+					})()}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>

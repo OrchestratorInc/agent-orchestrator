@@ -59,7 +59,10 @@
 	flex-shrink: 0;
 }
 
-.shortcuts-settings[data-shortcuts-layout] div:has(> [data-shortcuts-list]) > :not([data-shortcuts-list]) {
+/* A class, not div:has(> [data-shortcuts-list]): a :has() whose subject is any
+   div made Chromium restyle the whole document on every DOM change anywhere in
+   the app (each terminal frame paid a full style recalc). */
+.shortcuts-settings[data-shortcuts-layout] .shortcut-list-column > :not([data-shortcuts-list]) {
 	flex-shrink: 0;
 }
 

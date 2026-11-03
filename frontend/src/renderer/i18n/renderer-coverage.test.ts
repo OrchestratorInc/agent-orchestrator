@@ -24,7 +24,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"my-workspace/", "my-project", "web-app", "main", "github_pat_…", "ghp_...",
 		"https://github.com/owner/repo", "GitHub PAT",
 	],
-	"components/DaemonStartupLoader.tsx": ["Agent Orchestrator"],
+	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
 	// Technical branch/prefix examples moved with the common settings fields.
 	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
 	// Key-cap hint beside Cancel.

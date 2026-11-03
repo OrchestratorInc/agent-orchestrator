@@ -3,19 +3,20 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { Button } from "../ui/button";
-import { installView, type InstallJob } from "./installState";
+import { installView, showsExistingJob, type InstallJob } from "./installState";
 
 const POLL_INTERVAL_MS = 1500;
 
 /**
- * Offers to install the connector that makes this machine reachable from
- * outside the local network.
+ * Shows the connector that makes this machine reachable from outside the
+ * local network while it is being installed.
  *
- * Deliberately user-initiated rather than automatic. Every other install in AO
- * is, `brew install` can take minutes and update itself first — which would
- * look like a hang while someone waits on a QR — and on Linux it cannot be
- * automatic at all, because AO never asks for an administrator password and
- * has to hand over the command instead.
+ * The daemon downloads its own pinned cloudflared as soon as remote access
+ * needs one, so this mostly reports that download. The package-manager route
+ * (`brew`, `winget`, or a command to run on Linux, where AO never asks for an
+ * administrator password) is offered only after the download failed. The
+ * install button remains for a bridge that has not asked for the connector,
+ * such as a LAN-only one.
  */
 export function InstallCloudflared({ onInstalled }: { onInstalled: () => void }) {
 	const { t } = useTranslation();
@@ -52,6 +53,22 @@ export function InstallCloudflared({ onInstalled }: { onInstalled: () => void })
 		}, POLL_INTERVAL_MS);
 	};
 
+	// Pick up the download the daemon may already be running.
+	useEffect(() => {
+		let cancelled = false;
+		void (async () => {
+			const { data } = await apiClient.GET("/api/v1/system/install/{target}", {
+				params: { path: { target: "cloudflared" } },
+			});
+			if (cancelled || !data || !showsExistingJob(data)) return;
+			setJob((current) => current ?? data);
+			if (data.status === "running") poll();
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
 	async function start() {
 		setStarting(true);
 		setError(undefined);
@@ -76,11 +93,21 @@ export function InstallCloudflared({ onInstalled }: { onInstalled: () => void })
 					{t("mobile.installConnector", "Install cloudflared")}
 				</Button>
 			)}
-			{view.kind === "running" && (
+			{(view.kind === "running" || view.kind === "downloading") && (
 				<p className="flex items-center gap-1.5 text-xs text-settings-muted">
 					<Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
-					{t("mobile.installingConnector", "Installing cloudflared…")}
+					{view.kind === "downloading"
+						? t("mobile.downloadingConnector", "Downloading cloudflared…")
+						: t("mobile.installingConnector", "Installing cloudflared…")}
 				</p>
+			)}
+			{view.kind === "fallback" && (
+				<>
+					<p className="text-xs text-error">{view.reason}</p>
+					<Button type="button" variant="ghost" size="sm" className="self-start text-settings-muted hover:text-settings-label" onClick={() => void start()}>
+						{t("mobile.installConnectorFallback", "Install with your package manager")}
+					</Button>
+				</>
 			)}
 			{view.kind === "manual" && (
 				<>

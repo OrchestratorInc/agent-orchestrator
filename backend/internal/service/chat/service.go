@@ -63,6 +63,7 @@ type Service struct {
 	newID                  IDFactory
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
+	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
@@ -172,6 +173,10 @@ type Options struct {
 	// OnAccountChanged invalidates daemon-owned account readiness for the
 	// harness that emitted an account/updated notification.
 	OnAccountChanged func(domain.SessionID, string, domain.AgentHarness)
+	// RecheckAccount reads the session's account again when a turn starts while
+	// a refused login is pending, so a login that works clears the notice. It
+	// is not a refusal and leaves readiness alone.
+	RecheckAccount func(domain.SessionID, domain.AgentHarness)
 	// OnCodexCapacityChanged attributes a structured provider update to the one
 	// globally active AO Codex account. The callback owns profile-independent
 	// account state; conversation rows are not the authority for Codex capacity.
@@ -219,6 +224,7 @@ func New(opts Options) *Service {
 		newID:                  opts.NewID,
 		now:                    now,
 		onAccountChanged:       opts.OnAccountChanged,
+		recheckAccount:         opts.RecheckAccount,
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
@@ -433,7 +439,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.HistoryMode = ports.ChatHistoryRequired
 	}
 
-	replayCheckpoint := nativeHistoryCheckpoint{}
+	replayCheckpoint := nativeHistoryCheckpoint{harness: cfg.Harness}
 	nativeEvidence := ""
 	if cfg.HistoryMode == ports.ChatHistoryRequired {
 		if s.sessions == nil {
@@ -565,6 +571,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			verified.userMismatch = replayCheckpoint.userMismatch
 			verified.assistantMismatch = replayCheckpoint.assistantMismatch
 		}
+		verified.harness = cfg.Harness
 		replayCheckpoint = verified
 	}
 
@@ -574,7 +581,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		if err != nil {
 			return nil, err
 		}
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			return nil, err
 		}
 	}
@@ -777,7 +784,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.Permissions = conversation.Settings.ApprovalMode
 	}
 	if cfg.ProviderConversationID == "" {
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			return nil, err
 		}
 		conversation.Settings.Model = cfg.Model
@@ -904,7 +911,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			}
 			caps[ports.ChatCapabilityResume] = true
 		}
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, err
 		}
@@ -1035,7 +1042,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
@@ -1114,7 +1121,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, err
 		}
-		events = reconcileNativeHistory(events, existing.Turns, existing.Messages, existing.Activities)
+		events = reconcileNativeHistoryForHarness(cfg.Harness, events, existing.Turns, existing.Messages, existing.Activities)
 		if providerBoundary != nil {
 			if cfg.ProviderHandoff != nil {
 				// Visible, boundary-keyed provenance: earlier rows are retained but
@@ -2242,7 +2249,7 @@ func (s *Service) PreflightChat(
 	if err != nil {
 		return err
 	}
-	return capabilityAdmissionError(harness, caps, permissions)
+	return chatAdmissionError(driver, harness, caps, permissions)
 }
 
 // PermissionModes lists, strictest first, the permission modes harness can run a
@@ -2265,6 +2272,18 @@ func (s *Service) PermissionModes(ctx context.Context, harness domain.AgentHarne
 		}
 	}
 	return modes, nil
+}
+
+// chatAdmissionError keeps preflight and controller admission on the same
+// transport floor and provider-native permission contract.
+func chatAdmissionError(driver ports.ChatDriver, harness domain.AgentHarness, caps ports.ChatCapabilities, permissions ports.PermissionMode) error {
+	if err := capabilityAdmissionError(harness, caps, permissions); err != nil {
+		return err
+	}
+	if checker, ok := driver.(ports.ChatPermissionModeChecker); ok && !checker.SupportsPermissionMode(ports.NormalizePermissionMode(permissions)) {
+		return fmt.Errorf("%w: %s cannot run with %q", ports.ErrChatPermissionModeUnsupported, harness, permissions)
+	}
+	return nil
 }
 
 func capabilityAdmissionError(

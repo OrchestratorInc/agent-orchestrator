@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -75,8 +76,12 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				rt := tmux.New(tmux.Options{Binary: binary, LegacyBinary: binary, SocketName: tc.socket, Shell: "/bin/sh", Timeout: time.Second})
 				st := &fakeShellTerminalStore{}
 				workspace := t.TempDir()
-				svc := NewService(rt, st, nil, nil, workspace, "first-launch", testLogger())
-				term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{Shell: "/bin/sh"})
+				// Session-scoped: relaunch keeps only shells a session can show.
+				sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+					"session-1": {workspacePath: workspace},
+				}}
+				svc := NewService(rt, st, nil, sessions, workspace, "first-launch", testLogger())
+				term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "session-1", Shell: "/bin/sh"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -87,7 +92,7 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 					tmuxCommand("set-option", "-w", "-t", "="+term.HandleID+":0", "remain-on-exit", "on")
 				}
 				// Relaunching preserves the still-running requested shell.
-				svc = NewService(rt, st, nil, nil, workspace, "next-launch", testLogger())
+				svc = NewService(rt, st, nil, sessions, workspace, "next-launch", testLogger())
 				if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 					t.Fatalf("live reap = %d, %v", n, err)
 				}

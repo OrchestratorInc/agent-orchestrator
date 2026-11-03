@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 var (
@@ -47,6 +49,12 @@ type actionLifecycle interface {
 
 type mergeStateWriter interface {
 	MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error
+}
+
+// mergedViaWriter records which client asked AO to merge, for the worker PR
+// merge measurement (ao.usage.worker_pr_merged). Optional on the merge writer.
+type mergedViaWriter interface {
+	RecordWorkerPRMergedVia(ctx context.Context, prURL, mergedVia string) error
 }
 
 // ActionDeps contains the storage and SCM boundaries used by ActionService.
@@ -182,6 +190,14 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 		}
 	}
 	mergedAt := s.clock().UTC()
+	// Recorded before the merged row, so the usage flush can never see this
+	// merge without its client; a failed local write leaves the observer to
+	// record the merge later, still attributed correctly.
+	if via, ok := s.mergeWriter.(mergedViaWriter); ok {
+		if err := via.RecordWorkerPRMergedVia(ctx, tracked.URL, deliverytelemetry.MergedViaSurface(telemetrymeta.SurfaceFromContext(ctx))); err != nil {
+			s.logger.Warn("pr merge telemetry: record merged_via", "pr", tracked.URL, "err", err)
+		}
+	}
 	persisted := false
 	if s.mergeWriter != nil {
 		if err := s.mergeWriter.MarkPRMerged(ctx, tracked.URL, out.MergeCommitSHA, mergedAt); err != nil {

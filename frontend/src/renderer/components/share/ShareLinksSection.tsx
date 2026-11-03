@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { aoBridge } from "../../lib/bridge";
 import type { CloudCpShareLink } from "../../lib/cloud-cp";
-import { shareLinkUrl } from "../../lib/share-links";
+import { isShareCode, shareCodeLinkUrl, shareLinkUrl } from "../../lib/share-links";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -37,6 +37,16 @@ export function shareLinkRequest({ scope, access, modeCap, expiry, sessionId }: 
 		modeCap: access === "editor" ? modeCap : "read-only" as const,
 		...(hours ? { expiresInHours: hours } : {}),
 	};
+}
+
+/**
+ * The link to copy for a link just created: its short link when the control
+ * plane minted a well-formed code, else the token link (what a control plane
+ * with codes off returns), or undefined when the response carries neither.
+ */
+export function createdShareLinkUrl(baseUrl: string, orgId: string, link: Pick<CloudCpShareLink, "code" | "token">): string | undefined {
+	if (isShareCode(link.code)) return shareCodeLinkUrl(baseUrl, link.code);
+	return link.token ? shareLinkUrl(baseUrl, orgId, link.token) : undefined;
 }
 
 /** What an active link lets people do, naming a whole-project link as such. */
@@ -80,8 +90,9 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 	const create = useMutation({
 		mutationFn: async () => {
 			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
-			if (!link.token) throw new Error(t("share.noToken"));
-			return shareLinkUrl(baseUrl, orgId, link.token);
+			const url = createdShareLinkUrl(baseUrl, orgId, link);
+			if (!url) throw new Error(t("share.noToken"));
+			return url;
 		},
 		onSuccess: (url) => {
 			setCreated(url);

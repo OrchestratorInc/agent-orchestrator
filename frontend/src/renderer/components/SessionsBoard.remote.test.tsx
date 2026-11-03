@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionsBoard } from "./SessionsBoard";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -75,7 +75,10 @@ vi.mock("../stores/ui-store", () => {
 		setProjectRestarting: vi.fn(),
 		setOrchestratorStartupError: vi.fn(),
 	};
-	return { useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }) };
+	return {
+		sidebarOccupiesLayout: () => true,
+		useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }),
+	};
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
@@ -88,7 +91,11 @@ function worker(hostId: string, title = "Fix login", status = "working") {
 	};
 }
 
+/** Every client a test renders with, so afterEach can empty it. */
+const clients: QueryClient[] = [];
+
 function renderBoard(hostId: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+	clients.push(client);
 	const view = (host: string) => <QueryClientProvider client={client}>
 		<TooltipProvider><SessionsBoard key={host} hostId={host} projectId="shared" /></TooltipProvider>
 	</QueryClientProvider>;
@@ -106,6 +113,17 @@ beforeEach(() => {
 	};
 	mocks.remoteGet.mockResolvedValue({ data: { prs: [] } });
 	mocks.remotePost.mockResolvedValue({ data: {}, error: undefined });
+});
+
+// React Query hands updates to React on a 0ms timer. One queued as a test's
+// last fetch settles could fire after this file's DOM was torn down, and React
+// then threw "window is not defined" as an unhandled error that failed the
+// whole run. Unmount, empty the clients, then wait one tick so anything
+// already queued lands while the DOM still exists.
+afterEach(async () => {
+	cleanup();
+	for (const client of clients.splice(0)) client.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 it("renders the shared board with host-scoped data, PRs, actions, and navigation", async () => {

@@ -140,9 +140,15 @@ type CloudflaredLookup struct {
 	EnvPath string
 	// ManagedPath is where AO keeps its own pinned copy (~/.ao/bin/cloudflared).
 	ManagedPath string
-	LookPath    func(file string) (string, error)
-	Exists      func(path string) bool
-	Version     func(path string) (CloudflaredVersion, bool)
+	// ManagedVersion is the release AO pins. A managed copy that says it is
+	// another release is not used: the download replaces it, so a new pin
+	// reaches machines that hold an old one. One whose version cannot be read
+	// is kept: a slow first scan or a noexec mount would otherwise download it
+	// forever, and running it says what is wrong. Zero trusts any.
+	ManagedVersion CloudflaredVersion
+	LookPath       func(file string) (string, error)
+	Exists         func(path string) bool
+	Version        func(path string) (CloudflaredVersion, bool)
 }
 
 // CloudflaredResolution is which binary to run, or that one must be installed.
@@ -170,7 +176,7 @@ func ResolveCloudflared(l CloudflaredLookup) CloudflaredResolution {
 	if l.EnvPath != "" {
 		return CloudflaredResolution{Path: l.EnvPath, Source: CloudflaredFromEnv}
 	}
-	if l.ManagedPath != "" && l.Exists != nil && l.Exists(l.ManagedPath) {
+	if l.ManagedPath != "" && l.Exists != nil && l.Exists(l.ManagedPath) && l.managedIsPinned() {
 		return CloudflaredResolution{Path: l.ManagedPath, Source: CloudflaredManaged}
 	}
 	if l.LookPath != nil {
@@ -184,6 +190,17 @@ func ResolveCloudflared(l CloudflaredLookup) CloudflaredResolution {
 	return CloudflaredResolution{Source: CloudflaredAbsent, NeedsInstall: true}
 }
 
+func (l CloudflaredLookup) managedIsPinned() bool {
+	if l.ManagedVersion == (CloudflaredVersion{}) {
+		return true
+	}
+	if l.Version == nil {
+		return false
+	}
+	v, ok := l.Version(l.ManagedPath)
+	return !ok || v == l.ManagedVersion
+}
+
 // ManagedCloudflaredPath is where AO keeps its own pinned copy.
 func ManagedCloudflaredPath(dataDir string) string {
 	name := "cloudflared"
@@ -194,12 +211,14 @@ func ManagedCloudflaredPath(dataDir string) string {
 }
 
 // LocalCloudflaredLookup builds the production lookup: the real PATH, the real
-// filesystem, and `cloudflared --version` for the version gate.
-func LocalCloudflaredLookup(dataDir string) CloudflaredLookup {
+// filesystem, and `cloudflared --version` for the version gates. pinned is the
+// release AO's own copy must be.
+func LocalCloudflaredLookup(dataDir string, pinned CloudflaredVersion) CloudflaredLookup {
 	return CloudflaredLookup{
-		EnvPath:     os.Getenv("AO_CLOUDFLARED_PATH"),
-		ManagedPath: ManagedCloudflaredPath(dataDir),
-		LookPath:    exec.LookPath,
+		EnvPath:        os.Getenv("AO_CLOUDFLARED_PATH"),
+		ManagedPath:    ManagedCloudflaredPath(dataDir),
+		ManagedVersion: pinned,
+		LookPath:       exec.LookPath,
 		Exists: func(p string) bool {
 			fi, err := os.Stat(p)
 			return err == nil && !fi.IsDir()
@@ -286,9 +305,16 @@ type TunnelStatus struct {
 	// started yet" were both a zero value, so the desktop showed an ordinary QR
 	// and the user had no way to learn that reaching this machine from outside
 	// the network is simply not available here.
-	Supported bool   `json:"supported"`
-	Running   bool   `json:"running"`
-	Ready     bool   `json:"ready"`
+	Supported bool `json:"supported"`
+	// Installing is set while no connector is installed but one is being
+	// installed; it starts by itself when it lands.
+	Installing bool `json:"installing"`
+	Running    bool `json:"running"`
+	Ready      bool `json:"ready"`
+	// Fixed is set while the connector serves this machine's fixed address,
+	// whose hostname stays the same across restarts, rather than a quick
+	// tunnel's.
+	Fixed     bool   `json:"fixed"`
 	Hostname  string `json:"hostname"`
 	Location  string `json:"location"`
 	LastError string `json:"lastError"`
@@ -310,6 +336,8 @@ type TunnelRuntime struct {
 	// a brand-new quick tunnel hostname takes roughly twenty more seconds to
 	// resolve, and a phone handed the address before then gets "no such host".
 	settled bool
+	// fixed is set once this run serves a named tunnel; see NamedHostname.
+	fixed   bool
 	lastErr string
 }
 
@@ -324,6 +352,7 @@ func (r *TunnelRuntime) Started() {
 	r.log = TunnelLog{}
 	r.running = true
 	r.settled = false
+	r.fixed = false
 	r.lastErr = ""
 }
 
@@ -369,6 +398,15 @@ func (r *TunnelRuntime) Settled() {
 	r.settled = true
 }
 
+// NamedHostname records a named tunnel's address, which cloudflared never
+// prints. Whether it still has to settle is the runner's call.
+func (r *TunnelRuntime) NamedHostname(hostname string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.log.URL = "https://" + hostname
+	r.fixed = true
+}
+
 // UnsettledHostname is a registered hostname still inside its settling window,
 // or "" when nothing is waiting — not registered yet, or already settled.
 func (r *TunnelRuntime) UnsettledHostname() string {
@@ -387,6 +425,7 @@ func (r *TunnelRuntime) Snapshot() TunnelStatus {
 	return TunnelStatus{
 		Running:   r.running,
 		Ready:     r.running && r.log.Ready() && r.settled,
+		Fixed:     r.fixed,
 		Hostname:  hostnameOf(r.log.URL),
 		Location:  r.log.Location,
 		LastError: r.lastErr,
@@ -430,7 +469,9 @@ func TunnelBackoff(attempt int) time.Duration {
 // off because the hostname is only available by scraping the log, and a
 // self-update could swap the binary out from under that pinned format. The
 // metrics listener is what /ready is polled on, which is a far more reliable
-// readiness signal than the log alone.
+// readiness signal than the log alone. A personal ~/.cloudflared/config.yml
+// still applies, as it always has, so settings such as protocol: http2 keep
+// working.
 func CloudflaredArgs(localPort, metricsPort int) []string {
 	return []string{
 		"tunnel",
@@ -438,6 +479,13 @@ func CloudflaredArgs(localPort, metricsPort int) []string {
 		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		"--no-autoupdate",
 	}
+}
+
+// NamedCloudflaredArgs runs this host's locally configured fixed-address
+// tunnel (see FixedTunnelSource). Its run token arrives in TUNNEL_TOKEN, which
+// keeps it out of the process list.
+func NamedCloudflaredArgs(localPort, metricsPort int) []string {
+	return append(CloudflaredArgs(localPort, metricsPort), "run")
 }
 
 var tunnelPIDLocks = struct {

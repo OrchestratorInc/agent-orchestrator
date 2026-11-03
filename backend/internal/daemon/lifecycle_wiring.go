@@ -23,6 +23,7 @@ import (
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
@@ -74,6 +75,9 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
+		// One delivery recorder for every owner of a session end; services
+		// reach it through lcm.DeliveryTelemetry().
+		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
 		lifecycle.WithContainerReaper(dockerreap.New(), store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
@@ -211,6 +215,10 @@ type sessionLifecycle interface {
 	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
+	// ReconcileWorkspaceCleanup finishes interrupted workspace cleanups and
+	// records sessions with nothing left on disk; it never deletes a worktree
+	// the user has not asked to remove.
+	ReconcileWorkspaceCleanup(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration) error
 	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
@@ -352,6 +360,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Tracker:           tracker,
 		Telemetry:         telemetry,
 		Milestones:        installMilestones(cfg),
+		Delivery:          lcm.DeliveryTelemetry(),
 		Logger:            log,
 		BackgroundContext: ctx,
 		AgentReadiness:    agentReadiness,
@@ -723,6 +732,10 @@ var _ interface {
 
 func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
+}
+
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
 }
 
 func (c chatLauncher) PreflightChat(

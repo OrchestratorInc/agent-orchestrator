@@ -38,7 +38,7 @@ import {
 
 export type { ShareScope, ShareModeCap } from "./share/accessLabels";
 export type { ShareAccess, ShareExpiry } from "./share/ShareLinksSection";
-export { shareLinkLabel, shareLinkRequest, shareLinksQueryKey } from "./share/ShareLinksSection";
+export { createdShareLinkUrl, shareLinkLabel, shareLinkRequest, shareLinksQueryKey } from "./share/ShareLinksSection";
 
 const ROLE_RANK: Record<string, number> = { viewer: 1, editor: 2, member: 3 };
 

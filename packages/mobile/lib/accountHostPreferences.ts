@@ -20,6 +20,18 @@ export async function ignoredAccountHosts(accountId: string): Promise<Set<string
 	} catch { return new Set(); }
 }
 
+/** Carry the hidden machines over to an account's new ID. Call it inside
+ * mutateAccountHosts; it does not queue itself. */
+export async function moveIgnoredAccountHosts(fromAccountId: string, toAccountId: string): Promise<void> {
+	const moved = await ignoredAccountHosts(fromAccountId);
+	if (moved.size) {
+		const ids = await ignoredAccountHosts(toAccountId);
+		for (const id of moved) ids.add(id);
+		await AsyncStorage.setItem(ignoredKey(toAccountId), JSON.stringify([...ids]));
+	}
+	await AsyncStorage.removeItem(ignoredKey(fromAccountId));
+}
+
 /** Forget is durable on this phone without waiting for any network request. */
 export function ignoreAccountHost(accountId: string, hostId: string): Promise<void> {
 	return mutateAccountHosts(async () => {

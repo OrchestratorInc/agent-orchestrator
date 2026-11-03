@@ -28,7 +28,7 @@ import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
-import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
+import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
@@ -483,6 +483,10 @@ const TimelineItem = memo(function TimelineItem({
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
 	if (render) return <RenderFrame render={render} />;
+	// An HTML page the agent reported with ao report --artifact, in the same frame.
+	const artifact = item.activityKind === "system" ? readArtifactRef(item.detail) : undefined;
+	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
+	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;

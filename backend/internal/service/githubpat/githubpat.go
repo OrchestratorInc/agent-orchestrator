@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // ErrInvalidCredentials reports that GitHub rejected the stored credential.
@@ -245,6 +247,9 @@ func (s *Service) refreshLocked(ctx context.Context, stored storedPAT) (storedPA
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+			return storedPAT{}, ErrInvalidCredentials
+		}
 		return storedPAT{}, fmt.Errorf("github token refresh: status %d", resp.StatusCode)
 	}
 	var out struct {
@@ -259,7 +264,7 @@ func (s *Service) refreshLocked(ctx context.Context, stored storedPAT) (storedPA
 		return storedPAT{}, fmt.Errorf("github token refresh: decode: %w", err)
 	}
 	if out.Error != "" {
-		return storedPAT{}, fmt.Errorf("github token refresh: %s", out.Error)
+		return storedPAT{}, ErrInvalidCredentials
 	}
 	if out.AccessToken == "" {
 		return storedPAT{}, fmt.Errorf("github token refresh: no access token returned")
@@ -314,7 +319,10 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 		// a transient failure must not wipe a still-valid credential.
 		newToken, rerr := s.forceRefresh(ctx)
 		if rerr != nil {
-			return nil, ErrInvalidCredentials
+			if errors.Is(rerr, ErrInvalidCredentials) {
+				return nil, ErrInvalidCredentials
+			}
+			return nil, fmt.Errorf("%w: %w", apierr.Unavailable("GITHUB_REFRESH_UNAVAILABLE", "GitHub credential refresh is temporarily unavailable"), rerr)
 		}
 		repos, status, err = s.fetchRepos(ctx, newToken)
 		if err != nil {

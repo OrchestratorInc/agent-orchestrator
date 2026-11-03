@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
@@ -60,6 +61,30 @@ type InstallScriptResult struct {
 // exposing script authority to clients.
 type InstallScriptRunner interface {
 	RunInstallScript(ctx context.Context, command InstallScriptCommand, stdout, stderr io.Writer) (InstallScriptResult, error)
+}
+
+// ErrDownloadRejected marks a managed download whose bytes were wrong (a
+// checksum mismatch, an asset over the size limit, an archive without the
+// binary): trying again would fetch the same.
+var ErrDownloadRejected = errors.New("download rejected")
+
+// ManagedBinaryDownload is a daemon-owned release asset installed into AO's
+// own bin directory (<data dir>/bin). SHA256 pins the downloaded bytes and is
+// checked before anything reads them. ArchiveMember names the executable
+// inside a .tar.gz asset; empty means the asset is the executable itself.
+type ManagedBinaryDownload struct {
+	URL           string
+	SHA256        string
+	ArchiveMember string
+	// Name is the file name under the bin directory, e.g. "cloudflared.exe".
+	Name string
+}
+
+// ManagedBinaryInstaller downloads a pinned release executable into AO's bin
+// directory and returns where it landed. An unverified file never becomes
+// executable or reaches that path.
+type ManagedBinaryInstaller interface {
+	InstallManagedBinary(ctx context.Context, download ManagedBinaryDownload) (string, error)
 }
 
 // NPMInstallCapabilities is one request-scoped npm/Node preflight snapshot.
