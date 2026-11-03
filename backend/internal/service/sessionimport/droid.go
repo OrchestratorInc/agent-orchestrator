@@ -13,8 +13,8 @@ import (
 // <root>/sessions/-<cwd-dashed>/<id>.jsonl, beside a <id>.settings.json sidecar
 // that import ignores. The file name is the native session id, matching the id
 // in the session_start record and the id `droid exec --output-format acp-daemon`
-// resolves for session/load (the daemon finds a session by id across every
-// cwd-dashed folder, so an imported chat resumes from AO's worktree).
+// resolves for session/load. Import offering remains deferred until native
+// resumed tools are verified to run in AO's worktree; the parser is retained.
 const (
 	// droidHomeEnv overrides Droid's home; ".factory" is appended to it. It is a
 	// home override, not a direct state-dir path, unlike CLAUDE_CONFIG_DIR.
