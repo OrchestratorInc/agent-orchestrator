@@ -115,7 +115,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		switch {
 		case err == nil && info.Mode().IsRegular():
 			return path, true, nil
-		case err == nil, errors.Is(err, os.ErrNotExist):
+		case err == nil, errors.Is(err, os.ErrNotExist), errors.Is(err, os.ErrPermission):
 			continue
 		default:
 			return "", false, fmt.Errorf("qwen: stat transcript: %w", err)
