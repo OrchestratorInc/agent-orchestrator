@@ -354,8 +354,14 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if importer, ok := harnessImporters[harness]; ok {
 		return importer.read(ctx, root, paths...)
 	}
+	if harness == domain.HarnessOMP {
+		return readOMPTranscript(ctx, root, paths...)
+	}
 	if harness == domain.HarnessPi {
 		return readPiTranscript(ctx, root, paths...)
+	}
+	if harness == domain.HarnessKimchi {
+		return readKimchiTranscript(ctx, root, paths...)
 	}
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
@@ -364,8 +370,12 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	// Harnesses whose transcript format differs from the Claude/Codex JSONL
 	// handled below parse in their own file.
 	switch harness {
+	case domain.HarnessCopilot:
+		return readCopilotTranscript(ctx, root, paths...)
 	case domain.HarnessKimi:
 		return readKimiTranscript(ctx, root, paths...)
+	case domain.HarnessQwen:
+		return readQwenTranscript(ctx, root, paths...)
 	case domain.HarnessOpenCode:
 		// OpenCode's history lives in a SQLite database read by session id.
 		return readOpenCodeTranscript(ctx, root, paths...)

@@ -158,7 +158,6 @@ function HomePageContent() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, workspaceStartupState } =
 		useShell();
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
@@ -240,7 +239,8 @@ function HomePageContent() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
-							{developerMode && cloudEnabled ? (
+							{/* Cloud is on for everyone a control plane is configured for. */}
+							{cloudEnabled ? (
 								<HomeActionCard
 									icon={<Cloud strokeWidth={1.8} />}
 									label={t("createProject.cloudTitle")}
