@@ -1,84 +1,108 @@
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, StyleSheet, TextInput, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
-import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
-import { COMPOSER_RADIUS } from "../chat/composerStyles";
+import { ComposerGlass } from "../chat/composer-glass";
+import { COMPOSER_DISC, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "../chat/composerStyles";
 import { DictationField } from "../voice/DictationField";
-import { MicKey } from "../voice/MicKey";
 import type { VoiceState } from "../voice/types";
 import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import type { Theme } from "../theme";
-import { haptics } from "../haptics";
 import type { SendTarget } from "./sendRoute";
-import { RouteToggle } from "./RouteToggle";
-import { font, iconSize, space, stateOpacity, touchTarget, type } from "../tokens";
+import { iconSize, radius, space, stateOpacity, touchTarget } from "../tokens";
 
-// One field, one send button. The normal route sends a message to the agent; the
-// terminal route is an explicit escape hatch for prompts that need a literal
-// character, and the session screen auto-engages it when the daemon reports a
-// blocked permission prompt (see sendRoute.ts).
+/** Dictate, filled as on the chat composer's round button. */
+const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
+
+// One field, one round button. The normal route sends a message to the agent; the
+// terminal route types into the terminal instead, and the session screen engages
+// it when the daemon reports a blocked permission prompt (see sendRoute.ts).
 //
-// Drawn as the chat composer is — one capsule with the glass behind it on iOS 26,
-// the elevated fill elsewhere, and touch-target controls — so the two screens of
-// one session do not type into two different-looking fields.
+// Drawn as the chat composer is when collapsed — one capsule with the glass
+// behind it on iOS 26, the elevated fill elsewhere — so the two screens of one
+// session do not type into two different-looking fields. The round button
+// follows the prompt as the chat's does: it dictates while the field is empty,
+// sends once there is something to send, and stops the mic while it is open.
 export function Composer({
 	value,
 	onChangeText,
 	onSend,
 	sending,
 	target,
-	onTargetChange,
 	voice,
 	keyboardVisible,
 	onDismissKeyboard,
-	targetLocked,
 }: {
 	value: string;
 	onChangeText: (v: string) => void;
 	onSend: () => void;
 	sending: boolean;
 	target: SendTarget;
-	onTargetChange: (target: SendTarget) => void;
 	voice: { state: VoiceState; partial: string; toggleLatched(): void; subscribeLevel(listener: (level: number) => void): () => void };
 	keyboardVisible: boolean;
 	onDismissKeyboard: () => void;
-	/** Plain worktree shells have no agent route; hide the misleading toggle. */
-	targetLocked?: boolean;
 }) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const fieldSize = useComposerFieldSize();
 	const iconFeedback = usePressFeedback("icon");
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
-	const canSend = !!value.trim() && !sending;
+	const hasDraft = !!value.trim();
+	const canSend = hasDraft && !sending;
 	const toTerminal = target === "terminal";
-	const dictating = voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing";
+	const listening = voice.state === "starting" || voice.state === "recording";
+	const transcribing = voice.state === "transcribing";
+	const dictating = listening || transcribing;
+	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	const primary = listening ? "stopDictation" : transcribing ? "transcribing" : !hasDraft && canDictate ? "dictate" : "send";
+
+	// No haptic of its own on send: the screen confirms the send, or its failure,
+	// once it knows which happened.
+	const roundButton = primary === "send"
+		? <Pressable
+			accessibilityRole="button"
+			accessibilityLabel="Send"
+			accessibilityState={{ disabled: !canSend }}
+			disabled={!canSend}
+			onPress={onSend}
+			android_ripple={sendFeedback.android_ripple}
+			style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed, !canSend && styles.disabled]}
+		>
+			<View style={[styles.roundDisc, styles.roundAccent]}>
+				{sending ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.sm} weight="bold" color={t.onAccent} />}
+			</View>
+		</Pressable>
+		: <Pressable
+			accessibilityRole="button"
+			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate a message"}
+			accessibilityState={{ disabled: transcribing, busy: transcribing }}
+			disabled={transcribing}
+			android_ripple={sendFeedback.android_ripple}
+			onPress={() => { if (primary === "dictate") Keyboard.dismiss(); voice.toggleLatched(); }}
+			style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed]}
+		>
+			<View style={[styles.roundDisc, primary === "stopDictation" ? styles.roundLive : styles.roundAccent]}>
+				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+			</View>
+		</Pressable>;
 
 	return (
 		<View style={styles.bar}>
-			<View style={styles.pill}>
+			<View style={styles.composer}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
-				<View style={styles.row}>
-					{!targetLocked ? (
-						<RouteToggle
-							on={toTerminal}
-							onChange={(on) => {
-								haptics.select();
-								onTargetChange(on ? "terminal" : "agent");
-							}}
-						/>
-					) : null}
+				<View style={[styles.composerRow, fieldSize.row]}>
 					{/* While the mic is open the dictation takes the field's place, as in
 					    the chat's composer, rather than a strip over the terminal. */}
-					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
+					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 					<TextInput
-						style={[styles.input, dictating && styles.hiddenField]}
+						style={[styles.input, fieldSize.field, styles.inputLeading, dictating && styles.hiddenField]}
 						accessibilityLabel={toTerminal ? "Text for the terminal" : "Message the agent"}
 						value={value}
 						onChangeText={onChangeText}
 						placeholder={toTerminal ? "Send to terminal…" : "Message the agent…"}
 						placeholderTextColor={t.textFaint}
+						maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
 						multiline
 						keyboardAppearance={scheme}
 						{...textSelectionColors(t)}
@@ -87,7 +111,7 @@ export function Composer({
 					/>
 					{/* Only offered while there is a keyboard to dismiss, instead of a
 					    permanent toggle that claimed to hide a keyboard it did not own. */}
-					{keyboardVisible ? (
+					{keyboardVisible && !dictating ? (
 						<Pressable
 							accessibilityRole="button"
 							accessibilityLabel="Hide keyboard"
@@ -98,62 +122,20 @@ export function Composer({
 							<AppSymbol name="keyboardDismiss" size={iconSize.lg} color={t.textSecondary} />
 						</Pressable>
 					) : null}
-					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} onToggleLatched={voice.toggleLatched} />
-					{/* No haptic of its own: the screen confirms the send, or its failure,
-					    once it knows which happened. */}
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Send"
-						accessibilityState={{ disabled: !canSend }}
-						disabled={!canSend}
-						onPress={onSend}
-						android_ripple={sendFeedback.android_ripple}
-						style={({ pressed }) => [styles.control, styles.send, !canSend && styles.disabled, pressed && sendFeedback.pressed]}
-					>
-						<AppSymbol name="send" size={iconSize.lg} color={t.onAccent} weight="semibold" />
-					</Pressable>
+					{roundButton}
 				</View>
 			</View>
 		</View>
 	);
 }
 
-// Single-line text sits centred in a touch-target-tall field, and the field
-// grows to about four lines before it scrolls, so a long prompt can't swallow
-// the terminal above it.
-const LINE_HEIGHT = type.subheadline.lineHeight;
-const FIELD_MAX_HEIGHT = 4 * LINE_HEIGHT + (touchTarget - LINE_HEIGHT);
-
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		bar: {
-			paddingHorizontal: space.md,
-			paddingTop: space.xs,
-			paddingBottom: space.xs,
-		},
-		// The fill goes transparent where the glass layer draws behind it: an opaque
-		// pill under a material is the one arrangement that turns glass grey.
-		pill: {
-			paddingHorizontal: space.xxs,
-			paddingVertical: space.xxs,
-			borderRadius: COMPOSER_RADIUS,
-			borderCurve: "continuous",
-			backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated,
-		},
-		// Bottom-aligned, so the controls stay put while the field grows above them.
-		row: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
-		input: {
-			flex: 1,
-			minHeight: touchTarget,
-			maxHeight: FIELD_MAX_HEIGHT,
-			paddingHorizontal: space.xs,
-			paddingVertical: (touchTarget - LINE_HEIGHT) / 2,
-			fontFamily: font.regular,
-			fontSize: type.subheadline.fontSize,
-			lineHeight: LINE_HEIGHT,
-			color: t.textPrimary,
-			textAlignVertical: "top",
-		},
+		...composerStyleRules(t),
+		// The chat dock's gutter, so the pill is the same width on both screens.
+		bar: { paddingHorizontal: space.sm, paddingVertical: space.xs },
+		// The field starts just clear of the capsule's curve.
+		inputLeading: { paddingLeft: space.sm },
 		control: {
 			width: touchTarget,
 			height: touchTarget,
@@ -162,8 +144,13 @@ const makeStyles = (t: Theme) =>
 			alignItems: "center",
 			justifyContent: "center",
 		},
-		send: { backgroundColor: t.accent },
-		dictation: { minHeight: touchTarget, paddingHorizontal: space.xs },
+		// The chat composer's round button: a touch target holding a filled disc,
+		// the accent to send or dictate, red while the mic is open.
+		roundTarget: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+		roundDisc: { width: COMPOSER_DISC, height: COMPOSER_DISC, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+		roundAccent: { backgroundColor: t.accent },
+		roundLive: { backgroundColor: t.red },
+		dictation: { flex: 1, minHeight: touchTarget, paddingHorizontal: space.xs },
 		// Out of the layout while dictating, but still mounted with its draft.
 		hiddenField: { display: "none" },
 		disabled: { opacity: stateOpacity.disabled },

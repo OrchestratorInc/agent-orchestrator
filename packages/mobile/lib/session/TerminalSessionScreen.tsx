@@ -629,7 +629,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const [kbVisible, setKbVisible] = useState(false); // both platforms
 	const [msg, setMsg] = useState("");
 	const [sending, setSending] = useState(false);
-	const [sendTarget, setSendTarget] = useState<SendTarget>(shellOnly ? "terminal" : "agent");
+	// A plain shell has no agent to message. Otherwise each send goes to the agent
+	// and falls back to the terminal while it waits on a prompt (routeForSend).
+	const sendTarget: SendTarget = shellOnly ? "terminal" : "agent";
 	// A terminated session has no live PTY (the mux answers "Session not found").
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
@@ -978,7 +980,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
 				setMsg("");
-				setSendTarget("terminal");
 				showNotice(REROUTED_NOTICE, "info");
 			} else {
 				haptics.error();
@@ -1493,11 +1494,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					onSend={sendPrompt}
 					sending={sending || interfaceTransitionActive}
 					target={sendTarget}
-					onTargetChange={setSendTarget}
 					voice={voice}
 					keyboardVisible={kbVisible}
 					onDismissKeyboard={Keyboard.dismiss}
-					targetLocked={shellOnly}
 				/>
 			</View>
 			{/* Absolutely placed, so it comes last and draws over the dock's
