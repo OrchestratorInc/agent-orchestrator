@@ -25,6 +25,7 @@ type errCapture struct{ captured CapturedError }
 // decides which layer owns the Sentry report.
 type CapturedError struct {
 	Err            error
+	Code           string
 	ReportingOwner ownership.Owner
 	Fields         map[string]any
 	FailureSite    telemetrymeta.FailureSite
@@ -98,8 +99,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // WriteAPIError emits the locked envelope for any non-2xx response.
 func WriteAPIError(w http.ResponseWriter, r *http.Request, status int, kind, code, message string, details map[string]any) {
 	if status >= http.StatusInternalServerError {
-		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok && c.captured.FailureSite.String() == "" {
-			c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
+		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
+			c.captured.Code = code
+			if c.captured.FailureSite.String() == "" {
+				c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
+			}
 		}
 	}
 	writeAPIError(w, r, status, kind, code, message, details, "")
@@ -151,6 +155,17 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil, reportingOwner)
+}
+
+// WriteErrorWithCode gives an unclassified failure a stable operation code.
+// Classified failures retain their existing status and client envelope.
+func WriteErrorWithCode(w http.ResponseWriter, r *http.Request, err error, code, message string) {
+	var typed *apierr.Error
+	if errors.As(err, &typed) || isTransient(err) || errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		WriteError(w, r, err)
+		return
+	}
+	WriteError(w, r, apierr.InternalCause(code, message, err))
 }
 
 // SQLite primary result codes for a busy/locked database. Extended codes (e.g.

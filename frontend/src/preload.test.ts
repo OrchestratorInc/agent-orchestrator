@@ -421,3 +421,28 @@ describe("preload browser downloads bridge", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
 	});
 });
+
+describe("preload cloud binary requests", () => {
+	const init = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments", method: "POST" };
+
+	it("cancels a request by its id, and every one still running when the page goes away", async () => {
+		let finish!: (value: unknown) => void;
+		electronMocks.invoke.mockReturnValueOnce(new Promise(() => undefined)).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		const bridge = exposedBridge().cloudCp;
+		void bridge.requestBinary({ ...init, requestId: "running" });
+		const done = bridge.requestBinary({ ...init, requestId: "done" });
+		expect(electronMocks.invoke).toHaveBeenCalledWith("cloudCp:requestBinary", expect.objectContaining({ requestId: "running" }));
+		finish({ status: 201, headers: {}, body: new Uint8Array() });
+		await done;
+
+		bridge.cancelBinary("other");
+		expect(electronMocks.send).toHaveBeenCalledWith("cloudCp:cancelBinary", "other");
+		electronMocks.send.mockClear();
+		// A reload: what still runs is cancelled, not what already finished.
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send.mock.calls).toEqual([["cloudCp:cancelBinary", "running"]]);
+		electronMocks.send.mockClear();
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send).not.toHaveBeenCalled();
+	});
+});

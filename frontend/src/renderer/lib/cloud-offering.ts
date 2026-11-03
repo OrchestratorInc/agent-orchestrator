@@ -20,6 +20,12 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
+export const SHARE_FEATURE = "share";
+/** Offering feature the control plane sends while its session attachment routes are on. */
+export const ATTACHMENTS_FEATURE = "attachments";
+/** The largest Cloud attachment when the control plane takes files but names no limit. */
+export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export interface ResolvedCloudOffering {
 	providers: string[];
@@ -29,6 +35,12 @@ export interface ResolvedCloudOffering {
 	/** Undefined while a fallback still waits on the billing summary. */
 	billingMode: CloudCpBillingMode | undefined;
 	features: string[];
+	/**
+	 * The largest file a Cloud session takes as an attachment; undefined when
+	 * the control plane takes none (no attachments feature), so no surface
+	 * offers to attach.
+	 */
+	maxAttachmentBytes: number | undefined;
 	/**
 	 * The org may connect its own Coder deployment (it holds the coder
 	 * capability), which shows the Coder settings page. An older control plane
@@ -114,6 +126,9 @@ export function resolveCloudOffering(
 			kind: offering.kind ?? offeringKindFor(providers),
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
+			maxAttachmentBytes: offering.features?.includes(ATTACHMENTS_FEATURE)
+				? (offering.maxAttachmentBytes && offering.maxAttachmentBytes > 0 ? offering.maxAttachmentBytes : CLOUD_MAX_ATTACHMENT_BYTES)
+				: undefined,
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
 			artifacts: offering.artifacts ?? false,
 			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
@@ -130,6 +145,7 @@ export function resolveCloudOffering(
 		kind: offeringKindFor(providers),
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
+		maxAttachmentBytes: undefined,
 		customCoder: providers.includes(CODER_PROVIDER),
 		artifacts: false,
 		coderWorkerWorkingFolder: false,
