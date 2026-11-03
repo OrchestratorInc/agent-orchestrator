@@ -1,9 +1,10 @@
 # M1 Workflow 核心开发任务计划
 
-> 状态：**任务已拆解，代码实施尚未开始**。
-> 日期：2026-11-03；工作区：`E:\code\agent-orchestrator`；分支：`feat/multi-agent-desktop`。
+> 状态：**M1-01、M1-02、M1-03、M1-04、M1-05 全部完成，M1-05 验证通过（2026-11-03）**；全程仍然**零 Provider**——未启动真实 Agent、未发送 prompt、未消耗 Token；**M0 正式验收仍为 BLOCKED**，M0-05 预算仍未批准。
+> 日期：2026-11-03；工作区：`E:\code\agent-orchestrator`；分支：`feat/multi-agent-desktop`；基线提交 `623871d`。
 > 设计依据：[总体设计 V0.1](design.md) §2–§5、§10、§13；[M0 执行报告](m0-report.md) §8.4；M1 继承性分流证据：`E:\code\ao-m0-scratch\evidence\m1-inheritance-triage.md`。
-> M0 状态：**正式验收仍为 BLOCKED**；M0-05 预算暂未批准，后续执行。此计划不改变 M0 验收状态。
+> 验收证据：[M1 验收报告](m1-report.md)（命令、退出码、测试数量、基线隔离证明、Review 结论）；交接历史存档：[m1-handoff.md](m1-handoff.md)。
+> M0 状态：**正式验收仍为 BLOCKED**；M0-05 预算暂未批准，后续执行。此计划不改变 M0 验收状态，M1 完成也不改变。
 
 ## 1. 目标与授权边界
 
@@ -22,7 +23,7 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 
 ## 2. M1-01：数据库迁移与领域模型
 
-**状态：待开始**
+**状态：已完成（2026-11-03）**
 
 **目标**：建立 Workflow 核心实体与 SQLite 持久化结构，不触碰已有 migration 和生成文件。
 
@@ -33,6 +34,7 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
   - `workflow_repositories`：Workflow 与已注册 Project/Repo、base SHA 的绑定。
   - `workflow_tasks`：Task 类型、描述、状态、优先级、revision。
   - `workflow_edges`：依赖边，唯一约束及 Workflow 归属。
+  - `workflow_task_repos`：Task 与 Workflow 已绑定 Repo 的关联、允许路径和任务级 base SHA。
   - `workflow_attempts`：attempt 序号、状态、租约字段、时间和错误码；Session 绑定字段可空，M1 不启动 Session。
 - 在 `backend/internal/domain` 新增 Workflow / Task / Edge / Attempt 等领域类型和必要的不变量校验。
 - 按仓库流程执行 `npm run migration:create -- <snake_case_name>`、更新 migration 注册清单，并通过 `npm run sqlc` 生成 Store 代码。
@@ -40,27 +42,29 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 **交付物**
 - 新增 migration、schema/query、sqlc 生成结果。
 - 新增领域类型及构造/校验方法。
-- 迁移升级与 Store 读写测试。
+- 迁移升级、表约束与外键测试；sqlc 生成查询在 M1-01 完成，面向 Service 的 Store 读写/事务方法在 M1-03 与生命周期一起实现，避免提前形成两套事务入口。
 
 **验收标准**
 - 全新测试数据库和已有版本测试数据库均可向前迁移。
 - 唯一键、外键、revision、attempt 序号等约束符合设计。
-- Store 通过 sqlc 生成代码访问数据库；不手改 `backend/internal/storage/sqlite/gen/*`。
+- sqlc 查询生成代码成功并通过相关包编译/测试；M1-03 的 Store wrapper 通过生成代码访问数据库，不手改 `backend/internal/storage/sqlite/gen/*`。
 - 不修改已发布 migration，不把 Workflow 状态写入既有 Session 状态字段。
 
 **依赖**：无。此项为 M1 首个实施任务。
 
+**执行记录（2026-11-03）**：新增 migration `20261103044048260_workflow_core.sql`，创建 Workflow / Repository / Task / Edge / Task-Repo / Attempt 六类持久化结构；更新 migration ledger，新增 sqlc queries 并生成 `gen/workflow.sql.go` 与模型。领域模型及不变量测试位于 `domain/workflow.go`、`domain/workflow_test.go`；Migration 测试覆盖升级、跨 Workflow 外键、自环、租约约束、Attempt 唯一性及回滚。`npm run sqlc`、Workflow 专项测试、SQLite 与 Store 全量包测试、目标包 `go vet` 均通过。`go test ./internal/domain` 仍有 M0 已记录的 2 条 handoff 基线失败，Workflow 专项测试通过；未修改 `handoff_note.go`。
+
 ## 3. M1-02：DAG 校验器
 
-**状态：待开始**
+**状态：已完成（2026-11-03）**
 
 **目标**：实现纯本地、确定性的 DAG 合法性验证，不调用 LLM 或 Agent。
 
 **范围**
 - 校验 Task ID 唯一、依赖目标存在、无自环、无重复边、无跨 Workflow 边。
 - 检测环并提供可定位的错误信息；输出稳定的拓扑顺序。
-- 校验 RepoKey 指向 Workflow 已绑定的仓库。
-- 对节点数、最大深度、最大分支/扇出设置硬上限；具体数值在实现时依据现有配置和测试场景确定，不在本计划中臆造。
+- 校验 RepoKey 指向 Workflow 已绑定的仓库；仓库路径与任务允许路径必须为安全的相对路径，拒绝绝对路径、盘符/流语法、反斜杠和 `..` 穿越，并检测规范化后的重复路径。
+- 对节点数、最大深度、最大分支/扇出设置硬上限；限制由调用方显式传入，校验器不臆造默认数值。深度按根节点为 1 计算，FanOut 按节点的出边数计算。
 - 对 Planner/客户端传入的数据一律按不可信输入校验。
 
 **交付物**
@@ -74,14 +78,16 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 
 **依赖**：M1-01 的领域类型与依赖边结构。
 
+**执行记录（2026-11-03）**：新增纯本地 `domain.ValidateWorkflowGraph`，使用稳定 Kahn 拓扑排序（字典序最小堆）和确定性 DFS 环路定位；覆盖重复/空 Task ID、缺失/重复/自环/跨 Workflow 边、RepoKey 未绑定、跨 Workflow/重复 Repo 绑定、任务仓库引用错误、路径穿越、节点数/深度/FanOut 超限。返回稳定错误码、字段路径、Cycle 路径、深度映射和拓扑顺序；输入切片不会被修改。专项测试与 `go vet ./internal/domain` 通过，按 `--new-from-rev=HEAD` 运行仓库 golangci-lint 为 0 issues。Domain 全量测试仍仅有 M0 基线中的 2 条 handoff 测试失败，未修改相关文件。
+
 ## 4. M1-03：Workflow Service 与 Task 生命周期
 
-**状态：待开始**
+**状态：已完成（2026-11-03，含 Review 后的修复与验收）**
 
 **目标**：把领域规则落到事务服务，保证任务创建、状态迁移、领取和 Attempt 结算的一致性。
 
 **范围**
-- 在 `backend/internal/service/workflow` 建立 Service 和 Store/Clock 等必要依赖接口，遵循现有 ports/service 分层。
+- 在 `backend/internal/storage/sqlite/store` 实现面向 Workflow 的读写与事务方法，并在 `backend/internal/service/workflow` 建立 Service 和 Store/Clock 等必要依赖接口，遵循现有 ports/service 分层。
 - 创建 Workflow 时，在同一事务中持久化 Workflow、Repo 绑定、Task 和 Edge；提交前完成 DAG 校验。
 - 实现 Task 状态迁移与 revision/CAS；READY 由依赖和门禁事实决定，不允许客户端任意伪造。
 - 实现原子 Claim：生成 Attempt、attempt_no、lease_token、worker_id、lease_until；并发竞争只允许一个领取成功。
@@ -100,9 +106,15 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 
 **依赖**：M1-01、M1-02。
 
+**执行记录（2026-11-03，已完成）**：Store 侧实现 Workflow/Task/Attempt/Repository 读写、事务创建、Activate、原子 Claim、Start、Settle、Retry、过期租约恢复与幂等回放；Service 侧在 `backend/internal/service/workflow` 提供 Create/Get/List/Task 查询与完整生命周期方法，注入 Clock/ID/LeaseToken/GraphLimits，不 spawn Agent、不调 Chat Driver、不执行 Git。
+
+代码 Review 结论：**0 P0 / 6 P1 / 9 P2**，6 项 P1 已全部修复——P1-1 在 Store 边界做 UTC 归一化（`modernc.org/sqlite` 中租约排序是 TEXT 比较）；P1-2 恢复后的 Claim 重放改报 `WORKFLOW_CLAIM_REPLAY_EXPIRED`，不再返回无 capability 的结果；P1-3 启动时 + 周期性的租约恢复扫描已接入 Daemon（此前无生产调用方）；P1-4 `UNKNOWN` 原本是终态陷阱，新增 `ResolveUnknownWorkflowAttempt` / `Service.Resolve` 与 `attempt.resolve` 幂等操作，以 task revision 做 CAS 围栏且永不重新派发；P1-5 放宽 drain 语义，`StartWorkflowAttempt` 不再以 Workflow 处于 `active` 为前置，已领取的兄弟 Task 在终态失败后仍可 start/settle；P1-6 零行 UPDATE 路径改为分类定位原因，而非一律折算成 409。另修 P2-2：导出唯一 `domain.CanonicalWorkflowPath`，Service 与 Store 写入路径共用，使直接调用 Store 也无法绕过 `UNIQUE (workflow_id, project_id, path_ref)`。
+
+其余 P2 经确认按 M1 范围内**接受并延后**：响应快照式幂等负载、幂等行随 Workflow 级联删除、含租约结构的 `%+v` 日志、`cancelled` Task 所在的 Workflow 不会自动完成、`claimed → succeeded` 缺 `started_at`、attempt_no 依赖 SQLite 单写者。专项测试与目标包 `go vet`、`-race` 均已通过，详见 [M1 验收报告](m1-report.md) §5。
+
 ## 5. M1-04：基础 HTTP API 与 CDC/SSE
 
-**状态：待开始**
+**状态：已完成（2026-11-03）**
 
 **目标**：通过现有 Daemon API 暴露 Workflow 核心读写能力，并复用既有 CDC/SSE。
 
@@ -125,9 +137,17 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 
 **依赖**：M1-01、M1-03。
 
+**执行记录（2026-11-03）**：新增 `backend/internal/httpd/controllers/workflows.go`，在 `/api/v1/workflows…` 下提供 11 条路由：`GET /workflows`、`POST /workflows`、`POST /workflows/recover-expired`、`GET /workflows/{workflowId}`、`GET /workflows/{workflowId}/tasks`、`GET /workflows/{workflowId}/tasks/{taskId}`、`POST /workflows/{workflowId}/activate`、`POST /workflows/{workflowId}/tasks/{taskId}/claim`、`POST /workflows/{workflowId}/attempts/{attemptId}/start`、`POST …/settle`、`POST …/tasks/{taskId}/retry`。Controller 沿用既有约定：Service 为 nil 时经 `apispec.NotImplemented` 返回 501；幂等键作为 JSON body 字段（与其余 API 一致，不用 Header）；create 限制 1 MiB body；仅当返回页恰好填满时才给 `nextCursor`（Service 无 total）；租约 token 只作为 claim 响应的顶层 `leaseToken` 出现，绝不进入 `attempt` 对象。
+
+DTO 与契约：`dto.go` 新增 30 个 DTO 类型；`specgen` 新增 `workflowOperations()`、`workflows` tag 与 30 条 `schemaNames`；测试新增 15 条 controller 测试、1 条 SSE 测试、1 条回滚/CDC 测试。
+
+CDC：新增 migration `20261103073516664_workflow_cdc.sql`，加入 4 个事件类型（`workflow_created`、`workflow_updated`、`workflow_task_updated`、`workflow_attempt_updated`）与 6 个触发器。`event_type` 的 CHECK 通过 `PRAGMA writable_schema` **原地放宽**（不重建表——重建需手工重建 34 个既有 change_log 触发器），并带内容级后置校验，因为不匹配的 `replace()` 会报告 1 行已改却什么都没改。Workflow 事件固定 `project_id = NULL`、`session_id = NULL`，标识符放在 payload：Workflow 跨多个 Project，且 `workflows` INSERT 时 `workflow_repositories` 尚未写入，按 Project 扇出会产出 0 条 `workflow_created`。Attempt 触发器只以 `state` 为条件，避免租约/心跳写入刷爆 change_log。
+
+已验证：回滚的 Workflow 事务不产生 CDC 事件；`TestRouteSpecParity` 与 `TestBuild_MatchesEmbedded` 通过；`npm run api` 两次连续运行，`openapi.yaml` 与 `frontend/src/api/schema.ts` 字节一致。
+
 ## 6. M1-05：回归测试、恢复验证与验收归档
 
-**状态：待开始**
+**状态：已完成（2026-11-03，验证通过）**
 
 **目标**：以可复现证据完成 M1 核心验收，并明确区分本次回归与 M0 已知基线失败。
 
@@ -150,15 +170,65 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 
 **依赖**：M1-01～M1-04。
 
+**执行记录（2026-11-03，M1-05 验证完成）**
+
+构建与静态检查：
+
+| 命令 | 范围 | 退出码 |
+| --- | --- | --- |
+| `go build ./...` | 全仓后端 | **0** |
+| `go vet` | `internal/domain`、`internal/service/workflow`、`internal/storage/sqlite`、`internal/storage/sqlite/store`、`internal/cdc`、`internal/httpd/...`、`internal/daemon` | **0** |
+
+目标包测试（dirty tree）：
+
+| 包 | 结果 |
+| --- | --- |
+| `internal/service/workflow` | 全部通过 |
+| `internal/storage/sqlite/store` | 429+ 测试通过，0 失败 |
+| `internal/storage/sqlite` | ok（约 120s） |
+| `internal/cdc` | ok |
+| `internal/httpd/apispec` + `specgen` | ok |
+| `internal/httpd` | ok（165 个顶层测试） |
+| `internal/domain` | 70 通过 / 2 失败（均为既有 handoff 基线） |
+
+Workflow 专项扫描 `go test ./... -run 'Workflow'`：**212 个包 ok、0 FAIL**；67 个顶层 PASS + 45 个子测试 PASS，0 FAIL。`-race` 运行 claim/settle/start/recover/retry 相关套件：退出码 **0**（service 52s、store 399s）。
+
+前端与生成物：`npm run typecheck` 在 `packages/product-ui` 依赖安装后 **PASS**（退出码 0），`frontend/src` 与 `src/api/schema.ts` 均零错误。`npm run sqlc` 可复现，重复运行输出字节一致；真实内容变化只有 `gen/models.go`（+77，workflow 结构体）与新增的 `gen/workflow.sql.go`，其余 35 个显示为 modified 的 `gen/*.go` 是 `core.autocrlf` 行尾产物、内容字节一致（用运行前副本做字节 diff 核实）。`npm run api` 可复现，两次连续运行的 `openapi.yaml` 与 `frontend/src/api/schema.ts` 字节一致。
+
+基线隔离（本阶段的关键证据）：在提交 `623871d`（"docs: finalize M0 report and define M1 tasks"）上建立 pristine worktree，确认 clean 且**不含任何 Workflow 文件**（无 `internal/service/workflow`、无 `domain/workflow.go`），作为对照基线逐包重放。
+
+| 包 | HEAD 基线 | dirty tree（M1） | 结论 |
+| --- | --- | --- | --- |
+| `internal/domain` | 2 fail | 2 fail（72 run / 70 pass） | 相同 |
+| `internal/httpd/controllers` | 4 fail（617 run / 607 pass / 4 fail / 6 skip） | 4 fail（632 run / 622 pass / 4 fail / 6 skip） | 相同 |
+| `internal/daemon` | 2 fail（103 run / 101 pass） | 2 fail（103 run / 101 pass） | 相同 |
+
+集合差：8 条可复现失败**全部为既有失败，M1 新增回归为零**。（§6 范围里原写「`internal/httpd/controllers` 5 条既有失败」是计划期估计，本轮实测为 4 条。）
+
+8 条既有失败及其归因（均属 Windows 环境产物，非 M1 引入）：
+
+1. `TestBuildHandoffNoteStaysUnderTheCapAndKeepsTheLatestTurn`（`handoff_note_test.go:84`）——既有 handoff 缺陷，属 M2 路径，M1 未修改。
+2. `TestHandoffNoteKeepsArtifactsWithinTheByteCap`（`handoff_note_test.go:211`）——同上。
+3. `TestListDirsRejectsRelativeAndMissingPaths`（`fs_test.go:133`）——错误码断言不匹配。
+4. `TestBridgeStatusConcurrentSecurePairing`（`mobile_concurrency_test.go:106`）——原子重命名报 `Access is denied`。
+5. `TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory`（`artifact_files_test.go:238`）——缺符号链接权限。
+6. `TestProjectsAPI_Clone`（`projects_test.go:297`）——沙箱下 git URL 校验。
+7. `TestStabilizeWorkingDirectoryChdirsToDataDir`——TempDir 在作为进程 cwd 时被清理。
+8. `TestWiring_StartSessionSpawnsScratchWithoutGitRepo`（`wiring_test.go:443`）——沙箱拒绝 fake-harness 凭据。
+
+`handoff_note.go` 与 `handoff_note_test.go` 在工作树中**未被修改**（两者的 `git diff --stat HEAD` 为空）。`internal/domain` 用 `-count=5` 复核：同样两条测试在 5 次迭代中全部失败，为确定性失败而非 flaky。
+
+边界：全程 0 Provider turn、0 token，未启动任何真实 Agent；未读写真实 `~/.ao`（测试使用 `t.TempDir()` / `sqlitetest`）；未改动 `.codex/`、`.claude/`；未执行 reset/clean/checkout/stash/commit/push。完整证据见 [M1 验收报告](m1-report.md)。
+
 ## 7. 执行顺序与边界
 
 | 顺序 | 任务 | 前置 | 状态 |
 | --- | --- | --- | --- |
-| 1 | M1-01 数据库迁移与领域模型 | 无 | **待开始** |
-| 2 | M1-02 DAG 校验器 | M1-01 | 待开始 |
-| 3 | M1-03 Workflow Service 与 Task 生命周期 | M1-01、M1-02 | 待开始 |
-| 4 | M1-04 基础 HTTP API 与 CDC/SSE | M1-01、M1-03 | 待开始 |
-| 5 | M1-05 回归测试、恢复验证与验收归档 | M1-01～M1-04 | 待开始 |
+| 1 | M1-01 数据库迁移与领域模型 | 无 | **已完成** |
+| 2 | M1-02 DAG 校验器 | M1-01 | **已完成** |
+| 3 | M1-03 Workflow Service 与 Task 生命周期 | M1-01、M1-02 | **已完成** |
+| 4 | M1-04 基础 HTTP API 与 CDC/SSE | M1-01、M1-03 | **已完成** |
+| 5 | M1-05 回归测试、恢复验证与验收归档 | M1-01～M1-04 | **已完成** |
 
 ### M1 允许范围
 
@@ -180,10 +250,16 @@ M1 只交付 Workflow 核心后端能力：SQLite 持久化、领域模型、DAG
 ### M0 已知问题的隔离
 
 - `internal/domain` 的 2 条 handoff 测试失败属于既有 M2 路径缺陷；M1 仅新增领域文件，不改 `handoff_note.go`。
-- `internal/httpd/controllers` 的 5 条失败属于既有测试/fixture 问题；如 M1 需要改该包，必须保留基线对照并证明未新增失败。
+- `internal/httpd/controllers` 有 **4 条**既有失败（实测；计划期估计的「5 条」不准确）。本轮另行测得 `internal/daemon` 2 条既有失败，故既有基线合计 **8 条**（domain 2 + controllers 4 + daemon 2）。这 8 条均须保留基线对照并证明未新增，**不得误报为 M1 新增回归**。
 - Codex Windows 账号目录 `account_storage_unsafe` 是已知启动 WARN，M1 不依赖该功能；另列 M2 follow-up，不在本任务范围内。
 - 仓库 `CONTRIBUTING.md` 要求向上游贡献的 Feature 先取得 core-team approval；本计划用于用户本地定制分支，若后续准备向上游提交 PR，需先满足该审批要求。
 
 ## 8. 完成状态
 
-本文件创建只代表 M1-01～M1-05 的任务拆解完成，**不代表任何 M1 代码已经实现或验收通过**。下一项执行任务为 **M1-01**。
+截至 2026-11-03，**M1-01～M1-05 全部完成并验证通过**，M1 核心验收判 **PASS**（逐条证据见 [M1 验收报告](m1-report.md)）。
+
+- **零新增回归**：8 条可复现失败全部为既有 Windows 环境基线（`internal/domain` 2 + `internal/httpd/controllers` 4 + `internal/daemon` 2），已在同一提交 `623871d` 的 pristine worktree 上复现，集合差为零。
+- **生成物锁定可复现**：`npm run sqlc` 与 `npm run api` 各连续两次运行，输出字节一致。
+- **边界保持**：0 Provider turn / 0 token，未启动真实 Agent，未读写真实 `~/.ao`。
+
+M0 正式验收仍为 **BLOCKED**，M0-05 预算未批准；**M1 完成不改变 M0 状态**。M2～M6 未开始。交接细节见 [m1-handoff.md](m1-handoff.md)（已归档关闭）。

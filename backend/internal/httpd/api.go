@@ -91,6 +91,11 @@ type APIDeps struct {
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
 
+	// Workflows is the durable multi-repository orchestration core. Nil leaves
+	// every workflow route mounted and answering 501, like the other optional
+	// surfaces.
+	Workflows controllers.WorkflowService
+
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
 	Presence *presence.Tracker
@@ -162,6 +167,7 @@ type API struct {
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
 	github        *controllers.GitHubController
+	workflows     *controllers.WorkflowsController
 	events        *EventsController
 }
 
@@ -226,6 +232,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
+		workflows:     &controllers.WorkflowsController{Svc: deps.Workflows},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 }
@@ -349,6 +356,7 @@ func (a *API) Register(root chi.Router) {
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.github.Register(r)
+			a.workflows.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.

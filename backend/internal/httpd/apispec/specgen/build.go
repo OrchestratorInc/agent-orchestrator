@@ -70,6 +70,8 @@ func Build() ([]byte, error) {
 			"Agent session lifecycle and messaging"),
 		*(&openapi31.Tag{Name: "automations"}).WithDescription(
 			"Recurring daemon-owned session schedules and durable run history"),
+		*(&openapi31.Tag{Name: "workflows"}).WithDescription(
+			"Durable multi-repository workflow DAGs, their tasks, and worker claim leases"),
 		*(&openapi31.Tag{Name: "prs"}).WithDescription(
 			"Pull-request actions (SCM lane)"),
 		*(&openapi31.Tag{Name: "reviews"}).WithDescription(
@@ -313,6 +315,35 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListAutomationsResponse":                   "ListAutomationsResponse",
 	"ControllersAutomationRunResponse":                     "AutomationRunResponse",
 	"ControllersListAutomationRunsResponse":                "ListAutomationRunsResponse",
+	"ControllersWorkflowIDParam":                           "WorkflowIDParam",
+	"ControllersWorkflowTaskIDParam":                       "WorkflowTaskIDParam",
+	"ControllersWorkflowAttemptIDParam":                    "WorkflowAttemptIDParam",
+	"ControllersListWorkflowsQuery":                        "ListWorkflowsQuery",
+	"ControllersListWorkflowTasksQuery":                    "ListWorkflowTasksQuery",
+	"ControllersWorkflowRepositoryInput":                   "WorkflowRepositoryInput",
+	"ControllersWorkflowTaskInput":                         "WorkflowTaskInput",
+	"ControllersWorkflowDependencyInput":                   "WorkflowDependencyInput",
+	"ControllersWorkflowTaskRepositoryInput":               "WorkflowTaskRepositoryInput",
+	"ControllersCreateWorkflowRequest":                     "CreateWorkflowRequest",
+	"ControllersActivateWorkflowRequest":                   "ActivateWorkflowRequest",
+	"ControllersClaimWorkflowTaskRequest":                  "ClaimWorkflowTaskRequest",
+	"ControllersStartWorkflowAttemptRequest":               "StartWorkflowAttemptRequest",
+	"ControllersSettleWorkflowAttemptRequest":              "SettleWorkflowAttemptRequest",
+	"ControllersRetryWorkflowTaskRequest":                  "RetryWorkflowTaskRequest",
+	"ControllersWorkflowResponse":                          "WorkflowResponse",
+	"ControllersWorkflowRepositoryResponse":                "WorkflowRepositoryResponse",
+	"ControllersWorkflowTaskResponse":                      "WorkflowTaskResponse",
+	"ControllersWorkflowEdgeResponse":                      "WorkflowEdgeResponse",
+	"ControllersWorkflowTaskRepositoryResponse":            "WorkflowTaskRepositoryResponse",
+	"ControllersWorkflowAttemptResponse":                   "WorkflowAttemptResponse",
+	"ControllersWorkflowDefinitionResponse":                "WorkflowDefinitionResponse",
+	"ControllersWorkflowEnvelope":                          "WorkflowEnvelope",
+	"ControllersWorkflowTaskEnvelope":                      "WorkflowTaskEnvelope",
+	"ControllersWorkflowAttemptEnvelope":                   "WorkflowAttemptEnvelope",
+	"ControllersClaimWorkflowTaskResponse":                 "ClaimWorkflowTaskResponse",
+	"ControllersListWorkflowsResponse":                     "ListWorkflowsResponse",
+	"ControllersListWorkflowTasksResponse":                 "ListWorkflowTasksResponse",
+	"ControllersRecoverExpiredWorkflowsResponse":           "RecoverExpiredWorkflowsResponse",
 	// httpd/envelope
 	"EnvelopeAPIError": "APIError",
 	// observe/ownership
@@ -753,6 +784,7 @@ func operations() []operation {
 	ops = append(ops, projectOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
+	ops = append(ops, workflowOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
@@ -792,6 +824,110 @@ func automationOperations() []operation {
 		{method: http.MethodPatch, path: "/api/v1/automations/{automationId}", id: "updateAutomation", tag: "automations", summary: "Update a recurring automation", pathParams: id, reqBody: controllers.UpdateAutomationRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.AutomationEnvelope{}}}, commonErrors...)},
 		{method: http.MethodDelete, path: "/api/v1/automations/{automationId}", id: "deleteAutomation", tag: "automations", summary: "Delete an automation and its run history", pathParams: id, resps: append([]respUnit{{http.StatusNoContent, nil}}, commonErrors...)},
 		{method: http.MethodGet, path: "/api/v1/automations/{automationId}/runs", id: "listAutomationRuns", tag: "automations", summary: "List durable automation run history", pathParams: []any{controllers.AutomationIDParam{}, controllers.ListAutomationRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListAutomationRunsResponse{}}}, commonErrors...)},
+	}
+}
+
+// workflowOperations declares the durable workflow surface. Must stay 1:1 with
+// the routes WorkflowsController.Register mounts (enforced by the parity
+// test). 409 is load-bearing here — revision and idempotency clashes are the
+// normal outcome of two workers racing the same task — while 503 is not: the
+// service reports every workflow failure as a classified *apierr.Error.
+func workflowOperations() []operation {
+	workflowID := []any{controllers.WorkflowIDParam{}}
+	// The task/attempt param containers carry their own workflowId, so nesting
+	// WorkflowIDParam alongside them would declare that parameter twice.
+	taskID := []any{controllers.WorkflowTaskIDParam{}}
+	attemptID := []any{controllers.WorkflowAttemptIDParam{}}
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusConflict, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/workflows", id: "listWorkflows", tag: "workflows",
+			summary:    "List durable workflow definitions",
+			pathParams: []any{controllers.ListWorkflowsQuery{}},
+			resps:      append([]respUnit{{http.StatusOK, controllers.ListWorkflowsResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows", id: "createWorkflow", tag: "workflows",
+			summary: "Create a workflow from a validated task DAG; replays the original with 200",
+			reqBody: controllers.CreateWorkflowRequest{},
+			// 201 is a fresh insert; 200 is the same workflow when the
+			// idempotency key replays a request whose response was lost.
+			resps: append([]respUnit{
+				{http.StatusCreated, controllers.WorkflowEnvelope{}},
+				{http.StatusOK, controllers.WorkflowEnvelope{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/recover-expired", id: "recoverExpiredWorkflows", tag: "workflows",
+			summary: "Move expired attempt leases to unknown and block their tasks",
+			// The sweep takes no input; an empty body is a meaningful request.
+			optionalReqBody: true,
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.RecoverExpiredWorkflowsResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}", id: "getWorkflowDefinition", tag: "workflows",
+			summary:    "Get one workflow with its repositories, tasks, edges, and task scopes",
+			pathParams: workflowID,
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowDefinitionResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/tasks", id: "listWorkflowTasks", tag: "workflows",
+			summary:    "List a workflow's tasks",
+			pathParams: []any{controllers.WorkflowIDParam{}, controllers.ListWorkflowTasksQuery{}},
+			resps:      append([]respUnit{{http.StatusOK, controllers.ListWorkflowTasksResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/tasks/{taskId}", id: "getWorkflowTask", tag: "workflows",
+			summary:    "Get one workflow task with its durable attempt history",
+			pathParams: taskID,
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowTaskEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/activate", id: "activateWorkflow", tag: "workflows",
+			summary:    "Activate a draft workflow and derive its initially ready tasks",
+			pathParams: workflowID,
+			reqBody:    controllers.ActivateWorkflowRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/claim", id: "claimWorkflowTask", tag: "workflows",
+			summary:    "Lease a ready task to a worker and issue its one-time lease token",
+			pathParams: taskID,
+			reqBody:    controllers.ClaimWorkflowTaskRequest{},
+			resps: append([]respUnit{
+				{http.StatusCreated, controllers.ClaimWorkflowTaskResponse{}},
+				{http.StatusOK, controllers.ClaimWorkflowTaskResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/start", id: "startWorkflowAttempt", tag: "workflows",
+			summary:    "Mark a claimed attempt as running after checking its lease capability",
+			pathParams: attemptID,
+			reqBody:    controllers.StartWorkflowAttemptRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowAttemptEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/settle", id: "settleWorkflowAttempt", tag: "workflows",
+			summary:    "Record a worker's terminal result for its attempt",
+			pathParams: attemptID,
+			reqBody:    controllers.SettleWorkflowAttemptRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowAttemptEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/retry", id: "retryWorkflowTask", tag: "workflows",
+			summary:    "Reopen a retry_wait task after a failed attempt",
+			pathParams: taskID,
+			reqBody:    controllers.RetryWorkflowTaskRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowTaskEnvelope{}}}, commonErrors...),
+		},
 	}
 }
 

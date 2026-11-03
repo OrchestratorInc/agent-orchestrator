@@ -294,6 +294,11 @@ func Run(buildVersion string) error {
 	if err != nil {
 		return err
 	}
+	// Workflow definitions and leases live in the same durable store. The
+	// recovery sweep runs before any scheduler work so a restart reconciles
+	// attempts whose workers are gone.
+	workflowSvc := newWorkflowService(store)
+	startWorkflowLeaseRecovery(ctx, workflowSvc, log)
 
 	// Terminal streaming: the selected platform runtime supplies the
 	// attach Stream and liveness; the CDC broadcaster feeds the session-state channel. The manager
@@ -1103,6 +1108,7 @@ func Run(buildVersion string) error {
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
 		Automations:        automationSvc,
+		Workflows:          workflowSvc,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
 		Reviews:            reviewSvc,

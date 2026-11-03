@@ -30,6 +30,14 @@ const (
 	EventPRReviewThreadResolved EventType = "pr_review_thread_resolved"
 	EventReviewRunCreated       EventType = "review_run_created"
 	EventReviewRunUpdated       EventType = "review_run_updated"
+
+	// Workflow events are project- and session-scoped as null: a workflow spans
+	// several projects, so the payload carries kind/workflowId/taskId/attemptId
+	// instead of attributing the change to one project.
+	EventWorkflowCreated        EventType = "workflow_created"
+	EventWorkflowUpdated        EventType = "workflow_updated"
+	EventWorkflowTaskUpdated    EventType = "workflow_task_updated"
+	EventWorkflowAttemptUpdated EventType = "workflow_attempt_updated"
 )
 
 // Event is one CDC change read from change_log. Seq is the monotonic ordering +

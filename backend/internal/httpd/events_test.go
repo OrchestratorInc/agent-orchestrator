@@ -143,6 +143,53 @@ func TestEventsStreamForwardsReviewRunCDC(t *testing.T) {
 	}
 }
 
+// workflowEventSource replays one workflow event and publishes one live, in
+// that order, so the test proves both the durable replay and the live fan-out
+// carry workflow frames. Workflow events are deliberately unscoped: they carry
+// neither a project nor a session id, and the payload names the workflow.
+type workflowEventSource struct {
+	live *fakeEventSubscriber
+}
+
+func (s *workflowEventSource) EventsAfter(context.Context, int64, int) ([]cdc.Event, error) {
+	s.live.publish(testCDCEventWithType(2, cdc.EventWorkflowUpdated))
+	return []cdc.Event{testCDCEventWithType(1, cdc.EventWorkflowCreated)}, nil
+}
+
+func (*workflowEventSource) LatestSeq(context.Context) (int64, error) { return 0, nil }
+
+// TestEventsStreamForwardsWorkflowCDC proves a workflow change reaches the SSE
+// stream under its own frame name. The stream is a pass-through of whatever the
+// CDC source reports, so the risk this pins is a workflow event being dropped
+// or renamed at the transport edge rather than reaching the desktop's board.
+func TestEventsStreamForwardsWorkflowCDC(t *testing.T) {
+	live := &fakeEventSubscriber{}
+	src := &workflowEventSource{live: live}
+	router := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{
+		CDC:    src,
+		Events: live,
+	}, ControlDeps{})
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events?after=0", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	events := readSSEEventTypes(t, resp.Body, 2)
+	if got, want := strings.Join(events, ","), "workflow_created,workflow_updated"; got != want {
+		t.Fatalf("event types = %s, want %s", got, want)
+	}
+}
+
 func TestEventsStreamRejectsInvalidAfter(t *testing.T) {
 	router := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{
 		CDC:    &fakeEventSource{live: &fakeEventSubscriber{}},

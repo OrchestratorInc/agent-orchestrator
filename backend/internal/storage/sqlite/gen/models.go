@@ -975,6 +975,83 @@ type UsageSource struct {
 	UpdatedAt       time.Time
 }
 
+type Workflow struct {
+	ID             domain.WorkflowID
+	Title          string
+	Goal           string
+	OwnerSessionID *domain.SessionID
+	State          domain.WorkflowState
+	Revision       int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type WorkflowAttempt struct {
+	ID          domain.WorkflowAttemptID
+	WorkflowID  domain.WorkflowID
+	TaskID      domain.WorkflowTaskID
+	AttemptNo   int64
+	SessionID   *domain.SessionID
+	WorkerID    string
+	LeaseToken  string
+	LeaseUntil  sql.NullTime
+	HeartbeatAt sql.NullTime
+	State       domain.WorkflowAttemptState
+	StartedAt   sql.NullTime
+	EndedAt     sql.NullTime
+	ErrorCode   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type WorkflowEdge struct {
+	WorkflowID domain.WorkflowID
+	FromTaskID domain.WorkflowTaskID
+	ToTaskID   domain.WorkflowTaskID
+}
+
+type WorkflowIdempotency struct {
+	IdempotencyKey     string
+	WorkflowID         domain.WorkflowID
+	Operation          string
+	RequestFingerprint string
+	ResultType         string
+	ResultID           string
+	CreatedAt          time.Time
+}
+
+type WorkflowRepository struct {
+	WorkflowID domain.WorkflowID
+	RepoKey    domain.WorkflowRepoKey
+	ProjectID  domain.ProjectID
+	PathRef    string
+	BaseSha    string
+	TargetRef  string
+}
+
+type WorkflowTask struct {
+	ID           domain.WorkflowTaskID
+	WorkflowID   domain.WorkflowID
+	Kind         domain.WorkflowTaskKind
+	Title        string
+	Brief        string
+	State        domain.WorkflowTaskState
+	Priority     int64
+	AgentHarness domain.AgentHarness
+	MaxAttempts  int64
+	Revision     int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type WorkflowTaskRepo struct {
+	WorkflowID       domain.WorkflowID
+	TaskID           domain.WorkflowTaskID
+	RepoKey          domain.WorkflowRepoKey
+	AllowedPathsJson string
+	BaseSha          string
+}
+
 type WorkspaceRepo struct {
 	ProjectID     domain.ProjectID
 	Name          string

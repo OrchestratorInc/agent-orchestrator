@@ -13169,6 +13169,680 @@ paths:
       summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
+  /api/v1/workflows:
+    get:
+      operationId: listWorkflows
+      parameters:
+      - description: Restrict the page to one durable workflow state.
+        in: query
+        name: state
+        schema:
+          description: Restrict the page to one durable workflow state.
+          enum:
+          - draft
+          - active
+          - paused
+          - completed
+          - failed
+          - cancelled
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List durable workflow definitions
+      tags:
+      - workflows
+    post:
+      operationId: createWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowEnvelope'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a workflow from a validated task DAG; replays the original with
+        200
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}:
+    get:
+      operationId: getWorkflowDefinition
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowDefinitionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get one workflow with its repositories, tasks, edges, and task scopes
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/activate:
+    post:
+      operationId: activateWorkflow
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateWorkflowRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Activate a draft workflow and derive its initially ready tasks
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/settle:
+    post:
+      operationId: settleWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettleWorkflowAttemptRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowAttemptEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record a worker's terminal result for its attempt
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/start:
+    post:
+      operationId: startWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartWorkflowAttemptRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowAttemptEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Mark a claimed attempt as running after checking its lease capability
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/tasks:
+    get:
+      operationId: listWorkflowTasks
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Restrict the page to one durable task state.
+        in: query
+        name: state
+        schema:
+          description: Restrict the page to one durable task state.
+          enum:
+          - pending
+          - ready
+          - claimed
+          - running
+          - verifying
+          - ready_for_integration
+          - awaiting_approval
+          - integrating
+          - retry_wait
+          - blocked
+          - failed
+          - cancelled
+          - succeeded
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowTasksResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a workflow's tasks
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/tasks/{taskId}:
+    get:
+      operationId: getWorkflowTask
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow task identifier, unique inside its workflow.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Workflow task identifier, unique inside its workflow.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTaskEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get one workflow task with its durable attempt history
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/tasks/{taskId}/claim:
+    post:
+      operationId: claimWorkflowTask
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow task identifier, unique inside its workflow.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Workflow task identifier, unique inside its workflow.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimWorkflowTaskRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimWorkflowTaskResponse'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimWorkflowTaskResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Lease a ready task to a worker and issue its one-time lease token
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/tasks/{taskId}/retry:
+    post:
+      operationId: retryWorkflowTask
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow task identifier, unique inside its workflow.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Workflow task identifier, unique inside its workflow.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryWorkflowTaskRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTaskEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Reopen a retry_wait task after a failed attempt
+      tags:
+      - workflows
+  /api/v1/workflows/recover-expired:
+    post:
+      operationId: recoverExpiredWorkflows
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoverExpiredWorkflowsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Move expired attempt leases to unknown and block their tasks
+      tags:
+      - workflows
 components:
   schemas:
     APIError:
@@ -13212,6 +13886,20 @@ components:
           type: string
       required:
       - activeBranchId
+      type: object
+    ActivateWorkflowRequest:
+      properties:
+        expectedRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - expectedRevision
+      - idempotencyKey
       type: object
     AddProjectInput:
       properties:
@@ -14792,6 +15480,35 @@ components:
       - prs
       - branchChanged
       - takenOverFrom
+      type: object
+    ClaimWorkflowTaskRequest:
+      properties:
+        expectedRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        workerId:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - expectedRevision
+      - workerId
+      - idempotencyKey
+      type: object
+    ClaimWorkflowTaskResponse:
+      properties:
+        attempt:
+          $ref: '#/components/schemas/WorkflowAttemptResponse'
+        leaseToken:
+          type: string
+      required:
+      - attempt
+      - leaseToken
       type: object
     CleanupSessionsResponse:
       properties:
@@ -17037,6 +17754,45 @@ components:
       required:
       - id
       type: object
+    CreateWorkflowRequest:
+      properties:
+        dependencies:
+          items:
+            $ref: '#/components/schemas/WorkflowDependencyInput'
+          type: array
+        goal:
+          minLength: 1
+          type: string
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        ownerSessionId:
+          description: Optional owning AO session; creating a workflow never starts
+            one.
+          type: string
+        repositories:
+          items:
+            $ref: '#/components/schemas/WorkflowRepositoryInput'
+          type: array
+        taskRepositories:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskRepositoryInput'
+          type: array
+        tasks:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskInput'
+          type: array
+        title:
+          minLength: 1
+          type: string
+      required:
+      - title
+      - goal
+      - repositories
+      - tasks
+      - idempotencyKey
+      type: object
     CueDefinitionRequest:
       properties:
         command:
@@ -18260,6 +19016,28 @@ components:
       required:
       - shellTerminals
       type: object
+    ListWorkflowTasksResponse:
+      properties:
+        nextCursor:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskResponse'
+          type: array
+      required:
+      - tasks
+      type: object
+    ListWorkflowsResponse:
+      properties:
+        nextCursor:
+          type: string
+        workflows:
+          items:
+            $ref: '#/components/schemas/WorkflowResponse'
+          type: array
+      required:
+      - workflows
+      type: object
     ListWorkspaceFilesResponse:
       properties:
         ahead:
@@ -19076,6 +19854,14 @@ components:
       required:
       - pat
       type: object
+    RecoverExpiredWorkflowsResponse:
+      properties:
+        recovered:
+          format: int64
+          type: integer
+      required:
+      - recovered
+      type: object
     RegisterPushDeviceRequest:
       properties:
         deviceName:
@@ -19463,6 +20249,20 @@ components:
           type: string
         turnId:
           type: string
+      type: object
+    RetryWorkflowTaskRequest:
+      properties:
+        expectedRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - expectedRevision
+      - idempotencyKey
       type: object
     ReviewRun:
       properties:
@@ -20770,6 +21570,29 @@ components:
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
       type: object
+    SettleWorkflowAttemptRequest:
+      properties:
+        errorCode:
+          maxLength: 256
+          type: string
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        leaseToken:
+          description: Capability token returned once by the claim response.
+          minLength: 1
+          type: string
+        result:
+          enum:
+          - succeeded
+          - failed
+          type: string
+      required:
+      - leaseToken
+      - result
+      - idempotencyKey
+      type: object
     ShellTerminalEnvelope:
       properties:
         shellTerminal:
@@ -21543,6 +22366,20 @@ components:
       - sessionId
       - transition
       type: object
+    StartWorkflowAttemptRequest:
+      properties:
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        leaseToken:
+          description: Capability token returned once by the claim response.
+          minLength: 1
+          type: string
+      required:
+      - leaseToken
+      - idempotencyKey
+      type: object
     SteerConversationRequest:
       properties:
         attachments:
@@ -22189,6 +23026,395 @@ components:
           type: string
       required:
       - status
+      type: object
+    WorkflowAttemptEnvelope:
+      properties:
+        attempt:
+          $ref: '#/components/schemas/WorkflowAttemptResponse'
+      required:
+      - attempt
+      type: object
+    WorkflowAttemptResponse:
+      properties:
+        attemptNo:
+          format: int64
+          type: integer
+        createdAt:
+          format: date-time
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        errorCode:
+          type: string
+        heartbeatAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        leaseUntil:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - claimed
+          - running
+          - settling
+          - succeeded
+          - failed
+          - unknown
+          type: string
+        taskId:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workerId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - taskId
+      - attemptNo
+      - state
+      - createdAt
+      - updatedAt
+      type: object
+    WorkflowDefinitionResponse:
+      properties:
+        edges:
+          items:
+            $ref: '#/components/schemas/WorkflowEdgeResponse'
+          type: array
+        repositories:
+          items:
+            $ref: '#/components/schemas/WorkflowRepositoryResponse'
+          type: array
+        taskRepositories:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskRepositoryResponse'
+          type: array
+        tasks:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskResponse'
+          type: array
+        workflow:
+          $ref: '#/components/schemas/WorkflowResponse'
+      required:
+      - workflow
+      - repositories
+      - tasks
+      - edges
+      - taskRepositories
+      type: object
+    WorkflowDependencyInput:
+      properties:
+        fromTaskId:
+          minLength: 1
+          type: string
+        toTaskId:
+          minLength: 1
+          type: string
+      required:
+      - fromTaskId
+      - toTaskId
+      type: object
+    WorkflowEdgeResponse:
+      properties:
+        fromTaskId:
+          type: string
+        toTaskId:
+          type: string
+      required:
+      - fromTaskId
+      - toTaskId
+      type: object
+    WorkflowEnvelope:
+      properties:
+        workflow:
+          $ref: '#/components/schemas/WorkflowResponse'
+      required:
+      - workflow
+      type: object
+    WorkflowRepositoryInput:
+      properties:
+        baseSha:
+          type: string
+        pathRef:
+          description: Repo-relative directory inside the project; empty means the
+            project root.
+          type: string
+        projectId:
+          description: Registered project identifier.
+          minLength: 1
+          type: string
+        repoKey:
+          description: Workflow-local key other parts of this request use to reference
+            the repository.
+          minLength: 1
+          type: string
+        targetRef:
+          type: string
+      required:
+      - repoKey
+      - projectId
+      type: object
+    WorkflowRepositoryResponse:
+      properties:
+        baseSha:
+          type: string
+        pathRef:
+          type: string
+        projectId:
+          type: string
+        repoKey:
+          type: string
+        targetRef:
+          type: string
+      required:
+      - repoKey
+      - projectId
+      - pathRef
+      type: object
+    WorkflowResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        goal:
+          type: string
+        id:
+          type: string
+        ownerSessionId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - draft
+          - active
+          - paused
+          - completed
+          - failed
+          - cancelled
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - title
+      - goal
+      - state
+      - revision
+      - createdAt
+      - updatedAt
+      type: object
+    WorkflowTaskEnvelope:
+      properties:
+        attempts:
+          items:
+            $ref: '#/components/schemas/WorkflowAttemptResponse'
+          type: array
+        task:
+          $ref: '#/components/schemas/WorkflowTaskResponse'
+      required:
+      - task
+      - attempts
+      type: object
+    WorkflowTaskInput:
+      properties:
+        agentHarness:
+          enum:
+          - claude-code
+          - codex
+          - aider
+          - opencode
+          - opencode-v2
+          - grok
+          - droid
+          - amp
+          - agy
+          - crush
+          - cursor
+          - qwen
+          - gemini
+          - copilot
+          - goose
+          - auggie
+          - continue
+          - devin
+          - cline
+          - kimi
+          - muse
+          - kiro
+          - kilocode
+          - vibe
+          - pi
+          - kimchi
+          - omp
+          - fx
+          - prime-agent
+          - autohand
+          - unreal-agent
+          - codewhale
+          - mimo-code
+          - deepseek-harness
+          - openhands
+          - command-code
+          - memcode
+          - hermes
+          type: string
+        brief:
+          type: string
+        id:
+          description: Client-chosen task identifier, unique inside the workflow.
+          minLength: 1
+          type: string
+        kind:
+          enum:
+          - analysis
+          - development
+          - testing
+          - review
+          - integration
+          - approval
+          type: string
+        maxAttempts:
+          description: Attempts the task may spend before it needs a retry. Defaults
+            to 1.
+          format: int64
+          minimum: 1
+          type: integer
+        priority:
+          format: int64
+          type: integer
+        title:
+          minLength: 1
+          type: string
+      required:
+      - id
+      - kind
+      - title
+      type: object
+    WorkflowTaskRepositoryInput:
+      properties:
+        allowedPaths:
+          description: Repo-relative directories the task may write. Omit to grant
+            no path scope.
+          items:
+            type: string
+          type: array
+        baseSha:
+          type: string
+        repoKey:
+          minLength: 1
+          type: string
+        taskId:
+          minLength: 1
+          type: string
+      required:
+      - taskId
+      - repoKey
+      type: object
+    WorkflowTaskRepositoryResponse:
+      properties:
+        allowedPaths:
+          items:
+            type: string
+          type: array
+        baseSha:
+          type: string
+        repoKey:
+          type: string
+        taskId:
+          type: string
+      required:
+      - taskId
+      - repoKey
+      - allowedPaths
+      type: object
+    WorkflowTaskResponse:
+      properties:
+        agentHarness:
+          type: string
+        brief:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - analysis
+          - development
+          - testing
+          - review
+          - integration
+          - approval
+          type: string
+        maxAttempts:
+          format: int64
+          type: integer
+        priority:
+          format: int64
+          type: integer
+        revision:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - pending
+          - ready
+          - claimed
+          - running
+          - verifying
+          - ready_for_integration
+          - awaiting_approval
+          - integrating
+          - retry_wait
+          - blocked
+          - failed
+          - cancelled
+          - succeeded
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - kind
+      - title
+      - state
+      - priority
+      - maxAttempts
+      - revision
+      - createdAt
+      - updatedAt
       type: object
     WorkspaceBranchResponse:
       properties:
@@ -22934,6 +24160,9 @@ tags:
   name: sessions
 - description: Recurring daemon-owned session schedules and durable run history
   name: automations
+- description: Durable multi-repository workflow DAGs, their tasks, and worker claim
+    leases
+  name: workflows
 - description: Pull-request actions (SCM lane)
   name: prs
 - description: Code-review runs and findings

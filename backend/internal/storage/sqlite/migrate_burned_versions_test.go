@@ -241,6 +241,9 @@ var shippedMigrations = map[int64]string{
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 	20261101145613011: "20261101145613011_repository_renames.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
+	20261103044048260: "20261103044048260_workflow_core.sql",
+	20261103050931629: "20261103050931629_workflow_idempotency.sql",
+	20261103073516664: "20261103073516664_workflow_cdc.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

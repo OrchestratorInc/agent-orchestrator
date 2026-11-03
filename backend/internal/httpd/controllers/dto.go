@@ -3973,3 +3973,250 @@ type SwitchSessionAgentAccountRequest struct {
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
 }
+
+// --- Workflow contracts ------------------------------------------------------
+//
+// The workflow surface exposes the durable multi-repository orchestration core:
+// a user-authored DAG (workflow, tasks, dependency edges), the per-task
+// repository scopes, and the claim/lease execution records a worker holds.
+// Every write carries a body-level idempotencyKey (the REST convention here;
+// no route reads an Idempotency-Key header) and every revision-bearing write
+// carries expectedRevision so a stale caller gets a 409 instead of overwriting
+// newer state.
+
+// WorkflowIDParam identifies one workflow.
+type WorkflowIDParam struct {
+	WorkflowID string `path:"workflowId" description:"Workflow identifier."`
+}
+
+// WorkflowTaskIDParam identifies one task inside a workflow.
+type WorkflowTaskIDParam struct {
+	WorkflowID string `path:"workflowId" description:"Workflow identifier."`
+	TaskID     string `path:"taskId" description:"Workflow task identifier, unique inside its workflow."`
+}
+
+// WorkflowAttemptIDParam identifies one execution attempt inside a workflow.
+type WorkflowAttemptIDParam struct {
+	WorkflowID string `path:"workflowId" description:"Workflow identifier."`
+	AttemptID  string `path:"attemptId" description:"Workflow attempt identifier."`
+}
+
+// ListWorkflowsQuery describes filters and pagination for workflow definitions.
+type ListWorkflowsQuery struct {
+	State  string `query:"state,omitempty" enum:"draft,active,paused,completed,failed,cancelled" description:"Restrict the page to one durable workflow state."`
+	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor string `query:"cursor,omitempty"`
+}
+
+// ListWorkflowTasksQuery describes filters and pagination for a workflow's tasks.
+type ListWorkflowTasksQuery struct {
+	State  string `query:"state,omitempty" enum:"pending,ready,claimed,running,verifying,ready_for_integration,awaiting_approval,integrating,retry_wait,blocked,failed,cancelled,succeeded" description:"Restrict the page to one durable task state."`
+	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100"`
+	Cursor string `query:"cursor,omitempty"`
+}
+
+// WorkflowRepositoryInput binds a workflow to a registered project.
+type WorkflowRepositoryInput struct {
+	RepoKey   string `json:"repoKey" minLength:"1" description:"Workflow-local key other parts of this request use to reference the repository."`
+	ProjectID string `json:"projectId" minLength:"1" description:"Registered project identifier."`
+	PathRef   string `json:"pathRef,omitempty" description:"Repo-relative directory inside the project; empty means the project root."`
+	BaseSHA   string `json:"baseSha,omitempty"`
+	TargetRef string `json:"targetRef,omitempty"`
+}
+
+// WorkflowTaskInput describes one task of a new workflow. Lifecycle state is
+// assigned by the daemon, never by the caller.
+type WorkflowTaskInput struct {
+	ID           string `json:"id" minLength:"1" description:"Client-chosen task identifier, unique inside the workflow."`
+	Kind         string `json:"kind" enum:"analysis,development,testing,review,integration,approval"`
+	Title        string `json:"title" minLength:"1"`
+	Brief        string `json:"brief,omitempty"`
+	Priority     int64  `json:"priority,omitempty"`
+	AgentHarness string `json:"agentHarness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes"`
+	MaxAttempts  int64  `json:"maxAttempts,omitempty" minimum:"1" description:"Attempts the task may spend before it needs a retry. Defaults to 1."`
+}
+
+// WorkflowDependencyInput declares that fromTaskId must succeed before
+// toTaskId becomes ready.
+type WorkflowDependencyInput struct {
+	FromTaskID string `json:"fromTaskId" minLength:"1"`
+	ToTaskID   string `json:"toTaskId" minLength:"1"`
+}
+
+// WorkflowTaskRepositoryInput scopes one task to a workflow repository.
+type WorkflowTaskRepositoryInput struct {
+	TaskID       string   `json:"taskId" minLength:"1"`
+	RepoKey      string   `json:"repoKey" minLength:"1"`
+	AllowedPaths []string `json:"allowedPaths,omitempty" description:"Repo-relative directories the task may write. Omit to grant no path scope."`
+	BaseSHA      string   `json:"baseSha,omitempty"`
+}
+
+// CreateWorkflowRequest is the body accepted when creating a workflow.
+type CreateWorkflowRequest struct {
+	Title            string                        `json:"title" minLength:"1"`
+	Goal             string                        `json:"goal" minLength:"1"`
+	OwnerSessionID   string                        `json:"ownerSessionId,omitempty" description:"Optional owning AO session; creating a workflow never starts one."`
+	Repositories     []WorkflowRepositoryInput     `json:"repositories"`
+	Tasks            []WorkflowTaskInput           `json:"tasks"`
+	Dependencies     []WorkflowDependencyInput     `json:"dependencies,omitempty"`
+	TaskRepositories []WorkflowTaskRepositoryInput `json:"taskRepositories,omitempty"`
+	IdempotencyKey   string                        `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// ActivateWorkflowRequest is the body accepted when activating a workflow.
+type ActivateWorkflowRequest struct {
+	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
+	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// ClaimWorkflowTaskRequest is the body accepted when a worker claims a ready task.
+type ClaimWorkflowTaskRequest struct {
+	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
+	WorkerID         string `json:"workerId" minLength:"1" maxLength:"200"`
+	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// StartWorkflowAttemptRequest is the body accepted when a claiming worker
+// starts running its attempt.
+type StartWorkflowAttemptRequest struct {
+	LeaseToken     string `json:"leaseToken" minLength:"1" description:"Capability token returned once by the claim response."`
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// SettleWorkflowAttemptRequest is the body accepted when a worker reports the
+// terminal outcome of its attempt.
+type SettleWorkflowAttemptRequest struct {
+	LeaseToken     string `json:"leaseToken" minLength:"1" description:"Capability token returned once by the claim response."`
+	Result         string `json:"result" enum:"succeeded,failed"`
+	ErrorCode      string `json:"errorCode,omitempty" maxLength:"256"`
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// RetryWorkflowTaskRequest is the body accepted when reopening a retry_wait task.
+type RetryWorkflowTaskRequest struct {
+	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
+	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// WorkflowResponse is the API representation of a workflow definition.
+type WorkflowResponse struct {
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Goal           string    `json:"goal"`
+	OwnerSessionID string    `json:"ownerSessionId,omitempty"`
+	State          string    `json:"state" enum:"draft,active,paused,completed,failed,cancelled"`
+	Revision       int64     `json:"revision"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// WorkflowRepositoryResponse is one repository binding of a workflow.
+type WorkflowRepositoryResponse struct {
+	RepoKey   string `json:"repoKey"`
+	ProjectID string `json:"projectId"`
+	PathRef   string `json:"pathRef"`
+	BaseSHA   string `json:"baseSha,omitempty"`
+	TargetRef string `json:"targetRef,omitempty"`
+}
+
+// WorkflowTaskResponse is the API representation of one workflow task.
+type WorkflowTaskResponse struct {
+	ID           string    `json:"id"`
+	WorkflowID   string    `json:"workflowId"`
+	Kind         string    `json:"kind" enum:"analysis,development,testing,review,integration,approval"`
+	Title        string    `json:"title"`
+	Brief        string    `json:"brief,omitempty"`
+	State        string    `json:"state" enum:"pending,ready,claimed,running,verifying,ready_for_integration,awaiting_approval,integrating,retry_wait,blocked,failed,cancelled,succeeded"`
+	Priority     int64     `json:"priority"`
+	AgentHarness string    `json:"agentHarness,omitempty"`
+	MaxAttempts  int64     `json:"maxAttempts"`
+	Revision     int64     `json:"revision"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// WorkflowEdgeResponse is one dependency edge: fromTaskId must succeed before
+// toTaskId becomes ready.
+type WorkflowEdgeResponse struct {
+	FromTaskID string `json:"fromTaskId"`
+	ToTaskID   string `json:"toTaskId"`
+}
+
+// WorkflowTaskRepositoryResponse is one repository scope assigned to a task.
+type WorkflowTaskRepositoryResponse struct {
+	TaskID       string   `json:"taskId"`
+	RepoKey      string   `json:"repoKey"`
+	AllowedPaths []string `json:"allowedPaths"`
+	BaseSHA      string   `json:"baseSha,omitempty"`
+}
+
+// WorkflowAttemptResponse is the API representation of one execution attempt.
+// It never carries the lease token: that capability is returned exactly once,
+// by the claim response's separate top-level field.
+type WorkflowAttemptResponse struct {
+	ID          string     `json:"id"`
+	WorkflowID  string     `json:"workflowId"`
+	TaskID      string     `json:"taskId"`
+	AttemptNo   int64      `json:"attemptNo"`
+	SessionID   string     `json:"sessionId,omitempty"`
+	WorkerID    string     `json:"workerId,omitempty"`
+	LeaseUntil  *time.Time `json:"leaseUntil,omitempty"`
+	HeartbeatAt *time.Time `json:"heartbeatAt,omitempty"`
+	State       string     `json:"state" enum:"claimed,running,settling,succeeded,failed,unknown"`
+	StartedAt   *time.Time `json:"startedAt,omitempty"`
+	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	ErrorCode   string     `json:"errorCode,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// WorkflowDefinitionResponse is one workflow with its complete persisted DAG.
+type WorkflowDefinitionResponse struct {
+	Workflow         WorkflowResponse                 `json:"workflow"`
+	Repositories     []WorkflowRepositoryResponse     `json:"repositories"`
+	Tasks            []WorkflowTaskResponse           `json:"tasks"`
+	Edges            []WorkflowEdgeResponse           `json:"edges"`
+	TaskRepositories []WorkflowTaskRepositoryResponse `json:"taskRepositories"`
+}
+
+// WorkflowEnvelope wraps one workflow response.
+type WorkflowEnvelope struct {
+	Workflow WorkflowResponse `json:"workflow"`
+}
+
+// WorkflowTaskEnvelope wraps one task with its durable attempt history.
+type WorkflowTaskEnvelope struct {
+	Task     WorkflowTaskResponse      `json:"task"`
+	Attempts []WorkflowAttemptResponse `json:"attempts"`
+}
+
+// WorkflowAttemptEnvelope wraps one attempt response.
+type WorkflowAttemptEnvelope struct {
+	Attempt WorkflowAttemptResponse `json:"attempt"`
+}
+
+// ClaimWorkflowTaskResponse is the body of a successful task claim. LeaseToken
+// is the one-time capability the worker must present to start and settle: it
+// is exposed here and nowhere else.
+type ClaimWorkflowTaskResponse struct {
+	Attempt    WorkflowAttemptResponse `json:"attempt"`
+	LeaseToken string                  `json:"leaseToken"`
+}
+
+// ListWorkflowsResponse is one page of workflow definitions.
+type ListWorkflowsResponse struct {
+	Workflows  []WorkflowResponse `json:"workflows"`
+	NextCursor string             `json:"nextCursor,omitempty"`
+}
+
+// ListWorkflowTasksResponse is one page of workflow tasks.
+type ListWorkflowTasksResponse struct {
+	Tasks      []WorkflowTaskResponse `json:"tasks"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+}
+
+// RecoverExpiredWorkflowsResponse reports how many expired attempts were
+// recovered (moved to unknown, blocking their tasks) by one sweep.
+type RecoverExpiredWorkflowsResponse struct {
+	Recovered int64 `json:"recovered"`
+}
