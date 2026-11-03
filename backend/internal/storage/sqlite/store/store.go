@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -74,6 +75,11 @@ func (m *contextMutex) Unlock() {
 }
 
 type conversationProjectionTxKey struct{}
+type conversationProjectionDBKey struct{}
+
+func projectionContext(ctx context.Context, q *gen.Queries, db gen.DBTX) context.Context {
+	return context.WithValue(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationProjectionDBKey{}, db)
+}
 
 // conversationWriter returns the transaction-bound query set when a provider
 // event projection is in progress. Otherwise it acquires the ordinary single
@@ -147,7 +153,11 @@ func (s *Store) inTx(ctx context.Context, what string, fn func(*gen.Queries) err
 // while their sqlc artifacts are intentionally regenerated in a later slice.
 func (s *Store) inTxDB(ctx context.Context, what string, fn func(*gen.Queries, gen.DBTX) error) error {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
-		if err := fn(q, nil); err != nil {
+		db, ok := ctx.Value(conversationProjectionDBKey{}).(gen.DBTX)
+		if !ok {
+			return errors.New("projection transaction database is missing")
+		}
+		if err := fn(q, db); err != nil {
 			return fmt.Errorf("%s: %w", what, err)
 		}
 		return nil

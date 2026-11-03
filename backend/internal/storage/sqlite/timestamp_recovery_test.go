@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -181,5 +182,201 @@ func TestTimestampRepairCloseCancelsWorker(t *testing.T) {
 	case <-finished:
 	default:
 		t.Fatal("Close returned before the repair worker finished")
+	}
+}
+
+func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
+	for name, legacy := range map[string]string{
+		"named":           "2026-10-21 18:15:40.123456789 +0200 CEST",
+		"numeric":         "2026-10-21 18:15:40.123456789 +0200 +0200",
+		"rfc3339":         "2026-10-21T18:15:40.123456789+02:00",
+		"negative":        "2026-10-21 12:15:40.123456789 -0400 EDT",
+		"monotonic":       "2026-10-21 18:15:40.123456789 +0200 CEST m=+1.234",
+		"later lifecycle": "2026-10-21 18:15:40.123456789 +0200 CEST",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openMigratedTestDBIn(t, dir)
+			const good = "2026-10-21 16:15:40.123456789 +0000 UTC"
+			updated := legacy
+			wantUpdated := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
+			if name == "later lifecycle" {
+				updated = "2026-10-21 13:45:40.123456789 -0400 EDT"
+				wantUpdated = time.Date(2026, 10, 21, 17, 45, 40, 123456789, time.UTC)
+			}
+			_, err := db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_assistant_update,conversation_checkpoint_state,conversation_checkpoint_generation,conversation_checkpoint_native_id) VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,'old answer','complete','old-gen','old-native');
+INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);
+CREATE TABLE aaa_repair(at TIMESTAMP);
+INSERT INTO aaa_repair VALUES('2026-10-21 18:15:40 +0200 +0200');
+CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, updated, legacy, good, good)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var before string
+			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
+				t.Fatalf("fixture was repaired before send: %q %v", before, err)
+			}
+			later := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
+			created, err := s.AppendUserMessage(context.Background(), "pending-conv", "pending", "gen-1", domain.ConversationMessage{ID: "later-message", Text: "later UTC prompt", Origin: domain.MessageOriginHuman}, "later-turn", later)
+			if err != nil || !created {
+				t.Fatalf("send: created=%v err=%v", created, err)
+			}
+			got, ok, err := s.GetSession(context.Background(), "pending")
+			if err != nil || !ok {
+				t.Fatalf("read sent facts: ok=%v %v", ok, err)
+			}
+			if got.Metadata.LatestUserPrompt != "later UTC prompt" || !got.Metadata.LatestUserPromptAt.Equal(later) || !got.UpdatedAt.Equal(wantUpdated) {
+				t.Fatalf("send succeeded with stale prompt facts: %+v", got.Metadata)
+			}
+			if got.Metadata.LatestAssistantUpdate != "" || got.Metadata.ConversationCheckpointState != domain.ConversationCheckpointLegacy || got.Metadata.ConversationCheckpointGeneration != "" || got.Metadata.ConversationCheckpointNativeID != "" {
+				t.Fatalf("send kept stale checkpoint: %+v", got.Metadata)
+			}
+			for _, table := range []string{"conversation_messages", "conversation_turns"} {
+				var count int
+				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 1 {
+					t.Fatalf("send persisted %d %s: %v", count, table, err)
+				}
+			}
+			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
+				t.Fatal(err)
+			}
+			if err := repairOffsetOnlyTimestamps(db); err != nil {
+				t.Fatal(err)
+			}
+			after, _, err := s.GetSession(context.Background(), "pending")
+			if err != nil || after.Metadata.LatestUserPrompt != got.Metadata.LatestUserPrompt || !after.Metadata.LatestUserPromptAt.Equal(later) {
+				t.Fatalf("background completion changed sent facts: %+v %v", after.Metadata, err)
+			}
+		})
+	}
+}
+
+// The blocker makes pending repair deterministic without holding the writer.
+func pendingSessionGuardFixture(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	const good = "2026-10-21 16:15:40.123456789 +0000 UTC"
+	const legacy = "2026-10-21 18:15:40.123456789 +0200 CEST"
+	_, err := db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_interaction_at)
+VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,?);
+INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);
+CREATE TABLE aaa_repair(at TIMESTAMP);
+INSERT INTO aaa_repair VALUES('2026-10-21 18:15:40 +0200 +0200');
+CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, legacy, legacy, legacy, good, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, db
+}
+
+func TestPendingSessionTimestampGuardBoundaries(t *testing.T) {
+	old := time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)
+	for _, delta := range []time.Duration{-1, 0, 1} {
+		t.Run(delta.String(), func(t *testing.T) {
+			s, _ := pendingSessionGuardFixture(t)
+			ctx := context.Background()
+			at := old.Add(delta)
+			changed, err := s.RecordSessionLatestUserPrompt(ctx, "pending", "pane prompt", at)
+			if err != nil || changed != (delta >= 0) {
+				t.Fatalf("pane guard: changed=%v err=%v", changed, err)
+			}
+			if err := s.RecordSessionInteraction(ctx, "pending", "", at); err != nil {
+				t.Fatal(err)
+			}
+			got, _, err := s.GetSession(ctx, "pending")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := old
+			if delta > 0 {
+				want = at
+			}
+			if !got.Metadata.LatestInteractionAt.Equal(want) || !got.UpdatedAt.Equal(want) {
+				t.Fatalf("interaction guard lost instant: %+v", got)
+			}
+			// An equal interaction and an older prompt must not write clean rows.
+			rev := got.Revision
+			if err := s.RecordSessionInteraction(ctx, "pending", "", want); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.RecordSessionLatestUserPrompt(ctx, "pending", "stale", old.Add(-time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			got, _, err = s.GetSession(ctx, "pending")
+			if err != nil || got.Revision != rev {
+				t.Fatalf("clean/replayed write changed revision: %d -> %d %v", rev, got.Revision, err)
+			}
+		})
+	}
+}
+
+func TestPendingSessionNormalizationRollsBackWithSend(t *testing.T) {
+	s, db := pendingSessionGuardFixture(t)
+	if _, err := db.Exec(`CREATE TRIGGER reject_send BEFORE INSERT ON conversation_messages BEGIN SELECT RAISE(ABORT,'send failed'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.AppendUserMessage(context.Background(), "pending-conv", "pending", "gen-1", domain.ConversationMessage{ID: "failed-message", Text: "failed prompt", Origin: domain.MessageOriginHuman}, "failed-turn", time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("send unexpectedly succeeded")
+	}
+	var raw, prompt string
+	if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT),latest_user_prompt FROM sessions WHERE id='pending'`).Scan(&raw, &prompt); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "2026-10-21 18:15:40.123456789 +0200 CEST" || prompt != "earlier" {
+		t.Fatalf("failed send committed normalization: %q %q", raw, prompt)
+	}
+	var turns int
+	if err := db.QueryRow(`SELECT count(*) FROM conversation_turns`).Scan(&turns); err != nil || turns != 0 {
+		t.Fatalf("failed send left %d turns: %v", turns, err)
+	}
+}
+
+func TestPendingSteerNormalizationReusesProjectionTransaction(t *testing.T) {
+	s, db := pendingSessionGuardFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	at := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
+	rollback := errors.New("roll back projection")
+	project := func(fail bool) error {
+		_, err := s.ProjectProviderEvent(ctx, "pending-conv", "pending", "gen-1", "steer-event", "activity.started", `{}`, at, func(txCtx context.Context) error {
+			err := s.UpsertActivity(txCtx, "pending-conv", "", domain.ConversationActivity{ID: "steer", Kind: domain.ActivityKindAOAction, Status: domain.ActivityStatusCompleted, Detail: []byte(`{"event":"steer","origin":"human"}`)}, at)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return rollback
+			}
+			return nil
+		})
+		return err
+	}
+	if err := project(true); !errors.Is(err, rollback) {
+		t.Fatalf("projection rollback: %v", err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT CAST(latest_interaction_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "2026-10-21 18:15:40.123456789 +0200 CEST" {
+		t.Fatalf("projection committed normalization: %q", raw)
+	}
+	if err := project(false); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.GetSession(ctx, "pending")
+	if err != nil || !got.Metadata.LatestInteractionAt.Equal(at) {
+		t.Fatalf("steer did not advance recency: %+v %v", got.Metadata, err)
 	}
 }

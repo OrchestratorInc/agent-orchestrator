@@ -578,10 +578,14 @@ func (s *Store) UpdateSessionFromActivitySignal(
 func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{
-		LatestUserPrompt: prompt,
-		UpdatedAt:        timeToNullTime(updatedAt),
-		ID:               id,
+	var rows int64
+	err := s.inTxDB(ctx, "record latest user prompt", func(q *gen.Queries, db gen.DBTX) error {
+		if err := normalizeSessionGuardTimes(ctx, db, id); err != nil {
+			return err
+		}
+		var err error
+		rows, err = q.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{LatestUserPrompt: prompt, UpdatedAt: timeToNullTime(updatedAt), ID: id})
+		return err
 	})
 	if err != nil {
 		return false, fmt.Errorf("record latest user prompt for session %s: %w", id, err)

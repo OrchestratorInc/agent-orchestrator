@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
 )
 
 // Read legacy times while the bounded repair catches up. Keep the driver's
@@ -116,7 +118,7 @@ func (r timestampRows) Next(dest []driver.Value) error {
 	}
 	for _, i := range r.times {
 		if s, ok := dest[i].(string); ok {
-			if at, ok := legacyTimestamp(s); ok {
+			if at, ok := timestamps.ParseLegacy(s); ok {
 				dest[i] = at
 			}
 		}

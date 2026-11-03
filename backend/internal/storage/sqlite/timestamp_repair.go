@@ -5,26 +5,16 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
 )
 
 // Kept for older builds; a completed pass is no proof an old writer has not
 // subsequently stored more local times. Never use this marker to skip detection.
 const offsetOnlyTimestampRepairVersion = 1
 const timestampRepairBatch = 256
-
-var legacyDriverTimestamp = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) ([+-]\d{4}) \S+(?: m=[+-][0-9.]+)?$`)
-
-func legacyTimestamp(value string) (time.Time, bool) {
-	if match := legacyDriverTimestamp.FindStringSubmatch(value); match != nil {
-		at, err := time.Parse("2006-01-02 15:04:05.999999999 -0700", match[1]+" "+match[2])
-		return at.UTC(), err == nil
-	}
-	at, err := time.Parse(time.RFC3339Nano, value)
-	return at.UTC(), err == nil
-}
 
 func repairOffsetOnlyTimestamps(db *sql.DB) error {
 	return repairTimestamps(context.Background(), db)
@@ -92,7 +82,7 @@ FROM %[1]s WHERE rowid>=? ORDER BY rowid LIMIT ?`, table, column), cursor, times
 		if !value.Valid {
 			continue
 		}
-		if at, ok := legacyTimestamp(value.String); ok && at.String() != value.String {
+		if at, ok := timestamps.ParseLegacy(value.String); ok && at.String() != value.String {
 			if changes == nil {
 				changes = make([]change, 0, timestampRepairBatch)
 			}
