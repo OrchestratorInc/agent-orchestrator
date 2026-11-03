@@ -84,6 +84,41 @@ func TestSpanningPlanIsCurrentOnABranchForkedByAnEdit(t *testing.T) {
 	}
 }
 
+// Startup undoes an edit whose branch never recorded its prompt, moving the head
+// back to the source branch. That path holds the copies written after the fork
+// again, so the latest of them is current, not the copy the edit made current.
+func TestSpanningPlanIsCurrentAgainAfterAnAbandonedEditIsRepaired(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	root := conversation.ActiveBranchID
+
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-a", "provider-turn-a", testNow)
+	forkAfter := latestSequence(t, s, conversation.ID)
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-b", "provider-turn-b", testNow.Add(time.Minute))
+
+	branch := domain.ConversationBranch{
+		ID: "branch-edited", ConversationID: conversation.ID, ProviderConversationID: "thread-edited",
+		ParentBranchID: root, ForkAfterTurnID: "turn-a", ForkAfterSequence: forkAfter, ReplacedTurnID: "turn-b",
+	}
+	if err := s.CreateAndActivateConversationBranch(ctx, session.ID, branch, "generation-edited", testNow.Add(2*time.Minute)); err != nil {
+		t.Fatalf("CreateAndActivateConversationBranch: %v", err)
+	}
+	repaired, _, err := s.RepairIncompleteConversationEdit(ctx, session.ID, conversation.ID, testNow.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("RepairIncompleteConversationEdit: %v", err)
+	}
+	if repaired.ID != root {
+		t.Fatalf("repair restored branch %q, want source %q", repaired.ID, root)
+	}
+	restored := loadSnapshot(t, s, conversation.ID)
+	if !planOf(t, restored, "turn-a").Superseded || !planRowSuperseded(t, restored, "turn-a") {
+		t.Fatalf("after the repair, turn-a's copy is current beside turn-b's; want it superseded")
+	}
+	if planOf(t, restored, "turn-b").Superseded || planRowSuperseded(t, restored, "turn-b") {
+		t.Fatalf("after the repair, turn-b's copy is superseded; want it current")
+	}
+}
+
 // writeSpanningPlan starts a turn and writes its copy of a list that spans turns,
 // the way the controller does: the turn's plan, its plan row, then a reconcile.
 func writeSpanningPlan(t *testing.T, s *sqlite.Store, sessionID domain.SessionID, conversationID, turnID, providerTurnID string, written time.Time) {

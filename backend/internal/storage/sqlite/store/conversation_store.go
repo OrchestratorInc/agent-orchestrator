@@ -1016,6 +1016,10 @@ func (s *Store) RepairIncompleteConversationEdit(
 		if conversationRows != 1 {
 			return fmt.Errorf("restore source conversation head: conversation %s not found", conversationID)
 		}
+		// The source path holds the copies written after the abandoned fork again.
+		if reconcileErr := reconcileSpanningPlans(ctx, q, conversationID, now); reconcileErr != nil {
+			return reconcileErr
+		}
 		parent.Active = true
 		repaired = parent
 		if active.SessionID != sessionID {
