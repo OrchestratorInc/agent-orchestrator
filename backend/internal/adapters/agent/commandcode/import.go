@@ -146,39 +146,60 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	return copyCommandBundle(ctx, root, filepath.Dir(rel), r.ConfigDir, bucket, r.NativeSessionID)
 }
 
-// PrepareNativeResume verifies the exact workspace copy in AO's isolated HOME.
-// A failed migration must never let the provider silently create an empty chat.
-func PrepareNativeResume(ctx context.Context, dataDir string, sessionID domain.SessionID, cwd, nativeID string) error {
+// The shared workspace context preserves import provenance after adoption, even
+// if private files are removed. Only first open copies the native bundle; later
+// launches must find AO's existing turns and may not reseed from an old source.
+func prepareImportedCommandWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if cfg.ImportConfigDir != "" {
+		if !commandNativeID.MatchString(cfg.NativeSessionID) {
+			return errors.New("invalid command-code imported identity")
+		}
+		switch cfg.RestoreMode {
+		case ports.WorkspaceRestoreImported:
+			home, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.SystemPrompt)
+			if err != nil {
+				return err
+			}
+			if home == "" {
+				return errors.New("command-code imported profile is unavailable")
+			}
+			bucket, err := commandNativeProjectBucket(cfg.WorkspacePath)
+			if err != nil {
+				return err
+			}
+			source, err := os.OpenRoot(cfg.ImportConfigDir)
+			if err != nil {
+				return err
+			}
+			err = copyCommandBundle(ctx, source, filepath.Join("projects", bucket), filepath.Join(home, ".commandcode"), bucket, cfg.NativeSessionID)
+			_ = source.Close()
+			if err != nil {
+				return err
+			}
+		case ports.WorkspaceRestoreNative:
+			// Preserve the managed copy, including all later AO turns.
+		default:
+			return errors.New("command-code import requires native restore context")
+		}
+		if err := verifyImportedCommandResume(ctx, cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.WorkspacePath, cfg.NativeSessionID); err != nil {
+			return err
+		}
+	}
+	return commandCodeHooks.Install(ctx, cfg.WorkspacePath)
+}
+
+func verifyImportedCommandResume(ctx context.Context, dataDir string, sessionID domain.SessionID, cwd, nativeID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if nativeID == "" {
-		return nil
-	}
 	if !commandNativeID.MatchString(nativeID) || SessionHomeDir(dataDir, sessionID) == "" {
-		return nil // Existing managed identities retain their provider behavior.
+		return errors.New("invalid command-code imported resume identity")
 	}
 	bucket, err := commandNativeProjectBucket(cwd)
 	if err != nil {
-		return nil // Import relocation already refuses unsupported workspace paths.
+		return err
 	}
 	target := filepath.Join(SessionHomeDir(dataDir, sessionID), ".commandcode")
-	marker := filepath.Join("projects", bucket, nativeID+".ao-import")
-	marked := false
-	for _, profile := range []string{target, realCommandCodeDir()} {
-		provider, err := os.OpenRoot(profile)
-		if err != nil {
-			continue
-		}
-		contents, err := provider.ReadFile(marker)
-		_ = provider.Close()
-		if err == nil && string(contents) == nativeID {
-			marked = true
-		}
-	}
-	if !marked {
-		return nil
-	}
 	root, err := os.OpenRoot(target)
 	if err != nil {
 		return err
@@ -235,15 +256,30 @@ func commandReadable(root *os.Root, rel, id string) error {
 }
 
 func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot, bucket, id string) error {
+	target, err := os.OpenRoot(targetRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = target.Close() }()
+	if err := target.Mkdir("projects", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	projects, err := target.Lstat("projects")
+	if err != nil {
+		return err
+	}
+	if !projects.IsDir() {
+		return errors.New("command-code destination projects is not a directory")
+	}
 	dest := filepath.Join("projects", bucket)
-	if _, err := root.Lstat(filepath.Join(dest, id+".jsonl")); err == nil {
-		return commandReadable(root, filepath.Join(dest, id+".jsonl"), id)
+	if _, err := target.Lstat(filepath.Join(dest, id+".jsonl")); err == nil {
+		return commandReadable(target, filepath.Join(dest, id+".jsonl"), id)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	// Refuse replacing an existing project directory, even when it does not yet
 	// contain this id: another native conversation may already own it.
-	if _, err := root.Lstat(dest); err == nil {
+	if _, err := target.Lstat(dest); err == nil {
 		return errors.New("command-code destination project already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -295,9 +331,6 @@ func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot
 	_ = prepared.Close()
 	if readErr != nil {
 		return readErr
-	}
-	if err := os.WriteFile(filepath.Join(stage, id+".ao-import"), []byte(id), 0o600); err != nil {
-		return err
 	}
 	return os.Rename(stage, filepath.Join(targetRoot, dest))
 }

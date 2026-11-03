@@ -41,11 +41,11 @@ func TestImportedCommandCodeCopyAndStrictResume(t *testing.T) {
 	}
 	data := t.TempDir()
 	prepareHome(t, data, "imported", "AO instructions")
-	if err := PrepareNativeResume(context.Background(), data, "imported", cwd, id); err == nil {
+	if err := verifyImportedCommandResume(context.Background(), data, "imported", cwd, id); err == nil {
 		t.Fatal("missing isolated history allowed fresh resume")
 	}
 	MigrateNativeHistory(data, "imported", id)
-	if err := PrepareNativeResume(context.Background(), data, "imported", cwd, id); err != nil {
+	if err := verifyImportedCommandResume(context.Background(), data, "imported", cwd, id); err != nil {
 		t.Fatal(err)
 	}
 	updated := append(append([]byte(nil), body...), []byte(`{"type":"message","id":"a","parentId":"u","message":{"role":"assistant","content":"AO turn"}}`+"\n")...)
@@ -129,5 +129,39 @@ func TestCommandCodeRelocationUsesPhysicalWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "projects", bucket, id+".jsonl")); err != nil {
 		t.Fatalf("native physical-cwd bucket missing: %v", err)
+	}
+}
+
+func TestCommandCodeAdoptedImportCannotReseedMissingHistory(t *testing.T) {
+	home := isolatedHome(t)
+	root, cwd, data := filepath.Join(home, ".commandcode"), t.TempDir(), t.TempDir()
+	id := "11111111-2222-4333-8444-555555555555"
+	source := filepath.Join(root, "projects", "source", id+".jsonl")
+	writeHomeFile(t, source, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	p := New()
+	if err := p.RelocateImportedSession(context.Background(), ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: cwd}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceHookConfig{DataDir: data, SessionID: "imported", WorkspacePath: cwd, NativeSessionID: id, RestoreMode: ports.WorkspaceRestoreImported, ImportConfigDir: root}
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.RestoreMode = ports.WorkspaceRestoreNative
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := commandNativeProjectBucket(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(SessionHomeDir(data, "imported"), ".commandcode", "projects", bucket, id+".jsonl")
+	if err := os.Remove(private); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.GetAgentHooks(context.Background(), cfg); err == nil {
+		t.Fatal("adopted import accepted missing native history")
+	}
+	if _, err := os.Stat(private); !os.IsNotExist(err) {
+		t.Fatalf("adopted import reseeded old history: %v", err)
 	}
 }
