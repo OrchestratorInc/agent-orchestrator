@@ -40,8 +40,9 @@ type Archive struct {
 type nativeMessage struct {
 	Role    string `json:"role"`
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		Cache json.RawMessage `json:"cache_control"`
 	} `json:"content"`
 }
 
@@ -139,13 +140,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 		if message.Role != "user" && message.Role != "assistant" {
 			return
 		}
-		var text []string
-		for _, block := range message.Content {
-			if block.Type == "text" && block.Text != "" {
-				text = append(text, block.Text)
-			}
-		}
-		if joined := strings.Join(text, "\n"); strings.TrimSpace(joined) != "" {
+		if joined := visibleText(message); strings.TrimSpace(joined) != "" {
 			out.Messages = append(out.Messages, Message{Role: message.Role, Text: joined, At: at})
 		}
 	}
