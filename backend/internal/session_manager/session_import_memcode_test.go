@@ -23,6 +23,19 @@ type memcodeImportRuntime struct {
 	wrongIdentity         bool
 }
 
+type memcodeTransferredAgent struct {
+	*memcode.Plugin
+	sawTransferredHistory bool
+}
+
+func (a *memcodeTransferredAgent) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	dir := filepath.Join(r.LaunchCWD, ".memcode", "sessions", r.NativeSessionID)
+	_, historyErr := os.Stat(filepath.Join(dir, "messages.json"))
+	_, markerErr := os.Stat(filepath.Join(dir, ".ao-import"))
+	a.sawTransferredHistory = historyErr == nil && errors.Is(markerErr, os.ErrNotExist)
+	return a.Plugin.PrepareImportedSession(ctx, r)
+}
+
 func (r *memcodeImportRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	generation := r.lastCfg.Env["AO_MEMCODE_GENERATION"]
 	if generation == "" {
@@ -52,8 +65,18 @@ func (r *memcodeImportRuntime) GetStyledOutput(context.Context, ports.RuntimeHan
 }
 
 func TestMemcodeImportUsesActualInteractiveRestorerAfterNativeCopy(t *testing.T) {
-	for _, wrongIdentity := range []bool{false, true} {
-		t.Run(map[bool]string{false: "native resume", true: "wrong identity refused"}[wrongIdentity], func(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		wrongIdentity bool
+		fresh         bool
+		tracked       bool
+	}{
+		{name: "native resume"},
+		{name: "wrong identity refused", wrongIdentity: true},
+		{name: "fresh non-ignored history", fresh: true},
+		{name: "fresh tracked history", fresh: true, tracked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("MEMCODE_ENDPOINT_URL", "")
@@ -62,6 +85,16 @@ func TestMemcodeImportUsesActualInteractiveRestorerAfterNativeCopy(t *testing.T)
 			// replaces provider execution and supplies current terminal evidence.
 			if err := os.WriteFile(filepath.Join(binDir, "memcode"), []byte("#!/bin/sh\necho 'memcode synthetic fixture'\n"), 0o700); err != nil {
 				t.Fatal(err)
+			}
+			m, st, rt, msg := interactiveManager(t, false, &interactiveTestAgent{})
+			if tc.fresh {
+				_, _, realWorkspace, repo := newGitTaskPreparationManager(t)
+				source, workspace = repo, ""
+				m.workspace = realWorkspace
+				project := st.projects["mer"]
+				project.Path, project.Kind = source, domain.ProjectKindSingleRepo
+				project.Config.DefaultBranch = "main"
+				st.projects["mer"] = project
 			}
 			id := "sess_01234567"
 			dir := filepath.Join(source, ".memcode", "sessions", id)
@@ -73,16 +106,20 @@ func TestMemcodeImportUsesActualInteractiveRestorerAfterNativeCopy(t *testing.T)
 			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			m, st, rt, msg := interactiveManager(t, false, &interactiveTestAgent{})
-			m.agents = singleAgent{agent: memcode.New()}
-			m.runtime = &memcodeImportRuntime{fakeRuntime: rt, data: m.dataDir, session: "mer-1", target: id, messages: msg, wrongIdentity: wrongIdentity}
+			if tc.tracked {
+				runManagerGit(t, source, "add", ".memcode/sessions/"+id+"/messages.json")
+				runManagerGit(t, source, "commit", "-m", "synthetic native history")
+			}
+			agent := &memcodeTransferredAgent{Plugin: memcode.New()}
+			m.agents = singleAgent{agent: agent}
+			m.runtime = &memcodeImportRuntime{fakeRuntime: rt, data: m.dataDir, session: "mer-1", target: id, messages: msg, wrongIdentity: tc.wrongIdentity}
 			rec := st.sessions["mer-1"]
 			rec.Mode, rec.Activity.State = domain.SessionModeTUI, domain.ActivityIdle
 			rec.Metadata = domain.SessionMetadata{WorkspacePath: workspace, Branch: "ao/import", AgentSessionID: id, ProviderConversationID: id, NativeTranscriptPath: path,
-				ImportSource: &domain.SessionImportSource{NativeID: id, ConfigDir: source, CWD: source, Transferred: true, Prepared: true}}
+				ImportSource: &domain.SessionImportSource{NativeID: id, ConfigDir: source, CWD: source, Transferred: !tc.fresh, Prepared: !tc.fresh}}
 			st.sessions[rec.ID] = rec
 			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
-			if wrongIdentity {
+			if tc.wrongIdentity {
 				if err == nil || !st.sessions[rec.ID].NeedsImportResume() || rt.destroyed == 0 {
 					t.Fatalf("wrong native identity adopted = %#v, %v, destroyed=%d", result, err, rt.destroyed)
 				}
@@ -90,9 +127,13 @@ func TestMemcodeImportUsesActualInteractiveRestorerAfterNativeCopy(t *testing.T)
 				if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || result.Session.Metadata.AgentSessionID != id {
 					t.Fatalf("actual interactive import = %#v, %v", result, err)
 				}
+				workspace = result.Session.Metadata.WorkspacePath
 				prepared := result.Session.Metadata.ImportSource
-				if prepared.ConfigDir != source || prepared.ResumeConfigDir != workspace || prepared.ResumeNativeID != id || result.Session.Metadata.AgentSessionIDLaunchID != "launch-new" {
+				if prepared.ConfigDir != source || prepared.ResumeConfigDir != workspace || prepared.ResumeNativeID != id || !prepared.Transferred || !prepared.Prepared || result.Session.Metadata.AgentSessionIDLaunchID != "launch-new" {
 					t.Fatalf("native copy/generation not adopted = %+v", result.Session.Metadata)
+				}
+				if tc.fresh && !agent.sawTransferredHistory {
+					t.Fatal("fresh import did not exercise native history arriving through Git transfer")
 				}
 			}
 			if len(msg.msgs) != 1 || msg.msgs[0] != "/resume "+id || rt.lastCfg.WorkspacePath != workspace {

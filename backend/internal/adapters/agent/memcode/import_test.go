@@ -78,9 +78,22 @@ func TestMemcodeImportRetryRetainsWorktreeTurns(t *testing.T) {
 
 func TestMemcodeImportRefusesUnrelatedDestination(t *testing.T) {
 	r := memcodeRelocationFixture(t)
-	seedHistory(t, r.LaunchCWD, validHistory)
+	seedHistory(t, r.LaunchCWD, strings.Replace(validHistory, `"role":"user"`, `"role":"assistant"`, 1))
 	if err := (&Plugin{}).RelocateImportedSession(context.Background(), r); err == nil {
-		t.Fatal("accepted a native file without this import's marker")
+		t.Fatal("accepted destination history different from the selected source")
+	}
+}
+
+func TestMemcodeImportAcceptsExactSourceHistoryTransferredByGit(t *testing.T) {
+	r := memcodeRelocationFixture(t)
+	seedHistory(t, r.LaunchCWD, validHistory)
+	prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+	if err != nil || prepared.NativeSessionID != testID {
+		t.Fatalf("exact transferred native copy = %+v, %v", prepared, err)
+	}
+	data, err := os.ReadFile(prepared.TranscriptPath)
+	if err != nil || string(data) != validHistory {
+		t.Fatalf("transferred bytes changed = %s, %v", data, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package memcode
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -114,15 +115,46 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	wantMarker := hex.EncodeToString(sum[:]) + "\n"
 	marker := filepath.Join(filepath.Dir(rel), ".ao-import")
 	if _, err := dst.Lstat(rel); err == nil {
-		got, err := memcodeImportFile(ctx, dst, marker, 128)
-		if err != nil || string(got) != wantMarker {
+		got, markerErr := memcodeImportFile(ctx, dst, marker, 128)
+		if errors.Is(markerErr, os.ErrNotExist) {
+			// The shared Git transfer may already have brought this selected
+			// transcript into the worktree. Claim it only when every byte is
+			// identical to the validated source; never replace destination data.
+			src, err := os.OpenRoot(source)
+			if err != nil {
+				return err
+			}
+			original, err := memcodeImportFile(ctx, src, rel, 16<<20)
+			_ = src.Close()
+			if err != nil {
+				return err
+			}
+			copied, err := memcodeImportFile(ctx, dst, rel, 16<<20)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(original, copied) {
+				return errors.New("memcode destination differs from the selected source history")
+			}
+			if _, _, err := transcript(source, r.NativeSessionID); err != nil {
+				return err
+			}
+			if err := installMemcodeImport(ctx, dst, marker, []byte(wantMarker)); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			got, markerErr = memcodeImportFile(ctx, dst, marker, 128)
+		}
+		if markerErr != nil || string(got) != wantMarker {
 			return errors.New("memcode destination belongs to another conversation")
 		}
 		if _, err := memcodeImportFile(ctx, dst, rel, 16<<20); err != nil {
 			return err
 		}
 		_, _, err = transcript(launch, r.NativeSessionID)
-		return err
+		if err != nil {
+			return err
+		}
+		return dst.Chmod(rel, 0o600)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
