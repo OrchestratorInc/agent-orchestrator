@@ -76,6 +76,9 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
+	// fingerprint covers additional native inputs (for example SQLite WAL and
+	// manifest stats) without changing the existing size/mtime contract.
+	fingerprint string
 }
 
 type parsed struct {
@@ -217,7 +220,7 @@ func originURL(config, worktree string) string {
 // remoteIdentity reduces a network remote to host/path, so the SSH, scp-style
 // and HTTPS forms of one repository, with or without a user, a default port or
 // .git, compare equal. Hosts such as GitHub ignore case in owner and repository
-// names, so the identity is lowercase. ok is false for a local path.
+// names. Other hosts may have case-sensitive paths. ok is false for a local path.
 func remoteIdentity(remote string) (string, bool) {
 	if filepath.IsAbs(remote) || filepath.VolumeName(remote) != "" {
 		return "", false
@@ -247,7 +250,11 @@ func remoteIdentity(remote string) (string, bool) {
 	if host == "" || path == "" {
 		return "", false
 	}
-	return strings.ToLower(host + "/" + path), true
+	host = strings.ToLower(host)
+	if host == "github.com" {
+		path = strings.ToLower(path)
+	}
+	return host + "/" + path, true
 }
 
 // SameRepository recognizes linked worktrees and separate clones of the same origin.
@@ -539,7 +546,7 @@ func (f sourceFiles) nativeID() string {
 }
 
 func (f sourceFiles) cacheKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
 }
 
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
@@ -580,7 +587,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
+	projects := s.registeredDiscoveryRoots(dests)
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
@@ -594,9 +602,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		var files []sourceFiles
 		var err error
 		if importer.discoverRegistered != nil {
-			roots := s.registeredDiscoveryRoots(dests)
-			files, err = importer.discoverRegistered(ctx, roots)
-			files = registeredSources(files, roots)
+			files, err = importer.discoverRegistered(ctx, projects)
+			files = registeredSources(files, projects)
+		} else if importer.discoverWithProjects != nil {
+			files, err = importer.discoverWithProjects(ctx, root, projects)
 		} else {
 			files, err = s.discover(ctx, harness, root)
 		}
@@ -628,7 +637,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				continue
 			}
 			group.Go(func() error {
-				source, err := readTranscript(groupCtx, harness, file.root, file.paths...)
+				source, err := readTranscriptForProjects(groupCtx, harness, file.root, projects, file.paths...)
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
@@ -704,7 +713,11 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
+	dests, err := s.destinations(ctx)
+	if err != nil {
+		return err
+	}
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, s.registeredDiscoveryRoots(dests), paths...)
 	if err != nil {
 		return err
 	}
@@ -807,7 +820,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			}
 			group.Go(func() error {
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-				reads[i].source, reads[i].err = readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
+				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, s.registeredDiscoveryRoots(dests), item.source.paths...)
 				return nil
 			})
 		}

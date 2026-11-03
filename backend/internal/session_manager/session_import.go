@@ -374,6 +374,9 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
+	if rec.Harness == domain.HarnessOpenCode || rec.Harness == domain.HarnessKimi {
+		return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("this harness cannot yet resume an import safely in AO's workspace; the imported history is preserved"))
+	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}
