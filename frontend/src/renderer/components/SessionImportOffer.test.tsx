@@ -28,25 +28,30 @@ beforeEach(() => {
 });
 
 it("offers a direct button when only one importable agent is configured", () => {
-	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("cursor", true, "authorized"));
+	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("amp", true, "authorized"));
 	expect(screen.queryByRole("button", { name: /Import chats/ })).not.toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Import Claude Code chats" }));
 	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", harnessTab: "import" });
 });
 
 it("groups several agents under one menu, each opening that agent's Import tab", async () => {
-	renderOffer(agent("claude-code", true, "authorized"), agent("opencode", true, "authorized"), agent("codex", true, "unauthorized"));
+	renderOffer(agent("claude-code", true, "authorized"), agent("pi", true, "authorized"), agent("codex", true, "unauthorized"));
 	expect(screen.queryByRole("button", { name: /Claude Code chats/ })).not.toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Import chats" }));
 	const menu = await screen.findByRole("menu");
-	expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "OpenCode"]);
-	await userEvent.click(within(menu).getByRole("menuitem", { name: "OpenCode" }));
-	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "opencode", harnessTab: "import" });
+	expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "Pi"]);
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "Pi" }));
+	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "pi", harnessTab: "import" });
 });
 
-it("keeps the card to one row by collapsing extra agent logos into a count", () => {
+it("shows only logos for harnesses with import enabled", () => {
 	renderOffer(...["claude-code", "codex", "droid", "kimi", "opencode", "pi"].map((id) => agent(id, true, "authorized")));
-	expect(screen.getByRole("img", { name: "Claude Code, Codex, Droid, Kimi, OpenCode, Pi" })).toHaveTextContent("+2");
+	expect(screen.getByRole("img", { name: "Claude Code, Codex, Droid, Pi" })).not.toHaveTextContent("+2");
+});
+
+it("does not offer imports when only deferred harnesses are configured", () => {
+	renderOffer(agent("opencode", true, "authorized"), agent("kimi", true, "authorized"));
+	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
 });
 
 it("shows nothing when no importable agent is configured", () => {

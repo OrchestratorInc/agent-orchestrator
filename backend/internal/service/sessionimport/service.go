@@ -220,7 +220,7 @@ func originURL(config, worktree string) string {
 // remoteIdentity reduces a network remote to host/path, so the SSH, scp-style
 // and HTTPS forms of one repository, with or without a user, a default port or
 // .git, compare equal. Hosts such as GitHub ignore case in owner and repository
-// names, so the identity is lowercase. ok is false for a local path.
+// names. Other hosts may have case-sensitive paths. ok is false for a local path.
 func remoteIdentity(remote string) (string, bool) {
 	if filepath.IsAbs(remote) || filepath.VolumeName(remote) != "" {
 		return "", false
@@ -250,7 +250,11 @@ func remoteIdentity(remote string) (string, bool) {
 	if host == "" || path == "" {
 		return "", false
 	}
-	return strings.ToLower(host + "/" + path), true
+	host = strings.ToLower(host)
+	if host == "github.com" {
+		path = strings.ToLower(path)
+	}
+	return host + "/" + path, true
 }
 
 // SameRepository recognizes linked worktrees and separate clones of the same origin.
@@ -584,7 +588,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
 	projects := s.registeredDiscoveryRoots(dests)
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi, domain.HarnessKimi}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
