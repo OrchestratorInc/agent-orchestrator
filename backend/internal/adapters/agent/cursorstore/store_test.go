@@ -102,7 +102,8 @@ func TestCopyKeepsSourceAndExistingNativeCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := Read(context.Background(), root, target)
-	if err != nil || got.ID != testID || got.CWD != launch || len(got.Messages) != 2 {
+	wantCWD, pathErr := filepath.EvalSymlinks(launch)
+	if err != nil || pathErr != nil || got.ID != testID || got.CWD != wantCWD || len(got.Messages) != 2 {
 		t.Fatalf("copy = %#v, %v", got, err)
 	}
 	after, err := os.ReadFile(source)
@@ -147,6 +148,23 @@ func TestCopyUsesResolvedLaunchDirectory(t *testing.T) {
 	want, pathErr := SessionPath(root, launch, testID)
 	if err != nil || pathErr != nil || target != want {
 		t.Fatalf("target = %q, %v; want %q, %v", target, err, want, pathErr)
+	}
+}
+
+func TestCopyResolvesProviderProfileAlias(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	source := fixture(t, root, cwd)
+	alias := filepath.Join(t.TempDir(), "profile-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	target, err := Copy(context.Background(), alias, source, launch)
+	want, pathErr := SessionPath(root, launch, testID)
+	if err != nil || pathErr != nil || target != want {
+		t.Fatalf("profile alias target = %q, %v; want %q, %v", target, err, want, pathErr)
+	}
+	if _, err := Read(context.Background(), alias, target); err != nil {
+		t.Fatal(err)
 	}
 }
 

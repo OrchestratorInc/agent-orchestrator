@@ -55,6 +55,10 @@ func SessionPath(root, cwd, id string) (string, error) {
 	if _, err := uuid.Parse(id); err != nil || filepath.Base(id) != id {
 		return "", errors.New("invalid cursor session id")
 	}
+	root, err := providerRoot(root)
+	if err != nil {
+		return "", err
+	}
 	resolved, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return "", err
@@ -67,12 +71,16 @@ func SessionPath(root, cwd, id string) (string, error) {
 	return filepath.Join(root, "chats", hex.EncodeToString(sum[:]), id, "store.db"), nil
 }
 
-func confined(root, path string) (string, error) {
-	base, err := filepath.EvalSymlinks(root)
+func providerRoot(root string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
 	}
-	base, err = filepath.Abs(base)
+	return filepath.Abs(resolved)
+}
+
+func confined(root, path string) (string, error) {
+	base, err := providerRoot(root)
 	if err != nil {
 		return "", err
 	}
@@ -304,6 +312,10 @@ func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
 }
 
 func copyWithPublisher(ctx context.Context, root, source, launchCWD string, publish func(string, string) error) (string, error) {
+	root, err := providerRoot(root)
+	if err != nil {
+		return "", err
+	}
 	db, tx, actual, err := snapshot(ctx, root, source)
 	if err != nil {
 		return "", err
