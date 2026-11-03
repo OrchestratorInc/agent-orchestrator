@@ -3,6 +3,7 @@ package cursor
 import (
 	"context"
 	"errors"
+	"path/filepath"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
@@ -70,4 +71,39 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{NativeSessionID: archive.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+}
+
+// PrepareRuntimeLaunch verifies the exact imported cwd bucket before Cursor
+// can initialize a missing SQLite store and silently continue an empty chat.
+// Ordinary managed launches keep their existing behavior.
+func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cfg.RestoreMode == ports.WorkspaceRestoreFresh || cfg.RestoreMode == ports.WorkspaceRestoreNative && cfg.ImportConfigDir == "" {
+		return nil
+	}
+	if cfg.NativeSessionID == "" || cfg.ImportConfigDir == "" {
+		return errors.New("cursor imported restore is missing its exact native binding")
+	}
+	root, err := p.NativeSessionConfigDir(ctx, cfg.Env)
+	if err != nil {
+		return err
+	}
+	selected, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	recorded, err := filepath.EvalSymlinks(cfg.ImportConfigDir)
+	if err != nil {
+		return err
+	}
+	if selected != recorded {
+		return errors.New("cursor launch profile differs from the imported native root")
+	}
+	path, err := cursorstore.SessionPath(root, cfg.WorkspacePath, cfg.NativeSessionID)
+	if err != nil {
+		return err
+	}
+	return cursorstore.Verify(ctx, root, path, cfg.NativeSessionID)
 }

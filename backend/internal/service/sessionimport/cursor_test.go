@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func cursorFixture(t *testing.T, root, cwd string) string {
@@ -88,12 +90,31 @@ func TestCursorImportUsesTerminalDespiteChatCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	launch := t.TempDir()
-	if _, err := cursorstore.Copy(context.Background(), root, path, launch); err != nil {
+	target, err := cursorstore.Copy(context.Background(), root, path, launch)
+	if err != nil {
 		t.Fatal(err)
 	}
 	files, err := discoverCursor(context.Background(), root)
 	if err != nil || len(files) != 2 {
 		t.Fatalf("native buckets = %#v, %v", files, err)
+	}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: launch, Env: map[string]string{"CURSOR_DATA_DIR": root}, NativeSessionID: rec.Metadata.AgentSessionID, ImportConfigDir: root, RestoreMode: ports.WorkspaceRestoreImported}
+	adapter := cursor.New()
+	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	// The original still exists in another bucket. A restored import must
+	// validate its AO copy rather than accepting that unrelated lookup.
+	cfg.RestoreMode = ports.WorkspaceRestoreNative
+	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err == nil {
+		t.Fatal("accepted a missing copied native store")
+	}
+	cfg.RestoreMode = ports.WorkspaceRestoreFresh
+	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatalf("changed fresh-launch behavior: %v", err)
 	}
 }
 

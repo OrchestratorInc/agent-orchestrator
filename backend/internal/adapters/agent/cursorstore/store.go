@@ -136,23 +136,56 @@ func Read(ctx context.Context, root, path string) (Archive, error) {
 	return read(ctx, tx, actual)
 }
 
-func read(ctx context.Context, tx *sql.Tx, path string) (Archive, error) {
+func readMetadata(ctx context.Context, tx *sql.Tx, path string) (metadata, error) {
 	var encoded string
 	if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN length(value)<=2097152 THEN value END FROM meta WHERE key='0'").Scan(&encoded); err != nil {
-		return Archive{}, err
+		return metadata{}, err
 	}
 	body, err := hex.DecodeString(encoded)
 	if err != nil {
-		return Archive{}, err
+		return metadata{}, err
 	}
 	var meta metadata
 	if err := json.Unmarshal(body, &meta); err != nil {
-		return Archive{}, err
+		return metadata{}, err
 	}
 	if meta.ID != filepath.Base(filepath.Dir(path)) || meta.Root == "" {
-		return Archive{}, errors.New("cursor native identity or root is missing")
+		return metadata{}, errors.New("cursor native identity or root is missing")
 	}
 	if _, err := uuid.Parse(meta.ID); err != nil {
+		return metadata{}, err
+	}
+	return meta, nil
+}
+
+// Verify checks native backing state without requiring a supported display
+// projection. Later native turns can use text/blob formats the importer omits.
+func Verify(ctx context.Context, root, path, id string) error {
+	db, tx, actual, err := snapshot(ctx, root, path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	defer func() { _ = tx.Rollback() }()
+	meta, err := readMetadata(ctx, tx, actual)
+	if err != nil {
+		return err
+	}
+	if meta.ID != id {
+		return errors.New("cursor native identity differs from the selected conversation")
+	}
+	rootID, err := hex.DecodeString(meta.Root)
+	if err != nil {
+		return err
+	}
+	reader := graphReader{ctx: ctx, tx: tx}
+	_, err = reader.blob(rootID)
+	return err
+}
+
+func read(ctx context.Context, tx *sql.Tx, path string) (Archive, error) {
+	meta, err := readMetadata(ctx, tx, path)
+	if err != nil {
 		return Archive{}, err
 	}
 	root, err := os.OpenRoot(filepath.Dir(path))
