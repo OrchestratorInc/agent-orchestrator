@@ -56,6 +56,8 @@ func parseRecordsWithState(
 		parseHermes(source, records, state.Hermes, &result)
 	case domain.UsageSourceGrokSession:
 		parseGrok(source, records, state.Snapshot, &result)
+	case domain.UsageSourceFXSession:
+		parseFX(source, records, state.Snapshot, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -235,7 +237,7 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateHermesParserState(state.Hermes); err != nil {
 			return nil, err
 		}
-	case domain.UsageSourceGrokSession:
+	case domain.UsageSourceGrokSession, domain.UsageSourceFXSession:
 		if state.Claude != nil || state.Codex != nil || state.Hermes != nil {
 			return nil, errors.New("snapshot state has invalid parser payload")
 		}
@@ -266,7 +268,7 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 		}
 	case domain.UsageSourceHermesState:
 		state.Hermes = &hermesParserStateV1{Rows: map[string]hermesUsageCounters{}}
-	case domain.UsageSourceGrokSession:
+	case domain.UsageSourceGrokSession, domain.UsageSourceFXSession:
 		state.Snapshot = &snapshotParserStateV1{Rows: map[string]hermesUsageCounters{}}
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
 		domain.UsageSourceGooseLedger:

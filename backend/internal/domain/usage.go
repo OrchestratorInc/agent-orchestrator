@@ -21,6 +21,7 @@ const (
 	UsageSourceGooseLedger    UsageSourceKind = "goose_ledger"
 	UsageSourceHermesState    UsageSourceKind = "hermes_state"
 	UsageSourceGrokSession    UsageSourceKind = "grok_session"
+	UsageSourceFXSession      UsageSourceKind = "fx_session"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -36,6 +37,7 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceGooseLedger,
 	UsageSourceHermesState,
 	UsageSourceGrokSession,
+	UsageSourceFXSession,
 }
 
 // IsKnown reports whether k is a certified usage source kind.

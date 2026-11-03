@@ -75,6 +75,8 @@ type SourceRoots struct {
 	// GrokSessions holds one directory per workspace, each holding one
 	// directory per Grok session with that session's usage.json.
 	GrokSessions string
+	// FXSessions holds one directory per fx session, named by its ID.
+	FXSessions string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -118,6 +120,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		GooseSessions:  filepath.Join(gooseDataDir(home), "sessions"),
 		HermesAgents:   filepath.Join(dataDir, "agents", "hermes"),
 		GrokSessions:   filepath.Join(grokHome, "sessions"),
+		FXSessions:     filepath.Join(home, ".fx", "sessions"),
 	}, nil
 }
 
@@ -154,18 +157,22 @@ func sqliteUsageHarness(harness domain.AgentHarness) bool {
 // snapshotUsageHarness reports whether the harness keeps a session's running
 // usage totals in one JSON file that it rewrites in place.
 func snapshotUsageHarness(harness domain.AgentHarness) bool {
-	return harness == domain.HarnessGrok
+	return harness == domain.HarnessGrok || harness == domain.HarnessFX
 }
 
 // cumulativeUsageKind reports whether the source kind reports running totals
 // that the parser diffs against a baseline, which a replaced generation must
 // keep: replaying the totals from zero would bill every earlier call again.
 func cumulativeUsageKind(kind domain.UsageSourceKind) bool {
-	return kind == domain.UsageSourceHermesState || kind == domain.UsageSourceGrokSession
+	return kind == domain.UsageSourceHermesState || kind == domain.UsageSourceGrokSession ||
+		kind == domain.UsageSourceFXSession
 }
 
 // grokUsageFileName is the per-session file of Grok's running usage totals.
 const grokUsageFileName = "usage.json"
+
+// fxUsageFileName is the per-session file of fx's running usage totals.
+const fxUsageFileName = "usage-v2.json"
 
 // hermesStateDBName is Hermes's session store, which also holds its per-model
 // usage counters.
@@ -1833,7 +1840,7 @@ func (c *Collector) registerValidatedSource(
 		}
 	}
 	if replaced != nil && cumulativeUsageKind(kind) && replaced.Kind == kind {
-		// Hermes and Grok store cumulative counters. The parser's per-row
+		// Hermes, Grok and fx store cumulative counters. The parser's per-row
 		// baseline must follow the artifact into its new generation, or every
 		// earlier call would be billed again from zero.
 		record.ByteOffset = replaced.ByteOffset
@@ -2607,6 +2614,14 @@ func validateSourceAttribution(
 			filepath.Base(filepath.Dir(resolved)) != nativeSessionID {
 			return rejected()
 		}
+	case domain.UsageSourceFXSession:
+		// fx names each session's directory by its session ID; the parser
+		// also checks the ID usage-v2.json records.
+		if binding.Harness != domain.HarnessFX || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != fxUsageFileName ||
+			filepath.Base(filepath.Dir(resolved)) != nativeSessionID {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2664,6 +2679,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.GooseSessions}
 	case domain.HarnessGrok:
 		return []string{c.roots.GrokSessions}
+	case domain.HarnessFX:
+		return []string{c.roots.FXSessions}
 	default:
 		return nil
 	}
@@ -2687,6 +2704,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceHermesState, true
 	case domain.HarnessGrok:
 		return domain.UsageSourceGrokSession, true
+	case domain.HarnessFX:
+		return domain.UsageSourceFXSession, true
 	default:
 		return "", false
 	}
@@ -2746,6 +2765,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverHermesPath(ctx, sessionID)
 	case domain.HarnessGrok:
 		return c.discoverGrokPath(ctx, nativeID)
+	case domain.HarnessFX:
+		return c.discoverFXPath(ctx, nativeID)
 	}
 	type candidate struct {
 		path string
@@ -2846,6 +2867,22 @@ func (c *Collector) discoverGrokPath(ctx context.Context, nativeID string) (stri
 		}
 	}
 	return best, nil
+}
+
+// discoverFXPath finds the usage-v2.json of the fx session AO learned through
+// Herdr. fx writes it once the session's first request settles.
+func (c *Collector) discoverFXPath(ctx context.Context, nativeID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(c.roots.FXSessions) == "" || !nativeUsageIDPattern.MatchString(nativeID) {
+		return "", nil
+	}
+	path := filepath.Join(c.roots.FXSessions, nativeID, fxUsageFileName)
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return "", nil
+	}
+	return path, nil
 }
 
 func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.SessionID) (string, error) {
