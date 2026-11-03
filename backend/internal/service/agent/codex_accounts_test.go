@@ -261,6 +261,7 @@ func newTestCodexAccountManager(t *testing.T, factory ports.CodexAccountClientFa
 		filepath.Join(root, "switch-staging"), filepath.Join(root, "device-home"),
 		factory, nil)
 	manager.snapshotRevision = 0
+	manager.resolveBinary = func(context.Context) (string, error) { return "/test/bin/codex", nil }
 	if state != nil {
 		if active, ok := state.testDeviceAccount(); ok && active.AccountID != "" {
 			manager.deviceAccountID = active.AccountID
@@ -372,7 +373,7 @@ func TestNativeLoginTerminalUsesOnePrivatePendingHomeAndNoName(t *testing.T) {
 		t.Fatalf("terminal opens = %d", len(terminal.opened))
 	}
 	opened := terminal.opened[0]
-	if !slices.Equal(opened.Argv, []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login"}) {
+	if !slices.Equal(opened.Argv, []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login", "--executable", "/test/bin/codex"}) {
 		t.Fatalf("argv = %#v", opened.Argv)
 	}
 	home := opened.Env["CODEX_HOME"]

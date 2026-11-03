@@ -37,6 +37,10 @@ function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
 }
 
+// How long global Settings waits after opening before forcing the Codex account
+// reconciliation, so its multi-second request does not queue the page's reads.
+const codexReconcileDelayMs = 1_500;
+
 function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -229,13 +233,21 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		// Warm account management as soon as global Settings opens, regardless of
 		// which page is selected. By the time the user visits Accounts, external
 		// login/logout changes and saved-account observations are already current.
-		void ensureCodexAccounts([], {
-			includeUsage: true,
-			forceAuthentication: true,
-			forceDeviceReconciliation: true,
-		})
+		// The cached read answers at once; the forced reconciliation takes
+		// seconds and holds one of the renderer's few daemon connections, so it
+		// starts once the page's own reads have gone out.
+		void ensureCodexAccounts([], { includeUsage: true })
 			.then((next) => writeCodexAccounts(queryClient, next, "replace"))
 			.catch(() => undefined);
+		window.setTimeout(() => {
+			void ensureCodexAccounts([], {
+				includeUsage: true,
+				forceAuthentication: true,
+				forceDeviceReconciliation: true,
+			})
+				.then((next) => writeCodexAccounts(queryClient, next, "replace"))
+				.catch(() => undefined);
+		}, codexReconcileDelayMs);
 		// Same for Mobile: its pairing state and Keep awake are known before the
 		// page is first drawn, so nothing pops in or flips after it opens.
 		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
