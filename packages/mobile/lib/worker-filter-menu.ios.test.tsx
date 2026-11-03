@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ select: vi.fn() }));
 
-vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textSecondary: "#secondary" }), useThemeState: () => ({ scheme: "dark" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", textSecondary: "#secondary" }), useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios", Version: "26.0" }, StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("expo-router", async () => {
@@ -76,6 +76,8 @@ it("is a flat 44pt glyph in the bar, named for VoiceOver", async () => {
 	const face = menu.props.label;
 	expect(face.props.modifiers).toEqual(expect.arrayContaining([{ modifier: "frame", args: [{ width: 44, height: 44 }] }]));
 	expect(face.props.modifiers).not.toEqual(expect.arrayContaining([expect.objectContaining({ modifier: "glassCircle" })]));
+	// The bar's other buttons are bare glyphs in the primary ink.
+	expect(face.props).toMatchObject({ systemName: "line.3.horizontal.decrease", size: 24, color: "#textPrimary" });
 });
 
 it("fills the glyph and names the filters once the board is filtered", async () => {

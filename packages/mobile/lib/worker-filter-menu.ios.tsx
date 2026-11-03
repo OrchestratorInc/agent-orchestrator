@@ -51,12 +51,14 @@ function WorkerFilterButton({ environments, selectedEnvironmentId, onSelectEnvir
 	return (
 		<Host style={{ width: touchTarget, height: touchTarget }} colorScheme={scheme}>
 			<Menu
-				// A filtered board shows it in the glyph, filled, not in colour alone.
+				// Drawn as the bar's own buttons are (the bell, the gear): a bare glyph
+				// in the primary ink at their size. A filtered board fills it into a
+				// circle, so the state shows in its shape, not in colour alone.
 				label={
 					<Image
-						systemName={filtered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"}
-						size={iconSize.lg}
-						color={t.textSecondary}
+						systemName={filtered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"}
+						size={iconSize.xl}
+						color={t.textPrimary}
 						modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
 					/>
 				}
