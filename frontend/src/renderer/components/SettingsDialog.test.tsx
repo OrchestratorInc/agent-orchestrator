@@ -377,10 +377,20 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
+		// The cached account read goes out at once; the slow forced
+		// reconciliation follows once the page's own reads have been sent.
+		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true } },
+		));
+		expect(postMock).not.toHaveBeenCalledWith(
+			"/api/v1/agents/codex/accounts/ensure",
+			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		);
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
-		));
+		), { timeout: 3_000 });
 	});
 
 	it("scrolls to and briefly highlights the setting a deep link names", async () => {

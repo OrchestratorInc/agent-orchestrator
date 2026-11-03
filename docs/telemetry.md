@@ -32,6 +32,9 @@ default DSN is distinct from the daemon project; Electron main uses
 builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
+Desktop error reports are sampled at 25%. Fatal crashes are kept at full rate.
+Unhandled renderer window errors and rejected promises are nonfatal, so they
+are sampled at 25% too. An isolated one has a 25% chance of reaching Sentry.
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
@@ -43,9 +46,12 @@ choice controls Electron and daemon Sentry there. Share usage analytics is a
 separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
-Error events can include a standard exception type and allowlisted in-app
-function names and line numbers. Stack paths and raw exception messages are
-removed before sending.
+Error events can include a standard exception type, bounded function names,
+bounded line and column numbers, and a validated app relative JavaScript asset
+filename. The asset filename preserves the location needed for source map matching. Local
+filesystem paths, full URLs, and raw exception messages are removed before sending.
+The app's global renderer error boundary binds handlers independently of
+PostHog setup. Electron main still checks Share error events before sending.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
@@ -385,6 +391,39 @@ leading and trailing whitespace:
 | `l` | 801 to 2,000 bytes |
 | `xl` | More than 2,000 bytes |
 
+The daemon also emits `ao.automation.created` once after successfully saving a
+new definition, whether created through the desktop, CLI, or API. Its only
+automation-specific properties are `template_id` and `use_case`, both restricted
+to closed vocabularies. It does not include the automation ID, prompt, name,
+repository, project ID, or generated output. Existing desktop/daemon telemetry
+controls apply; delivery is best effort and a telemetry failure does not fail
+creation.
+
+`template_id` is one of `custom`, `daily_pr_review_v1`,
+`daily_issue_triage_v1`, or `weekly_release_notes_v1`. It records the chosen
+starting point and stays fixed even if the prompt changes. `use_case` is one of
+`pr_review`, `issue_triage`, `repo_digest`, `ci_triage`, `release_notes`,
+`security_audit`, `dependency_maintenance`, `docs_maintenance`, `other`, or
+`unknown`. The desktop derives the category from the selected starter; custom
+definitions use `unknown`. CLI/API clients may optionally supply or update a
+category, including `other`. Older definitions and clients default to
+`custom` / `unknown`.
+
+Template origin is client-declared, not verified. The desktop sets `templateId`
+from the selected starter, but CLI/API callers can supply any allowed template
+ID with an arbitrary prompt, even when they did not use that starter. Scripted
+or agent-driven creates can therefore inflate template counts. Treat
+`template_id` as a declared starting point, not proof of a template selection
+or prompt contents; it cannot reliably measure desktop starter adoption across
+all clients.
+
+For intent analysis, count `ao.automation.created` grouped by these two fields.
+Do not add renderer success events to this count: they describe the same desktop
+creations and exclude CLI/API creations. Updates, runs, and startup migration do
+not emit creation events. This measures declared intent at creation, not current
+active usage, successful execution, or the exact contents of a customized prompt.
+Existing events cannot be used to reconstruct historical automation intent.
+
 ## Artifact creation
 
 When desktop product telemetry is enabled, Orchestrator.inc records visits to the
@@ -591,19 +630,33 @@ relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
 goroutine panics; and Electron main capture of process crashes, uncaught
 exceptions, unhandled rejections, and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by registered route and error code,
-while retaining the AO function that recorded the failure as the culprit.
+raw error messages. It groups HTTP faults by registered route and stable error
+code, or by a bounded cause type when no code exists. Ordinary Go errors carry
+no synthetic throw stack. Recovered panics retain the interrupted AO function.
 Agent relaunches group by operation and failure step, with a fixed step tag
 and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
-error provides evidence. It keeps stack function and line information, but
-removes stack paths, request data, project, session, repository and branch
-names, and panic text. Electron events use fixed titles and scrubbed exception
-values with the same installation ID as Sentry `user.id`.
+error provides evidence. Panic events keep function and line information, but
+remove stack paths, request data, project, session, repository and branch
+names, and panic text. Electron exception titles use a standard error type and
+a fixed function name or bounded bundle location; renderer API titles use a
+fixed error code or category.
+Both have scrubbed exception values and the same
+installation ID as Sentry `user.id`.
 Canceled requests, transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
+Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
+Sentry policy. Untyped renderer 503 responses remain reportable. The existing
+API client skips its confirmed expected 409 probes, while other 409 responses
+remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
+name at five per minute and 200 per day. The daemon admits the first five
+reportable errors per fingerprint each minute and at most 200 per day. Its
+in process budget tracks at most 1,024 distinct fingerprints per day, then
+uses one overflow group. It samples
+admitted errors at full rate. Project quota and spike protection still need
+verification before a stable release.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not

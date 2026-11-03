@@ -15,8 +15,10 @@ vi.mock("../../../lib/api-client", () => ({
 it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("droid")).toBe(false);
 	expect(IMPORTABLE_AGENTS.has("gemini")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(true);
 });
 
@@ -26,6 +28,10 @@ it("does not offer OpenCode imports while resumed tools use the saved directory"
 
 it("does not offer Kimi imports while resumed tools use the saved directory", () => {
 	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(false);
+});
+
+it("does not offer Droid imports while resumed tool cwd is unverified", () => {
+	expect(IMPORTABLE_AGENTS.has("droid")).toBe(false);
 });
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
@@ -51,6 +57,13 @@ beforeEach(() => {
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
 });
+it("lists OMP chats for import", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },
+	});
+	renderPanel("omp");
+	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
+});
 it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });
@@ -74,6 +87,7 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 
 it("gates importable harnesses to the ones with a verified resume path", () => {
 	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
 });
 
 it("reports new, existing and failed imports separately", async () => {
@@ -119,4 +133,19 @@ it("stops before importing when a folder cannot be added", async () => {
 	fireEvent.click(await screen.findByRole("button", { name: "Import 1 conversation" }));
 	expect(await screen.findByRole("alert")).toHaveTextContent("Import failed");
 	await waitFor(() => expect(api.POST).toHaveBeenCalledTimes(1));
+});
+
+it("imports only selected Copilot chats through the existing import flow", async () => {
+	expect(IMPORTABLE_AGENTS.has("copilot")).toBe(true);
+	api.GET.mockResolvedValue({ data: { candidates: [
+		{ ...chat, id: "copilot-chat", title: "Copilot parser work", harness: "copilot", projectId: "project" },
+		{ ...chat, id: "other-chat", title: "Another agent", harness: "claude-code", projectId: "project" },
+	] } });
+	api.POST.mockResolvedValue({ data: { results: [{ id: "copilot-chat", status: "created", sessionId: "project-copilot-1" }] } });
+	renderPanel("copilot");
+	expect(await screen.findByRole("checkbox", { name: "Import Copilot parser work" })).toBeChecked();
+	expect(screen.queryByText("Another agent")).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
+	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
+	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["copilot-chat"] } });
 });

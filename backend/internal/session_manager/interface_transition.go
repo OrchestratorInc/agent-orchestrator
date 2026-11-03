@@ -46,6 +46,7 @@ type interfaceTransitionStore interface {
 	ListActiveSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	ListDeliverableSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	AdvanceSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string, time.Time) (bool, error)
+	CompleteSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, string, time.Time) (bool, error)
 	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.SessionID, string, time.Time) (domain.SessionInterfaceTransition, bool, error)
 	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time, ports.MessageDeliveryOptions) error
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
@@ -118,7 +119,18 @@ func (m *Manager) InterfaceTransitionStatus(
 	if status.ReasonCode == "" {
 		if _, err := m.handoffNativeConversationID(ctx, rec); err != nil {
 			if errors.Is(err, ErrInterfaceHandoffUnsupported) {
-				status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
+				// A degraded hermes Chat→TUI switch never needs the identity
+				// pair: it resumes the native terminal when it can still be
+				// resolved and starts a fresh TUI otherwise. A degraded hermes
+				// TUI→Chat switch starts a fresh Chat conversation instead of
+				// resuming one. Neither direction needs the pair.
+				if target == domain.SessionModeTUI && m.hermesChatToTUIDegraded(rec) {
+					status.Supported = true
+				} else if target == domain.SessionModeChat && m.hermesIdentityDegraded(rec, domain.NormalizeSessionMode(rec.Mode)) {
+					status.Supported = true
+				} else {
+					status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
+				}
 			} else if errors.Is(err, ErrNativeConversationMissing) {
 				status.ReasonCode = "NATIVE_SESSION_MISSING"
 			} else {
@@ -194,8 +206,31 @@ func (m *Manager) StartInterfaceTransition(
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
 	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
-	if err != nil {
+	// A hermes Chat session whose adapter never declared the compatible
+	// identity pair is admitted degraded instead of refused: Chat→TUI only
+	// needs to find the native terminal, which the adapter's own recorded
+	// conversation evidence already names. A hermes Terminal session is
+	// likewise admitted degraded toward Chat: the target starts a fresh Chat
+	// conversation instead of resuming one.
+	degradedChatToTUI := err != nil && errors.Is(err, ErrInterfaceHandoffUnsupported) &&
+		target == domain.SessionModeTUI && m.hermesChatToTUIDegraded(rec)
+	degradedTUItoChat := err != nil && errors.Is(err, ErrInterfaceHandoffUnsupported) &&
+		target == domain.SessionModeChat && m.hermesIdentityDegraded(rec, source)
+	if err != nil && !degradedChatToTUI && !degradedTUItoChat {
 		return domain.SessionInterfaceTransition{}, err
+	}
+	// An identity-reset handoff is admitted with no native conversation: the
+	// target starts a fresh Chat conversation instead of resuming one. A
+	// degraded hermes Chat→TUI switch instead restores the native terminal
+	// when it can still be resolved, and starts a fresh TUI otherwise.
+	var degradedKind string
+	if degradedChatToTUI {
+		if resolved, found := m.hermesNativeTerminalResumeID(ctx, rec); found {
+			nativeID = resolved
+		}
+		degradedKind = domain.SessionInterfaceTransitionDegradedIdentityReset
+	} else if degradedTUItoChat || (err == nil && nativeID == "" && m.hermesIdentityDegraded(rec, source)) {
+		degradedKind = domain.SessionInterfaceTransitionDegradedIdentityReset
 	}
 	expectedPredecessorID := ""
 	if historyPolicy == domain.SessionInterfaceTransitionHistoryProvider {
@@ -213,7 +248,7 @@ func (m *Manager) StartInterfaceTransition(
 	pending := domain.SessionInterfaceTransition{
 		ID: m.newLaunchID(), SessionID: id, SourceMode: source, TargetMode: target,
 		Policy: policy, HistoryPolicy: historyPolicy, Phase: domain.SessionInterfaceTransitionRequested,
-		NativeConversationID: nativeID, CreatedAt: now, UpdatedAt: now,
+		NativeConversationID: nativeID, DegradedKind: degradedKind, CreatedAt: now, UpdatedAt: now,
 	}
 	var transition domain.SessionInterfaceTransition
 	var created bool
@@ -484,7 +519,16 @@ func (m *Manager) runInterfaceTransition(
 	// admission and the gate. The target must receive the current identity, never
 	// the stale admission snapshot. A promptless Chat source must likewise prove
 	// it is still untouched after fencing, or transfer its newly created native ID.
-	if transition.SourceMode == domain.SessionModeTUI || transition.NativeConversationID == "" {
+	// A degraded hermes Chat→TUI switch is excluded: the admission decision
+	// (native terminal found, or fresh TUI) stands, and the strict identity gate
+	// would only re-refuse the switch it already admitted.
+	// A degraded identity-reset handoff is excluded from the strict identity
+	// gate in BOTH directions: admission already decided the target starts
+	// fresh (fresh Chat for TUI→Chat; native terminal or fresh TUI for
+	// Chat→TUI), and the gate would only re-refuse the switch it admitted.
+	degradedIdentityReset := transition.DegradedKind == domain.SessionInterfaceTransitionDegradedIdentityReset
+	if !degradedIdentityReset &&
+		(transition.SourceMode == domain.SessionModeTUI || transition.NativeConversationID == "") {
 		current, found, refreshErr := m.store.GetSession(ctx, rec.ID)
 		if refreshErr != nil || !found {
 			if refreshErr == nil {
@@ -668,6 +712,18 @@ func (m *Manager) runInterfaceTransition(
 	}
 }
 
+// hermesNativeConversationID reads the native state.db session id the
+// conversation is recorded under. On this branch a chat conversation's native
+// identity is the ACP session id hermes persists into its shared state.db,
+// recorded as ProviderConversationID; interface handoffs additionally bind
+// AgentSessionID, so it stays the fallback.
+func hermesNativeConversationID(rec domain.SessionRecord) string {
+	if id := rec.Metadata.ProviderConversationID; id != "" {
+		return id
+	}
+	return rec.Metadata.AgentSessionID
+}
+
 // handoffNativeConversationID is the readiness check shared by status and
 // start. A reserved native id alone is not enough for a handoff: Claude Code
 // only writes its transcript after the first prompt, so the id must also have
@@ -681,6 +737,108 @@ func (m *Manager) handoffNativeConversationID(
 		return "", err
 	}
 	return m.persistedNativeConversationID(ctx, rec, id, handoff)
+}
+
+// hermesIdentityDegraded reports a hermes Terminal session whose installed
+// adapter never declared the compatible TUI+Chat identity pair. Upstream hermes
+// main has no identity chain, so the strict handoff gate would refuse every
+// switch regardless of session state. Such a switch degrades to a fresh Chat
+// start instead of failing: the Chat target opens a new conversation and the
+// native history stays in Terminal. Handoffs whose adapter CAN prove identity
+// keep the strict path, and Chat→TUI switches are untouched.
+func (m *Manager) hermesIdentityDegraded(rec domain.SessionRecord, mode domain.SessionMode) bool {
+	if rec.Harness != domain.HarnessHermes || mode != domain.SessionModeTUI {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	_, declared := agent.(ports.AgentInterfaceHandoff)
+	return !declared
+}
+
+// degradedHandoffMarkerText is the boundary turn delivered into the fresh Chat
+// conversation after a degraded identity-reset handoff completes, so the
+// timeline states honestly that native history did not transfer.
+const degradedHandoffMarkerText = "Chat started fresh — the terminal's native history stays in Terminal."
+
+const (
+	// degradedTerminalResumeMarkerText is delivered into the terminal a
+	// degraded hermes Chat→TUI switch resumed through its recorded native
+	// conversation.
+	degradedTerminalResumeMarkerText = "Resumed your Terminal session."
+	// degradedTerminalFreshMarkerText is delivered when no native terminal
+	// could be resolved and the switch started a fresh TUI instead.
+	degradedTerminalFreshMarkerText = "Terminal started fresh — the Chat conversation stays archived in Chat."
+)
+
+// degradedHandoffMarkerTextFor words the boundary turn for the direction the
+// degraded handoff actually took, so each timeline states honestly what
+// transferred and what stayed behind.
+func degradedHandoffMarkerTextFor(transition domain.SessionInterfaceTransition) string {
+	if transition.SourceMode == domain.SessionModeChat && transition.TargetMode == domain.SessionModeTUI {
+		if transition.NativeConversationID != "" {
+			return degradedTerminalResumeMarkerText
+		}
+		return degradedTerminalFreshMarkerText
+	}
+	return degradedHandoffMarkerText
+}
+
+// hermesChatToTUIDegraded reports a hermes Chat session whose installed adapter
+// never declared the compatible TUI+Chat identity pair. The strict Chat→TUI
+// gate would refuse every such switch regardless of whether the native terminal
+// still exists, so the switch degrades instead: resume the native terminal when
+// the adapter can still resolve it, else start a fresh TUI. Handoffs whose
+// adapter CAN prove identity keep the strict path.
+func (m *Manager) hermesChatToTUIDegraded(rec domain.SessionRecord) bool {
+	if rec.Harness != domain.HarnessHermes || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	_, declared := agent.(ports.AgentInterfaceHandoff)
+	return !declared
+}
+
+// hermesNativeTerminalResume is the hermes adapter capability a degraded
+// Chat→TUI switch needs: materialize the terminal's resume identity for the
+// recorded native conversation. found=false reports that no matching native
+// conversation exists, so the caller starts a fresh TUI instead.
+type hermesNativeTerminalResume interface {
+	PrepareNativeTerminalResume(ctx context.Context, dataDir, sessionID, nativeConversationID, workspacePath string) (found bool, err error)
+}
+
+// hermesNativeTerminalResumeID resolves the recorded native conversation for a
+// degraded hermes Chat→TUI switch. A resolution failure is not fatal: the fresh
+// TUI fallback is always safe, and the transition's degraded marker records the
+// identity reset either way.
+func (m *Manager) hermesNativeTerminalResumeID(ctx context.Context, rec domain.SessionRecord) (string, bool) {
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return "", false
+	}
+	resolver, ok := agent.(hermesNativeTerminalResume)
+	if !ok {
+		return "", false
+	}
+	nativeID := hermesNativeConversationID(rec)
+	if nativeID == "" {
+		return "", false
+	}
+	found, err := resolver.PrepareNativeTerminalResume(ctx, m.dataDir, string(rec.ID), nativeID, rec.Metadata.WorkspacePath)
+	if err != nil {
+		m.logger.Warn("interface transition: hermes native terminal lookup failed; degrading to a fresh TUI",
+			"sessionID", rec.ID, "error", err)
+		return "", false
+	}
+	if !found {
+		return "", false
+	}
+	return nativeID, true
 }
 
 // nativeConversationID resolves the adapter's native conversation id for the
@@ -1432,8 +1590,16 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 		if nativeConversationID == "" {
 			nativeConversationID = current.NativeConversationID
 		}
-		moved, err := store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
-			nativeConversationID, errorCode, errorDetail, m.clock())
+		var moved bool
+		if next == domain.SessionInterfaceTransitionCompleted && current.DegradedKind != "" {
+			// Completion and the boundary notice share one transaction. The outbox
+			// dispatcher can therefore recover every completed degraded handoff.
+			moved, err = store.CompleteSessionInterfaceTransition(ctx, id, current.Phase,
+				degradedHandoffMarkerTextFor(current), m.clock())
+		} else {
+			moved, err = store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
+				nativeConversationID, errorCode, errorDetail, m.clock())
+		}
 		if err != nil {
 			return err
 		}
