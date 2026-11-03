@@ -453,41 +453,44 @@ func copyRows(ctx context.Context, source *sql.Tx, path string) error {
 	}
 	defer func() { _ = target.Rollback() }()
 	var total int64
-	for _, table := range []string{"meta", "blobs"} {
-		key, value := "key", "value"
-		if table == "blobs" {
-			key, value = "id", "data"
-		}
-		rows, err := source.QueryContext(ctx, "SELECT "+key+", CASE WHEN length("+value+")<=67108864 THEN "+value+" END FROM "+table)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id string
-			var data []byte
-			if err := rows.Scan(&id, &data); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			total += int64(len(id) + len(data))
-			if data == nil || total > maxStore {
-				_ = rows.Close()
-				return errors.New("cursor native snapshot exceeds import limit")
-			}
-			var value any = data
-			if table == "meta" {
-				value = string(data)
-			}
-			if _, err := target.ExecContext(ctx, "INSERT INTO "+table+" VALUES (?,?)", id, value); err != nil {
-				_ = rows.Close()
-				return err
-			}
-		}
-		rowsErr := rows.Err()
-		_ = rows.Close()
-		if rowsErr != nil {
-			return rowsErr
-		}
+	if err := copyTableRows(ctx, source, target, true, &total); err != nil {
+		return err
+	}
+	if err := copyTableRows(ctx, source, target, false, &total); err != nil {
+		return err
 	}
 	return target.Commit()
+}
+
+func copyTableRows(ctx context.Context, source, target *sql.Tx, metadata bool, total *int64) error {
+	selectSQL := "SELECT id, CASE WHEN length(data)<=67108864 THEN data END FROM blobs"
+	insertSQL := "INSERT INTO blobs VALUES (?,?)"
+	if metadata {
+		selectSQL = "SELECT key, CASE WHEN length(value)<=67108864 THEN value END FROM meta"
+		insertSQL = "INSERT INTO meta VALUES (?,?)"
+	}
+	rows, err := source.QueryContext(ctx, selectSQL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			return err
+		}
+		*total += int64(len(id) + len(data))
+		if data == nil || *total > maxStore {
+			return errors.New("cursor native snapshot exceeds import limit")
+		}
+		var value any = data
+		if metadata {
+			value = string(data)
+		}
+		if _, err := target.ExecContext(ctx, insertSQL, id, value); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }

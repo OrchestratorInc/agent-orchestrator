@@ -391,7 +391,12 @@ func TestReadRejectsSymlinkOutsideProvider(t *testing.T) {
 }
 
 func TestDecodeRejectsMalformedNativeGraph(t *testing.T) {
-	for _, body := range [][]byte{{0}, {0x0a, 0x7f}, {0x09, 1}, {0x0d, 1}, {0x0f}, {0x08, 0x80}} {
+	bodies := [][]byte{{0}, {0x0a, 0x7f}, {0x09, 1}, {0x0d, 1}, {0x0f}, {0x08, 0x80}}
+	bodies = append(bodies,
+		binary.AppendUvarint([]byte{0x0a}, uint64(maxBlob)+1),
+		binary.AppendUvarint([]byte{0x0a}, ^uint64(0)),
+	)
+	for _, body := range bodies {
 		if _, err := decode(body); err == nil {
 			t.Fatalf("accepted malformed protobuf %x", body)
 		}

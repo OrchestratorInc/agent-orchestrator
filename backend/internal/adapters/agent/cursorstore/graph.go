@@ -74,11 +74,15 @@ func decode(body []byte) (map[uint64][][]byte, error) {
 			body = body[8:]
 		case 2:
 			size, n := binary.Uvarint(body)
-			if n <= 0 || size > uint64(len(body)-n) {
+			if n <= 0 || size > maxBlob {
 				return nil, errors.New("invalid cursor native protobuf length")
 			}
+			length := int(size)
 			body = body[n:]
-			value, body = body[:int(size)], body[int(size):]
+			if length > len(body) {
+				return nil, errors.New("invalid cursor native protobuf length")
+			}
+			value, body = body[:length], body[length:]
 		case 5:
 			if len(body) < 4 {
 				return nil, errors.New("truncated cursor native protobuf fixed32")
