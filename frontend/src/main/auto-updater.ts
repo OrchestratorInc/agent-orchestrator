@@ -213,7 +213,6 @@ let updateRestartRequested = false;
 let restartFailureHandler: (() => void) | undefined;
 let macRestartProgress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
 let nativeReadyVersion: string | undefined;
-let nativeReadyAtMs: number | undefined;
 let nativePreparationError: Error | undefined;
 // Squirrel.Mac staging has no progress event and no cancel API, so a fixed
 // deadline punished slow disks (#5170). Watch the staging dir for growth and
@@ -432,7 +431,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
         nativeReadyVersion = undefined;
         rejectNativeOperation?.(error);
         reject(error);
-      } else { nativeReadyVersion = version; nativeReadyAtMs = Date.now(); resolve(); }
+      } else { nativeReadyVersion = version; resolve(); }
     },
   };
   // Squirrel creates the .ShipIt dir only after electron-updater has already
@@ -523,9 +522,6 @@ function isNativeInstallReady(): boolean {
 
 function nativeStagingWasLost(): boolean {
   return process.platform === "darwin" && isNativeInstallReady() &&
-    // The native event may precede the plist write. Allow one existing ShipIt
-    // watchdog interval for that handoff before declaring the files lost.
-    nativeReadyAtMs !== undefined && Date.now() - nativeReadyAtMs >= STAGE_POLL_INTERVAL_MS &&
     !nativeStagingFilesPresent();
 }
 
@@ -2027,7 +2023,6 @@ function wireUpdaterEvents(): void {
         timedOutNativePreparation = undefined;
         nativePreparationError = undefined;
         nativeReadyVersion = timedOut.version;
-        nativeReadyAtMs = Date.now();
         stagedInCurrentProcess = true;
         applyInstallOnQuitPolicy();
         recordUpdateDiagnostic("native-preparation-recovered", { version: timedOut.version });
@@ -2605,6 +2600,9 @@ function reconcileAutomaticUpdateSchedule(
 async function requestAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number | undefined> {
+  // This preflight must run before the queue and the in-flight guard: a lost
+  // native stage can leave a manual install pending ahead of every check.
+  discardLostNativeStaging();
   if (automaticCheckInFlight) return undefined;
   automaticCheckInFlight = true;
   try {
@@ -3063,15 +3061,6 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       throw error;
     }
     return;
-  }
-  // The native ready event can precede ShipIt's final plist write. Wait at
-  // most one watchdog interval before treating missing files as loss.
-  if (isNativeInstallReady() && !nativeStagingFilesPresent()) {
-    const remaining = STAGE_POLL_INTERVAL_MS - (Date.now() - (nativeReadyAtMs ?? 0));
-    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
-  }
-  if (awaitingStagedReplacement) {
-    throw new Error("Check for updates and download an update before restarting to install.");
   }
   if (discardLostNativeStaging()) {
     if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
