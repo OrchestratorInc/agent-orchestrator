@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -63,7 +62,6 @@ func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreCo
 	}
 	cmd := make([]string, 0, 16)
 	cmd = append(cmd, binary, "chat", "--cli", "--resume", id, "--no-restore-cwd", "--in", cfg.Session.WorkspacePath)
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
+	// Native resume retains its model/reasoning policy, as managed restores do.
 	return append(cmd, permissionArgs(cfg.Permissions)...), true, nil
 }

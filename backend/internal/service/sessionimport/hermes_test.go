@@ -10,7 +10,7 @@ import (
 )
 
 func TestHermesImportStaysTerminalWithRegisteredChatDriver(t *testing.T) {
-	root := t.TempDir()
+	root, workspace := t.TempDir(), t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(root, "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -19,14 +19,18 @@ func TestHermesImportStaysTerminalWithRegisteredChatDriver(t *testing.T) {
 	for _, statement := range []string{
 		`CREATE TABLE sessions(id TEXT,source TEXT,cwd TEXT,title TEXT,started_at REAL,hidden INTEGER)`,
 		`CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,timestamp REAL,_compressed_summary INTEGER)`,
-		`INSERT INTO sessions VALUES('20261103_000000_mode','cli','','',1790000000,0)`,
-		`INSERT INTO messages VALUES(1,'20261103_000000_mode','user','synthetic mode request',1790000001,0)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
 	}
-	store := &importStore{}
+	if _, err := db.Exec(`INSERT INTO sessions VALUES('20261103_000000_mode','cli',?,'',1790000000,0)`, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO messages VALUES(1,'20261103_000000_mode','user','synthetic mode request',1790000001,0)`); err != nil {
+		t.Fatal(err)
+	}
+	store := &importStore{projects: []domain.ProjectRecord{{ID: "hermes-mode", Path: workspace}}}
 	service := New(store, "", chatSupported)
 	service.roots = map[domain.AgentHarness]string{domain.HarnessHermes: root}
 	preview, err := service.Scan(context.Background())
@@ -38,7 +42,7 @@ func TestHermesImportStaysTerminalWithRegisteredChatDriver(t *testing.T) {
 		t.Fatalf("import = %#v, sessions = %#v, error = %v", results, store.sessions, err)
 	}
 	record := store.sessions[0]
-	if record.Mode != domain.SessionModeTUI || record.Metadata.AgentSessionID != "20261103_000000_mode" || !record.NeedsImportResume() || len(store.messages) != 1 {
+	if record.Mode != domain.SessionModeTUI || record.ProjectID != "hermes-mode" || record.Metadata.AgentSessionID != "20261103_000000_mode" || !record.NeedsImportResume() || len(store.messages) != 1 {
 		t.Fatalf("native Terminal import = %#v, messages = %#v", record, store.messages)
 	}
 }
