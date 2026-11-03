@@ -25,8 +25,12 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	source := rec.Metadata.ImportSource
 	if source.ResumeNativeID == "" {
 		ref, err := preparer.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{
-			NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir,
-			TranscriptPath: rec.Metadata.NativeTranscriptPath, SourceCWD: source.CWD, LaunchCWD: launchPath,
+			NativeSessionID:   source.NativeID,
+			ConfigDir:         source.ConfigDir,
+			TranscriptPath:    rec.Metadata.NativeTranscriptPath,
+			SourceCWD:         source.CWD,
+			LaunchCWD:         launchPath,
+			SourceFingerprint: source.Fingerprint,
 		})
 		if err != nil {
 			return rec, err
