@@ -39,6 +39,9 @@ func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 // visible history. The copy taken at import remains when the source is unreadable.
 func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
+	if source != nil && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
+		return nil // Retain the archive paired with the checkpointed native copy.
+	}
 	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
 	if m.importArchive == nil {
 		if required {
@@ -404,7 +407,13 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		return rec, fmt.Errorf("no agent adapter for harness %q", rec.Harness)
 	}
 	source := rec.Metadata.ImportSource
-	if prober, ok := agent.(ports.AgentNativeSessionProber); ok {
+	deferSourceProbe := source.Prepared && rec.Metadata.WorkspacePath != "" &&
+		source.ResumeNativeID == "" && source.ResumeCwd == "" && m.hasFingerprintImportPreparer(rec)
+	if deferSourceProbe {
+		workspace, statErr := os.Stat(rec.Metadata.WorkspacePath)
+		deferSourceProbe = statErr == nil && workspace.IsDir()
+	}
+	if prober, ok := agent.(ports.AgentNativeSessionProber); ok && !deferSourceProbe {
 		available, err := prober.ProbeNativeSession(ctx, importedNativeRef(source))
 		if err != nil {
 			return rec, err
