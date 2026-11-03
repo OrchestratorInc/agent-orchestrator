@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useCloudCp } from "../../hooks/useCloudCp";
-import { invalidateTeamsAndShares } from "../../hooks/useTeams";
-import { CloudCpError, type CloudCpTeamDetail } from "../../lib/cloud-cp";
+import { invalidateTeamsAndShares, myTeamsQueryKey, teamQueryKey, teamsQueryKey } from "../../hooks/useTeams";
+import { CloudCpError, type CloudCpTeam, type CloudCpTeamDetail } from "../../lib/cloud-cp";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -44,7 +44,7 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 	initialName?: string;
 }) {
 	const { t, i18n } = useTranslation();
-	const { client, ready } = useCloudCp();
+	const { client, baseUrl, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const [name, setName] = useState(initialName);
 	const [people, setPeople] = useState<Recipient[]>(initialPeople);
@@ -55,6 +55,12 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 				members: people.filter((person): person is Extract<Recipient, { kind: "person" }> => person.kind === "person").map((person) => ({ email: person.email })),
 			}),
 		onSuccess: (team) => {
+			// Its page and the lists have it at once: no skeleton on the way in,
+			// and it's there on the way back.
+			queryClient.setQueryData(teamQueryKey(baseUrl, orgId, team.team.id, false), team);
+			for (const key of [teamsQueryKey(baseUrl, orgId), myTeamsQueryKey(baseUrl)]) {
+				queryClient.setQueryData<CloudCpTeam[]>(key, (list) => (list && !list.some((listed) => listed.id === team.team.id) ? [...list, team.team] : list));
+			}
 			invalidateTeamsAndShares(queryClient);
 			onCreated(team);
 		},
