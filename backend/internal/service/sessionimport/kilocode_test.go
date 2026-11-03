@@ -9,6 +9,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+func TestKiloCodeAdmissionRemainsDeferred(t *testing.T) {
+	if _, enabled := harnessImporters[domain.HarnessKilocode]; enabled {
+		t.Fatal("deferred native export must not admit new Kilo imports")
+	}
+}
+
 func TestKiloCodeImport(t *testing.T) {
 	root := t.TempDir()
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "kilo.db")))
