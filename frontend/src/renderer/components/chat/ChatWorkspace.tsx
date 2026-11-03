@@ -567,7 +567,9 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string }[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise<string[]>;
+	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
+	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
 	/**
@@ -806,6 +808,7 @@ function ChatWorkspaceContent({
 	composerStarting = false,
 	localEchos,
 	onStageAttachments,
+	cloudAttachments,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -2103,6 +2106,7 @@ function ChatWorkspaceContent({
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}

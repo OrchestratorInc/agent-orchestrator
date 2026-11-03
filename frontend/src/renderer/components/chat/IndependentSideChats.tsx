@@ -7,7 +7,7 @@ import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
@@ -537,7 +537,7 @@ export function useIndependentSideChats(
 		let stream: EventSource | undefined;
 		if (baseUrl && typeof EventSource !== "undefined") {
 			stream = new EventSource(
-				`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
 			);
 			stream.addEventListener("changed", refreshSafely);
 			stream.addEventListener("snapshot", refreshSafely);

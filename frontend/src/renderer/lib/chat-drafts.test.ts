@@ -93,6 +93,22 @@ describe("optimistic composer drafts", () => {
 		expect(readChatSessionDraft("optimistic", storage).composer.delivery).toBeUndefined();
 	});
 
+	it("records acceptance of a message carrying cloud attachment references", () => {
+		const storage = new MemoryStorage();
+		const cloudFile = { id: "cloud", path: "ao-cloud-attachment:4dc20886-1485-45f9-b18d-9135f090bffb/moose.png", name: "moose.png", mimeType: "image/png", bytes: 4 };
+		const cloudInput = {
+			...input, nativeImages: false, attachments: [cloudFile],
+			requestText: `same request\n\nAttached files (read these files in the workspace):\n- ${cloudFile.path}`,
+			clientMessageId: "cloud-send-1",
+		};
+		const prepared = prepareChatComposerDelivery("cloud", cloudInput, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(markChatComposerDeliveryAccepted("cloud", cloudInput.clientMessageId, prepared.mutation.revision, storage).ok).toBe(true);
+		expect(clearAcceptedChatComposer("cloud", prepared.mutation.revision, storage, [cloudFile.id]))
+			.toMatchObject({ ok: true, cleared: true });
+		expect(readChatSessionDraft("cloud", storage).composer).toMatchObject({ text: "", attachments: [] });
+	});
+
 	it("reports the untouched empty next composer as cleared after acceptance", () => {
 		const storage = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery("empty-next-draft", input, storage);

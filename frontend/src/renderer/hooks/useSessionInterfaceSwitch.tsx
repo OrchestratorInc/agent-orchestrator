@@ -382,6 +382,10 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [interfaceSwitch.transition?.phase, owner, session?.mode, switchIntent]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
+		if (session?.provider === "hermes") {
+			setDialogScope({ owner, targetMode: target });
+			return;
+		}
 		if (cloudTerminalToChat && !busy && session?.cloud) {
 			// The Cloud list can lag terminal input. Confirm the current activity
 			// before stopping a controller without asking the user first.
@@ -445,6 +449,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
 	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
+		mayStartFresh={session.provider === "hermes"}
 		supported={showStatus || (Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked))}
 		disabledReason={disabledReason}
 		pending={interfaceSwitch.starting || activeTransition || chatLeaveLocked}
@@ -511,6 +516,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		<SessionInterfaceSwitchDialog
 			open={dialogOpen}
 			target={dialogScope?.targetMode ?? target}
+			mayStartFresh={session?.provider === "hermes"}
 			requireExplicitTerminalStop={cloudTerminalToChat && !(busy || dialogScope?.sourceBusy)}
 			waitingForInput={waitingForInput || dialogScope?.sourceWaitingForInput}
 			busy={interfaceSwitch.starting}

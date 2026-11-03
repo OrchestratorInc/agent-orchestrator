@@ -7,9 +7,6 @@ SELECT * FROM app_settings WHERE id = 1;
 -- name: SetDefaultSessionMode :exec
 UPDATE app_settings SET default_session_mode = ?, updated_at = ? WHERE id = 1;
 
--- name: SetCloudOffering :exec
-UPDATE app_settings SET cloud_offering = ?, updated_at = ? WHERE id = 1;
-
 -- name: SetVersionRefresh :exec
 UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1;
 
