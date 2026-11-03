@@ -105,7 +105,7 @@ func TestScanDoesNotOfferOpenCodeWithReadableHistory(t *testing.T) {
 	project := t.TempDir()
 	addSession(t, db, "ses_deferred", "", project, "Deferred import", 9000, nil)
 	addMessage(t, db, "ses_deferred", "msg_deferred", "user", 1000, "text:keep tools in AO")
-	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "")
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessOpenCode: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {

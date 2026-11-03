@@ -60,8 +60,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 
 func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 	metadata := map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}
-	if rec.NeedsImportResume() {
-		source := rec.Metadata.ImportSource
+	if source := rec.Metadata.ImportSource; source != nil && rec.Metadata.AgentSessionID == importedNativeRef(source).NativeSessionID {
 		metadata[ports.MetadataKeyImportSourceNativeID] = source.NativeID
 		metadata[ports.MetadataKeyImportResumeNativeID] = source.ResumeNativeID
 		metadata[ports.MetadataKeyImportConfigDir] = importedNativeRef(source).ConfigDir
