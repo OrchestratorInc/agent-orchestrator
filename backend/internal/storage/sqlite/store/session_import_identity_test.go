@@ -12,7 +12,7 @@ func TestImportedNativeIdentityPublicationIsFencedAndPreservesSource(t *testing.
 	ctx := context.Background()
 	s := newTestStore(t)
 	rec := domain.SessionRecord{Kind: domain.KindWorker, Harness: domain.HarnessGemini, Mode: domain.SessionModeTUI, Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	rec.Metadata = domain.SessionMetadata{AgentSessionID: "original", ProviderConversationID: "original", RuntimeHandleID: "handle", RuntimeLaunchID: "launch", WorkspacePath: "/workspace", ImportSource: &domain.SessionImportSource{NativeID: "original", ConfigDir: "/provider", CWD: "/source", ResumeCwd: "/workspace"}}
+	rec.Metadata = domain.SessionMetadata{AgentSessionID: "original", ProviderConversationID: "original", RuntimeHandleID: "handle", RuntimeLaunchID: "launch", WorkspacePath: "/workspace", ImportSource: &domain.SessionImportSource{NativeID: "original", ConfigDir: "/provider", CWD: "/source", ResumeCwd: "/workspace", ResumeTranscriptPath: "/provider/original.jsonl"}}
 	created, _, err := s.CreateImportedSession(ctx, rec, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestImportedNativeIdentityPublicationIsFencedAndPreservesSource(t *testing.
 		t.Fatalf("owned publication = %v, %v", ok, err)
 	}
 	loaded, _, err := s.GetSession(ctx, created.ID)
-	if err != nil || loaded.Metadata.AgentSessionID != "fork" || loaded.Metadata.ProviderConversationID != "fork" || loaded.Metadata.ImportSource.ResumeNativeID != "fork" || loaded.Metadata.ImportSource.NativeID != "original" || loaded.Metadata.ImportSource.ConfigDir != "/provider" {
+	if err != nil || loaded.Metadata.AgentSessionID != "fork" || loaded.Metadata.ProviderConversationID != "fork" || loaded.Metadata.ImportSource.ResumeNativeID != "fork" || loaded.Metadata.ImportSource.NativeID != "original" || loaded.Metadata.ImportSource.ConfigDir != "/provider" || loaded.Metadata.ImportSource.ResumeTranscriptPath != "" {
 		t.Fatalf("published native fork = %#v, %v", loaded.Metadata, err)
 	}
 	if ok, err := s.CommitImportedNativeSessionID(ctx, created.ID, created.Metadata.ImportSource, "handle", "launch", "another-fork"); err != nil || ok {

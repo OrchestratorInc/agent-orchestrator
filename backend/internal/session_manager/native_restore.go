@@ -100,11 +100,30 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 	if err := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before publication"))(ctx, current); err != nil {
 		return err
 	}
+	var transcriptPath string
 	if target != original.Metadata.AgentSessionID {
 		takeover, ok := plan.(ports.NativeRestoreIdentityTakeover)
 		if !ok || !original.NeedsImportResume() || takeover.SourceNativeSessionID() != original.Metadata.AgentSessionID {
 			return errors.New("native restore changed the requested conversation")
 		}
+	}
+	if source := original.Metadata.ImportSource; source != nil && target != source.NativeID && m.agents != nil {
+		if agent, ok := m.agents.Agent(original.Harness); ok {
+			if locator, ok := agent.(ports.AgentTranscriptLocator); ok {
+				ref := importedNativeRef(source)
+				ref.NativeSessionID = target
+				path, found, err := locator.LocateTranscript(ctx, ref)
+				if err != nil {
+					return err
+				}
+				if !found || path == "" {
+					return errors.New("native import transcript binding could not be verified")
+				}
+				transcriptPath = path
+			}
+		}
+	}
+	if target != original.Metadata.AgentSessionID {
 		store, ok := m.store.(importedIdentityStore)
 		if !ok {
 			return errors.New("native import identity publication is unavailable")
@@ -117,7 +136,7 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 			return errors.New("native import identity publication lost ownership")
 		}
 	}
-	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: target, Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
+	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: target, TranscriptPath: transcriptPath, Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
 		return err
 	}
 	rec, err := m.getRecord(ctx, original.ID)
