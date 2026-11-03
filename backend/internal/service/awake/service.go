@@ -709,7 +709,7 @@ func (s *Service) reconcile(ctx context.Context) error {
 	reason := s.safety()
 	// A recovered battery stop creates a new lease; the helper may still
 	// report the old lease's latch until its next scan.
-	if reason == "" && !(nativeReason == "low_battery" && recoveredBattery) && (nativeReason == "critical_heat" || nativeReason == "low_battery" || nativeReason == "battery_unknown") {
+	if reason == "" && (nativeReason != "low_battery" || !recoveredBattery) && (nativeReason == "critical_heat" || nativeReason == "low_battery" || nativeReason == "battery_unknown") {
 		reason = nativeReason
 	}
 	if reason != "" && (count > 0 || s.doc.StopReason != "") {
