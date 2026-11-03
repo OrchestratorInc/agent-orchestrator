@@ -68,6 +68,19 @@ func TestImportedCommandCodeCopyAndStrictResume(t *testing.T) {
 	if string(readHomeFile(t, copyPath)) != string(updated) {
 		t.Fatal("retry overwrote existing AO turns")
 	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
+		t.Fatalf("valid prepared copy depended on removed source: %v", err)
+	}
+	if string(readHomeFile(t, copyPath)) != string(updated) {
+		t.Fatal("source removal changed the prepared conversation")
+	}
+	writeHomeFile(t, copyPath, []byte("corrupt prepared history"))
+	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
+		t.Fatal("accepted corrupt prepared history after source removal")
+	}
 	r.NativeSessionID = "../escape"
 	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
 		t.Fatal("accepted invalid native id")

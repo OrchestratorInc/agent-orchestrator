@@ -140,9 +140,8 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != r.NativeSessionID+".jsonl" {
 		return errors.New("command-code transcript is outside its profile")
 	}
-	if err := commandReadable(ctx, root, rel, r.NativeSessionID); err != nil {
-		return err
-	}
+	// Reuse a validated prepared target before reading the original source.
+	// New copies still pass native validation in staging before publication.
 	return copyCommandBundle(ctx, root, filepath.Dir(rel), r.ConfigDir, bucket, r.NativeSessionID)
 }
 
