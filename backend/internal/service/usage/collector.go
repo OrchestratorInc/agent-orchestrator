@@ -72,6 +72,9 @@ type SourceRoots struct {
 	// HermesAgents is AO's per-session Hermes launch state. Each session's
 	// native-home file names the Hermes home whose state.db it writes.
 	HermesAgents string
+	// GrokSessions holds one directory per workspace, each holding one
+	// directory per Grok session with that session's usage.json.
+	GrokSessions string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -97,6 +100,10 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = filepath.Join(home, ".ao", "data")
 	}
+	grokHome := strings.TrimSpace(os.Getenv("GROK_HOME"))
+	if grokHome == "" {
+		grokHome = filepath.Join(home, ".grok")
+	}
 	qwenRuntime, err := qwenRuntimeBaseDir(ctx, home, "")
 	if err != nil {
 		return SourceRoots{}, err
@@ -110,6 +117,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
 		GooseSessions:  filepath.Join(gooseDataDir(home), "sessions"),
 		HermesAgents:   filepath.Join(dataDir, "agents", "hermes"),
+		GrokSessions:   filepath.Join(grokHome, "sessions"),
 	}, nil
 }
 
@@ -142,6 +150,22 @@ const gooseSessionsDBName = "sessions.db"
 func sqliteUsageHarness(harness domain.AgentHarness) bool {
 	return harness == domain.HarnessGoose || harness == domain.HarnessHermes
 }
+
+// snapshotUsageHarness reports whether the harness keeps a session's running
+// usage totals in one JSON file that it rewrites in place.
+func snapshotUsageHarness(harness domain.AgentHarness) bool {
+	return harness == domain.HarnessGrok
+}
+
+// cumulativeUsageKind reports whether the source kind reports running totals
+// that the parser diffs against a baseline, which a replaced generation must
+// keep: replaying the totals from zero would bill every earlier call again.
+func cumulativeUsageKind(kind domain.UsageSourceKind) bool {
+	return kind == domain.UsageSourceHermesState || kind == domain.UsageSourceGrokSession
+}
+
+// grokUsageFileName is the per-session file of Grok's running usage totals.
+const grokUsageFileName = "usage.json"
 
 // hermesStateDBName is Hermes's session store, which also holds its per-model
 // usage counters.
@@ -545,6 +569,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessPi ||
 			session.Harness == domain.HarnessQwen || session.Harness == domain.HarnessGoose ||
+			session.Harness == domain.HarnessGrok ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
@@ -1807,10 +1832,10 @@ func (c *Collector) registerValidatedSource(
 			record.ParserStateJSON = identityMatch.ParserStateJSON
 		}
 	}
-	if replaced != nil && kind == domain.UsageSourceHermesState && replaced.Kind == kind {
-		// Hermes stores cumulative counters. The parser's per-row baseline must
-		// follow the database into its new generation, or every earlier call
-		// would be billed again from zero.
+	if replaced != nil && cumulativeUsageKind(kind) && replaced.Kind == kind {
+		// Hermes and Grok store cumulative counters. The parser's per-row
+		// baseline must follow the artifact into its new generation, or every
+		// earlier call would be billed again from zero.
 		record.ByteOffset = replaced.ByteOffset
 		record.ParserStateJSON = replaced.ParserStateJSON
 	}
@@ -2435,6 +2460,9 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if sqliteUsageHarness(harness) {
 		wantExt = ".db"
 	}
+	if snapshotUsageHarness(harness) {
+		wantExt = ".json"
+	}
 	if !filepath.IsAbs(path) || strings.ToLower(filepath.Ext(path)) != wantExt {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
@@ -2482,10 +2510,11 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if err != nil {
 		return "", "", 0, err
 	}
-	if sqliteUsageHarness(harness) {
+	if sqliteUsageHarness(harness) || snapshotUsageHarness(harness) {
 		// A SQLite source's cursor is a row ID, which the database's byte length
-		// says nothing about (new rows may still sit in the WAL). Only the file
-		// identity decides whether a registered generation is still current.
+		// says nothing about (new rows may still sit in the WAL). A snapshot's
+		// cursor is a usage volume. Only the file identity decides whether a
+		// registered generation is still current.
 		return resolved, identity, math.MaxInt64, nil
 	}
 	return resolved, identity, info.Size(), nil
@@ -2570,6 +2599,14 @@ func validateSourceAttribution(
 			subagentID != "" || filepath.Base(resolved) != hermesStateDBName {
 			return rejected()
 		}
+	case domain.UsageSourceGrokSession:
+		// Grok names each session's directory by its session ID; the parser
+		// also checks the ID usage.json records.
+		if binding.Harness != domain.HarnessGrok || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != grokUsageFileName ||
+			filepath.Base(filepath.Dir(resolved)) != nativeSessionID {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2625,6 +2662,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.QwenUsage}
 	case domain.HarnessGoose:
 		return []string{c.roots.GooseSessions}
+	case domain.HarnessGrok:
+		return []string{c.roots.GrokSessions}
 	default:
 		return nil
 	}
@@ -2646,6 +2685,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceGooseLedger, true
 	case domain.HarnessHermes:
 		return domain.UsageSourceHermesState, true
+	case domain.HarnessGrok:
+		return domain.UsageSourceGrokSession, true
 	default:
 		return "", false
 	}
@@ -2703,6 +2744,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverGoosePath(ctx)
 	case domain.HarnessHermes:
 		return c.discoverHermesPath(ctx, sessionID)
+	case domain.HarnessGrok:
+		return c.discoverGrokPath(ctx, nativeID)
 	}
 	type candidate struct {
 		path string
@@ -2775,6 +2818,34 @@ func (c *Collector) discoverHermesPath(ctx context.Context, sessionID domain.Ses
 		return "", nil
 	}
 	return path, nil
+}
+
+// discoverGrokPath finds the session's usage.json under whichever workspace
+// directory Grok filed it. Session IDs are unique, so a second match means a
+// copied session directory; the most recently written one is the live copy.
+func (c *Collector) discoverGrokPath(ctx context.Context, nativeID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(c.roots.GrokSessions) == "" || !nativeUsageIDPattern.MatchString(nativeID) {
+		return "", nil
+	}
+	matches, err := filepath.Glob(filepath.Join(c.roots.GrokSessions, "*", nativeID, grokUsageFileName))
+	if err != nil {
+		return "", err
+	}
+	var best string
+	var bestModTime time.Time
+	for _, match := range matches {
+		info, err := os.Stat(match)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if best == "" || info.ModTime().After(bestModTime) {
+			best, bestModTime = match, info.ModTime()
+		}
+	}
+	return best, nil
 }
 
 func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.SessionID) (string, error) {

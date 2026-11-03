@@ -54,6 +54,8 @@ func parseRecordsWithState(
 		parseGoose(source, records, &result)
 	case domain.UsageSourceHermesState:
 		parseHermes(source, records, state.Hermes, &result)
+	case domain.UsageSourceGrokSession:
+		parseGrok(source, records, state.Snapshot, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -101,6 +103,7 @@ type parserStateEnvelope struct {
 	Claude     *claudeParserStateV1    `json:"claude,omitempty"`
 	Codex      *codexParserStateV1     `json:"codex,omitempty"`
 	Hermes     *hermesParserStateV1    `json:"hermes,omitempty"`
+	Snapshot   *snapshotParserStateV1  `json:"snapshot,omitempty"`
 }
 
 type parserIntegrityStateV1 struct {
@@ -196,12 +199,12 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 	}
 	switch source.Kind {
 	case domain.UsageSourceClaudeMain, domain.UsageSourceClaudeSubagent:
-		if state.Claude == nil || state.Codex != nil || state.Hermes != nil {
+		if state.Claude == nil || state.Codex != nil || state.Hermes != nil || state.Snapshot != nil {
 			return nil, errors.New("claude state has invalid parser payload")
 		}
 		state.Claude.LegacyProvider = ""
 	case domain.UsageSourceCodexRollout:
-		if state.Codex == nil || state.Claude != nil || state.Hermes != nil {
+		if state.Codex == nil || state.Claude != nil || state.Hermes != nil || state.Snapshot != nil {
 			return nil, errors.New("codex state has invalid parser payload")
 		}
 		state.Codex.LegacyProvider = ""
@@ -219,17 +222,27 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		}
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
 		domain.UsageSourceGooseLedger:
-		if state.Claude != nil || state.Codex != nil || state.Hermes != nil {
+		if state.Claude != nil || state.Codex != nil || state.Hermes != nil || state.Snapshot != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
 	case domain.UsageSourceHermesState:
-		if state.Claude != nil || state.Codex != nil {
+		if state.Claude != nil || state.Codex != nil || state.Snapshot != nil {
 			return nil, errors.New("hermes state has invalid parser payload")
 		}
 		if state.Hermes == nil {
 			state.Hermes = &hermesParserStateV1{}
 		}
 		if err := validateHermesParserState(state.Hermes); err != nil {
+			return nil, err
+		}
+	case domain.UsageSourceGrokSession:
+		if state.Claude != nil || state.Codex != nil || state.Hermes != nil {
+			return nil, errors.New("snapshot state has invalid parser payload")
+		}
+		if state.Snapshot == nil {
+			state.Snapshot = &snapshotParserStateV1{}
+		}
+		if err := validateSnapshotParserState(state.Snapshot); err != nil {
 			return nil, err
 		}
 	default:
@@ -253,6 +266,8 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 		}
 	case domain.UsageSourceHermesState:
 		state.Hermes = &hermesParserStateV1{Rows: map[string]hermesUsageCounters{}}
+	case domain.UsageSourceGrokSession:
+		state.Snapshot = &snapshotParserStateV1{Rows: map[string]hermesUsageCounters{}}
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
 		domain.UsageSourceGooseLedger:
 		// These formats carry replay-stable native IDs, so no provider-specific
