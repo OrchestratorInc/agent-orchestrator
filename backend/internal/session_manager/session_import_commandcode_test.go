@@ -52,7 +52,7 @@ func TestCommandCodeChatImportRefusesUnwritablePrivateHomeBeforeLaunch(t *testin
 		t.Fatal(err)
 	}
 	m.dataDir = blocked
-	_, err := m.resumeChatController(context.Background(), "resume", rec, st.projects[rec.ProjectID], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
+	_, err := m.resumeChatController(context.Background(), "resume", rec, st.projects[string(rec.ProjectID)], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
 	if err == nil || errors.Is(err, launcher.startErr) || len(launcher.started) != 0 {
 		t.Fatalf("private preparation failure reached Chat launch: started=%d err=%v", len(launcher.started), err)
 	}
@@ -65,7 +65,7 @@ func TestCommandCodeChatAdoptedImportCannotReseedPrivateHistory(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing", true: "corrupt"}[corrupt], func(t *testing.T) {
 			m, st, launcher, rec, ws := commandCodeChatImport(t)
-			_, err := m.resumeChatController(context.Background(), "resume", rec, st.projects[rec.ProjectID], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
+			_, err := m.resumeChatController(context.Background(), "resume", rec, st.projects[string(rec.ProjectID)], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
 			if !errors.Is(err, launcher.startErr) || len(launcher.started) != 1 {
 				t.Fatalf("first open did not reach the driver after preparation: %v", err)
 			}
@@ -85,7 +85,7 @@ func TestCommandCodeChatAdoptedImportCannotReseedPrivateHistory(t *testing.T) {
 			rec = st.sessions[rec.ID]
 			rec.Metadata.ImportSource.Adopted = true
 			st.sessions[rec.ID] = rec
-			_, err = m.resumeChatController(context.Background(), "resume", rec, st.projects[rec.ProjectID], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
+			_, err = m.resumeChatController(context.Background(), "resume", rec, st.projects[string(rec.ProjectID)], ws, true, false, "", domain.SessionInterfaceTransitionHistoryStrict)
 			if err == nil || errors.Is(err, launcher.startErr) || len(launcher.started) != 1 {
 				t.Fatalf("adopted invalid history reached Chat launch: started=%d err=%v", len(launcher.started), err)
 			}
