@@ -115,11 +115,14 @@ func New(store Store, dataDir string) *Service {
 	if kimi == "" {
 		kimi = filepath.Join(home, ".kimi-code")
 	}
+	// Kimchi 1.24.3's entry point ignores config-root overrides and always uses
+	// homedir/.config/kimchi/harness. Only offer the root its runtime can load.
+	kimchi := filepath.Join(home, ".config", "kimchi", "harness")
 	qwen := os.Getenv(qwenHomeEnv)
 	if qwen == "" {
 		qwen = filepath.Join(home, ".qwen")
 	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessOMP: ompRoot(home), domain.HarnessQwen: qwen}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
@@ -400,6 +403,11 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	switch harness {
 	case domain.HarnessKimi:
 		return discoverKimi(ctx, root)
+	case domain.HarnessKimchi:
+		// Kimchi stores one JSONL per conversation under sessions/<cwd-dashed>/,
+		// like Pi, but AO's own resume copies live there too; discoverKimchi skips
+		// them using the importer's excluded data directory.
+		return discoverKimchi(ctx, root, s.excluded)
 	case domain.HarnessOpenCode:
 		// OpenCode stores conversations in a SQLite database, not a projects tree.
 		return discoverOpenCode(ctx, root)
@@ -535,6 +543,9 @@ func (f sourceFiles) nativeID() string {
 	if f.harness == domain.HarnessOMP && len(f.paths) > 0 {
 		return ompNativeIDFromPath(f.paths[0])
 	}
+	if f.harness == domain.HarnessKimchi && len(f.paths) > 0 {
+		return kimchiNativeID(f.paths[0])
+	}
 	return f.key
 }
 
@@ -580,7 +591,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessOMP, domain.HarnessQwen}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
@@ -730,7 +741,7 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	switch source.harness {
 	case domain.HarnessClaudeCode:
 		rec.Metadata.Model = source.model
-	case domain.HarnessPi, domain.HarnessOMP:
+	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi:
 		rec.Metadata.Model, rec.Metadata.Effort = source.model, source.effort
 	}
 	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
