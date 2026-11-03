@@ -97,6 +97,7 @@ export const symbols = {
 	server: { ios: "server.rack", android: "dns" },
 	cloud: { ios: "cloud", android: "cloud" },
 	laptop: { ios: "laptopcomputer", android: "laptop" },
+	phone: { ios: "iphone", android: "smartphone" },
 	// A small-form-factor machine. Material has no mini PC, so a board stands in.
 	miniPc: { ios: "macmini", android: "developer_board" },
 	workstation: { ios: "macstudio", android: "host" },

@@ -344,14 +344,7 @@ export default function PairScreen() {
 	const live = permission?.granted === true;
 	return (
 		<View style={styles.screen}>
-			{/* Two short steps; the bar already names the task. Onboarding has
-			    just shown its own, so they are not repeated from there. */}
-			{fromOnboarding ? <View style={styles.introGap} /> : (
-				<View style={styles.steps}>
-					<NumberedStep n={1} total={2} title={repairHost ? `Open Connect Mobile on ${repairHost.name}` : "Open Connect Mobile on your computer"} compact />
-					<NumberedStep n={2} total={2} title="Scan the code" compact />
-				</View>
-			)}
+			<View style={styles.introGap} />
 
 			<View style={[styles.viewfinder, live && styles.viewfinderLive]}>
 				{live ? (
@@ -365,7 +358,7 @@ export default function PairScreen() {
 							barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
 							onBarcodeScanned={onScan}
 						/>
-						{/* Where to hold the code. Decoration: the steps above say it. */}
+						{/* Where to hold the code. Decoration: the steps below say it. */}
 						<View pointerEvents="none" style={styles.reticleLayer} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
 							<View style={styles.reticle} />
 						</View>
@@ -380,6 +373,13 @@ export default function PairScreen() {
 						onRequest={requestPermission}
 					/>
 				)}
+			</View>
+
+			{/* How to get the code, under the scanner that reads it. */}
+			<View style={styles.steps}>
+				<NumberedStep n={1} total={3} title={repairHost ? `Open Orchestrator on ${repairHost.name}` : "Open Orchestrator on your computer"} compact />
+				<NumberedStep n={2} total={3} title="Go to Settings → Connect Mobile" compact />
+				<NumberedStep n={3} total={3} title="Scan the code with this phone" compact />
 			</View>
 
 			{/* From the moment a scan starts: the first race alone can take ~20 s
@@ -487,7 +487,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	steps: { paddingHorizontal: space.xl, paddingTop: space.xs, paddingBottom: space.lg },
+	steps: { paddingHorizontal: space.xl, paddingTop: space.lg },
 	introGap: { height: space.md },
 
 	// A card in the theme until the camera runs: the permission prompt inside it
@@ -529,7 +529,7 @@ const makeStyles = (t: Theme) =>
 	},
 
 	// Connecting and failure share one quiet slot under the viewfinder: no fill
-	// or border, aligned with the steps above.
+	// or border, aligned with the steps.
 	notice: {
 		flexDirection: "row",
 		gap: space.sm,

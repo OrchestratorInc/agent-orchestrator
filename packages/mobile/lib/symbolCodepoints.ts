@@ -65,6 +65,7 @@ const codepoints: Record<RegistryAndroidSymbol, number> = {
 	dns: 0xe875,
 	cloud: 0xe2bd,
 	laptop: 0xe31e,
+	smartphone: 0xe32c,
 	developer_board: 0xe30d,
 	host: 0xf3d9,
 	power_off: 0xe646,

@@ -20,11 +20,10 @@ describe("completeOnboarding", () => {
 		expect(routes).toEqual(["(tabs)"]);
 	});
 
-	it("is used after pairing from onboarding and when skipping", () => {
+	// Onboarding has no skip: pairing is the only way on, and it completes there.
+	it("is used after pairing from onboarding", () => {
 		const pair = readFileSync(fileURLToPath(new URL("../app/pair.tsx", import.meta.url)), "utf8");
-		const onboarding = readFileSync(fileURLToPath(new URL("../app/onboarding.tsx", import.meta.url)), "utf8");
 		expect(pair).toContain("if (fromOnboarding) completeOnboarding(navigation);");
 		expect(pair).toContain("else backOr(router);");
-		expect(onboarding).toContain("completeOnboarding(navigation);");
 	});
 });
