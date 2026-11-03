@@ -473,10 +473,18 @@ describe("side panel navigation and recovery", () => {
 		);
 	});
 
-	it("shows the shorter isolation explanation without info or collapse controls", async () => {
+	it("keeps the no-open-side-chat state to one message", async () => {
+		get.mockResolvedValue({ data: { sides: [] } });
+		render(<SidePanelHarness />);
+		await screen.findByText("No side chat opened yet");
+		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
+			.not.toBeInTheDocument();
+	});
+
+	it("shows the quick-question description without info or collapse controls", async () => {
         render(<SidePanelHarness />);
         await screen.findByLabelText("Side chat question");
-        expect(screen.getByText(/Files and Git are shared/)).toBeVisible();
+        expect(screen.getByText("Explore a quick question without interrupting the main chat.")).toBeVisible();
         expect(screen.queryByRole("button", { name: "About side-chat isolation" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Hide side chat" })).not.toBeInTheDocument();
     });

@@ -19,6 +19,9 @@ async function setup(page: Page, { existingSession = false } = {}) {
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		const pathname = new URL(route.request().url()).pathname;
 		if (pathname === "/api/v1/settings") return route.fulfill({ json: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } });
+		if (pathname === "/api/v1/agents/chat/permission-modes") {
+			return route.fulfill({ json: { agents: [{ agent: "codex", modes: ["default", "accept-edits", "auto", "bypass-permissions"] }] } });
+		}
 		if (pathname.startsWith("/api/v1/agents/readiness")) return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 		if (pathname === `/api/v1/projects/${projectId}`) {
 			return route.fulfill({ json: { status: "ok", project: { id: projectId, agent: "codex", config: { worker: { agent: "codex" } } } } });
@@ -60,7 +63,10 @@ test("renderer: the first send from the new chat page never blanks the composer 
 	});
 	await prompt.click();
 	await page.keyboard.type("Hand this over");
+	const delegated = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/orchestrators/delegate" && request.method() === "POST");
 	await page.keyboard.press("Enter");
+	// Leave an unselected policy to the daemon's project and harness defaults.
+	expect((await delegated).postDataJSON()).not.toHaveProperty("approvalMode");
 	await expect(page).toHaveURL(/sessions\/handoff-w1/);
 	await expect(prompt).toBeVisible();
 	await page.waitForTimeout(500);

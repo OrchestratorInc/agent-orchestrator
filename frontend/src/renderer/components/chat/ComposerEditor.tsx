@@ -13,6 +13,7 @@ import {
 	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
+	$setSelection,
 	$createParagraphNode,
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
@@ -526,8 +527,17 @@ function editorSnapshot(): ComposerEditorSnapshot {
 }
 
 function focusEditor(editor: LexicalEditor): void {
-	editor.focus();
 	const root = editor.getRootElement();
+	const native = getDOMSelectionFromTarget(root);
+	// A native caret move can precede Lexical's queued selectionchange. Adopt it
+	// before focus restores the editor selection, including background clicks.
+	if (root && native?.anchorNode && native.focusNode && root.contains(native.anchorNode) && root.contains(native.focusNode)) {
+		editor.update(() => {
+			const selection = $createRangeSelectionFromDom(native, editor);
+			if (selection) $setSelection(selection);
+		}, { discrete: true });
+	}
+	editor.focus();
 	if (root && document.activeElement !== root) root.focus({ preventScroll: true });
 }
 

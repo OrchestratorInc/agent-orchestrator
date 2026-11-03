@@ -24,6 +24,7 @@ import {
 	useAgentReadinessQuery,
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
+import { useChatPermissionModesQuery } from "../hooks/useChatPermissionModes";
 import { useSettings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -765,6 +766,19 @@ export function useTaskLaunch({ projectId, hostId }: {
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!(chatHarnesses ?? []).includes(selectedAgent);
+	const usesChatPermissions = !isCloudProject && !requiresTuiFallback && settings?.defaultSessionMode === "chat";
+	const permissionDiscovery = useChatPermissionModesQuery(hostId, usesChatPermissions ? selectedAgent : undefined);
+	const chatPermissionModes = permissionDiscovery.data?.get(selectedAgent);
+	const projectPermissions = projectConfig?.worker?.agentConfig?.permissions ?? projectConfig?.agentConfig?.permissions;
+	const wantedApproval = approvalMode ?? (isCloudProject ? "bypass-permissions" : APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto");
+	// An inherited or stale choice cannot invent an ACP mode. Use the agent's
+	// normal approval behavior when it has no alternatives, never implicitly bypass.
+	// Keep the chosen policy intact so switching back restores it.
+	const usesNativePermissions = usesChatPermissions && chatPermissionModes?.length === 1 && chatPermissionModes[0] === "default";
+	const effectiveApproval = usesNativePermissions ? "default" : wantedApproval;
+	// Preserve omission so the daemon can apply project and harness defaults.
+	// Only a default-only catalog needs a correction in the launch payload.
+	const launchApproval = usesNativePermissions ? "default" : approvalMode;
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -828,10 +842,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 					: cloudCatalogGap === "failed"
 						? t("newTask.cloudModelsFailed", { agent: selectedAgentLabel })
 						: undefined;
+	// An omitted agent or failed permission probe must still reach daemon admission
+	// and its default-Chat-to-TUI fallback once initial discovery settles.
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
+		(!usesChatPermissions || !permissionDiscovery.isPending) &&
 		(!isStandalone || selectedAgent !== "") &&
 		selectedAgent !== "" &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
@@ -950,7 +967,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// The local daemon applies the default session mode itself; the control
 					// plane has none, so a cloud task carries it.
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
-					approvalMode: requestedApproval ?? approvalMode,
+					approvalMode: requestedApproval ?? launchApproval,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1134,15 +1151,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 		efforts: item.efforts,
 		defaultEffort: item.defaultEffort,
 	})), [catalogModels, catalogUsesModes, t]);
-	const projectPermissions = projectConfig?.worker?.agentConfig?.permissions ?? projectConfig?.agentConfig?.permissions;
 	const turnSettings: TurnSettings = {
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
-		// A session started without a permission choice runs in auto (applySpawnAgentConfig).
-		// A Cloud task's runs in trusted mode, whose turns skip prompts unless one is picked.
-		approvalMode: approvalMode ?? (isCloudProject
-			? "bypass-permissions"
-			: APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
+		// Display the inherited policy even when the daemon applies it at launch.
+		approvalMode: effectiveApproval,
 	};
 	const chooseTurnSettings = (next: TurnSettings) => {
 		if ((next.model ?? "") !== (turnSettings.model ?? "")) {
@@ -1171,7 +1184,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			agent: selectedAgent || undefined,
 			model: requestedModel,
 			effort: requestedEffort,
-			approvalMode,
+			approvalMode: launchApproval,
 			mode: submitMode,
 		}),
 		// The interface a plain send starts in, including the Settings default.
@@ -1283,6 +1296,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		},
 		showEffort,
 		chatModels,
+		approvalModes: usesChatPermissions ? chatPermissionModes ?? [] : undefined,
 		turnSettings,
 		chooseTurnSettings,
 		agentChoices,

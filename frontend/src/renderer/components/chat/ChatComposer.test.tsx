@@ -1350,6 +1350,19 @@ describe("sent message recall", () => {
 		expect(composerWireText(field)).toBe("my draft");
 	});
 
+	it("preserves a native caret move when composer padding is pressed before selectionchange", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "abcdef");
+		const text = field.querySelector("[data-lexical-text]")?.firstChild;
+		const form = field.closest("form");
+		if (!text || !form) throw new Error("Expected composer text and form");
+		window.getSelection()?.collapse(text, 4);
+		expect(fireEvent.mouseDown(form, { button: 0 })).toBe(false);
+		fireEvent.click(form);
+		expect(document.activeElement).toBe(field);
+		expect(window.getSelection()?.anchorOffset).toBe(4);
+	});
+
 	it("reads the caret the browser shows before Lexical has caught up with it", async () => {
 		const { field } = renderComposer({ sentMessages: SENT });
 		await typeInComposer(field, "my draft");
