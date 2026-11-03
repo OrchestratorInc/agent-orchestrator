@@ -117,7 +117,11 @@ const ORCH_POINTS = [
 	{ title: "firstRun.orchPoint3Title", body: "firstRun.orchPoint3Body" },
 ] as const;
 /** How long each part of the story holds before the next plays. */
-const POINT_HOLD_MS = [4200, 3800, 4800] as const;
+const POINT_HOLD_MS = [4200, 3800, 5200] as const;
+/** The order the last point settles the example work (task indexes), and the
+ * gap between moves. The one waiting on you settles last, in place. */
+const SORT_ORDER = [3, 2, 0, 1] as const;
+const SORT_BEAT_MS = 520;
 
 type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
 type InstallJob = components["schemas"]["InstallJob"];
@@ -279,6 +283,24 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		}, POINT_HOLD_MS[point]);
 		return () => window.clearTimeout(timer);
 	}, [step, point]);
+	// The last point sorts the board one card at a time, a beat apart, so each
+	// move reads on its own instead of all cards crossing at once. The beat is
+	// keyed to the loop and point it belongs to, so a new run starts from 0 on
+	// its first frame instead of flashing the previous run's finished board.
+	const sorting = step === "welcome" && point === ORCH_POINTS.length - 1;
+	const sortKey = `${cycle}:${point}`;
+	const [sort, setSort] = useState({ key: "", beat: 0 });
+	useEffect(() => {
+		if (!sorting) return;
+		let beat = 0;
+		const timer = window.setInterval(() => {
+			beat += 1;
+			setSort({ key: sortKey, beat });
+			if (beat >= SORT_ORDER.length) window.clearInterval(timer);
+		}, SORT_BEAT_MS);
+		return () => window.clearInterval(timer);
+	}, [sorting, sortKey]);
+	const sortBeat = !sorting ? SORT_ORDER.length : sort.key === sortKey ? sort.beat : 0;
 	const toolAgents = useToolAgents();
 	const account = cloud.status === "authenticated" ? cloud.session : null;
 	const scene = (
@@ -286,6 +308,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			step={step}
 			point={point}
 			cycle={cycle}
+			sortBeat={sortBeat}
 			account={account ? { name: account.user.displayName?.trim() || account.user.email, avatarUrl: account.user.avatarUrl } : null}
 			pickerAgents={toolAgents.pickerAgents}
 			selectedAgentId={toolAgents.selectedId}
@@ -329,7 +352,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							exit={{ opacity: 0, transition: { duration: 0 } }}
 							transition={FADE}
 						>
-							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
+							{step === "welcome" ? <WelcomeStep point={point} cycle={cycle} onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
 							{step === "tools" ? <ToolsStep onNext={goNext} /> : null}
 							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
@@ -503,20 +526,21 @@ function useExampleTasks() {
  */
 type WorkStage = "none" | "working" | "sorted";
 
-function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStage): PreviewCard[] {
+function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStage, sortBeat: number = SORT_ORDER.length): PreviewCard[] {
 	const [task1, task2, task3, task4] = tasks;
 	if (stage === "none") return [];
-	if (stage === "working") {
-		return tasks.map((task): PreviewCard => ({ ...task, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }));
-	}
+	const working = (task: (typeof tasks)[number]): PreviewCard => ({ ...task, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 0 });
+	if (stage === "working") return tasks.map(working);
 	// Most of the work lands ready to merge; one change is in review and one
-	// worker waits on you.
-	return [
-		{ ...task2, column: "building", status: "needs_input", minutesAgo: 4 },
-		{ ...task4, column: "needs_review", status: "review_pending", displayStatus: "Review pending", pr: 43, minutesAgo: 3 },
+	// worker waits on you. Cards not yet reached keep working in Building.
+	const settled: PreviewCard[] = [
 		{ ...task1, column: "ready", status: "mergeable", displayStatus: "Mergeable", pr: 41, minutesAgo: 2 },
+		{ ...task2, column: "building", status: "needs_input", minutesAgo: 4 },
 		{ ...task3, column: "ready", status: "mergeable", displayStatus: "Mergeable", pr: 42, minutesAgo: 1 },
+		{ ...task4, column: "needs_review", status: "review_pending", displayStatus: "Review pending", pr: 43, minutesAgo: 3 },
 	];
+	const reached = new Set<number>(SORT_ORDER.slice(0, sortBeat));
+	return tasks.map((task, index) => (reached.has(index) ? settled[index]! : working(task)));
 }
 
 /**
@@ -531,6 +555,7 @@ function OnboardingScene({
 	step,
 	point,
 	cycle,
+	sortBeat,
 	account,
 	pickerAgents,
 	selectedAgentId,
@@ -538,6 +563,7 @@ function OnboardingScene({
 	step: Step;
 	point: number;
 	cycle: number;
+	sortBeat: number;
 	account: { name: string; avatarUrl?: string } | null;
 	pickerAgents: Array<{ id: string; label: string; dimmed?: boolean }>;
 	selectedAgentId?: string;
@@ -548,7 +574,7 @@ function OnboardingScene({
 	const welcome = step === "welcome";
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
 	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
-	const cards = exampleCards(tasks, stage);
+	const cards = exampleCards(tasks, stage, welcome ? sortBeat : undefined);
 	// While the chat leads a new loop, the board (fading out behind it) keeps
 	// the last loop's work instead of flashing empty; the next loop's board
 	// mounts fresh so its cards arrive again.
@@ -613,37 +639,57 @@ function ExamplePhone() {
 
 // ── 0. Welcome ──────────────────────────────────────────────────────────────
 
-function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
+function WelcomeStep({ point, cycle, onNext }: { point: number; cycle: number; onNext: () => void }) {
 	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion();
+	const current = ORCH_POINTS[point]!;
 	return (
 		<StepSplit
 			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
 		>
-			<div className="flex flex-col gap-2">
-				<p className="text-xs font-medium text-muted-foreground">{t("firstRun.orchTitle")}</p>
-				{/* Follows the preview: the part playing is marked by a bar that
-				    slides down the list as the story moves on. */}
-				<ol className="flex flex-col">
-					{ORCH_POINTS.map(({ title, body }, i) => (
-						<li key={title} aria-current={i === point ? "step" : undefined} className="relative flex gap-3 py-2 pl-3">
+			{/* Narrates the preview: one caption for the part playing, under a
+			    three-segment timer that fills while it plays. */}
+			<div className="flex flex-col gap-3 pt-6" aria-hidden="true">
+				<div className="flex gap-1">
+					{ORCH_POINTS.map(({ title }, i) => (
+						<span key={title} className="h-0.5 w-8 overflow-hidden rounded-full bg-muted">
+							{i < point ? <span className="block h-full w-full bg-foreground/60" /> : null}
 							{i === point ? (
 								<motion.span
-									layoutId="first-run-point"
-									className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-foreground"
-									transition={{ type: "spring", visualDuration: 0.35, bounce: 0.1 }}
+									key={`${cycle}-${point}`}
+									className="block h-full origin-left bg-foreground/60"
+									initial={{ scaleX: reduceMotion ? 1 : 0 }}
+									animate={{ scaleX: 1 }}
+									transition={reduceMotion ? { duration: 0 } : { duration: POINT_HOLD_MS[point] / 1000, ease: "linear" }}
 								/>
 							) : null}
-							<span className={cn("w-3 shrink-0 text-sm tabular-nums transition-colors duration-300", i === point ? "text-foreground" : "text-muted-foreground")}>{i + 1}</span>
-							<span className="flex min-w-0 flex-col gap-0.5">
-								<span className={cn("text-sm font-medium transition-colors duration-300", i === point ? "text-foreground" : "text-muted-foreground")}>{t(title)}</span>
-								<span className="text-pretty text-xs leading-relaxed text-muted-foreground">{t(body)}</span>
-							</span>
-						</li>
+						</span>
 					))}
-				</ol>
+				</div>
+				<div className="grid">
+					<AnimatePresence initial={false}>
+						<motion.div
+							key={point}
+							className="col-start-1 row-start-1 flex flex-col gap-1"
+							initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: -8 }}
+							transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+						>
+							<span className="text-sm font-medium text-foreground">{t(current.title)}</span>
+							<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(current.body)}</span>
+						</motion.div>
+					</AnimatePresence>
+				</div>
 			</div>
+			{/* The whole story for assistive tech, which skips the animation. */}
+			<ol className="sr-only">
+				{ORCH_POINTS.map(({ title, body }) => (
+					<li key={title}>{t(title)}: {t(body)}</li>
+				))}
+			</ol>
 			<StepAction>
 				<Button variant="primary" onClick={onNext} autoFocus>{t("firstRun.getStarted")}</Button>
 			</StepAction>
