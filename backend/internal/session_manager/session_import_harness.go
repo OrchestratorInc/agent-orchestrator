@@ -20,9 +20,10 @@ type importedHarnessHooks struct {
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessGemini: {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
+	domain.HarnessVibe:   {configEnvKey: "VIBE_HOME", ownedElsewhere: vibeImportOwnedElsewhere, adoptedOwnedElsewhere: vibeImportOwnedElsewhere},
 }
 
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "droid", "gemini", "node", "copilot", "omp"}
+var importedProcessNames = []string{"claude", "codex", "droid", "gemini", "node", "copilot", "omp", "vibe"}
