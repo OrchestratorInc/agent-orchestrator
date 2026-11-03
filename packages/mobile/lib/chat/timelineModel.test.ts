@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -52,22 +52,6 @@ describe("mobile Chat timeline model", () => {
 	it("keeps queued questions with their own answers instead of strict-sequence interleaving", () => {
 		const groups = groupConversationByTurn(snapshot());
 		expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([["u1", "a1"], ["u2", "a2"]]);
-		expect(conversationMarkers(snapshot())).toMatchObject([
-			{ sequence: 1, title: "First task", detail: "First answer" },
-			{ sequence: 2, title: "Queued task", detail: "Queued answer" },
-		]);
-	});
-
-	it("titles a marker with the human's words rather than AO's staged attachment list", () => {
-		const value = snapshot();
-		const [first, second] = value.items;
-		if (first.kind !== "message" || second.kind !== "message") throw new Error("fixture");
-		first.text = "See screenshot\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png";
-		second.text = "Attached files (read these files in the workspace):\n- .ao/attachments/attachment-b.png\n- .ao/attachments/attachment-c.png";
-		expect(conversationMarkers(value)).toMatchObject([
-			{ sequence: 1, title: "See screenshot" },
-			{ sequence: 2, title: "2 attachments" },
-		]);
 	});
 
 	it("keys a loaded turn by durable identity rather than its current page boundary", () => {

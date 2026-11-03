@@ -6,14 +6,13 @@ beforeEach(resetChatSheets);
 describe("chat sheet registry", () => {
 	it("keeps non-serializable sheet data alive only until release", () => {
 		const onSelect = vi.fn();
-		const key = parkChatSheet({ kind: "conversation-map", markers: [], onSelect });
-		expect(readChatSheet(key)).toMatchObject({ kind: "conversation-map", onSelect });
+		const key = parkChatSheet({ kind: "composer-picker", catalog: { groups: [] } as never, onSelect });
+		expect(readChatSheet(key)).toMatchObject({ kind: "composer-picker", onSelect });
 		releaseChatSheet(key);
 		expect(readChatSheet(key)).toBeUndefined();
 	});
 
 	it.each([
-		["conversation-map", "/sheets/conversation-map"],
 		["composer-picker", "/sheets/composer-picker"],
 		["conversation-usage", "/sheets/conversation-usage"],
 	] as const)("routes %s through a native sheet route", (kind, pathname) => {

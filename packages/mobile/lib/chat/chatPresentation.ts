@@ -9,17 +9,6 @@ export type ChatPresentation = {
 	tone: ChatTone;
 };
 
-export function conversationMarkerPresentation(state?: ConversationTurn["state"]): ChatPresentation {
-	switch (state) {
-		case "running": return { icon: "activity", label: "Working", tone: "working" };
-		case "completed": return { icon: "check-circle", label: "Done", tone: "success" };
-		case "failed": return { icon: "alert-circle", label: "Failed", tone: "danger" };
-		case "interrupted": return { icon: "minus-circle", label: "Stopped", tone: "muted" };
-		case "queued": return { icon: "clock", label: "Queued", tone: "muted" };
-		default: return { icon: "message-circle", label: "Update", tone: "accent" };
-	}
-}
-
 export function requestPresentation(kind: "approval" | "input", pending: boolean): Omit<ChatPresentation, "label"> & { title: string; badge: string } {
 	if (!pending) return { icon: "check-circle", title: kind === "approval" ? "Approval resolved" : "Input resolved", badge: "Resolved", tone: "muted" };
 	return kind === "approval"

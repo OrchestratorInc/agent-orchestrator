@@ -6,7 +6,6 @@ import type {
 	ConversationPlan,
 	ConversationTurn,
 } from "./types";
-import { stagedAttachmentParts } from "./messageAttachments";
 
 export type ConversationGroup = {
 	key: string;
@@ -16,14 +15,6 @@ export type ConversationGroup = {
 	turn?: ConversationTurn;
 	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
 	plan?: ConversationPlan;
-};
-
-export type ConversationMarker = {
-	key: string;
-	sequence: number;
-	title: string;
-	detail?: string;
-	state?: ConversationTurn["state"];
 };
 
 export type ActivityNode = {
@@ -226,25 +217,6 @@ export function conversationTimelineRenderPlan(
 	return groups.length === 0 ? { kind: "empty", groups: [] } : { kind: "list", groups };
 }
 
-export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
-	return groupConversationByTurn(snapshot).map((group) => {
-		const human = group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human");
-		const assistant = [...group.items].reverse().find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim());
-		const activity = group.items.find((item): item is ConversationActivity => item.kind === "activity");
-		const title = previewText(human?.kind === "message" ? humanMessageTitle(human.text) : activity?.summary || "Conversation update", 120);
-		const detailSource = assistant?.kind === "message" ? assistant.text : activity?.detail?.text || activity?.summary;
-		const detail = detailSource ? previewText(String(detailSource), 240) : undefined;
-		return { key: group.key, sequence: group.anchor, title, detail: detail && detail !== title ? detail : undefined, state: group.turn?.state };
-	});
-}
-
-/** A marker names what the human wrote, not the staged-path list AO appended. */
-function humanMessageTitle(text: string): string {
-	const { body, attachments } = stagedAttachmentParts(text);
-	if (attachments.length === 0) return text;
-	return body.trim() || (attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`);
-}
-
 /**
  * Human prompts the daemon can branch before and resend edited, mirroring the
  * desktop's gate: an idle controller, a settled turn, and either the binding's
@@ -387,14 +359,4 @@ function activityCycle(node: ActivityNode, parent: ActivityNode, byProvider: Map
 		current = parentId ? byProvider.get(parentId) : undefined;
 	}
 	return false;
-}
-
-function previewText(value: string, limit: number): string {
-	const plain = value
-		.replace(/```[\s\S]*?```/g, " code sample ")
-		.replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-		.replace(/[*_`#>~]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	return plain.length > limit ? `${plain.slice(0, limit - 1).trimEnd()}…` : plain;
 }

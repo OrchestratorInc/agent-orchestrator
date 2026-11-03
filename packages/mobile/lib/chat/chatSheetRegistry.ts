@@ -1,6 +1,5 @@
 import type { ComposerPickerCatalog } from "./composerSuggestions";
 import type { ConversationMenuAction, ConversationMenuGroup } from "./conversationMenuModel";
-import type { ConversationMarker } from "./timelineModel";
 import type { ConversationSnapshot } from "./types";
 
 /** The conversation's context window, token counts and account limits, kept current while the sheet is up. */
@@ -23,7 +22,6 @@ export type ConversationActionsEntry = {
 };
 
 export type ChatSheetEntry =
-	| { kind: "conversation-map"; markers: ConversationMarker[]; onSelect(sequence: number): void }
 	| ConversationActionsEntry
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
 	| ConversationUsageEntry;
@@ -44,7 +42,6 @@ export function resetChatSheets(): void { entries.clear(); sequence = 0; }
 export function chatSheetRoute(entry: ChatSheetEntry) {
 	const sheetKey = parkChatSheet(entry);
 	const pathname = {
-		"conversation-map": "/sheets/conversation-map",
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
 		// Outside sheets/ for its own options: iOS bars it, the other sheets do not.

@@ -49,7 +49,6 @@ const sheetRoutes = [
 	"sheets/artifact-history.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/connect.tsx",
-	"sheets/conversation-map.tsx",
 	"sheets/conversation-usage.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
