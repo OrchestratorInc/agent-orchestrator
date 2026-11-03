@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 it("offers a direct button when only one importable agent is configured", () => {
-	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("cursor", true, "authorized"));
+	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("amp", true, "authorized"));
 	expect(screen.queryByRole("button", { name: /Import chats/ })).not.toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Import Claude Code chats" }));
 	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", harnessTab: "import" });
