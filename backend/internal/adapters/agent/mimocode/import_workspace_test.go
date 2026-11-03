@@ -30,3 +30,15 @@ func TestMiMoImportedWorkspaceUsesEffectiveLaunchEnvironment(t *testing.T) {
 		})
 	}
 }
+
+func TestMiMoPreparedDatabaseBinding(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mimocode.db")
+	got, err := New().NativeSessionConfigDir(t.Context(), map[string]string{"MIMOCODE_DB": path})
+	if err != nil || got != root {
+		t.Fatalf("prepared native root = %q, %v", got, err)
+	}
+	if _, err := New().NativeSessionConfigDir(t.Context(), map[string]string{"MIMOCODE_DB": filepath.Join(root, "unrelated.db")}); err == nil {
+		t.Fatal("unsupported database filename accepted")
+	}
+}

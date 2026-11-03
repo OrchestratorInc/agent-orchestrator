@@ -31,6 +31,9 @@ func mimoCodeRoot(home string) string {
 	// Custom database names need a durable filename binding before import can
 	// safely resume them. Never offer candidates from another database.
 	if path := strings.TrimSpace(os.Getenv("MIMOCODE_DB")); path != "" && path != "mimocode.db" {
+		if filepath.IsAbs(path) && filepath.Base(path) == mimoCodeDBFile {
+			return filepath.Dir(path)
+		}
 		return ""
 	}
 	if dir := strings.TrimSpace(os.Getenv("MIMOCODE_HOME")); dir != "" {
