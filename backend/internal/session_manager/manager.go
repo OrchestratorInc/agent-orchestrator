@@ -3550,7 +3550,9 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		if err != nil {
 			return RestoreResult{}, err
 		}
-		m.refreshImportArchive(ctx, rec)
+		if err := m.refreshImportArchive(ctx, rec); err != nil {
+			return RestoreResult{}, err
+		}
 		requireNativeHistory = true
 	} else if adoptedOwnedElsewhere(ctx, rec) {
 		return RestoreResult{}, ErrSessionOpenElsewhere

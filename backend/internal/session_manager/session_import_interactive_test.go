@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -42,6 +43,7 @@ func (f *fakeStore) CommitImportedNativeSessionID(_ context.Context, id domain.S
 	}
 	next := *rec.Metadata.ImportSource
 	next.ResumeNativeID = nativeID
+	next.ResumeTranscriptPath = ""
 	rec.Metadata.ImportSource = &next
 	rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID, rec.Metadata.AgentSessionIDLaunchID = nativeID, nativeID, launchID
 	f.sessions[id] = rec
@@ -126,6 +128,45 @@ func (a *preparedInteractiveImportAgent) PrepareNativeRestore(ctx context.Contex
 type failingNativePublicationLCM struct {
 	*nativeBindingLCM
 	fail bool
+}
+
+type locatedForkAgent struct {
+	importInteractiveAgent
+	found bool
+	path  string
+}
+
+func (a *locatedForkAgent) LocateTranscript(_ context.Context, ref ports.NativeSessionRef) (string, bool, error) {
+	if ref.NativeSessionID != "fork-native" {
+		return "", false, errors.New("lookup used the source id instead of the fork")
+	}
+	return a.path, a.found, nil
+}
+
+func TestInteractiveForkBindsObservedTranscriptAndRefusesMissingBinding(t *testing.T) {
+	for _, found := range []bool{false, true} {
+		t.Run(fmt.Sprintf("found-%v", found), func(t *testing.T) {
+			m, st, _, _ := interactiveManager(t, false, &interactiveTestAgent{plan: &interactiveTestPlan{}})
+			root := t.TempDir()
+			a := &locatedForkAgent{found: found, path: filepath.Join(root, "fork-native.jsonl"), importInteractiveAgent: importInteractiveAgent{plan: &forkInteractivePlan{source: "agent-x", importInteractivePlan: &importInteractivePlan{target: "fork-native"}}}}
+			m.agents = singleAgent{agent: a}
+			rec := st.sessions["mer-1"]
+			rec.Mode, rec.Activity.State = domain.SessionModeTUI, domain.ActivityIdle
+			rec.Metadata.WorkspacePath = t.TempDir()
+			rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID, rec.Metadata.AgentSessionIDLaunchID = "", "", ""
+			rec.Metadata.ProviderConversationID = "agent-x"
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agent-x", ConfigDir: root, Transferred: true, Prepared: true}
+			st.sessions[rec.ID] = rec
+			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+			if found {
+				if err != nil || result.Session.Metadata.NativeTranscriptPath != a.path || result.Session.NeedsImportResume() {
+					t.Fatalf("fork transcript binding = %#v, %v", result, err)
+				}
+			} else if err == nil || !st.sessions[rec.ID].NeedsImportResume() || st.sessions[rec.ID].Metadata.AgentSessionID != "agent-x" {
+				t.Fatalf("missing fork binding accepted: %#v, %v", result, err)
+			}
+		})
+	}
 }
 
 func (l *failingNativePublicationLCM) ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
