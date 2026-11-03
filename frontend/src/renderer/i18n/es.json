@@ -384,7 +384,7 @@
 	"firstRun.startPromptBugLabel": "Corregir un bug",
 	"firstRun.startPromptTests": "Encuentra código importante sin tests y arranca workers para añadirlos.",
 	"firstRun.startPromptTestsLabel": "Añadir tests",
-	"firstRun.openOrchestrator": "Abrir orquestador",
+	"firstRun.openOrchestrator": "Enviar al orquestador",
 	"firstRun.back": "Atrás",
 	"firstRun.skipSetup": "Omitir configuración",
 	"firstRun.skipConfirmTitle": "¿Omitir la configuración?",

@@ -383,7 +383,7 @@
 	"firstRun.startPromptBugLabel": "修复 bug",
 	"firstRun.startPromptTests": "找出没有测试的重要代码，并启动 worker 为其添加测试。",
 	"firstRun.startPromptTestsLabel": "添加测试",
-	"firstRun.openOrchestrator": "打开编排器",
+	"firstRun.openOrchestrator": "发送给编排器",
 	"firstRun.back": "返回",
 	"firstRun.skipSetup": "跳过设置",
 	"firstRun.skipConfirmTitle": "跳过设置？",

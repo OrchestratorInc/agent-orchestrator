@@ -383,7 +383,7 @@
 	"firstRun.startPromptBugLabel": "バグを修正",
 	"firstRun.startPromptTests": "テストのない重要なコードを見つけ、テストを追加するワーカーを起動してください。",
 	"firstRun.startPromptTestsLabel": "テストを追加",
-	"firstRun.openOrchestrator": "オーケストレーターを開く",
+	"firstRun.openOrchestrator": "オーケストレーターに送信",
 	"firstRun.back": "戻る",
 	"firstRun.skipSetup": "セットアップをスキップ",
 	"firstRun.skipConfirmTitle": "セットアップをスキップしますか？",

@@ -383,7 +383,7 @@
 	"firstRun.startPromptBugLabel": "Bug beheben",
 	"firstRun.startPromptTests": "Finde wichtigen Code ohne Tests und starte Worker, die Tests ergänzen.",
 	"firstRun.startPromptTestsLabel": "Tests ergänzen",
-	"firstRun.openOrchestrator": "Orchestrator öffnen",
+	"firstRun.openOrchestrator": "An den Orchestrator senden",
 	"firstRun.back": "Zurück",
 	"firstRun.skipSetup": "Einrichtung überspringen",
 	"firstRun.skipConfirmTitle": "Einrichtung überspringen?",
