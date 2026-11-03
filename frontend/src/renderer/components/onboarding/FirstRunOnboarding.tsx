@@ -2,7 +2,7 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Cloud, FolderClosed, GitFork, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
+import { animate, AnimatePresence, motion, useIsPresent, useMotionValue, useReducedMotion } from "motion/react";
 import {
 	createContext,
 	useCallback,
@@ -106,11 +106,16 @@ const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.34, bounce: 0.04 } a
 /** The stage opening or closing (the copy column's width). */
 const COLLAPSE_MS = 340;
 const COLLAPSE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
+/** The copy's left padding (pl-12). */
+const COPY_INSET_LEFT = 48;
 /** Pages that lead with the app icon. */
 const STEPS_WITH_ICON: ReadonlySet<Step> = new Set<Step>(["welcome", "signin"]);
 /** The icon (48px) and the gap under it (20px). */
 const ICON_SLOT_HEIGHT = 68;
 const IconSlotContext = createContext(false);
+/** The row's width when the page being left was centred across it (else 0),
+ * so a left-aligned page arriving from it starts centred and slides over. */
+const PreviousCenteredContext = createContext(0);
 
 const STARTER_PROMPTS = [
 	{ label: "firstRun.startPromptImproveLabel", prompt: "firstRun.startPromptImprove" },
@@ -246,6 +251,13 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	// icon slot starts from it and collapses (or grows) instead of cutting.
 	const lastStep = useRef(step);
 	const previousHadIcon = STEPS_WITH_ICON.has(lastStep.current);
+	const previousCentered = wide && lastStep.current === "project" && step !== "project";
+	// Whether the phone was out when the project page opened (it came from Log
+	// in), so it stays there while the project page is up.
+	const [phoneWasShown, setPhoneWasShown] = useState(step === "signin");
+	useEffect(() => {
+		if (step !== "project") setPhoneWasShown(step === "signin");
+	}, [step]);
 	useEffect(() => {
 		lastStep.current = step;
 	}, [step]);
@@ -357,6 +369,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 					}}
 				>
 					<IconSlotContext.Provider value={previousHadIcon}>
+					<PreviousCenteredContext.Provider value={previousCentered ? rowWidth : 0}>
 					<AnimatePresence initial={false}>
 						<motion.div
 							key={step}
@@ -374,6 +387,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
 						</motion.div>
 					</AnimatePresence>
+					</PreviousCenteredContext.Provider>
 					</IconSlotContext.Provider>
 				</div>
 				{wide ? (
@@ -384,8 +398,10 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							frameWidth={rowWidth - COPY_WIDTH}
 							phoneDelay={phoneDelay}
 							phone={<ExamplePhone />}
-							phoneShown={step === "signin"}
-							opaque={step === "signin"}
+							// The phone stays put into the project page (the stage closes over
+							// it), so going back doesn't slide it in a second time.
+							phoneShown={step === "signin" || (step === "project" && phoneWasShown)}
+							opaque={step === "signin" || (step === "project" && phoneWasShown)}
 						>
 							{scene}
 						</PreviewStage>
@@ -471,6 +487,22 @@ function StepSplit({
 	body?: ReactNode;
 	children?: ReactNode;
 }) {
+	// Arriving from the centred project page, a left-aligned page starts where
+	// the centred copy was and slides left as the column narrows, mirroring
+	// how the copy drifts to the middle on the way there.
+	const fromCenteredRow = useContext(PreviousCenteredContext);
+	const reduceMotion = useReducedMotion();
+	const contentRef = useRef<HTMLDivElement>(null);
+	const x = useMotionValue(0);
+	// Once, on arrival, before the first paint.
+	const [arrivedFrom] = useState(fromCenteredRow);
+	useLayoutEffect(() => {
+		if (centered || !arrivedFrom || reduceMotion) return;
+		const width = contentRef.current?.offsetWidth ?? 0;
+		x.set(Math.max(0, (arrivedFrom - width) / 2 - COPY_INSET_LEFT));
+		const slide = animate(x, 0, { duration: COLLAPSE_MS / 1000, ease: [0.32, 0.72, 0, 1] });
+		return () => slide.stop();
+	}, [arrivedFrom, centered, reduceMotion, x]);
 	return (
 		// Fixed top anchor: the title sits at the same height on every step,
 		// centred or not, so only what is under it changes and the copy only
@@ -481,12 +513,12 @@ function StepSplit({
 				centered ? "items-center px-12" : "pl-12 pr-10",
 			)}
 		>
-			<div className="flex w-full max-w-md flex-col">
+			<motion.div ref={contentRef} className="flex w-full max-w-md flex-col" style={{ x }}>
 				<IconSlot shown={Boolean(icon)} />
 				<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
 				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
 				{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
-			</div>
+			</motion.div>
 		</div>
 	);
 }
@@ -506,7 +538,9 @@ function IconSlot({ shown }: { shown: boolean }) {
 			className="origin-top-left overflow-hidden"
 			initial={reduceMotion ? false : mountedWith ? open : closed}
 			animate={shown ? open : closed}
-			transition={reduceMotion ? { duration: 0 } : COLLAPSE_SPRING}
+			// Leaving is quick (it shouldn't linger over the next title);
+			// arriving takes the stage's pace.
+			transition={reduceMotion ? { duration: 0 } : shown ? COLLAPSE_SPRING : { duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
 		>
 			<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />
 		</motion.div>
