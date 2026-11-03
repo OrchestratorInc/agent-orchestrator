@@ -3982,7 +3982,7 @@ export interface components {
             slug: string;
             /** @description The same as contentUrl, kept for clients that predate it. */
             url: string;
-            /** @description Where the link's file is served, for example https://<slug>.orchestrator-usercontent.com/. */
+            /** @description Where the link's file is served, for example https://<slug>.orchestratorusercontent.com/. */
             contentUrl: string;
             /** @description The public page that shows the link, for example https://orchestrator.inc/artifact/<slug>. Absent when the control plane has no viewer configured; share contentUrl instead. */
             viewerUrl?: string;
