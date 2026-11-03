@@ -1,10 +1,10 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
 import { Gauge, Image, Text } from "@expo/ui/swift-ui";
 import { accessibilityAddTraits, accessibilityHidden, background, buttonStyle, disabled as disabledModifier, font, foregroundStyle, frame, gaugeStyle, listRowBackground, scaleEffect, scrollContentBackground, tint } from "@expo/ui/swift-ui/modifiers";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { appFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { rowIconWidth } from "../tokens";
+import { rowIconWidth, space } from "../tokens";
 import type { ConversationMenuItem } from "./conversationMenuModel";
 import type { ConversationActionsPageProps } from "./ConversationActionsPage.types";
 
@@ -21,18 +21,21 @@ export function ConversationActionsPage({ groups, onSelect }: ConversationAction
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
-		<Host style={[styles.fill, { backgroundColor: t.bgBase }]} colorScheme={scheme}>
-			<FieldGroup testID="conversation-actions" modifiers={[scrollContentBackground("hidden"), background(t.bgBase), appFont("body"), foregroundStyle(t.textPrimary)]}>
-				{groups.map((group) => (
-					<FieldGroup.Section key={group.title}>
-						<FieldGroup.SectionHeader>
-							<Text modifiers={[appFont("footnote"), foregroundStyle(t.textSecondary), accessibilityAddTraits(["isHeader"])]}>{group.title}</Text>
-						</FieldGroup.SectionHeader>
-						{group.items.map((item) => <ActionRow key={item.action} item={item} onSelect={onSelect} />)}
-					</FieldGroup.Section>
-				))}
-			</FieldGroup>
-		</Host>
+		// The sheet has no title bar, so the first section keeps a gap under the grabber.
+		<View style={[styles.fill, styles.page, { backgroundColor: t.bgBase }]}>
+			<Host style={[styles.fill, { backgroundColor: t.bgBase }]} colorScheme={scheme}>
+				<FieldGroup testID="conversation-actions" modifiers={[scrollContentBackground("hidden"), background(t.bgBase), appFont("body"), foregroundStyle(t.textPrimary)]}>
+					{groups.map((group) => (
+						<FieldGroup.Section key={group.title}>
+							<FieldGroup.SectionHeader>
+								<Text modifiers={[appFont("footnote"), foregroundStyle(t.textSecondary), accessibilityAddTraits(["isHeader"])]}>{group.title}</Text>
+							</FieldGroup.SectionHeader>
+							{group.items.map((item) => <ActionRow key={item.action} item={item} onSelect={onSelect} />)}
+						</FieldGroup.Section>
+					))}
+				</FieldGroup>
+			</Host>
+		</View>
 	);
 }
 
@@ -60,4 +63,5 @@ function ActionRow({ item, onSelect }: { item: ConversationMenuItem; onSelect: C
 
 const styles = StyleSheet.create({
 	fill: { flex: 1 },
+	page: { paddingTop: space.huge },
 });

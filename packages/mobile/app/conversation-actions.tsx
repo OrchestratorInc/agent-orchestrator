@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { backOr } from "../lib/backNavigation";
 import { ConversationActionsPage } from "../lib/chat/ConversationActionsPage";
@@ -22,16 +22,13 @@ export default function ConversationActionsRoute() {
 	useSheetEntryPresent(Boolean(actions));
 	if (!actions) return null;
 	return (
-		<>
-			<Stack.Screen options={{ title: actions.title }} />
-			<ConversationActionsPage
-				groups={groups ?? actions.groups}
-				onSelect={(action) => {
-					backOr(router);
-					actions.onSelect(action);
-				}}
-			/>
-		</>
+		<ConversationActionsPage
+			groups={groups ?? actions.groups}
+			onSelect={(action) => {
+				backOr(router);
+				actions.onSelect(action);
+			}}
+		/>
 	);
 }
 
