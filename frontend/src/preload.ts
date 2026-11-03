@@ -217,6 +217,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		listGitHubRepos: (query: string) =>
+			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		refreshGitHubOwners: () => ipcRenderer.invoke("app:refreshGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		checkGitHubRepositoryAvailability: (input: { owner: string; name: string }) =>
@@ -726,6 +728,10 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getExperimentCohort: () => ipcRenderer.invoke("appState:getExperimentCohort") as Promise<number | null>,
+		claimFirstRunExperimentExposure: () => ipcRenderer.invoke("appState:claimFirstRunExperimentExposure") as Promise<boolean>,
+		getFirstRunProjectPrompt: () => ipcRenderer.invoke("appState:getFirstRunProjectPrompt") as Promise<"pending" | "seen">,
+		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},
 	cliLink: {
 		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
