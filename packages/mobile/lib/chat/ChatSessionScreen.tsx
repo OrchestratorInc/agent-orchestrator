@@ -54,7 +54,7 @@ import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
-import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
@@ -355,7 +355,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		setResuming(true);
 		setResumeError(undefined);
 		try {
-			if (!config) throw new Error(NOT_PAIRED_ACTION_COPY);
+			if (!config) throw new Error(machine ? RECONNECTING_ACTION_COPY : NOT_PAIRED_ACTION_COPY);
 			if (terminated) await restoreSession(config, session.id);
 			else await resumeSessionAgent(config, session.id);
 			await refreshBoard();
@@ -365,7 +365,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			if (quiet) setResumeError(userFacingError(cause));
 			else Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
-	}, [config, conversation.refresh, refreshBoard, resuming, session.id, terminated]);
+	}, [config, conversation.refresh, machine, refreshBoard, resuming, session.id, terminated]);
 
 	const startupView = useMemo(
 		() => ("projectName" in session ? undefined : sessionStartupView(session, conversation.snapshot)),
