@@ -84,6 +84,9 @@ type Service struct {
 	modelCalls         map[string]*modelCatalogCall
 	modelGeneration    map[string]int64
 	discoverySlots     chan struct{}
+
+	savedDefaultLaunchEnv func(ctx context.Context, harness domain.AgentHarness) (map[string]string, error)
+
 	// inputChecks tracks background credential-input checks for cached
 	// catalogs, so a cache read never waits on them.
 	inputCheckMu  sync.Mutex
@@ -550,7 +553,7 @@ func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projec
 		}
 		binary = resolved
 	}
-	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
 	if err != nil {
 		return false
 	}
@@ -590,7 +593,7 @@ func activeModelCatalogScope(scope string) bool {
 	return modelCatalogScope(scope) == scope
 }
 
-func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
+func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
@@ -599,7 +602,16 @@ func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (port
 		request.CredentialType = credentialType
 		return request, nil
 	}
-	request.Env = s.runtimeCredentialEnv(agentID)
+	if agentID == string(domain.HarnessClaudeCode) && s.savedDefaultLaunchEnv != nil {
+		var err error
+		request.Env, err = s.savedDefaultLaunchEnv(ctx, domain.HarnessClaudeCode)
+		if err != nil {
+			return ports.AgentModelDiscoveryRequest{}, err
+		}
+	}
+	if len(request.Env) == 0 {
+		request.Env = s.runtimeCredentialEnv(agentID)
+	}
 	return s.globalModelDiscoveryRequest(request)
 }
 
@@ -805,7 +817,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			binary = resolved
 		}
 	}
-	request, err := s.modelDiscoveryRequest(agentID, projectID, binary)
+	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
 	if err != nil {
 		return ports.AgentModelCatalog{}, err
 	}

@@ -573,7 +573,6 @@ func Run(buildVersion string) error {
 	claudecodeagent.ConfigureModelVersionRequirements(
 		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
-	agentSvc.WarmModelCatalogs(ctx)
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
@@ -664,6 +663,7 @@ func Run(buildVersion string) error {
 	})
 	if agentSvc != nil {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
+		agentSvc.SetSavedDefaultLaunchEnv(agentAccountSvc.DefaultLaunchEnv)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
 			harness := map[domain.AgentAccountProvider]domain.AgentHarness{
 				domain.AgentAccountProviderClaude: domain.HarnessClaudeCode,
@@ -673,6 +673,7 @@ func Run(buildVersion string) error {
 				agentSvc.InvalidateAgentAuthentication(string(harness))
 			}
 		})
+		agentSvc.WarmModelCatalogs(ctx)
 	}
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
