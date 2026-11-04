@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
+import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
 import {
@@ -10,6 +11,7 @@ import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
+	type AgentReadiness,
 } from "../../../hooks/useAgentReadinessQuery";
 import {
 	advisoryInUse,
@@ -35,6 +37,7 @@ import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hook
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../../lib/agent-options";
 import { apiErrorMessage } from "../../../lib/api-client";
+import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
@@ -43,6 +46,7 @@ import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
@@ -59,6 +63,11 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+
+function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
+	if (workflow.action === "logout") return status === "unauthorized";
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code"));
+}
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
 type AgentAuthProbeResult = Awaited<ReturnType<typeof probeAgentAuth>>;
@@ -336,6 +345,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
 	}, []);
 
+	const cliLoginOnOwnRow = useCallback((agentId: AgentId) => !hostId && agentAccountProviderFor(agentId) !== null
+		&& followsSavedAccount(queryClient.getQueryData<AgentReadiness>(readinessKey)?.agents.find((agent) => agent.id === agentId)), [hostId, queryClient, readinessKey]);
+
 	// A "Log in" shortcut elsewhere (the task composer's model error) lands here
 	// and starts the same login flow the row's own button would, exactly once.
 	const startAuthRef = useRef<(agentId: AgentId) => Promise<boolean>>(async () => false);
@@ -346,8 +358,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		autoLoginHandledRef.current = true;
 		const plan = agentAuthPlans.get(targetAgentId);
 		if (!plan || !plan.available || plan.action === "instructions") return;
+		// New tasks start on a saved account: the CLI's own login would not fix
+		// them, so the page opens on the accounts list instead.
+		if (cliLoginOnOwnRow(targetAgentId)) return;
 		void startAuthRef.current(targetAgentId);
-	}, [agentAuthPlans, agents.isPending, authPlans.isPending, startLogin, targetAgentId]);
+	}, [agentAuthPlans, agents.isPending, authPlans.isPending, cliLoginOnOwnRow, startLogin, targetAgentId]);
 
 	useEffect(() => {
 		for (const job of jobs.data ?? []) {
@@ -430,6 +445,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
+		if (operation === "install") void captureRendererEvent("ao.agents.install_clicked", { agent: agentId });
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const fail = (message: string) => {
@@ -595,22 +611,43 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
+	// Reads the accounts again, so the CLI login's row shows a sign-in that just
+	// changed, and returns whether that login is signed in.
+	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
+		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		if (!provider) return undefined;
+		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		if (!accounts) return undefined;
+		queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+	}, [hostId, queryClient]);
+
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
 		setAuthWorkflow(authWorkflowRef.current);
-		// MiMo can confirm a stored provider key locally without validating it upstream.
-		const completed = (candidate: AgentAuthProbeResult | undefined) => workflow.action === "logout"
-			? candidate?.agent?.authStatus === "unauthorized"
-			: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+		const signingIn = workflow.action !== "logout";
+		const ownRow = cliLoginOnOwnRow(workflow.agentId);
+		let cliSignedIn: boolean | undefined;
+		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
+			if (ownRow) {
+				cliSignedIn = await refreshCliLogin(workflow.agentId);
+				return cliSignedIn === signingIn;
+			}
+			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
+		};
 		let result = await checkAuth(workflow.agentId, { fresh: true });
-		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !completed(result); attempt++) {
+		let done = await completed(result);
+		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !done; attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 			result = await checkAuth(workflow.agentId, { fresh: true });
+			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		if (completed(result)) {
+		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		if (done) {
+			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			} catch (error) {
@@ -624,10 +661,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {
 			...current,
-			phase: result?.agent?.authStatus === "unauthorized" ? "unauthorized" : "unverified",
-			reason: workflow.action === "logout" ? t("settings.harness.logoutUnverified") : result?.agent?.authStatus === "unauthorized" ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
+			phase: signedOut ? "unauthorized" : "unverified",
+			reason: !signingIn ? t("settings.harness.logoutUnverified") : signedOut ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
 		} : current);
-	}, [checkAuth, hostId, queryClient, shellKey, t]);
+	}, [checkAuth, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
 
 	const closeAuth = useCallback(async (workflow: AuthTerminalWorkflow): Promise<boolean> => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return false;
@@ -652,9 +689,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// instead of leaving a stale "signed out" terminal on screen.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
-		const expected = authWorkflow.action === "logout" ? "unauthorized" : "authorized";
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === expected) void closeAuth(authWorkflow);
-	}, [authWorkflow, readinessAgents, closeAuth]);
+		if (cliLoginOnOwnRow(authWorkflow.agentId)) return;
+		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
+	}, [authWorkflow, readinessAgents, closeAuth, cliLoginOnOwnRow]);
 
 	useEffect(() => {
 		if (!authWorkflow || authWorkflow.phase !== "running") return;
@@ -773,14 +810,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <button key={agentId}
-								type="button"
+							return <Pressable key={agentId}
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
 								aria-describedby={statusId}
 								aria-current={selected ? "true" : undefined}
 								className={cn(
-									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+									"flex w-full items-center gap-3",
 									split ? "min-h-11 shrink-0 px-3" : "min-h-12 shrink-0 px-3",
 									selected
 										? (split ? "bg-(--color-bg-tertiary) font-medium" : "bg-accent font-medium")
@@ -805,7 +841,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button>;
+							</Pressable>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
@@ -818,7 +854,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						ref={detailRef}
 					>
 						{split ? null : <div className="shrink-0">
-							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
+							<Button type="button" size="sm" variant="quiet" className="-ml-2 gap-1 px-2" onClick={closeDetail}>
 								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
 							</Button>
 						</div>}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	scmgithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/github"
 	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
@@ -11,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
+	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -18,7 +20,7 @@ import (
 // and GitLab providers via a multi Provider dispatcher. Missing credentials
 // for one provider do not prevent the other from starting; the observer is
 // disabled only when no provider has usable credentials.
-func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.Manager, branchStates scmobserve.BranchStateReconciler, gitlabCfg config.GitLabConfig, logger *slog.Logger) <-chan struct{} {
+func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.Manager, branchStates scmobserve.BranchStateReconciler, gitlabCfg config.GitLabConfig, reviewRefresher *scmReviewRefresher, logger *slog.Logger) <-chan struct{} {
 	var named []scmmulti.NamedProvider
 
 	ghProvider, ghErr := newGitHubSCMProvider(logger)
@@ -41,6 +43,7 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 	}
 	provider := scmmulti.New(named...)
 	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates})
+	reviewRefresher.Bind(observer)
 	return observer.Start(ctx)
 }
 
@@ -113,6 +116,37 @@ func newMultiSCMMerger(gitlabCfg config.GitLabConfig, logger *slog.Logger) *scmm
 		return nil
 	}
 	return scmmulti.NewMerger(named...)
+}
+
+// scmReviewRefresher hands review-refresh requests to the SCM observer once it
+// is running. Before then, or without any SCM provider, a request is dropped
+// and the observer's regular poll picks the review up.
+type scmReviewRefresher struct {
+	mu     sync.RWMutex
+	target reviewsvc.ThreadRefresher
+}
+
+// Bind attaches the running observer.
+func (r *scmReviewRefresher) Bind(target reviewsvc.ThreadRefresher) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+// RequestReviewRefresh forwards to the bound observer without blocking.
+func (r *scmReviewRefresher) RequestReviewRefresh(prURL string) {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	target := r.target
+	r.mu.RUnlock()
+	if target != nil {
+		target.RequestReviewRefresh(prURL)
+	}
 }
 
 func closedDone() <-chan struct{} {

@@ -20,6 +20,9 @@ var (
 	// ErrNativeHistoryUnavailable means an interactive native restorer has no
 	// saved conversation yet; ordinary restore may launch fresh in its workspace.
 	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
+	// ErrAgentVersionTooOld means the provider rejected the selected model
+	// because the installed agent CLI predates it; updating the CLI fixes it.
+	ErrAgentVersionTooOld = errors.New("agent CLI is too old for the selected model")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -162,6 +165,21 @@ type AgentAuthDiagnosticsChecker interface {
 	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }
 
+// AgentRuntimeAuthChecker checks sign-in with the credentials AO adds when it
+// launches a session from dataDir (such as a login AO saved itself), so a
+// readiness or switch check agrees with what that session would actually use.
+type AgentRuntimeAuthChecker interface {
+	AuthStatusForRuntime(ctx context.Context, dataDir string) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
+
+// AgentRuntimeCredentialEnv reports the credential environment AO adds when it
+// launches a local session from dataDir (such as a login AO saved itself), so
+// work done outside a session, like model discovery or the computer's account
+// check, sees the same credential. It returns nil when AO adds none.
+type AgentRuntimeCredentialEnv interface {
+	RuntimeCredentialEnv(dataDir string) map[string]string
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.
@@ -188,6 +206,15 @@ type Agent interface {
 	// SessionInfo reads agent-owned session metadata such as native session id,
 	// display title, or summary. ok=false means no info is available.
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
+}
+
+// AgentNativeRestoreCommand is an optional refinement for adapters that can
+// recover a different native session ID while building a restore command.
+// When ok is true, sessionID is the exact identity selected by cmd. The manager
+// uses it for native history validation instead of the potentially stale stored ID.
+// Implementations must return the command and identity from the same lookup.
+type AgentNativeRestoreCommand interface {
+	GetRestoreCommandWithSessionID(ctx context.Context, cfg RestoreConfig) (cmd []string, sessionID string, ok bool, err error)
 }
 
 // AgentAuthChecker is the optional capability for adapters whose native CLI has
@@ -362,10 +389,19 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// SupportsFast reports that the model can run on the provider's faster tier.
+	SupportsFast bool `json:"supportsFast,omitempty"`
 	// LastUsedAt is the latest activity of a session in scope whose current model
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	// RequiresVersion is the oldest agent CLI version that can use this model.
+	// It is set only when the installed CLI is older, so a picker can show the
+	// model as unavailable instead of letting a launch fail.
+	RequiresVersion string `json:"requiresVersion,omitempty"`
+	// UnavailableReason is display text explaining why the model cannot be
+	// selected right now and how to fix it.
+	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.
@@ -375,11 +411,15 @@ type AgentModelCatalog struct {
 	// ConfiguredProviders names providers with credential configuration observed
 	// during discovery. Presence is not proof of authorization; absence is unknown.
 	// Only provider IDs are exposed, never credential values or source paths.
-	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
-	AgentID             string               `json:"agentId"`
-	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models              []AgentModelInfo     `json:"models"`
-	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	ConfiguredProviders []string `json:"configuredProviders,omitempty"`
+	// RunnableModels names the models the agent itself lists as ones it can run
+	// now, when the rest of Models come from a local catalog of every provider
+	// it knows (OpenCode's), there to browse. Empty means not known.
+	RunnableModels   []string             `json:"runnableModels,omitempty"`
+	AgentID          string               `json:"agentId"`
+	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models           []AgentModelInfo     `json:"models"`
+	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`
@@ -523,6 +563,30 @@ type AgentAfterStartCommand interface {
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
 type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
+}
+
+// TurnFailure is a provider turn that ended on an error, and when it ended.
+type TurnFailure struct {
+	At      time.Time
+	Message string
+	// Interrupted marks a turn the user interrupted (Esc) rather than one
+	// that ended on an error.
+	Interrupted bool
+}
+
+// TranscriptTurnFailureDetector is implemented by adapters whose harness can
+// end a turn without firing the hook that reports the turn's end, while still
+// recording that end in its native transcript. Codex runs its Stop hook only
+// after a successful turn, and fires no Stop when Esc interrupts one; Claude
+// Code fires no hook at all for an Esc interrupt. Without this such a turn
+// left the session active until the stale-activity observer screen-proved it
+// idle.
+type TranscriptTurnFailureDetector interface {
+	// LastTurnFailure reports the newest turn end recorded in the transcript
+	// when that turn ended on an error or was interrupted and no later turn
+	// has started. ok is false for a successful or still-running turn, and
+	// for a transcript that is missing or not the harness's own.
+	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
 }
 
 // TerminalActivityOptions lets an adapter declare how the shared observer
@@ -738,8 +802,10 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
-	// Env is the launch environment, for steps that must follow it (such as
-	// the provider config folder an account selects).
+	// Env is the environment the runtime layers over the daemon's own for this
+	// launch (the project env plus AO's variables). The session manager sets it
+	// for PreLaunch, so an adapter prepares the provider config the launched
+	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
 	Env map[string]string
 }
 

@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, LoaderCircle, User } from "lucide-react";
-import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
+import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { GithubAvatar } from "@aoagents/product-ui";
 import { useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
@@ -9,15 +9,11 @@ import { getGitHubStatus } from "../lib/github-daemon";
 import { cn } from "../lib/utils";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { Button } from "./ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "./ui/dropdown-menu";
 import { PanelMessage } from "./WorkspaceDiffView";
 
 // Version rows shown before "Show more".
 const VERSIONS_SHOWN = 8;
-
-// How long after the menu closes the button ignores a tooltip request.
-const TOOLTIP_AFTER_MENU_MS = 400;
 
 /** "Today at 8:31 PM", "Yesterday at …", else "Oct 11 at …". */
 export function formatVersionTime(isoDate: string, now: Date = new Date()): string {
@@ -84,13 +80,14 @@ function VersionItem({
 }
 
 /**
- * The History menu in the viewer's header: every kept version in one list,
+ * The History submenu in the viewer's title menu: every kept version in one list,
  * newest first, the first marked current. Choosing one previews it in the
  * viewer; the current version returns to the live file. The list and the
- * user's avatar load when the viewer opens, so the menu is ready to read, and
+ * user's avatar load when the title menu opens, so the submenu is ready to read, and
  * opening it records any edit the observer has not picked up yet.
  */
 export function ArtifactHistoryMenu({
+	cloud,
 	fallbackHarness,
 	hostId,
 	onSelect,
@@ -98,6 +95,8 @@ export function ArtifactHistoryMenu({
 	selectedVersion,
 	sessionId,
 }: {
+	/** A cloud session's versions, kept by the control plane. */
+	cloud?: CloudArtifactVersions;
 	/** The session's agent, shown for versions recorded before their own agent was kept. */
 	fallbackHarness: string;
 	hostId?: string;
@@ -108,12 +107,9 @@ export function ArtifactHistoryMenu({
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
-	const [menuOpen, setMenuOpen] = useState(false);
-	const [tooltipOpen, setTooltipOpen] = useState(false);
 	const [showAll, setShowAll] = useState(false);
-	const closedAtRef = useRef(0);
-	const versions = useArtifactVersions({ enabled: true, hostId, path, sessionId });
-	const syncVersions = useSyncArtifactVersions({ hostId, path, sessionId });
+	const versions = useArtifactVersions({ cloud, enabled: true, hostId, path, sessionId });
+	const syncVersions = useSyncArtifactVersions({ cloud, hostId, path, sessionId });
 	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
 	const { data: github } = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000 });
 	const login = github?.login;
@@ -127,33 +123,14 @@ export function ArtifactHistoryMenu({
 		return source ? t("artifacts.history.restoredFrom", { time: formatVersionTime(source.createdAt) }) : t("artifacts.history.restoredFromOlder");
 	};
 	return (
-		<DropdownMenu
-			onOpenChange={(open) => {
-				setMenuOpen(open);
-				// Opening shows what is cached at once and refreshes it behind the scenes.
-				if (open) syncVersions.mutate();
-				else closedAtRef.current = Date.now();
-			}}
-			open={menuOpen}
-		>
-			{/* Closing the menu hands focus back to the button, which would otherwise raise its tooltip. */}
-			<Tooltip
-				onOpenChange={(open) => {
-					if (open && Date.now() - closedAtRef.current < TOOLTIP_AFTER_MENU_MS) return;
-					setTooltipOpen(open);
-				}}
-				open={tooltipOpen && !menuOpen}
-			>
-				<TooltipTrigger asChild>
-					<DropdownMenuTrigger asChild>
-						<Button aria-label={t("artifacts.history")} className="text-muted-foreground hover:text-foreground" size="icon-sm" type="button" variant="ghost">
-							<History aria-hidden="true" className="size-icon-sm" />
-						</Button>
-					</DropdownMenuTrigger>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("artifacts.history")}</TooltipContent>
-			</Tooltip>
-			<DropdownMenuContent align="end" className="max-h-[min(28rem,60vh)] w-72 overflow-y-auto" data-browser-native-overlay="true">
+		<DropdownMenuSub onOpenChange={(open) => {
+			if (open) syncVersions.mutate();
+		}}>
+			<DropdownMenuSubTrigger>
+				<History aria-hidden="true" />
+				{t("artifacts.history")}
+			</DropdownMenuSubTrigger>
+			<DropdownMenuSubContent className="max-h-[min(28rem,60vh)] w-72 overflow-y-auto" data-browser-native-overlay="true">
 				{versions.isPending ? (
 					<div className="flex justify-center py-2 text-muted-foreground">
 						<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
@@ -191,8 +168,8 @@ export function ArtifactHistoryMenu({
 						{t("artifacts.history.showMore")}
 					</DropdownMenuItem>
 				) : null}
-			</DropdownMenuContent>
-		</DropdownMenu>
+			</DropdownMenuSubContent>
+		</DropdownMenuSub>
 	);
 }
 
@@ -204,6 +181,7 @@ export function ArtifactHistoryMenu({
  */
 export function ArtifactVersionPreview({
 	artifactOrigin,
+	cloud,
 	hostId,
 	onBack,
 	onRestore,
@@ -214,9 +192,11 @@ export function ArtifactVersionPreview({
 	version,
 }: {
 	artifactOrigin?: string;
+	cloud?: CloudArtifactVersions;
 	hostId?: string;
 	onBack: () => void;
-	onRestore: () => void;
+	/** Absent when this person only views the file. */
+	onRestore?: () => void;
 	path: string;
 	restoreError?: string;
 	restoring: boolean;
@@ -224,7 +204,7 @@ export function ArtifactVersionPreview({
 	version: number;
 }) {
 	const { t } = useTranslation();
-	const query = useArtifactVersion({ hostId, path, sessionId, version });
+	const query = useArtifactVersion({ cloud, hostId, path, sessionId, version });
 	const markdown = /\.(md|markdown)$/i.test(path);
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
@@ -236,10 +216,12 @@ export function ArtifactVersionPreview({
 				<Button onClick={onBack} size="sm" type="button" variant="ghost">
 					{t("artifacts.history.backToCurrent")}
 				</Button>
-				<Button disabled={!query.data || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
-					{restoring ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-					{t(restoring ? "artifacts.history.restoring" : "artifacts.history.restore")}
-				</Button>
+				{onRestore ? (
+					<Button disabled={!query.data || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
+						{restoring ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+						{t(restoring ? "artifacts.history.restoring" : "artifacts.history.restore")}
+					</Button>
+				) : null}
 			</div>
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
 				{query.isPending ? (

@@ -34,10 +34,13 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'      case "$2" in' \
 	'        enable) if [ "$TEST_AO_TUNNEL_PAIRING" = unavailable ]; then' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel unavailable: cloudflared missing\nPassword: test-secret\n"' \
+	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = linked ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an AO account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
 	'                else' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPassword: test-secret\n"' \
 	'                fi ;;' \
 	'        status) printf "Remote host enabled\nHost ID: h_test\nAddress: https://example.trycloudflare.com:443\nPassword: test-secret\n" ;;' \
+	'        link) [ "$3" = --help ] && echo "  --no-qr   Do not print a QR code" ;;' \
 	'      esac' \
 	'    fi ;;' \
 	'  daemon) printf "%s\n" "$PATH" > "$TEST_SERVICE_PATH_CAPTURE" ;;' \
@@ -388,12 +391,13 @@ PY
 			/bin/bash -s -- --bundle "$bundle" --install-only > "$tmp/out" 2>&1
 		[[ -d "$(readlink "$tmp/host/current")" ]]
 		;;
-	tunnel-pairing|tunnel-unavailable)
+	tunnel-pairing|tunnel-unavailable|tunnel-linked)
 		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/systemctl"
 		chmod +x "$tmp/bin/systemctl"
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
 		mode=1
 		[[ "$1" == tunnel-unavailable ]] && mode=unavailable
+		[[ "$1" == tunnel-linked ]] && mode=linked
 		result=0
 		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
 			TEST_AO_HOST_ROOT="$tmp/host" TEST_AO_READY_AFTER_INSTALL=1 TEST_AO_TUNNEL_PAIRING="$mode" \
@@ -402,17 +406,22 @@ PY
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			grep -q 'enable Developer mode, then Settings' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'On your laptop: Settings → Remote hosts → Add host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'The host is not linked to an AO account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
 			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
 			}
+		elif [[ "$1" == tunnel-linked ]]; then
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q '^Address: https://h-test.useao.dev:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'Password\|remote-host link' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		else
 			[[ "$result" != 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'Tunnel address is not ready' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"

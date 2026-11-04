@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { CloudCpBillingSummary, CloudCpMeResponse, CloudCpOffering, CloudCpOrganization } from "./cloud-cp/types";
 import { paidPlanBadge } from "../hooks/useCloudBilling";
 import {
+	ATTACHMENTS_FEATURE,
+	CLOUD_MAX_ATTACHMENT_BYTES,
 	billingModeFromSummary,
 	cachedCloudBillingMode,
 	canManageBilling,
@@ -86,6 +88,48 @@ describe("resolveCloudOffering", () => {
 		expect(resolveCloudOffering(generic(undefined))?.customCoder).toBe(true);
 		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
 		expect(resolveCloudOffering(legacy)?.customCoder).toBe(false);
+	});
+
+	it("reads artifacts from the server, off for a control plane that does not say", () => {
+		const me = (artifacts?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["freestyle"], defaultProvider: "freestyle", kind: "b2c", artifacts }),
+		});
+		expect(resolveCloudOffering(me(true))?.artifacts).toBe(true);
+		expect(resolveCloudOffering(me(false))?.artifacts).toBe(false);
+		expect(resolveCloudOffering(me(undefined))?.artifacts).toBe(false);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.artifacts).toBe(false);
+	});
+
+	it("takes Cloud attachments only while the control plane sends the attachments feature, up to its limit", () => {
+		const me = (features: string[], maxAttachmentBytes?: number): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["freestyle"], defaultProvider: "freestyle", kind: "b2c", features, maxAttachmentBytes }),
+		});
+		expect(resolveCloudOffering(me(["share", "attachments"], 26_214_400))?.maxAttachmentBytes).toBe(26_214_400);
+		expect(resolveCloudOffering(me(["attachments"], 10 << 20))?.maxAttachmentBytes).toBe(10 << 20);
+		// The feature without a limit is Cloud's 25 MiB, not the daemon's 50 MB.
+		expect(resolveCloudOffering(me(["attachments"]))?.maxAttachmentBytes).toBe(CLOUD_MAX_ATTACHMENT_BYTES);
+		expect(CLOUD_MAX_ATTACHMENT_BYTES).toBe(25 * 1024 * 1024);
+		// A limit without the feature, no feature, or an older control plane: no attachments.
+		expect(resolveCloudOffering(me(["share"], 26_214_400))?.maxAttachmentBytes).toBeUndefined();
+		expect(resolveCloudOffering(me([]))?.maxAttachmentBytes).toBeUndefined();
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.maxAttachmentBytes).toBeUndefined();
+		expect(ATTACHMENTS_FEATURE).toBe("attachments");
+	});
+
+	it("reads coderWorkerWorkingFolder from the server, and as off from an older control plane", () => {
+		const generic = (coderWorkerWorkingFolder?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["coder"], defaultProvider: "coder", kind: "b2b", coderWorkerWorkingFolder }),
+		});
+		expect(resolveCloudOffering(generic(true))?.coderWorkerWorkingFolder).toBe(true);
+		expect(resolveCloudOffering(generic(false))?.coderWorkerWorkingFolder).toBe(false);
+		expect(resolveCloudOffering(generic(undefined))?.coderWorkerWorkingFolder).toBe(false);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["coder"], default: "coder" } };
+		expect(resolveCloudOffering(legacy)?.coderWorkerWorkingFolder).toBe(false);
 	});
 
 	it("resolves nothing before /me loads, and no cloud without providers", () => {

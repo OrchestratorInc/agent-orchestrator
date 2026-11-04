@@ -206,26 +206,26 @@ func terminalRefreshIdentityVerified(rec domain.SessionRecord) bool {
 // exit on invalid resume arguments. Unknown probes fail closed without treating
 // the process as dead or deleting its previous release reference.
 func (m *Manager) verifyRefreshedTerminal(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) error {
-	alive, err := m.waitForTargetGeneration(ctx, handle, id, domain.AgentGenerationID(launchID))
+	alive, err := m.waitForExactLaunch(ctx, handle, id, launchID)
 	if err != nil || !alive {
 		return errors.Join(ErrNotResumable, err)
 	}
 	settled := time.NewTimer(time.Second)
 	defer settled.Stop()
-	ticker := time.NewTicker(switchPollInterval)
+	ticker := time.NewTicker(launchPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-settled.C:
-			alive, err := m.exactTargetGenerationAlive(ctx, handle, id, domain.AgentGenerationID(launchID))
+			alive, err := m.exactLaunchAlive(ctx, handle, id, launchID)
 			if err != nil || !alive {
 				return errors.Join(ErrNotResumable, err)
 			}
 			return nil
 		case <-ticker.C:
-			alive, err := m.exactTargetGenerationAlive(ctx, handle, id, domain.AgentGenerationID(launchID))
+			alive, err := m.exactLaunchAlive(ctx, handle, id, launchID)
 			if err != nil || !alive {
 				return errors.Join(ErrNotResumable, err)
 			}

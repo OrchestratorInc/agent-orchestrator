@@ -1,0 +1,132 @@
+import { ArrowUpRight } from "lucide-react";
+import { useRef } from "react";
+import { useTranslation } from "react-i18next";
+import { isInlineArtifactUrl } from "../../shared/agent-page-url";
+import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
+import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
+import { artifactContentUrl } from "../lib/artifact-content-url";
+import { artifactKey, type ArtifactRow } from "../lib/artifacts";
+import { useNavigateToSession } from "../lib/navigate-to-session";
+import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
+import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ArtifactFileView } from "./ArtifactFileView";
+import { CloudArtifactFrame } from "./CloudArtifactFrame";
+import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
+
+export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
+	artifact: ArtifactRow | null;
+	projectName: string;
+	onClose: () => void;
+}) {
+	const { t } = useTranslation();
+	const navigateToSession = useNavigateToSession();
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
+	const restoreFocusOnClose = useRestoreFocusOnClose(Boolean(artifact));
+	const titleRef = useRef<HTMLHeadingElement>(null);
+	const id = artifact ? artifactKey(artifact) : "";
+	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
+	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	// Only the person who started a cloud session shares its files.
+	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	const cloudOwner = Boolean(cloudUserId) && artifact?.cloud?.createdByUserId === cloudUserId;
+	const openInSession = () => {
+		if (!artifact) return;
+		onClose();
+		requestWorkspaceFileOpen(artifact.sessionId, artifact.path, undefined, "artifact");
+		navigateToSession(artifact.projectId, artifact.sessionId);
+	};
+	return (
+		<Dialog open={Boolean(artifact)} onOpenChange={(open) => { if (!open) onClose(); }}>
+			{artifact ? (
+				<DialogContent
+					className={cn(settingsDialogContentClass, "h-[min(52rem,calc(100svh_-_var(--size-toolbar)_-_var(--size-toolbar)_-_var(--space-8)))] max-h-none w-[min(72rem,calc(100vw-var(--space-8)))]")}
+					onCloseAutoFocus={restoreFocusOnClose}
+					onOpenAutoFocus={(event) => {
+						event.preventDefault();
+						titleRef.current?.focus();
+					}}
+					showCloseButton={false}
+				>
+					<header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
+						<div className="min-w-0 flex-1">
+							<DialogTitle className="truncate text-heading-sm outline-none" ref={titleRef} tabIndex={-1}>{artifact.name}</DialogTitle>
+							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
+						</div>
+						<div className="relative z-10 flex shrink-0 items-center gap-1">
+							{/* A local file's project names its document: without one, sharing
+							    it here would make a second link for the same file. Only the
+							    person who started a cloud session publishes its files. */}
+							{(artifact.cloud && (artifact.cloud.shared || !cloudOwner)) || (!artifact.cloud && !artifact.projectId) ? null : (
+								<ShareArtifactButton
+									className="transition-none"
+									file={artifact.cloud
+										? { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" }
+										: { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
+									name={artifact.name}
+								/>
+							)}
+							<ArtifactActionsMenu
+								artifact={artifact}
+								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
+								iconOnly
+								pinInMenu
+								pinned={pinned}
+								onTogglePin={() => togglePinnedArtifact(id)}
+								onDeleted={onClose}
+								errorClassName="bottom-auto top-full mb-0 mt-2"
+								className="transition-none"
+							/>
+						</div>
+						<Button className="shrink-0" onClick={openInSession} size="sm" variant="secondary">
+							{t("artifacts.openInSession")}
+							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+						</Button>
+						<DialogClose asChild>
+							<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+						</DialogClose>
+					</header>
+					<div className="min-h-0 flex-1 overflow-hidden bg-background">
+						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />
+					</div>
+				</DialogContent>
+			) : null}
+		</Dialog>
+	);
+}
+
+function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
+	const { t } = useTranslation();
+	const cloud = Boolean(artifact.cloud);
+	const access = useCloudArtifactAccess({ id: artifact.sessionId, cloud: artifact.cloud }, cloud);
+	const pinned = usePinnedArtifactUrl(cloud ? access.data : undefined, cloud ? artifact.path : undefined, artifact.updatedAt);
+	const { client: cloudClient } = useCloudCp(cloud);
+	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
+	const contentUrl = artifactContentUrl(artifact.sessionId, artifact.path, artifact.rawUrl);
+	// A file the agent rewrites while it is open shows the new content.
+	useArtifactFileChanges({ id: artifact.sessionId, cloud: artifact.cloud }, true);
+	if (artifact.cloud) {
+		const orgId = artifact.cloud.orgId;
+		if (access.isError) return <PanelMessage action={<RetryButton onClick={() => { void access.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
+		if (!pinned.url) return <PanelMessage>{t("files.loading")}</PanelMessage>;
+		const accessRefused = () => {
+			pinned.repin();
+			void access.refetch();
+		};
+		if (artifact.kind === "html") return <CloudArtifactFrame onAccessRefused={accessRefused} title={artifact.name} url={pinned.url} />;
+		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
+	}
+	if (page) {
+		return <iframe className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
+	}
+	if (!contentUrl) return <PanelMessage>{t("artifactLink.noPreview")}</PanelMessage>;
+	return <ArtifactFileView artifactName={artifact.name} path={artifact.path} rawUrl={artifact.rawUrl} readOnly sessionId={artifact.sessionId} />;
+}

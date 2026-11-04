@@ -31,9 +31,40 @@ WHERE session_id = ? AND provider = ?
 ORDER BY bound_at DESC
 LIMIT 1;
 
+-- Only a known source-time binding can prove that a turn used another account.
+-- name: SessionAgentAccountChangedSince :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions s
+    JOIN session_agent_accounts source ON source.session_id = s.id
+      AND source.provider = CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END
+    WHERE s.id = sqlc.arg(session_id)
+      AND source.bound_at = (
+          SELECT MAX(a.bound_at) FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+            AND a.bound_at <= sqlc.arg(requested_at)
+      )
+      AND source.account_id <> (
+          SELECT a.account_id FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+          ORDER BY a.bound_at DESC LIMIT 1
+      )
+);
+
+-- Account changes invalidate only this session's active provider's pending work.
+-- name: CancelSessionTurnAutoResume :exec
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE handled_by_session_id = sqlc.arg(session_id) AND usage_limit_auto_resume = 1
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = conversation_turns.handled_by_session_id
+        AND CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END = CAST(sqlc.arg(provider) AS TEXT)
+  );
+
 -- Each usage event counts for the account its session used when the event
 -- happened; an event older than the session's first binding counts for that
--- first account. Days are UTC calendar days.
+-- first account. Days are UTC calendar days. A non-empty session_id limits the
+-- sum to that session's events (folded into deleted_session_account_usage
+-- before the session is deleted).
 -- name: AgentAccountUsageSince :many
 SELECT
     CAST(COALESCE(
@@ -58,5 +89,25 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= sqlc.arg(since)
   AND b.harness IN ('claude-code', 'codex')
+  AND (CAST(sqlc.arg(session_id) AS TEXT) = '' OR b.session_id = CAST(sqlc.arg(session_id) AS TEXT))
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3;
+
+-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(sqlc.arg(since_day) AS TEXT)
+ORDER BY day, account_id, model_id;
+
+-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    sqlc.arg(account_id), sqlc.arg(day), sqlc.arg(model_id), sqlc.arg(input_tokens),
+    sqlc.arg(cached_input_tokens), sqlc.arg(output_tokens), sqlc.arg(estimated_cost_nanos)
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos;

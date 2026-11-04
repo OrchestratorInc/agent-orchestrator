@@ -83,10 +83,18 @@ async function expectNarrowLayout(page: Page) {
 	expect(await filterOverlapsATab(page)).toBe(false);
 	await expect(inspector.getByRole("button", { name: "Edit file" })).toBeHidden();
 	await expect(inspector.getByRole("button", { name: "More actions" })).toBeVisible();
+ await expect(inspector.getByRole("button", {name:"Open full file"})).toBeVisible();
+ await expect(inspector.getByRole("button", {name:"Open diff in center"})).toBeVisible();
+ const rail=await inspector.boundingBox();
+ for(const label of ["Open full file","Open diff in center"]) {
+  const action=await inspector.getByRole("button",{name:label}).boundingBox();
+  expect(action).not.toBeNull();expect(action!.x+action!.width).toBeLessThanOrEqual(rail!.x+rail!.width+1);
+ }
 	await expectFileNameUntruncated(page);
 }
 
 test("@P0 files filter and review rows stay clear of each other in a narrow inspector", async ({ page }) => {
+ await page.setViewportSize({width:1800,height:900});
 	await stubWorkspaceFiles(page);
 	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
 	const inspector = await openInspector(page);
@@ -141,4 +149,29 @@ test("@P0 files filter centers between the tabs and actions when the review tab 
 	await expectCentered();
 	await filter.focus();
 	await expectCentered();
+});
+
+test("@P0 collapsed files keep feedback usable and toggle the all-files icon", async ({ page }) => {
+	await page.setViewportSize({ width: 1800, height: 900 });
+	await stubWorkspaceFiles(page);
+	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
+	const inspector = await openInspector(page);
+	await inspector.getByRole("tab", { name: /Files?$/ }).click();
+	const collapseAll = page.getByRole("button", { name: "Collapse all files", exact: true });
+	await expect(collapseAll.locator("svg")).toHaveClass(/lucide-list-chevrons-down-up/);
+	await page.getByRole("button", { name: `Collapse ${filePath}`, exact: true }).click();
+	const expandAll = page.getByRole("button", { name: "Expand all files", exact: true });
+	await expect(expandAll.locator("svg")).toHaveClass(/lucide-list-chevrons-up-down/);
+	await inspector.getByRole("button", { name: "Add feedback", exact: true }).click();
+	const feedback = page.getByRole("textbox", { name: new RegExp(`Feedback for ${filePath}`) });
+	await expect(feedback).toBeVisible();
+	await feedback.fill("Keep this draft while changing file visibility");
+	await expandAll.click();
+	await expect(feedback).toBeVisible();
+	await expect(feedback).toHaveValue("Keep this draft while changing file visibility");
+	await expect(collapseAll.locator("svg")).toHaveClass(/lucide-list-chevrons-down-up/);
+	await collapseAll.click();
+	await expect(feedback).toBeVisible();
+	await expect(feedback).toHaveValue("Keep this draft while changing file visibility");
+	await expect(expandAll.locator("svg")).toHaveClass(/lucide-list-chevrons-up-down/);
 });

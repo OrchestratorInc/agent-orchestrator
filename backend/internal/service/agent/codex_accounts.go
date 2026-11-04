@@ -124,6 +124,7 @@ type codexAccountManager struct {
 	processes         chan struct{}
 	mutations         chan struct{}
 	executable        func() (string, error)
+	resolveBinary     func(context.Context) (string, error)
 	terminal          codexAccountLoginTerminalService
 	globalHome        string
 	pendingRoot       string

@@ -259,6 +259,186 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindWorker)
 }
 
+func TestResumeFailedAsyncChatSpawnPreservesResolvedEffort(t *testing.T) {
+	for _, selection := range []struct {
+		name          string
+		effort        string
+		projectEffort string
+		wantEffort    string
+	}{
+		{name: "high", effort: "high", wantEffort: "high"},
+		{name: "extra_high", effort: "xhigh", wantEffort: "xhigh"},
+		{name: "omitted_without_project_default"},
+		{name: "omitted_with_project_default", projectEffort: "medium", wantEffort: "medium"},
+	} {
+		for _, projectDefault := range []struct {
+			name   string
+			change bool
+		}{
+			{name: "unchanged_defaults"},
+			{name: "changed_defaults", change: true},
+		} {
+			t.Run(selection.name+"/"+projectDefault.name, func(t *testing.T) {
+				launcher := &recordingLauncher{}
+				m, st, _ := newChatManager(launcher)
+				m.dataDir = t.TempDir()
+				m.browserCapabilities = browsersvc.NewAuthority()
+				m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+					{ID: "gpt-test", Efforts: []string{"low", "medium", "high", "xhigh"}},
+				}}}
+				deferred := deferredBackground(m)
+				ws := m.workspace.(*fakeWorkspace)
+				ws.createErr = errors.New("temporary git failure")
+				project := st.projects[string(chatTestProject)]
+				project.Config.AgentConfig.Effort = selection.projectEffort
+				st.projects[string(chatTestProject)] = project
+				cfg := asyncChatSpawnConfig("do the thing")
+				cfg.AgentConfig = ports.AgentConfig{Model: "gpt-test", Effort: selection.effort}
+				cfg.EffortOverride = selection.effort != ""
+				rec, _, _, err := m.Spawn(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				(*deferred)[0]()
+				failed := st.sessions[rec.ID]
+				if failed.ProvisionState != domain.SessionProvisionFailed {
+					t.Fatalf("initial provision state = %q, want failed", failed.ProvisionState)
+				}
+				if failed.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("saved effort = %q, want %q", failed.Metadata.Effort, selection.wantEffort)
+				}
+
+				if projectDefault.change {
+					project.Config.AgentConfig.Effort = "low"
+					st.projects[string(chatTestProject)] = project
+				}
+				ws.createErr = nil
+				retried, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+				if err != nil {
+					t.Fatalf("retry failed start: %v", err)
+				}
+				if retried.Session.ID != rec.ID || len(*deferred) != 2 {
+					t.Fatal("retry did not reuse the failed session with one background start")
+				}
+				(*deferred)[1]()
+				if len(launcher.started) != 1 {
+					t.Fatalf("controllers started = %d, want 1", len(launcher.started))
+				}
+				if got := launcher.started[0]; got.Model != "gpt-test" || got.Effort != selection.wantEffort {
+					t.Fatalf("retried model/effort = %q/%q, want gpt-test/%q", got.Model, got.Effort, selection.wantEffort)
+				}
+				ready := st.sessions[rec.ID]
+				if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("retry state/effort = %q/%q, want ready/%q", ready.ProvisionState, ready.Metadata.Effort, selection.wantEffort)
+				}
+				if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
+					t.Fatalf("prompts queued = %d, queues drained = %d, want 1 each", len(launcher.queued), len(launcher.drained))
+				}
+			})
+		}
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		model        string
+		chatModel    string
+		catalogDrift bool
+		catalogError bool
+		wantModel    string
+		wantEffort   string
+	}{
+		{name: "empty_saved_model_ignores_changed_project_model", model: "", wantEffort: "xhigh"},
+		{name: "provider_default_capabilities_changed", model: "", catalogDrift: true},
+		{name: "empty_saved_model_then_chat_model_lacks_effort", model: "", chatModel: "small", wantModel: "small"},
+		{name: "empty_saved_model_then_chat_model_supports_effort", model: "", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "chat_model_lacks_saved_effort", model: "original", chatModel: "small", wantModel: "small"},
+		{name: "chat_model_supports_saved_effort", model: "original", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "saved_model_capabilities_changed", model: "original", catalogDrift: true, wantModel: "original"},
+		{name: "catalog_unavailable", model: "original", catalogError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			m.dataDir = t.TempDir()
+			m.browserCapabilities = browsersvc.NewAuthority()
+			catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "original", IsDefault: true, Efforts: []string{"high", "xhigh"}},
+				{ID: "small", Efforts: []string{"low", "medium"}},
+				{ID: "large", Efforts: []string{"high", "xhigh"}},
+			}}
+			m.modelCatalog = tuningCatalog{catalog: catalog}
+			deferred := deferredBackground(m)
+			ws := m.workspace.(*fakeWorkspace)
+			ws.createErr = errors.New("temporary git failure")
+			cfg := asyncChatSpawnConfig("do the thing")
+			cfg.AgentConfig = ports.AgentConfig{Model: tc.model, Effort: "xhigh"}
+			cfg.EffortOverride = true
+			rec, _, _, err := m.Spawn(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[0]()
+			failed := st.sessions[rec.ID]
+			if failed.ProvisionState != domain.SessionProvisionFailed || failed.Metadata.ProviderConversationID != "" {
+				t.Fatalf("initial failure = %+v, want failed before provider start", failed)
+			}
+			if failed.Metadata.Model != tc.model || failed.Metadata.Effort != "xhigh" {
+				t.Fatalf("saved model/effort = %q/%q, want %q/xhigh", failed.Metadata.Model, failed.Metadata.Effort, tc.model)
+			}
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig = domain.AgentConfig{Model: "small", Effort: "low"}
+			st.projects[string(chatTestProject)] = project
+			if tc.chatModel != "" {
+				if err := m.PersistChatModel(context.Background(), rec.ID, tc.chatModel); err != nil {
+					t.Fatal(err)
+				}
+				updated := st.sessions[rec.ID]
+				if updated.Metadata.Model != tc.chatModel || updated.Metadata.Effort != "xhigh" {
+					t.Fatalf("saved pair before Retry = %q/%q, want %q/xhigh", updated.Metadata.Model, updated.Metadata.Effort, tc.chatModel)
+				}
+			}
+			if tc.catalogDrift {
+				catalog.Models[0].Efforts = []string{"low", "medium"}
+			}
+			var refreshes []bool
+			m.modelCatalog = refreshRecordingCatalog{saved: catalog, fresh: catalog, refreshes: &refreshes}
+			if tc.catalogError {
+				m.modelCatalog = tuningCatalog{err: errors.New("catalog offline")}
+			}
+			ws.createErr = nil
+			_, err = m.ResumeAgentWithMode(context.Background(), rec.ID)
+			if tc.catalogError {
+				if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) || len(*deferred) != 1 || len(launcher.started) != 0 || st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed {
+					t.Fatalf("catalog error = %v, starts = %d, want early error preserving failed session", err, len(launcher.started))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[1]()
+			if len(launcher.started) != 1 {
+				t.Fatalf("controllers started = %d, want 1", len(launcher.started))
+			}
+			if got := launcher.started[0]; got.Model != tc.wantModel || got.Effort != tc.wantEffort {
+				t.Fatalf("launch model/effort = %q/%q, want %q/%q", got.Model, got.Effort, tc.wantModel, tc.wantEffort)
+			}
+			ready := st.sessions[rec.ID]
+			if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Model != tc.wantModel || ready.Metadata.Effort != tc.wantEffort {
+				t.Fatalf("persisted retry = %+v, want ready with launched tuning", ready)
+			}
+			if len(refreshes) == 0 || (tc.catalogDrift && (len(refreshes) < 2 || !refreshes[1])) {
+				t.Fatalf("catalog reads = %v, want validation and refresh on drift", refreshes)
+			}
+			if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
+				t.Fatalf("opening prompts = %d, drains = %d, want 1 each", len(launcher.queued), len(launcher.drained))
+			}
+		})
+	}
+}
+
 func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -462,6 +642,36 @@ func TestResumeFailedAsyncChatSpawnAdoptsLiveController(t *testing.T) {
 	}
 	if len(result.Session.ProvisionSteps) != 1 || result.Session.ProvisionSteps[0].ID != domain.SessionProvisionStepAgent || result.Session.ProvisionSteps[0].Status != domain.SessionProvisionStepDone {
 		t.Fatalf("retry steps = %+v, want completed agent step", result.Session.ProvisionSteps)
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnExistingConversationBypassesLaunchTuning(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.dataDir = t.TempDir()
+	var catalogCalls int
+	m.modelCatalog = tuningCatalog{err: errors.New("catalog offline"), calls: &catalogCalls}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		ProvisionState: domain.SessionProvisionFailed,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: t.TempDir(), Branch: "ao/mer-1",
+			ProviderConversationID: "thread-existing", Model: "small", Effort: "xhigh",
+		},
+	}
+	result, err := m.ResumeAgentWithMode(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.ProvisionState != domain.SessionProvisionReady || catalogCalls != 0 {
+		t.Fatalf("existing conversation retry state = %q, catalog calls = %d, want ready without new-launch validation", result.Session.ProvisionState, catalogCalls)
+	}
+	if result.Session.Metadata.Effort != "xhigh" || len(launcher.started) != 1 || launcher.started[0].ProviderConversationID != "thread-existing" {
+		t.Fatalf("retry did not resume the existing provider conversation: %+v", launcher.started)
+	}
+	if len(launcher.queued) != 0 || len(launcher.drained) != 1 {
+		t.Fatalf("prompts queued = %d, queues drained = %d, want 0 and 1", len(launcher.queued), len(launcher.drained))
 	}
 }
 

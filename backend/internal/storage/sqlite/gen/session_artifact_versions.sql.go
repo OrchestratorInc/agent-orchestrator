@@ -29,6 +29,40 @@ func (q *Queries) CountSessionArtifactVersionsBySHA(ctx context.Context, arg Cou
 	return count, err
 }
 
+const deleteSessionArtifactPathVersions = `-- name: DeleteSessionArtifactPathVersions :many
+DELETE FROM session_artifact_versions
+WHERE session_id = ?1 AND path = ?2
+RETURNING sha256
+`
+
+type DeleteSessionArtifactPathVersionsParams struct {
+	SessionID domain.SessionID
+	Path      string
+}
+
+func (q *Queries) DeleteSessionArtifactPathVersions(ctx context.Context, arg DeleteSessionArtifactPathVersionsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, deleteSessionArtifactPathVersions, arg.SessionID, arg.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteSessionArtifactVersions = `-- name: DeleteSessionArtifactVersions :exec
 DELETE FROM session_artifact_versions
 WHERE session_id = ?1

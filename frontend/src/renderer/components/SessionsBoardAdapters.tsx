@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -12,17 +13,18 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
 import type { MessageKey } from "../i18n";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
+import { clientForHost } from "../lib/host-clients";
+import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
-import {
-	agentSwitchStatusVisual,
-	deriveSessionAgentSwitchPresentation,
-} from "../lib/agent-switch-presentation";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
@@ -34,19 +36,27 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
+import { Input } from "./ui/input";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
+import { SessionPeopleStack } from "./SessionPeople";
+import { SessionOwnerTag } from "./SessionOwnerTag";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
-	t?: TFunction,
 ): BoardSessionPresentation {
-	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
-	const switchVisual = switchPresentation ? agentSwitchStatusVisual(switchPresentation) : undefined;
 	const provisioningStatus =
 		session.provisionState === "provisioning"
 			? {
@@ -75,16 +85,7 @@ export function toBoardSessionPresentation(
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
-		statusPresentation:
-			provisioningStatus ?? failedStartStatus ??
-			(t && switchPresentation && switchVisual
-				? {
-						className: switchVisual.className,
-						indicatorClassName: `${switchVisual.indicatorClassName}${switchVisual.breathe ? " animate-status-pulse" : ""}`,
-						label: t(switchPresentation.compactLabelKey, switchPresentation.values),
-						tone: switchVisual.tone,
-					}
-				: undefined),
+		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -99,10 +100,13 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	me,
+	participants,
 	memory,
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
+	onOpenArtifacts,
 	onTerminate,
 	session,
 }: {
@@ -113,19 +117,32 @@ export function BoardSessionCardAdapter({
 	onOpen: () => void;
 	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
+	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	/** The people in this session when it is shared. */
+	participants?: readonly SessionPerson[];
+	/** The signed-in cloud user, to tell their own work from someone else's. */
+	me?: string;
 }) {
 	return (
 		<DesktopSessionCard
+			me={me}
+			participants={participants}
 			memory={memory}
 			memoryTone={memoryTone}
 			onOpen={onOpen}
 			onOpenArtifact={onOpenArtifact}
+			onOpenArtifacts={onOpenArtifacts}
 			onTerminate={onTerminate}
 			session={session}
 		/>
 	);
+}
+
+/** The board card for a session, rendered static for a sidebar hover preview. */
+export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
+	return <DesktopSessionCard interactive={false} session={session} still />;
 }
 
 export function ArchivedSessionCardAdapter({
@@ -149,12 +166,16 @@ export function ArchivedSessionCardAdapter({
 		<DesktopSessionCard
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
-				<ArchiveRestoreButton
-					isDisabled={isRestoreDisabled}
-					isRestoring={isRestoring}
-					label={t("shell.restoreNamed", { title: session.title })}
-					onClick={restoreAction}
-				/>
+				<div className="flex items-center">
+					<ArchiveRestoreButton
+						isDisabled={isRestoreDisabled}
+						isRestoring={isRestoring}
+						label={t("shell.restoreNamed", { title: session.title })}
+						onClick={restoreAction}
+					/>
+					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
+					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} session={session} />}
+				</div>
 			}
 			branchAction={
 				branch ? (
@@ -173,6 +194,8 @@ export function ArchivedSessionCardAdapter({
 }
 
 function DesktopSessionCard({
+	me,
+	participants,
 	action,
 	branchAction,
 	footer,
@@ -182,8 +205,10 @@ function DesktopSessionCard({
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
+	onOpenArtifacts,
 	onTerminate,
 	session,
+	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -194,18 +219,24 @@ function DesktopSessionCard({
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onOpenArtifact?: (path: string) => void;
+	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	participants?: readonly SessionPerson[];
+	me?: string;
+	still?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [renameOpen, setRenameOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	// Archiving is the owner workspace's; a guest's archive would always be refused.
+	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
@@ -223,16 +254,16 @@ function DesktopSessionCard({
 						open={confirmOpen}
 						session={session}
 						trigger={
-							<button
+							<Button
 								aria-label={
 									termination.isPending
 										? t("shell.archivingNamedAria", { title: session.title })
 										: t("shell.archiveNamed", { title: session.title })
 								}
 								className={cn(
-									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+									"rounded-sm",
 									keepTerminateVisible || termination.isPending
-										? "opacity-100"
+										? "opacity-100 disabled:opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 								)}
 								onClick={(event) => {
@@ -242,14 +273,16 @@ function DesktopSessionCard({
 									setConfirmOpen(true);
 								}}
 								disabled={termination.isPending}
+								size="icon-sm"
 								type="button"
+								variant="quiet"
 							>
 								{termination.isPending ? (
 									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
 								) : (
 									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
-							</button>
+							</Button>
 						}
 					/>
 				</span>
@@ -260,12 +293,13 @@ function DesktopSessionCard({
 		</Tooltip>
 	) : undefined;
 
-	return (
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	const card = (
 		<SessionCardView
 			action={action}
 			artifacts={
 				interactive && onOpenArtifact ? (
-					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} onOpenInspector={onOpenArtifacts} session={session} />
 				) : undefined
 			}
 			branchAction={branchAction}
@@ -288,7 +322,12 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={terminationOverlay}
+			overlay={participants && participants.length > 0 ? (
+				<span className="inline-flex items-center gap-1">
+					<SessionPeopleStack people={participants} me={me} />
+					{terminationOverlay}
+				</span>
+			) : terminationOverlay}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
 				number: pr.number,
@@ -304,17 +343,124 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
+			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session, t))
-					: toBoardSessionPresentation(session, t)
+					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
+					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			still={still}
+			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
+	);
+	if (!interactive) return card;
+	return (
+		<>
+			<ContextMenu>
+				<ContextMenuTrigger asChild>
+					<div>{card}</div>
+				</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-44">
+					<SessionContextMenuItems
+						onArchive={showTerminate ? () => {
+							clearTerminateSessionState(queryClient, session.id, session.hostId);
+							setConfirmOpen(true);
+						} : undefined}
+						onRename={() => setRenameOpen(true)}
+						session={session}
+					/>
+				</ContextMenuContent>
+			</ContextMenu>
+			<SessionRenameDialog onOpenChange={setRenameOpen} open={renameOpen} session={session} />
+		</>
+	);
+}
+
+/** A card has no title to edit in place, so the board renames through a small dialog. */
+function SessionRenameDialog({
+	onOpenChange,
+	open,
+	session,
+}: {
+	onOpenChange: (open: boolean) => void;
+	open: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const [draft, setDraft] = useState(session.title);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Start each opening from the current title, but keep what is typed if the
+	// title changes while the dialog is open.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) {
+			setDraft(session.title);
+			setError(null);
+		}
+	}
+	useEffect(() => {
+		if (!open) return;
+		// The confirm dialog focuses its button on open; the name field should win.
+		const frame = requestAnimationFrame(() => inputRef.current?.select());
+		return () => cancelAnimationFrame(frame);
+	}, [open]);
+	const name = draft.trim();
+	const save = async () => {
+		if (name === session.title) {
+			onOpenChange(false);
+			return;
+		}
+		setBusy(true);
+		try {
+			if (session.cloud) {
+				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
+			} else {
+				await renameSession(session.id, name, session.hostId);
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			}
+			onOpenChange(false);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<ConfirmDialog
+			busy={busy}
+			confirmDisabled={!name}
+			confirmLabel={t("shell.rename")}
+			description={null}
+			error={error}
+			onConfirm={() => void save()}
+			onOpenChange={onOpenChange}
+			open={open}
+			title={t("shell.renameSession", { title: session.title })}
+		>
+			<Input
+				aria-label={t("shell.renameSession", { title: session.title })}
+				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+				onChange={(event) => setDraft(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					event.preventDefault();
+					void save();
+				}}
+				ref={inputRef}
+				value={draft}
+			/>
+		</ConfirmDialog>
 	);
 }
 
 const BOARD_ARTIFACT_LIMIT = 2;
+const BOARD_ARTIFACT_EXPANDED_LIMIT = 10;
+const BOARD_ARTIFACT_HOVER_DELAY = 300;
 
 /** The session's most recently updated artifacts, newest first. */
 export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
@@ -329,44 +475,151 @@ export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOA
 function BoardArtifactLinks({
 	artifacts,
 	onOpen,
+	onOpenInspector,
 	session,
 }: {
 	artifacts: SessionArtifact[];
 	onOpen: (path: string) => void;
+	onOpenInspector?: () => void;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const [previewPath, setPreviewPath] = useState<string | null>(null);
+	const suppressedPointer = useRef<{ x: number; y: number } | null>(null);
+	const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const listId = useId();
+	const reduceMotion = useReducedMotion();
+	const cancelPendingPreview = () => {
+		if (previewTimer.current !== null) clearTimeout(previewTimer.current);
+		previewTimer.current = null;
+	};
+	useEffect(() => () => {
+		if (previewTimer.current !== null) clearTimeout(previewTimer.current);
+	}, []);
 	if (artifacts.length === 0) return null;
-	const latest = latestSessionArtifacts(artifacts);
-	const hidden = artifacts.length - latest.length;
+	const sorted = latestSessionArtifacts(artifacts, BOARD_ARTIFACT_EXPANDED_LIMIT);
+	const latest = sorted.slice(0, expanded ? BOARD_ARTIFACT_EXPANDED_LIMIT : BOARD_ARTIFACT_LIMIT);
 	return (
-		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
-			{latest.map((artifact) => (
-				<HoverCard key={artifact.path}>
-					<HoverCardTrigger asChild>
-						<button
-							aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
-							className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-2xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+		<div
+			className="flex min-w-0 flex-col gap-0.5 font-sans text-2xs"
+			data-testid="board-session-artifacts"
+			onPointerLeave={() => {
+				cancelPendingPreview();
+				suppressedPointer.current = null;
+			}}
+		>
+			<div className="flex min-w-0 flex-col" id={listId}>
+				<AnimatePresence initial={false}>
+					{latest.map((artifact) => (
+						<motion.div
+							key={artifact.path}
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: "auto", opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+							className="flex min-w-0 flex-col overflow-hidden"
+						>
+							<HoverCard
+								openDelay={BOARD_ARTIFACT_HOVER_DELAY}
+								open={previewPath === artifact.path}
+								onOpenChange={(open) => {
+									if (open && !suppressedPointer.current) setPreviewPath(artifact.path);
+									else if (!open) setPreviewPath((current) => current === artifact.path ? null : current);
+								}}
+							>
+								<HoverCardTrigger asChild>
+									<Pressable
+										aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+										className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-foreground hover:underline"
+										onFocus={() => {
+											cancelPendingPreview();
+											suppressedPointer.current = null;
+										}}
+										onPointerLeave={cancelPendingPreview}
+										onPointerMove={(event) => {
+											const pointer = suppressedPointer.current;
+											if (!pointer) return;
+											cancelPendingPreview();
+											if (Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) < 4) return;
+											previewTimer.current = setTimeout(() => {
+												previewTimer.current = null;
+												suppressedPointer.current = null;
+												setPreviewPath(artifact.path);
+											}, BOARD_ARTIFACT_HOVER_DELAY);
+										}}
+										onClick={(event) => {
+											event.stopPropagation();
+											onOpen(artifact.path);
+										}}
+										type="button"
+									>
+										<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+										<span className="truncate leading-none">{artifact.name}</span>
+									</Pressable>
+								</HoverCardTrigger>
+								<ArtifactPreviewCard artifact={artifact} session={session} />
+							</HoverCard>
+						</motion.div>
+					))}
+				</AnimatePresence>
+			</div>
+			{artifacts.length > BOARD_ARTIFACT_LIMIT ? (
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+					<Pressable
+						aria-controls={listId}
+						aria-expanded={expanded}
+						className="self-start rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
+						onClick={(event) => {
+							event.stopPropagation();
+							cancelPendingPreview();
+							suppressedPointer.current = { x: event.clientX, y: event.clientY };
+							setPreviewPath(null);
+							setExpanded(!expanded);
+						}}
+						type="button"
+					>
+						{expanded ? t("shell.showLess") : t("shell.moreArtifacts", { count: artifacts.length - BOARD_ARTIFACT_LIMIT })}
+					</Pressable>
+					{expanded && artifacts.length > BOARD_ARTIFACT_EXPANDED_LIMIT && onOpenInspector ? (
+						<Pressable
+							className="rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
 							onClick={(event) => {
 								event.stopPropagation();
-								onOpen(artifact.path);
+								onOpenInspector();
 							}}
 							type="button"
 						>
-							<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
-							<span className="truncate">{artifact.name}</span>
-						</button>
-					</HoverCardTrigger>
-					<ArtifactPreviewCard artifact={artifact} session={session} />
-				</HoverCard>
-			))}
-			{hidden > 0 ? (
-				<span className="pl-[18px] text-2xs text-muted-foreground">
-					{t("shell.moreArtifacts", { count: hidden })}
-				</span>
+							{t("shell.openArtifactsInInspector")}
+						</Pressable>
+					) : null}
+				</div>
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * While someone else in a shared session is writing to the agent, the card's
+ * one status line says so, in the working color. A provisioning or failed
+ * start keeps its own line.
+ */
+export function withSharedWorkStatus(
+	session: BoardSessionPresentation,
+	participants: readonly SessionPerson[] | undefined,
+	me: string | undefined,
+	t: TFunction,
+): BoardSessionPresentation {
+	const working = participants ? someoneElseWorking(participants, me) : undefined;
+	if (!working || session.statusPresentation) return session;
+	return {
+		...session,
+		statusPresentation: {
+			className: "text-status-working",
+			indicatorClassName: "bg-status-working",
+			label: t("board.shared.working", { name: working.name || t("chat.shared.someone") }),
+		},
+	};
 }
 
 function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessionPresentation {
@@ -434,6 +687,77 @@ function toResourcePresentation(
 	};
 }
 
+/**
+ * Permanently deletes an archived session. A worktree still on disk is cleaned
+ * up first the way session cleanup does it, never forced: uncommitted work
+ * refuses the delete, and the dialog says why.
+ */
+function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [open, setOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const confirmDelete = async () => {
+		setDeleting(true);
+		setError(null);
+		try {
+			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
+				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+			});
+			if (deleteError) {
+				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
+				return;
+			}
+			setOpen(false);
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
+		} finally {
+			setDeleting(false);
+		}
+	};
+	return (
+		<>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex">
+						<Button
+							aria-label={t("shell.deleteSessionNamed", { title: session.title })}
+							className="size-control-board-sm"
+							size="none"
+							variant="destructive-ghost"
+							disabled={isDisabled}
+							onClick={(event) => {
+								event.stopPropagation();
+								setError(null);
+								setOpen(true);
+							}}
+							type="button"
+						>
+							<Trash2 className="size-icon-md" aria-hidden="true" />
+						</Button>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
+			</Tooltip>
+			<ConfirmDialog
+				busy={deleting}
+				confirmAriaLabel={t("deleteSession.confirmAria")}
+				confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
+				description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+				destructive
+				error={error}
+				onConfirm={() => void confirmDelete()}
+				onOpenChange={setOpen}
+				open={open}
+				title={t("deleteSession.dialog")}
+			/>
+		</>
+	);
+}
+
 function ArchiveRestoreButton({
 	label,
 	onClick,
@@ -450,15 +774,17 @@ function ArchiveRestoreButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<button
+					<Button
 						aria-label={label}
-						className="grid size-control-board-sm shrink-0 place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:cursor-not-allowed disabled:opacity-35"
+						className="size-control-board-sm"
+						size="none"
+						variant="quiet"
 						disabled={isDisabled}
 						onClick={onClick}
 						type="button"
 					>
 						<RotateCcw className={cn("size-icon-md", isRestoring && "animate-spin")} aria-hidden="true" />
-					</button>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top">
@@ -511,9 +837,11 @@ function CopyActionButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
+				<Button
 					aria-label={buttonLabel}
-					className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-passive transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					className="size-4 rounded-sm"
+					size="none"
+					variant="quiet"
 					onClick={(event) => void copyValue(event)}
 					type="button"
 				>
@@ -522,7 +850,7 @@ function CopyActionButton({
 					) : (
 						<Copy className="size-icon-2xs" aria-hidden="true" />
 					)}
-				</button>
+				</Button>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{buttonLabel}</TooltipContent>
 		</Tooltip>

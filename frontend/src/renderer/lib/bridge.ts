@@ -6,6 +6,12 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,
@@ -17,6 +23,7 @@ export const aoBridge: AoBridge =
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
 		getGitHubLogin: async (_repoPath?: string) => "",
+		listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 		refreshGitHubOwners: async () => [],
 		checkGitHubRepositoryAvailability: async () => ({ available: true }),
@@ -24,6 +31,8 @@ export const aoBridge: AoBridge =
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -34,6 +43,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -86,6 +96,35 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		// Publishing reads local files in the main process: desktop only.
+		cloudShare: {
+			available: async () => false,
+			inspect: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			list: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			publish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			cancel: async () => undefined,
+			unpublish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			onProgress: () => () => undefined,
+		},
+		cloudArtifact: {
+			fetch: async (url: string) => {
+				const response = await fetch(url);
+				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
+				return new Uint8Array(await response.arrayBuffer());
+			},
+			openFolder: async () => {
+				throw new Error("Opening a folder needs the desktop app");
+			},
+			onFrameNavigated: () => () => undefined,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",
@@ -96,7 +135,7 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		sideChats: { capture: async () => undefined },
+		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 		editorHandoff: {
 			getState: async () => ({
 				targets: [],
@@ -104,6 +143,10 @@ export const aoBridge: AoBridge =
 				workspaceAvailable: false,
 				unavailableReason: "Desktop app is required to open a workspace.",
 			}),
+			getEditors: async () => ({ editors: [], preferredEditorId: "cursor" }),
+			setPreferredEditor: async () => {
+				throw new Error("Desktop app is required to choose an editor.");
+			},
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
 			},
@@ -116,12 +159,16 @@ export const aoBridge: AoBridge =
 		},
 		telemetry: {
 			getBootstrap: async () => null,
-			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
-			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
+			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
+			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: false,
@@ -268,7 +315,8 @@ export const aoBridge: AoBridge =
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
 			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
@@ -289,6 +337,10 @@ export const aoBridge: AoBridge =
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
+			getFirstRunProjectPrompt: async () => "seen" as const,
+			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
 			setEnabled: async () => undefined,
@@ -338,6 +390,7 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 			agentBrowserUrl: async () => "",
@@ -359,11 +412,17 @@ export const aoBridge: AoBridge =
 				throw new Error("AO Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => {
 				throw new Error("AO Cloud requests require the desktop app.");
 			},
+			requestBinary: async () => {
+				throw new Error("AO Cloud requests require the desktop app.");
+			},
+			cancelBinary: () => undefined,
 			openStream: async () => {
 				throw new Error("AO Cloud event streams require the desktop app.");
 			},

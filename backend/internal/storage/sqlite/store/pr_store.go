@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -68,6 +69,9 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 	if rows != 1 {
 		return fmt.Errorf("mark pr merged %s: updated %d rows", prURL, rows)
 	}
+	if err := s.qw.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: prURL, ExportAllowed: s.usageAllowed()}); err != nil {
+		slog.Warn("record merged pr usage failed", "error", err)
+	}
 	return nil
 }
 
@@ -113,7 +117,7 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 		}); err != nil {
 			return err
 		}
-		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, false, false)
+		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, false, false, s.usageAllowed())
 	})
 	return outcome, err
 }
@@ -122,11 +126,11 @@ func (s *Store) writePR(ctx context.Context, pr domain.PullRequest, checks []dom
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "write pr observation", func(q *gen.Queries) error {
-		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, replaceLegacyComments, true)
+		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, replaceLegacyComments, true, s.usageAllowed())
 	})
 }
 
-func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, replaceLegacyComments, rejectReassignment bool) error {
+func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, replaceLegacyComments, rejectReassignment, exportAllowed bool) error {
 	pr = normalizedPRIdentity(pr)
 	var err error
 	pr, err = resolveWeakPRAlias(ctx, q, pr)
@@ -150,6 +154,12 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 		if err := upsertPRWithIdentity(ctx, q, pr, rejectReassignment); err != nil {
 			return err
 		}
+	}
+	if err := q.UpgradeWorkerPRUsageIdentity(ctx, pr.URL); err != nil {
+		slog.Warn("upgrade worker pr usage identity failed", "error", err)
+	}
+	if err := q.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: pr.URL, ExportAllowed: exportAllowed}); err != nil {
+		slog.Warn("record worker pr usage failed", "error", err)
 	}
 	for _, c := range checks {
 		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
@@ -462,6 +472,30 @@ func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload str
 		return fmt.Errorf("update pr nudge signature %s: %w", url, err)
 	}
 	return nil
+}
+
+// RecordRepositoryRename stores the provider's current name for a renamed or
+// transferred repository.
+func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertRepositoryRename(ctx, gen.UpsertRepositoryRenameParams(r)); err != nil {
+		return fmt.Errorf("record repository rename %s/%s: %w", r.Host, r.OldName, err)
+	}
+	return nil
+}
+
+// ListRepositoryRenames returns every known repository rename.
+func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error) {
+	rows, err := s.qr.ListRepositoryRenames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list repository renames: %w", err)
+	}
+	out := make([]domain.RepositoryRename, len(rows))
+	for i, row := range rows {
+		out[i] = domain.RepositoryRename(row)
+	}
+	return out, nil
 }
 
 // GetPR returns the PR facts for a URL, or ok=false if absent.

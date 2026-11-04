@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -32,10 +31,10 @@ import (
 // envelope.WriteError: the wire envelope hides internals ("Internal server
 // error"), so without this the cause of a 500 was lost entirely.
 func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) http.Handler {
-	return requestLoggerWithCapture(log, sink, sentryobs.CaptureHTTPError)
+	return requestLoggerWithCapture(log, sink, sentryobs.CaptureError)
 }
 
-type captureHTTPErrorFunc func(context.Context, error, map[string]string, string)
+type captureHTTPErrorFunc func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite)
 
 func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTTPError captureHTTPErrorFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -59,15 +58,37 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 				}
 				log.Info("http request", attrs...)
 				if ww.Status() >= http.StatusInternalServerError {
-					path := telemetrymeta.RoutePattern(r)
+					route := telemetrymeta.RoutePattern(r)
+					path := route.String()
 					capErr := captured.Err
 					var errorKind, errorCode string
 					if capErr != nil {
 						errorKind, errorCode = telemetrymeta.ErrorKindAndCode(capErr)
 					}
-					// Same grouping key for PostHog and Sentry so an issue lines up
-					// across both.
-					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, strconv.Itoa(ww.Status()), errorKind, errorCode)
+					if errorCode == "" {
+						errorCode = captured.Code
+					}
+					errorType := telemetrymeta.ErrorType(capErr)
+					// Codex account management is absent for this process. The
+					// renderer holds one quiet stream instead of treating that
+					// expected condition as a fault. Other 5xx still go to
+					// PostHog and, when ShouldCaptureStatus allows, to Sentry once.
+					if errorCode == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" {
+						return
+					}
+					// Group the same code or bounded cause type at a registered
+					// route together without using request or error text.
+					groupCode := errorCode
+					if groupCode == "" {
+						if errorType != "unknown" {
+							groupCode = errorType
+						}
+					}
+					if groupCode == "" {
+						groupCode = strconv.Itoa(ww.Status())
+					}
+					sentryFingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, groupCode)
+					posthogFingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, strconv.Itoa(ww.Status()), errorKind, errorCode)
 					if sink != nil {
 						payload := map[string]any{
 							"component":     "httpd",
@@ -80,10 +101,11 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 						}
 						if capErr != nil {
 							payload["error_kind"] = errorKind
+							payload["error_type"] = errorType
 							if errorCode != "" {
 								payload["error_code"] = errorCode
 							}
-							payload["fingerprint"] = fingerprint
+							payload["fingerprint"] = posthogFingerprint
 						}
 						for key, value := range captured.Fields {
 							payload[key] = value
@@ -110,9 +132,14 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							Payload:    payload,
 						})
 					}
-					// Capture genuine faults to Sentry with the real error/stack.
+					// Sentry keeps safe diagnostic fields and stack frames, but
+					// replaces error text before sending.
 					// 503 (transient contention) is excluded by ShouldCaptureStatus.
-					if sentryobs.ShouldCaptureStatus(ww.Status()) && captured.ReportingOwner != ownership.OwnerAgentSwitchSaga {
+					captureSentry := sentryobs.ShouldCaptureStatus(ww.Status())
+					if capErr != nil && errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
+						captureSentry = false
+					}
+					if captureSentry {
 						err := capErr
 						if err == nil {
 							err = fmt.Errorf("HTTP %d %s %s", ww.Status(), r.Method, path)
@@ -125,9 +152,10 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							"status":     strconv.Itoa(ww.Status()),
 							"category":   "http_5xx",
 							"error_kind": errorKind,
+							"error_type": errorType,
 							"error_code": errorCode,
-							"request_id": middleware.GetReqID(r.Context()),
-						}, fingerprint)
+							"area":       sentryobs.Area(capErr, errorCode),
+						}, sentryFingerprint, route, captured.FailureSite)
 					}
 				}
 			}()

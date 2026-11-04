@@ -24,8 +24,9 @@ var claudeSessionStartMatcher = "startup|resume|clear|compact|fork"
 // claudeManagedHooks is the source of truth for the hooks AO installs:
 // SessionStart (startup/resume/clear/compact/fork), UserPromptSubmit, the tool-use
 // trio (PreToolUse, PostToolUse, PostToolUseFailure), PermissionRequest,
-// Stop, Notification, and SessionEnd. They report normalized session metadata
-// and activity-state signals back into AO's store (see DeriveActivityState).
+// Stop, StopFailure, Notification, and SessionEnd. They report normalized
+// session metadata and activity-state signals back into AO's store (see
+// DeriveActivityState).
 // Notification and SessionEnd carry no matcher: each installs once and fires
 // for every sub-type, and the handler filters on the payload's
 // notification_type / reason field. The tool-use hooks also carry no matcher
@@ -47,6 +48,10 @@ var claudeManagedHooks = []hooksjson.HookSpec{
 	{Event: "PostToolUseFailure", Command: claudeHookCommandPrefix + "post-tool-use-failure"},
 	{Event: "PermissionRequest", Command: claudeHookCommandPrefix + "permission-request"},
 	{Event: "Stop", Command: claudeHookCommandPrefix + "stop"},
+	// StopFailure fires instead of Stop when an API error (rate limit, usage
+	// limit, unknown model, expired login) ends the turn. Without it such a
+	// turn left the session active.
+	{Event: "StopFailure", Command: claudeHookCommandPrefix + "stop-failure"},
 	{Event: "Notification", Command: claudeHookCommandPrefix + "notification"},
 	{Event: "SubagentStart", Command: claudeHookCommandPrefix + "subagent-start"},
 	{Event: "SubagentStop", Command: claudeHookCommandPrefix + "subagent-stop"},

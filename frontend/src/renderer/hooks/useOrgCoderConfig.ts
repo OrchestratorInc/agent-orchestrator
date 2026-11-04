@@ -17,15 +17,16 @@ export const orgCoderConfigQueryKey = ["cloud-org-coder-config"] as const;
 /**
  * Read only for an org whose offering includes coder: the control plane
  * answers 403 provider_forbidden for any other org. `enabled` lets a caller
- * narrow it further.
+ * narrow it further. `orgId` reads that org's connection (for example the org
+ * a project belongs to) instead of the signed-in org's.
  */
-export function useOrgCoderConfig(enabled = true) {
+export function useOrgCoderConfig(enabled = true, orgId?: string) {
 	const { client, ready } = useCloudCp();
 	const { org } = useCloudOrg();
 	// The org's own Coder connection exists only for an org with the coder
 	// capability; the control plane refuses the read for everyone else.
 	const { customCoder } = useCloudOffering();
-	const orgId = org?.id ?? "";
+	orgId = orgId?.trim() || (org?.id ?? "");
 	return useQuery({
 		queryKey: [...orgCoderConfigQueryKey, orgId],
 		enabled: enabled && customCoder && ready && orgId !== "",

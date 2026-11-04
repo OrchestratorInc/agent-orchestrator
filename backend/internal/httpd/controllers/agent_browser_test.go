@@ -45,7 +45,7 @@ func TestSessionsAPI_AgentBrowserProxy(t *testing.T) {
 		_, _ = io.WriteString(w, "viewer")
 	}))
 	t.Cleanup(browser.Close)
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{AgentBrowserURL: browser.URL, AgentBrowserToken: "rb-secret"},
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer"}, AgentBrowserURL: browser.URL, AgentBrowserToken: "rb-secret"},
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Sessions: newFakeSessionService()}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
@@ -53,7 +53,7 @@ func TestSessionsAPI_AgentBrowserProxy(t *testing.T) {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 		req.Header.Set("Authorization", "Bearer host-password")
-		req.Header.Set("Origin", "https://ao-preview-0123.localhost:47663")
+		req.Header.Set("Origin", "app://renderer")
 		req.Header.Set("Cookie", "ao_conn=host-password")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -81,7 +81,7 @@ func TestSessionsAPI_AgentBrowserProxy(t *testing.T) {
 	}
 
 	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/sessions/ao-1/agent-browser/ws/cdp", &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": {"Bearer host-password"}, "Origin": {"https://ao-preview-0123.localhost:47663"}},
+		HTTPHeader: http.Header{"Authorization": {"Bearer host-password"}, "Origin": {"app://renderer"}},
 	})
 	if err != nil {
 		t.Fatalf("stream socket through the daemon: %v", err)

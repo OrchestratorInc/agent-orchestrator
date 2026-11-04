@@ -40,6 +40,9 @@ type CodexCapacityObservation struct {
 	ResetCredits      *domain.CodexResetCreditsSummary
 	ObservedAt        time.Time
 	Partial           bool
+	// AutoResumeResetsAt retains a safe rolling deadline before display
+	// normalization discards quota-kind and completeness information.
+	AutoResumeResetsAt *time.Time `json:"-"`
 }
 
 // CodexUsageObservation is the deliberately small, display-safe subset of

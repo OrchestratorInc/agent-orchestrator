@@ -8,6 +8,9 @@
 // hang a provider on. Keys are released when the route unmounts (including a
 // swipe-dismiss with no selection), so a closure can't outlive its sheet.
 
+import type { MachineAppearance } from "./machineAppearance";
+import type { MachineNameChoice } from "./pairFlow";
+
 const handlers = new Map<string, (value: unknown) => void>();
 let seq = 0;
 
@@ -95,13 +98,18 @@ export function connectSheetRoute(onConnected: () => void, hostId?: string) {
 /** Opens the required-name prompt used after a new QR code is verified. */
 export function machineNameSheetRoute(opts: {
 	suggested: string;
-	onSelect: (name: string | null) => void;
+	appearance: MachineAppearance;
+	/** The machine being named, so the sheet can compare icons with the others. */
+	hostId: string;
+	onSelect: (choice: MachineNameChoice | null) => void;
 }) {
 	return {
 		pathname: "/sheets/machine-name" as const,
 		params: {
 			resultKey: parkSheetResult(opts.onSelect),
 			suggested: opts.suggested,
+			symbol: opts.appearance.symbol,
+			hostId: opts.hostId,
 		},
 	};
 }

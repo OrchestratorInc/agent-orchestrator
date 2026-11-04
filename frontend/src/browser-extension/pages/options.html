@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>AO Browser Bridge settings</title>
+	<link rel="stylesheet" href="pages.css">
+	<style>body { max-width: 640px; margin: 0 auto; padding: 28px 20px; }</style>
+</head>
+<body>
+	<h1>AO Browser Bridge</h1>
+	<p class="muted">Where AO agents may act in this Chrome. One host per line; a host also covers its subdomains.</p>
+
+	<h2>Never act on these sites</h2>
+	<textarea id="deny" aria-label="Denied sites" spellcheck="false"></textarea>
+	<p class="muted">Seeded with sign-in, payment and password-manager sites. Agents get an error instead of touching them.</p>
+
+	<h2>Only act on these sites (optional)</h2>
+	<textarea id="allow" aria-label="Allowed sites" spellcheck="false" placeholder="Leave empty to allow every site not on the deny list"></textarea>
+
+	<h2>Input</h2>
+	<label class="check">
+		<input type="checkbox" id="trusted">
+		<span>Use real clicks and typing by default (Chrome shows a debugging bar while the agent acts).</span>
+	</label>
+	<p class="muted">Use simulated input on these sites instead:</p>
+	<textarea id="synthetic" aria-label="Sites using simulated input" spellcheck="false"></textarea>
+
+	<p class="muted" id="saved" role="status"></p>
+	<div class="actions">
+		<button type="button" id="reset">Restore defaults</button>
+		<button type="button" class="primary" id="save">Save</button>
+	</div>
+	<script src="options.js"></script>
+</body>
+</html>

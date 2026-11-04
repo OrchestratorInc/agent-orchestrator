@@ -8,6 +8,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -427,6 +428,14 @@ describe("render activity", () => {
 			open.mockRestore();
 		}
 	});
+
+	it("opens the page in the session's Browser panel straight from the inline frame", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
+		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
+	});
 });
 
 describe("artifact activity", () => {
@@ -545,21 +554,17 @@ describe("artifact activity", () => {
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
 		// The session lists no preview for this path.
-		expect(within(dialog).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 	});
 
-	it("opens the session's preview of the artifact in the Browser panel and closes the dialog", async () => {
+	it("opens the artifact in the Artifacts tab and closes the dialog", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
 			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(dialog).getByRole("button", { name: "Open in Browser panel" }));
+			await user.click(within(dialog).getByRole("button", { name: "Open in Artifacts tab" }));
 			expect(screen.queryByRole("dialog")).toBeNull();
-			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
-			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
-			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
-			expect(request.method).toBe("POST");
-			expect(await request.json()).toEqual({ url: previewUrl });
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
+			expect(fetch).not.toHaveBeenCalled();
 		} finally {
 			fetch.mockRestore();
 		}
@@ -571,20 +576,17 @@ describe("artifact activity", () => {
 		expect(header).toHaveTextContent("Artifact");
 		expect(header).toHaveTextContent("Q3 (final).html");
 		// The session lists no preview for this artifact, so there is nothing to open.
-		expect(within(header).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 	});
 
-	it("opens the artifact in the Browser panel straight from the card", async () => {
+	it("opens the artifact in the Artifacts tab straight from the card", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
 			const user = userEvent.setup();
 			renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Browser panel" }));
-			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
-			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
-			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
-			expect(await request.json()).toEqual({ url: previewUrl });
+			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" }));
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
+			expect(fetch).not.toHaveBeenCalled();
 		} finally {
 			fetch.mockRestore();
 		}

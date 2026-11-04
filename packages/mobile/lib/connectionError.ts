@@ -231,8 +231,8 @@ export function describeConnectionFailure(
 /**
  * Copy for a scanned code none of whose endpoints answered.
  *
- * The phone races every endpoint the code carries, so naming only the first
- * one (the LAN address) misreports what was tried. And a code with no tunnel
+ * The phone races every endpoint the code carries, so the copy speaks to the
+ * code as a whole rather than naming one address. And a code with no tunnel
  * in it — shown by the desktop before remote access was ready — can only ever
  * work on the machine's own network: telling someone on mobile data to check
  * their Wi-Fi, without saying the code itself is the limit, sends them to
@@ -248,6 +248,9 @@ export function describeUnreachableCode(
 		port: local ? String(local.port) : "",
 		platform,
 	});
+	// Shown under the scanner, so each message is the fix in one line; the
+	// address that failed is left out because it does not change what to do.
+	const rescan = "scan a new code once remote access is on.";
 	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
 		// Every path failed, the internet one included, so this is not a Wi-Fi
 		// problem. The Local Network hint stays (base keeps it for an iOS code
@@ -256,46 +259,30 @@ export function describeUnreachableCode(
 		return {
 			...base,
 			hint: "Make sure Orchestrator is running on that machine.",
-			message:
-				"Couldn't reach your machine on this network or over the internet. " +
-				"Make sure Orchestrator is running there with Connect Mobile on, then try again.",
+			message: "Make sure Orchestrator is running there with Connect Mobile on.",
 		};
 	}
 	// Tailscale is a remote path too, just not a public one: it works from any
 	// network once both devices are on the tailnet. What the code lacks is the
 	// public tunnel, which is the only path that needs nothing on the phone.
-	const tailnet = endpoints.find((e) => e.kind === "tailscale");
-	const rescan =
-		"To connect from anywhere, open Connect Mobile on that machine, wait for the code to update with remote access, then scan it again.";
-	if (tailnet) {
-		const tried = local && local !== tailnet
-			? `Reached nothing at ${local.host}:${local.port} or over Tailscale at ${tailnet.host}:${tailnet.port}. `
-			: `Reached nothing over Tailscale at ${tailnet.host}:${tailnet.port}. `;
+	if (endpoints.some((e) => e.kind === "tailscale")) {
 		return {
 			...base,
-			title: "This code has no public tunnel",
+			title: "Turn on Tailscale",
 			hint: "Connect Tailscale on both devices, or scan a new code.",
-			message:
-				tried +
-				"This code has no public tunnel, so away from that machine's network it only works over Tailscale. " +
-				"Make sure Tailscale is connected on this phone and that machine. " +
-				rescan,
+			message: `Connect Tailscale on this phone and that machine, or ${rescan}`,
 		};
 	}
 	return {
 		...base,
 		title: "This code only works nearby",
 		hint: "Scan a new code once remote access has started.",
-		message:
-			`${local ? `Reached nothing at ${local.host}:${local.port}. ` : ""}` +
-			"This code has no public tunnel, so it only works on the same Wi-Fi as that machine. " +
-			rescan,
+		message: `Join the same Wi-Fi as that machine, or ${rescan}`,
 	};
 }
 
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */
-export const LOCAL_NETWORK_HINT =
-	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › Orchestrator.";
+export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in Settings.";
 
 // ---- Failed actions ----------------------------------------------------------
 

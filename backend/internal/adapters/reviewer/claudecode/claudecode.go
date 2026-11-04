@@ -141,6 +141,8 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 		Config:        inv.Config,
 		SessionID:     workeragent.SessionUUID(inv.ReviewerID),
 		WorkspacePath: inv.WorkspacePath,
+		// The mode ReviewCommand launches with.
+		Permissions: ports.PermissionModeAuto,
 	})
 }
 

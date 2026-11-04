@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -45,7 +46,12 @@ type LaunchConfig struct {
 	Model           string
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
+	DisableTools    bool
 	ProviderScopeID string
+	// ProviderConversationID carries the stored native conversation on resume so
+	// a binding can migrate provider-side history into a fresh process home.
+	// Empty on first start.
+	ProviderConversationID string
 }
 
 // Config binds one harness to an ACP agent implementation.
@@ -53,7 +59,12 @@ type Config struct {
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
-	Launch       func(context.Context, LaunchConfig) (Launch, error)
+	// InstallCheck optionally reports a missing chat adapter without starting
+	// anything. See ports.ChatInstallChecker.
+	InstallCheck func(context.Context) error
+	// RetryStartupExit starts the agent once more if it exits during its first handshake.
+	RetryStartupExit bool
+	Launch           func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -81,9 +92,30 @@ type Config struct {
 	// resumed conversation that already has turns received it then, so it is not
 	// repeated (see conversation.setSessionPreamble).
 	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
+	// ResetsConversation reports a prompt the agent answers by clearing its
+	// conversation in place (Hermes' `/reset`). The session id survives, so no
+	// relaunch re-delivers SessionPreamble: the reset prompt is sent without it,
+	// and once that turn completes the preamble leads the next prompt again.
+	ResetsConversation func([]acpsdk.ContentBlock) bool
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
+	// SuppressSessionModes drops the agent's mode surfaces from the
+	// config-option catalog: the legacy session-mode list and any
+	// mode-category config option. It is for agents whose modes are pure
+	// approval policies AO already maps onto its own permission picker —
+	// surfacing either surface renders one setting twice, and the provider
+	// copy then looks like a mode that flips under the user whenever the
+	// approval choice moves.
+	SuppressSessionModes bool
+	// ImplicitWorkspaceDirectories declares that this agent's filesystem reach
+	// is the whole workspace root through its own process (a shell-executing
+	// agent bound to the session cwd), so multi-repo workspaces' child
+	// directories need no ACP additional-directories support: they are
+	// reachable from the agent's cwd and are simply not sent on the wire. An
+	// agent that sandboxes file access to its declared roots must NOT set
+	// this.
+	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
 	// LaunchSessionOptions returns config options whose value is fixed for the
@@ -113,12 +145,50 @@ type Config struct {
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
 	// PromptResponseFailure lets a provider binding interpret its own structured
-	// terminal metadata after a nominally successful ACP prompt response.
-	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// terminal metadata after a nominally successful ACP prompt response. model
+	// is the session's selected model when the turn ran, or "" when unknown.
+	PromptResponseFailure func(response acpsdk.PromptResponse, model string) error
+	// ServedModel optionally reports the model that actually answered the turn
+	// that just completed, when it differs from selectedModel in a way worth
+	// showing (for example an alias resolving to a concrete model). It returns
+	// "" when there is nothing to report. Optional.
+	ServedModel func(ctx context.Context, cfg LaunchConfig, sessionID, selectedModel string) (served, reason string)
+	// ValidateModel optionally rejects a model the binding knows the running
+	// agent cannot use (for example one its CLI version predates) before AO asks
+	// the agent to switch to it. It returns nil when the model may be tried.
+	ValidateModel func(ctx context.Context, cfg LaunchConfig, model string) error
+	// PromptFailureCode classifies a provider-specific failed prompt without
+	// changing its technical error or treating unrelated ACP errors as auth failures.
+	PromptFailureCode func(error) domain.ConversationFailureCode
+	// SessionPromptResponseFailure is PromptResponseFailure given the provider
+	// session, for a binding that reads the failure from the agent's own record,
+	// and whether the turn brought any reply text or tool call.
+	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse, answered bool) error
+	// PromptErrorFailure lets a provider binding restate a session/prompt the
+	// agent answered with a JSON-RPC error, given whether the turn brought any
+	// reply text or tool call. A nil result keeps the generic error, and an
+	// authentication refusal never reaches it.
+	PromptErrorFailure func(err error, answered bool) error
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
+	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
+	// prompt, for an agent that replays a user message as one chunk (pi-acp).
+	HistoryUserChunkIsMessage bool
+	// HistoryReconciler rewrites one completed session/load replay before it
+	// becomes the conversation's history snapshot, for an agent whose replay
+	// carries rows AO never saw live. It runs after stable event identities are
+	// assigned, so an identical provider replay stays identical after the same
+	// rewrite. See hermesacp for the motivating shape.
+	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
+	// session (claude-agent-acp's task list), re-sent into later turns, rather
+	// than a plan for the turn it arrives in.
+	PlansSpanTurns bool
+	// QuickStop marks a provider whose stop gains nothing from waiting (it never
+	// reacts to stdin closing): a short session/close wait, then a quick signal.
+	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
@@ -148,6 +218,11 @@ type PermissionPolicy func(
 type SessionOption struct {
 	ID    string
 	Value string
+	// Optional settings are skipped when the session rejects them.
+	Optional bool
+	// Name finds the choice when the agent lists it under another value, such as
+	// Claude Code offering claude-opus-5-5 as "opus", named "Opus 5.5".
+	Name string
 }
 
 // Driver opens ACP conversations for a single harness.
@@ -180,8 +255,21 @@ func DiscoverConfigOptions(
 	workingDir string,
 	log *slog.Logger,
 ) ([]ports.ChatConfigOption, error) {
+	return DiscoverConfigOptionsForHarness(ctx, launch, workingDir, "", log)
+}
+
+// DiscoverConfigOptionsForHarness preserves the default discovery contract and
+// enables provider-specific catalog handling only for the named harness.
+func DiscoverConfigOptionsForHarness(
+	ctx context.Context,
+	launch Launch,
+	workingDir string,
+	harness domain.AgentHarness,
+	log *slog.Logger,
+) ([]ports.ChatConfigOption, error) {
 	driver := New(Config{
-		Launch: func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
+		Harness: harness,
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
 	}, log)
 	return driver.discoverConfigOptions(ctx, workingDir)
 }
@@ -214,7 +302,50 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	if d.cfg.Harness != domain.HarnessHermes {
+		return normalizeConfigOptions(resp.ConfigOptions), nil
+	}
+	// Hermes lists its model catalog only in the legacy response field.
+	return normalizeSessionOptions(d.suppressedModeOptions(resp.ConfigOptions), conv.legacyWire.modelState(), d.sessionModes(resp.Modes)), nil
+}
+
+// sessionModes drops a legacy session-mode list whose catalog the binding
+// suppresses; see Config.SuppressSessionModes.
+func (d *Driver) sessionModes(modes *acpsdk.SessionModeState) *acpsdk.SessionModeState {
+	if d.cfg.SuppressSessionModes {
+		return nil
+	}
+	return modes
+}
+
+// suppressedModeOptions drops mode-category config options when the binding
+// suppresses its session-mode surfaces. Agents advertise the same approval
+// policy on both channels — the legacy session-mode list and a mode-category
+// config option (Hermes' `edit_approval_policy`) — and SuppressSessionModes
+// must cover both: either one renders a provider mode picker beside AO's
+// permission picker, and the two disagree (Hermes offers three provider
+// policies where AO offers four permission modes).
+func (d *Driver) suppressedModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionConfigOption {
+	if !d.cfg.SuppressSessionModes {
+		return options
+	}
+	return withoutModeOptions(options)
+}
+
+func withoutModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionConfigOption {
+	out := make([]acpsdk.SessionConfigOption, 0, len(options))
+	for _, option := range options {
+		if option.Select != nil && option.Select.Category != nil &&
+			*option.Select.Category == acpsdk.SessionConfigOptionCategoryMode {
+			continue
+		}
+		if option.Boolean != nil && option.Boolean.Category != nil &&
+			*option.Boolean.Category == acpsdk.SessionConfigOptionCategoryMode {
+			continue
+		}
+		out = append(out, option)
+	}
+	return out
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
@@ -229,6 +360,23 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, err
 	}
 	return cloneCapabilities(d.cfg.Capabilities), nil
+}
+
+// CheckChatInstall reports a missing chat adapter; nil without a cheap check.
+func (d *Driver) CheckChatInstall(ctx context.Context) error {
+	if d.cfg.InstallCheck == nil {
+		return nil
+	}
+	return d.cfg.InstallCheck(ctx)
+}
+
+// SupportsPermissionMode reports whether the agent can start under mode.
+func (d *Driver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	if d.cfg.ValidateTurnSettings == nil {
+		return true
+	}
+	err := d.cfg.ValidateTurnSettings(mode, ports.ChatTurnSettings{Approval: mode})
+	return !errors.Is(err, ports.ErrChatPermissionModeUnsupported)
 }
 
 // Start creates a new ACP session in the AO worktree.
@@ -248,6 +396,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		DisableTools:    cfg.DisableTools,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
 	connectStarted := time.Now()
@@ -267,7 +416,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
 	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
+		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
+		d.cfg.ImplicitWorkspaceDirectories)
 	if err != nil {
 		conv.discard()
 		return nil, err
@@ -321,8 +471,8 @@ func (d *Driver) openNewSession(
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
-		conv.legacyWire.modelState(), resp.Modes,
+		settings.Approval, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(resp.ConfigOptions),
+		conv.legacyWire.modelState(), d.sessionModes(resp.Modes),
 	)
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
@@ -414,6 +564,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
+		// The connect below spawns a fresh process, so a resumed conversation's
+		// provider-side history has to be reachable from the new process home.
+		ProviderConversationID: cfg.ProviderConversationID,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -451,8 +604,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-			cfg.Permissions, d.cfg.ValidateTurnSettings, setup.ConfigOptions,
-			setup.Models, setup.Modes,
+			cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(setup.ConfigOptions),
+			setup.Models, d.sessionModes(setup.Modes),
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
@@ -475,7 +628,8 @@ func (d *Driver) resumeSession(
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
 	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
+		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
+		d.cfg.ImplicitWorkspaceDirectories)
 	if err != nil {
 		conv.discard()
 		if isACPAuthRequired(err) {
@@ -544,8 +698,8 @@ func (d *Driver) resumeSession(
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
-		conv.legacyWire.modelState(), modes,
+		cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(configOptions),
+		conv.legacyWire.modelState(), d.sessionModes(modes),
 	)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
 	// Standing context is process input, not transcript history, so a resumed
@@ -609,7 +763,65 @@ func (d *Driver) connect(
 	initializeStarted := time.Now()
 	conv, init, state, err := d.initialize(ctx, cfg, proc)
 	d.logStartStage(cfg.SessionID, "initialize", initializeStarted, err)
-	return conv, init, state, err
+	reopen := func(stage string) (*conversation, acpsdk.InitializeResponse, *persistenthost.ACPState, error) {
+		proc, err := d.openProcess(ctx, cfg, prepareEnv)
+		if err != nil {
+			return nil, acpsdk.InitializeResponse{}, nil, err
+		}
+		started := time.Now()
+		conv, init, state, err := d.initialize(ctx, cfg, proc)
+		d.logStartStage(cfg.SessionID, stage, started, err)
+		return conv, init, state, err
+	}
+	if errors.Is(err, errHostNeverStarted) {
+		// Nothing to recover: stop the host so it does not block every later
+		// start, then start the agent afresh, which reloads the conversation.
+		d.log.Info("chat: ACP host never finished starting; replacing it", "sessionID", cfg.SessionID, "harness", d.cfg.Harness)
+		if stopErr := proc.terminate(); stopErr != nil {
+			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf(
+				"%w: stop ACP host that never finished starting: %w", ports.ErrChatRecoveryInconclusive, stopErr)
+		}
+		if cfg.ReconnectOnly {
+			return nil, acpsdk.InitializeResponse{}, nil, ports.ErrChatHostNotRunning
+		}
+		return reopen("initialize_replaced")
+	}
+	if err == nil || !d.cfg.RetryStartupExit || proc.reconnected || !isACPPeerDisconnected(err) {
+		return conv, init, state, err
+	}
+	// Some agents exit during a cold first handshake (pi-acp while its
+	// background daemon comes up); a second start finds it running.
+	d.log.Info("chat: ACP agent exited during its first handshake; starting it once more",
+		"sessionID", cfg.SessionID, "harness", d.cfg.Harness, "error", err)
+	select {
+	case <-time.After(startupRetryDelay):
+	case <-ctx.Done():
+		return nil, acpsdk.InitializeResponse{}, nil, err
+	}
+	return reopen("initialize_retry")
+}
+
+// errHostNeverStarted is a reattached persistent host that holds no session.
+var errHostNeverStarted = errors.New("persistent ACP host never finished starting")
+
+// startupRetryDelay lets an exited agent release its host before the retry.
+const startupRetryDelay = 500 * time.Millisecond
+
+// isACPPeerDisconnected reports a request unanswered because the agent exited.
+func isACPPeerDisconnected(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	reason, _ := data["error"].(string)
+	// The handshake can also fail writing to the gone process's input.
+	for _, gone := range []string{"peer disconnected", "io: read/write on closed pipe", "broken pipe", "file already closed"} {
+		if strings.Contains(reason, gone) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) initialize(
@@ -620,15 +832,41 @@ func (d *Driver) initialize(
 	conv := newConversation(
 		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.cfg.ClientExtensionAliases,
 	)
+	conv.harness = d.cfg.Harness
+	conv.suppressSessionModes = d.cfg.SuppressSessionModes
+	conv.resetsConversation = d.cfg.ResetsConversation
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.promptFailureCode = d.cfg.PromptFailureCode
+	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
+	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
+	conv.historyReconciler = d.cfg.HistoryReconciler
+	conv.plansSpanTurns = d.cfg.PlansSpanTurns
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	if d.cfg.ServedModel != nil {
+		servedModel := d.cfg.ServedModel
+		conv.servedModel = func(ctx context.Context, sessionID, selectedModel string) (string, string) {
+			return servedModel(ctx, cfg, sessionID, selectedModel)
+		}
+	}
+	if d.cfg.ValidateModel != nil {
+		validateModel := d.cfg.ValidateModel
+		conv.validateModel = func(ctx context.Context, model string) error {
+			return validateModel(ctx, cfg, model)
+		}
+	}
 	if proc.reconnected {
 		state := proc.acpState
-		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
+		if state == nil || state.SessionID == "" {
+			// The host's first handshake was cut short (a daemon stopped mid-start).
+			conv.discard()
+			return nil, acpsdk.InitializeResponse{}, nil, errHostNeverStarted
+		}
+		if len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 {
 			conv.discard()
 			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf(
 				"%w: persistent ACP host has incomplete reconnect state", ports.ErrChatRecoveryInconclusive)
@@ -665,8 +903,11 @@ func (d *Driver) initialize(
 			// These two Claude bridge extensions enrich the transcript. They do
 			// not grant the agent access to AO's terminal or filesystem APIs.
 			Meta: map[string]any{
-				"subagent-transcript": true,
-				"terminal_output":     true,
+				// Cursor reports a model's effort, thinking and speed as their own
+				// settings only to a client that asks. Other agents ignore it.
+				"parameterizedModelPicker": true,
+				"subagent-transcript":      true,
+				"terminal_output":          true,
 				// claude-agent-acp publishes retryable API/transport failures only
 				// when the client opts into this namespaced metadata extension. It is
 				// observational: AO receives status, but grants no new capability.
@@ -763,7 +1004,13 @@ func (d *Driver) connectProcess(
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
-	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
+	if d.cfg.QuickStop {
+		proc.quickStop.Store(true)
+	}
+	proc.terminate = persistentTerminate(gate, transport.Stdin, &proc.quickStop, func(shutdownCtx context.Context, quick bool) error {
+		if quick {
+			return persistenthost.ShutdownQuick(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
+		}
 		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
 	})
 	return proc, nil
@@ -848,6 +1095,11 @@ func isACPResourceNotFound(err error) bool {
 func isACPMethodNotFound(err error) bool {
 	var requestErr *acpsdk.RequestError
 	return errors.As(err, &requestErr) && requestErr.Code == -32601
+}
+
+func isACPInvalidParams(err error) bool {
+	var requestErr *acpsdk.RequestError
+	return errors.As(err, &requestErr) && requestErr.Code == -32602
 }
 
 // isACPInternalError reports whether err is a JSON-RPC -32603 "Internal error"

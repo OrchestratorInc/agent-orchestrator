@@ -133,6 +133,8 @@ ao browser frame <ref|main> [--json]
 ao browser dialog accept [text] [--json]
 ao browser dialog dismiss [--json]
 ao browser dialog status [--json]
+ao browser target [panel|chrome] [--json]
+ao browser chrome status|setup|remove [--json]
 ```
 
 `act`'s `--action` accepts `click` (default), `dblclick`, `focus`, `hover`,
@@ -216,3 +218,45 @@ instead, omit the path and explicitly combine `--base64` with `--json`.
 
 `ao browser open` requires an explicit HTTP(S) URL or hostname. It does not
 silently search the web and does not allow `file://` or local filesystem paths.
+
+## Chrome mode: the user's own Chrome
+
+By default `ao browser` drives AO's Browser panel. A session can instead drive
+the user's own Google Chrome through the AO Browser Bridge extension, with the
+user's real sign-ins and a genuine Chrome fingerprint. Use it for sites that
+need the user's accounts or that challenge embedded browsers (captchas,
+"browser not supported" sign-in pages). Keep using the panel for `ao preview`,
+localhost apps, and anything that does not need the user's identity.
+
+```bash
+ao browser target          # which browser this session drives
+ao browser target chrome   # switch this session to the user's Chrome
+ao browser target panel    # switch back
+```
+
+- Chrome mode must be set up once by the user: Settings → Browser → "Agents in
+  your Chrome", or `ao browser chrome setup`, then loading the unpacked
+  extension in `chrome://extensions`. Do not run `chrome setup` or
+  `chrome remove` unless the user asks; `ao browser chrome status` is safe.
+- The first command from a session opens an AO consent window in Chrome. Wait
+  for the user; a denial fails with `BROWSER_CHROME_CONSENT_DENIED`, no answer
+  with `BROWSER_CHROME_CONSENT_TIMEOUT`. Never ask the user to grant consent
+  on your behalf through other tools.
+- The session works only in its own Chrome tab group, "AO · <session>". It
+  cannot see or act on the user's other tabs. If the user drags a tab out of
+  the group, the session loses it.
+- The same commands and output shapes work, with these differences: `devtools`
+  is not available; clicks, typing, key presses, and drags use real (trusted)
+  input, which shows Chrome's "started debugging this browser" bar while acting
+  and brings the session's tab to the front of its window; `screenshot` does
+  the same; `console` and `errors` read what Chrome kept for the page.
+- A click that opens `alert`/`confirm`/`prompt` returns at once; answer it with
+  `ao browser dialog accept|dismiss` before other commands, which otherwise fail
+  with `BROWSER_DIALOG_OPEN`.
+- The user's site policy is enforced: denied sites (sign-in, payment, and
+  password-manager sites by default) fail with `BROWSER_SITE_BLOCKED`. Do not
+  try to work around it; tell the user.
+- The user can stop every agent from the extension's toolbar button; commands
+  then fail with `BROWSER_CHROME_STOPPED` until the user allows the session
+  again.
+

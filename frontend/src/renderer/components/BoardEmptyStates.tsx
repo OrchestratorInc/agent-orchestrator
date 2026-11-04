@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShell } from "../lib/shell-context";
 import { CreateProjectFlow } from "./CreateProjectFlow";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { WelcomePanel } from "./WelcomePanel";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -12,6 +12,13 @@ import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 export function BoardWelcome() {
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const completeWelcome = useOnboardingStep("welcome", true);
+	// Adding the first project ends the welcome screen, which unmounts this
+	// component, so completion is reported from the handlers rather than an effect.
+	const done = <A extends unknown[]>(fn: (...args: A) => Promise<void>) => async (...args: A) => {
+		await fn(...args);
+		completeWelcome();
+	};
 	return (
 		<WelcomePanel>
 			<div
@@ -22,12 +29,14 @@ export function BoardWelcome() {
 					<CreateProjectFlow
 						embedded
 						mode="choose"
-						onCloneProject={cloneProject}
-						onCreateProject={createProject}
-						onInitializeProject={initializeProjectRepository}
-						onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+						onCloneProject={done(cloneProject)}
+						onCreateProject={done(createProject)}
+						onInitializeProject={done(initializeProjectRepository)}
+						onCreateStandaloneAgent={() => {
+							completeWelcome();
+							requestNewTask(STANDALONE_WORKSPACE_ID);
+						}}
 					/>
-					<GitHubOnboardingNotice />
 				</div>
 			</div>
 		</WelcomePanel>

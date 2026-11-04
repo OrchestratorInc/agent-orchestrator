@@ -2,6 +2,8 @@ package kimchiacp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -76,11 +78,17 @@ func TestConfigurePassesModelAndPermissionTogether(t *testing.T) {
 }
 
 func TestConfigureAppendsSystemPromptWhenProvided(t *testing.T) {
-	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{SystemPrompt: "Follow AO worker rules."})
+	data := t.TempDir()
+	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: data, SessionID: "s1", SystemPrompt: "Follow AO worker rules."})
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	want := []string{"--mode", "acp", "--append-system-prompt", "Follow AO worker rules."}
+	// Kimchi reads a path given to the flag as a file, which keeps the command line short.
+	file := filepath.Join(data, "prompts", "s1", "kimchi", "system-prompt.md")
+	if got, err := os.ReadFile(file); err != nil || string(got) != "Follow AO worker rules." {
+		t.Fatalf("system prompt file = %q, %v", got, err)
+	}
+	want := []string{"--mode", "acp", "--append-system-prompt", file}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}

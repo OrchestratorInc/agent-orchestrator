@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { artifactLinkForPath, findSessionLinks, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
+import { artifactLinkForPath, findPlainReferences, findSessionLinks, isAoLink, parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
 
 describe("session links", () => {
 	it.each([
@@ -77,5 +77,21 @@ describe("session links", () => {
 		expect(artifactLinkForPath("w/missing.md", workspaces)).toBeUndefined();
 		expect(artifactLinkForPath("/tmp/w/plan.md", workspaces)).toBeUndefined();
 		expect(artifactLinkForPath("plan.md", workspaces)).toBeUndefined();
+	});
+
+	it("finds plain paths and named sessions, without prose or wrapping punctuation", () => {
+		const sessions = new Map([["proj-297", "proj"]]);
+		const found = (text: string) => findPlainReferences(text, sessions).map((match) => [text.slice(match.start, match.end), match.node.type]);
+		expect(found("See (/Users/me/.ao/shot.png), ~/.ao and src/a.tsx:42.")).toEqual([
+			["/Users/me/.ao/shot.png", "inlineCode"], ["~/.ao", "inlineCode"], ["src/a.tsx:42", "inlineCode"],
+		]);
+		expect(found("frontend/src/renderer in session proj-297, not proj-2970.")).toEqual([
+			["frontend/src/renderer", "inlineCode"], ["proj-297", "link"],
+		]);
+		expect(found("src/App.test.tsx, src/index.d.ts and config/.env.local")).toEqual([
+			["src/App.test.tsx", "inlineCode"], ["src/index.d.ts", "inlineCode"], ["config/.env.local", "inlineCode"],
+		]);
+		expect(found("and/or CI/CD /review /tmp 1/2")).toEqual([]);
+		expect(findPlainReferences("proj-297", sessions)[0]!.node.url).toBe("ao://sessions/proj/proj-297");
 	});
 });

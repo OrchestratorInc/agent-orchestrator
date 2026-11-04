@@ -17,6 +17,7 @@ var (
 	ErrAgentAccountLoginUnknown     = errors.New("agent account sign-in not found")
 	ErrAgentAccountDeviceFixed      = errors.New("the computer's own login cannot be removed here")
 	ErrAgentAccountUnchanged        = errors.New("the session already uses this account")
+	ErrAgentAccountChanged          = errors.New("the session's account changed since this turn")
 	ErrAgentAccountUnshared         = errors.New("the account's folder cannot link to this computer's history")
 	ErrAgentAccountInUse            = errors.New("an agent that uses the account could not be stopped")
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")

@@ -5,10 +5,14 @@ import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
-import { useUiStore } from "../../stores/ui-store";
+import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
+import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
-import { ConfirmDialog } from "../ConfirmDialog";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { openChromeAgentsSettings } from "./BrowserChromeSection";
+import { Button } from "../ui/button";
+import { ArrowRight } from "lucide-react";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -17,7 +21,10 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
+import { TargetIcon } from "../TopbarOpenEditorButton";
+import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -60,6 +67,50 @@ function SessionInterfaceRow() {
 }
 
 /**
+ * The editor that "Open in editor" uses from the session top bar and session
+ * menus. Electron main stores it; opening a session in another editor from the
+ * top bar changes it too.
+ */
+function DefaultEditorRow() {
+	const { t } = useTranslation();
+	const preference = useEditorPreference();
+	const setPreferredEditor = useSetPreferredEditor();
+	const editors = preference.data?.editors ?? [];
+	const preferredEditorId = preference.data?.preferredEditorId;
+	const options: SettingsOption<string>[] = editors.map((editor) => ({
+		value: editor.id,
+		label: editor.name,
+		icon: <TargetIcon target={editor} className="size-icon-sm shrink-0" />,
+	}));
+	const failed = setPreferredEditor.isError || preference.isError;
+	const note = setPreferredEditor.isError
+		? t("settings.defaultEditor.saveFailed")
+		: preference.isError
+			? t("settings.defaultEditor.loadFailed")
+			: preference.data && editors.length === 0
+				? t("editor.noEditorInstalled")
+				: preference.data && !editors.some((editor) => editor.id === preferredEditorId)
+					? t("settings.defaultEditor.notInstalled")
+					: null;
+
+	return (
+		<SettingsRow
+			label={t("settings.defaultEditor.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.defaultEditor.label")}
+				value={preferredEditorId ?? ""}
+				options={options}
+				placeholder={t("editor.chooseEditor")}
+				onChange={(editorId) => setPreferredEditor.mutate(editorId as EditorId)}
+				disabled={preference.isPending || setPreferredEditor.isPending || editors.length === 0}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
  * After a harness update, idle open sessions restart on the new release
  * instead of running the old one until they happen to restart. Daemon-owned:
  * the daemon does the moving.
@@ -84,6 +135,41 @@ function VersionRefreshRow() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+const SESSION_RETENTION_DAYS = [7, 30, 90];
+
+/**
+ * How long an archived session is kept before the daemon deletes it for good.
+ * Only sessions whose worktree is already cleaned up are deleted. Hidden on a
+ * daemon that predates the setting, where the choice would do nothing.
+ */
+function SessionRetentionRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateSessionRetention();
+	const days = settings?.sessionRetentionDays;
+	if (days === undefined) return null;
+	// A value set through the API outside the menu still shows as itself.
+	const choices = SESSION_RETENTION_DAYS.includes(days) || days === 0 ? SESSION_RETENTION_DAYS : [...SESSION_RETENTION_DAYS, days].sort((a, b) => a - b);
+	const options: SettingsOption<string>[] = [
+		{ value: "0", label: t("settings.sessionRetention.never") },
+		...choices.map((choice) => ({ value: String(choice), label: t("settings.sessionRetention.afterDays", { days: choice }) })),
+	];
+	return (
+		<SettingsRow
+			label={t("settings.sessionRetention.label")}
+			description={error ? <span role="alert" className="text-error">{error}</span> : t("settings.sessionRetention.description")}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.sessionRetention.label")}
+				value={String(days)}
+				options={options}
+				onChange={(next) => update(Number(next))}
+				disabled={isLoading || saving}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -167,8 +253,21 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const navigationGestures = useUiStore((state) => state.navigationGestures);
+	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const projectAvatars = useUiStore((state) => state.projectAvatars);
+	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
+	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
+	const chatSendKeyOptions = [
+		{ value: "enter", label: t("settings.chatSendKey.enter") },
+		{ value: "mod-enter", label: t("settings.chatSendKey.modEnter") },
+	] satisfies SettingsOption<ChatSendKeyMode>[];
 
 	// Trigger and menu rows share one layout: name, then the palette on the right.
 	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
@@ -194,6 +293,7 @@ export function GeneralSettingsSection({
 		{ value: "fr", label: t("settings.language.fr") },
 		{ value: "de", label: t("settings.language.de") },
 		{ value: "pt-BR", label: t("settings.language.ptBR") },
+		{ value: "ru", label: t("settings.language.ru") },
 	] satisfies SettingsOption<AppLocale>[];
 
 	return (
@@ -221,6 +321,11 @@ export function GeneralSettingsSection({
 					</div>
 				</SettingsRow>
 				{isMacPlatform() && <WindowTranslucencyRow />}
+				{newSidebarDesign && (
+					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
+						<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
+					</SettingsRow>
+				)}
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -235,12 +340,35 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
+				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
+					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
+				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.navigation")} grouped>
+				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
+					<Switch
+						aria-label={t("settings.navigationGestures")}
+						checked={navigationGestures}
+						onCheckedChange={setNavigationGestures}
+					/>
+				</SettingsRow>
 			</SettingsSection>
 
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<DefaultEditorRow />
+				<SettingsRow label={t("settings.chatSendKey.label")}>
+					<SettingsOptionMenu
+						aria-label={t("settings.chatSendKey.label")}
+						value={chatSendKeyMode}
+						options={chatSendKeyOptions}
+						onChange={setChatSendKeyMode}
+					/>
+				</SettingsRow>
 				<VersionRefreshRow />
+				<SessionRetentionRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch
@@ -268,6 +396,7 @@ export function GeneralSettingsSection({
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -279,12 +408,50 @@ export function GeneralSettingsSection({
 						onCheckedChange={setDeveloperMode}
 					/>
 				</SettingsRow>
-				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <NewSidebarDesignRow />}
+				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -336,7 +503,7 @@ function DiagnosticsRow() {
 
 /**
  * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ * off hides the inspector tab, /btw, and "Add to side chat".
  */
 function SideChatsRow() {
 	const { t } = useTranslation();
@@ -345,6 +512,35 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for the new left sidebar design. On by default. */
+function NewSidebarDesignRow() {
+	const { t } = useTranslation();
+	const newSidebarDesign = useUiStore((state) => state.newSidebarDesign);
+	const setNewSidebarDesign = useUiStore((state) => state.setNewSidebarDesign);
+	return (
+		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
+			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
+ * browser settings, so this row only takes the user there.
+ */
+function ChromeAgentsRow() {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	return (
+		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
+			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
+				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
 		</SettingsRow>
 	);
 }
@@ -365,59 +561,5 @@ function WindowTranslucencyRow() {
 				onCheckedChange={setWindowTranslucency}
 			/>
 		</SettingsRow>
-	);
-}
-
-/**
- * Developer Mode-only toggle for the cloud offering. Persisted daemon-side (a
- * preference, not renderer state) so every surface resolves the same gate; the
- * daemon combines it with its baked control-plane URL into cloudEnabled, which
- * is what reveals sign-in, cloud projects, and sandbox sessions.
- */
-function CloudOfferingRow() {
-	const { t } = useTranslation();
-	const { settings, isLoading } = useSettings();
-	const { update, saving, error } = useUpdateCloudOffering();
-	// Enabling requires an explicit confirmation (the offering is an unstable
-	// preview); disabling never does.
-	const [confirmOpen, setConfirmOpen] = useState(false);
-	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow
-				label={t("settings.cloud")}
-				description={
-					<>
-						{t("settings.cloudToggleHint")}
-						{error ? <span role="alert" className="block text-error">{error}</span> : null}
-					</>
-				}
-			>
-				<Switch
-					aria-label={t("settings.cloud")}
-					checked={settings?.cloudOffering ?? false}
-					disabled={isLoading || saving}
-					onCheckedChange={(enabled) => {
-						if (enabled) {
-							setConfirmOpen(true);
-							return;
-						}
-						update(false);
-					}}
-				/>
-			</SettingsRow>
-			<ConfirmDialog
-				open={confirmOpen}
-				title={t("settings.cloudConfirm.title")}
-				description={t("settings.cloudConfirm.description")}
-				confirmLabel={t("settings.cloudConfirm.confirm")}
-				destructive
-				busy={saving}
-				onConfirm={() => {
-					update(true);
-					setConfirmOpen(false);
-				}}
-				onOpenChange={setConfirmOpen}
-			/>
-		</div>
 	);
 }

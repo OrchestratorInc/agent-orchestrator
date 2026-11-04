@@ -107,12 +107,20 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	prefix := string(rec.ProjectID)
 	if rec.ProjectID == "" {
 		num, err = s.qw.NextStandaloneSessionNum(ctx)
-		prefix = "standalone"
+		prefix = standaloneSessionIDPrefix
 	} else {
 		num, err = s.qw.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
 	}
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
+	}
+	// A deleted session's number is never handed out again.
+	floor, err := s.sessionNumFloor(ctx, prefix)
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("session num floor for %s: %w", rec.ProjectID, err)
+	}
+	if num <= floor {
+		num = floor + 1
 	}
 	for {
 		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, num))
@@ -166,18 +174,48 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
-func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+// SetSessionTaskBranch records a background task branch rename on the session
+// and its repository rows together. repoBranches maps each repository row to
+// the branch its checkout holds, which after a failed undo can differ.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
-		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
-		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	var rows int64
+	err := s.inTx(ctx, fmt.Sprintf("record task branch for %s", id), func(q *gen.Queries) error {
+		var err error
+		rows, err = q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
+		})
+		for repo, repoBranch := range repoBranches {
+			if err != nil || rows == 0 {
+				return err
+			}
+			err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
+		}
+		return err
 	})
-	if err != nil {
-		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+	return err == nil && rows > 0, err
+}
+
+// SetSessionBranchNaming marks whether a task's generated branch name is still
+// on the way.
+func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSessionBranchNaming(ctx, gen.SetSessionBranchNamingParams{ID: id, BranchNaming: naming}); err != nil {
+		return fmt.Errorf("record branch naming for %s: %w", id, err)
 	}
-	return rows > 0, nil
+	return nil
+}
+
+// ClearSessionBranchNaming ends every branch naming a restart interrupted.
+func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
+		return fmt.Errorf("clear interrupted branch naming: %w", err)
+	}
+	return nil
 }
 
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
@@ -832,6 +870,103 @@ WHERE id = ?
 	return n > 0, nil
 }
 
+// standaloneSessionIDPrefix is the id prefix of sessions with no project.
+const standaloneSessionIDPrefix = "standalone"
+
+// DeleteTerminatedSession removes a terminated session's row; its own
+// conversations, cleanup facts, PR facts and the other per-session rows go with
+// it through ON DELETE CASCADE. Callers decide whether the session's workspace
+// is released first; this only refuses live sessions and, with
+// domain.ErrSessionHistoryShared, shared conversation history, all in one
+// transaction so a concurrent restore cannot slip between
+// the checks and the delete.
+//
+// The session's number is recorded in session_num_floors so the next spawn
+// never reuses its id (or its branch name). Its usage events cascade away with
+// their usage_bindings, so their spend is first folded into
+// deleted_session_account_usage, which keeps it in the agent account usage
+// view. Its change_log rows are dropped
+// because change_log references sessions without ON DELETE CASCADE; the
+// sessions_cdc_delete trigger adds one project-level session_updated event in
+// their place so every client refetches the list the session left.
+//
+// Returns deleted=false when id does not name a terminated session.
+func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: begin: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var projectID sql.NullString
+	var num int64
+	err = tx.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: read: %w", id, err)
+	}
+	var shared bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns t
+    JOIN conversations c ON c.id = t.conversation_id
+    WHERE t.handled_by_session_id = ?1
+      AND (c.session_id IS NULL OR c.session_id <> ?1)
+) OR EXISTS (
+    SELECT 1 FROM conversations
+    WHERE current_session_id = ?1
+      AND (session_id IS NULL OR session_id <> ?1)
+)`, id).Scan(&shared); err != nil {
+		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
+	}
+	if shared {
+		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	prefix := standaloneSessionIDPrefix
+	if projectID.Valid && projectID.String != "" {
+		prefix = projectID.String
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
+ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
+		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
+	}
+	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
+	}
+	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND is_terminated = 1`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, fmt.Errorf("delete session %s: rows affected: %w", id, err)
+	} else if n == 0 {
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("delete session %s: commit: %w", id, err)
+	}
+	return true, nil
+}
+
+// sessionNumFloor is the highest number a deleted session under prefix held.
+func (s *Store) sessionNumFloor(ctx context.Context, prefix string) (int64, error) {
+	var floor int64
+	err := s.writeDB.QueryRowContext(ctx, `SELECT max_num FROM session_num_floors WHERE id_prefix = ?`, prefix).Scan(&floor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return floor, err
+}
+
 // GetSession returns the full record for a session, or ok=false if absent.
 func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSession(ctx, id)
@@ -882,6 +1017,47 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 		return nil, fmt.Errorf("list chat hibernation candidates: %w", err)
 	}
 	return ids, nil
+}
+
+// ListReleasedArchivedSessions returns the archived sessions retention may
+// delete, each with when it was archived.
+func (s *Store) ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error) {
+	rows, err := s.qr.ListReleasedArchivedSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list released archived sessions: %w", err)
+	}
+	out := make([]domain.ArchivedSession, 0, len(rows))
+	for _, row := range rows {
+		archivedAt := row.UpdatedAt
+		if row.TerminatedAt.Valid {
+			archivedAt = row.TerminatedAt.Time
+		}
+		out = append(out, domain.ArchivedSession{ID: row.ID, ArchivedAt: archivedAt})
+	}
+	return out, nil
+}
+
+// ListTurnFailureCandidates returns the harness's live terminal sessions that
+// are in a turn and have a native transcript path, reading only the columns
+// the failed-turn observer needs.
+func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list turn failure candidates: %w", err)
+	}
+	out := make([]domain.TurnFailureCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TurnFailureCandidate{
+			ID:                   r.ID,
+			Harness:              r.Harness,
+			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
+			Revision:             r.Revision,
+			RuntimeLaunchID:      r.RuntimeLaunchID,
+			NativeTranscriptPath: r.NativeTranscriptPath,
+		})
+	}
+	return out, nil
 }
 
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
@@ -977,6 +1153,8 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ProvisionError:    row.ProvisionError,
 		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
 		BranchState:       decodeBranchState(row.BranchState),
+		BranchNaming:      row.BranchNaming,
+		TemporaryBranch:   row.TemporaryBranch,
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
 }
@@ -1121,13 +1299,13 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		ReviewerHarness:                  rec.ReviewerHarness,
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
-		DisplayName:                      rec.DisplayName,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
 		IsTerminated:                     rec.IsTerminated,
 		IsPinned:                         rec.IsPinned,
 		PinnedAt:                         timePtrToNullTime(rec.PinnedAt),
+		TemporaryBranch:                  rec.Metadata.Branch,
 		Branch:                           rec.Metadata.Branch,
 		WorkspacePath:                    rec.Metadata.WorkspacePath,
 		WorkspaceRepoPath:                rec.Metadata.WorkspaceRepoPath,
@@ -1257,8 +1435,8 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// monotonic reading survive into the column. Rows written from a local-zone
 	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
 	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// agent-switch source-stop predicate is one such comparison, and a mismatched
-	// row silently matches zero rows there. Normalize every writer's value here
+	// activity predicates are one such comparison, and a mismatched row silently
+	// matches zero rows there. Normalize every writer's value here
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a

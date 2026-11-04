@@ -52,6 +52,34 @@ describe("editor handoff", () => {
 		expect(state.targets.map(({ id }) => id)).toEqual(["cursor", "vscode", "file-manager", "terminal"]);
 	});
 
+	it("ignores the Cursor Agent CLI shim when the Cursor IDE is not installed", async () => {
+		const shim = "/Users/tester/.local/bin/cursor";
+		const input = deps({
+			env: { PATH: "/Users/tester/.local/bin" },
+			isExecutable: (value) => value === shim,
+			isDirectory: () => false,
+			readFileHead: (value) => value === shim ? "echo \"Error: No Cursor IDE installation found.\"" : undefined,
+		});
+		const state = await createEditorHandoff(input).getState("ao-1");
+		expect(state.targets.map(({ id }) => id)).not.toContain("cursor");
+		// The IDE app bundle still wins when installed alongside the shim.
+		const withApp = await createEditorHandoff({ ...input, isDirectory: (value) => value === "/Applications/Cursor.app" }).getState("ao-1");
+		expect(withApp.targets.map(({ id }) => id)).toContain("cursor");
+	});
+
+	it("finds a real Cursor CLI later on PATH than the agent shim", async () => {
+		const shim = "/home/tester/.local/bin/cursor";
+		const input = deps({
+			platform: "linux",
+			env: { PATH: "/home/tester/.local/bin:/usr/bin" },
+			isExecutable: (value) => value === shim || value === "/usr/bin/cursor",
+			isDirectory: () => false,
+			readFileHead: (value) => value === shim ? "echo \"Error: No Cursor IDE installation found.\"" : "#!/bin/sh",
+		});
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "cursor" });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/cursor", ["/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
 	it.each(["/Applications", "/Users/tester/Applications"])("discovers Ghostty in %s without a CLI on PATH and sends the exact workspace as a folder-open event", async (root) => {
 		const workspace = "/work trees/it's $safe; $(touch nope)";
 		const input = deps({
@@ -485,6 +513,35 @@ describe("editor handoff", () => {
 			"That open target is not supported.",
 		);
 		expect(input.resolveArtifactDir).not.toHaveBeenCalled();
+	});
+
+	it("lists installed editors with the stored preference outside any session", async () => {
+		const input = deps({ readPreference: vi.fn().mockResolvedValue("zed") });
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.getEditors()).resolves.toEqual({
+			editors: [
+				{ id: "cursor", name: "Cursor", kind: "editor" },
+				{ id: "vscode", name: "VS Code", kind: "editor" },
+			],
+			preferredEditorId: "zed",
+		});
+		expect(input.resolveWorkspace).not.toHaveBeenCalled();
+	});
+
+	it("stores an installed editor as the preference without launching it", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.setPreferredEditor("vscode")).resolves.toBe("vscode");
+		expect(input.writePreference).toHaveBeenCalledWith("vscode");
+		expect(input.launch).not.toHaveBeenCalled();
+	});
+
+	it("refuses unknown or uninstalled editors as the preference", async () => {
+		const input = deps();
+		const handoff = createEditorHandoff(input);
+		await expect(handoff.setPreferredEditor("file-manager")).rejects.toThrow("That editor is not supported.");
+		await expect(handoff.setPreferredEditor("zed")).rejects.toThrow("That editor is not installed. Choose another option.");
+		expect(input.writePreference).not.toHaveBeenCalled();
 	});
 
 	it("does not silently replace a missing preferred editor", async () => {

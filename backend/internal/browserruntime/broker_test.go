@@ -233,7 +233,7 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 	}{
 		{"wrong token", `{"type":"hello","version":2,"token":"wrong-token"}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
 		{"missing token", `{"type":"hello","version":2}`, "BROWSER_RUNTIME_TOKEN_REJECTED"},
-		{"other protocol", `{"type":"hello","version":3,"token":"expected-token"}`, "BROWSER_RUNTIME_PROTOCOL_MISMATCH"},
+		{"other protocol", `{"type":"hello","version":4,"token":"expected-token"}`, "BROWSER_RUNTIME_PROTOCOL_MISMATCH"},
 		{"not a hello", `{"type":"result","requestId":"r1"}`, "BROWSER_RUNTIME_BAD_HELLO"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -421,4 +421,119 @@ func browserRuntimeTestTimeout() time.Duration {
 		return time.Second
 	}
 	return 5 * time.Second
+}
+
+func TestBrokerPeerVerifierRejectsBeforeHello(t *testing.T) {
+	broker := New(nil)
+	broker.SetTransport("chrome-extension")
+	var calls int
+	var mu sync.Mutex
+	broker.SetPeerVerifier(func(net.Conn) error {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls == 1 {
+			return errors.New("unexpected peer")
+		}
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+
+	rejected, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.NewEncoder(rejected).Encode(wireMessage{Type: "hello", Version: ProtocolVersion})
+	_ = rejected.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := rejected.Read(make([]byte, 1)); err == nil {
+		t.Fatal("rejected peer remained connected")
+	}
+	_ = rejected.Close()
+	if broker.Status().Connected {
+		t.Fatal("broker accepted a rejected peer")
+	}
+
+	accepted, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = accepted.Close() }()
+	if err := json.NewEncoder(accepted).Encode(wireMessage{
+		Type:          "hello",
+		Version:       ProtocolVersion,
+		Client:        "ao-chrome-extension",
+		ClientVersion: "1.2.3",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitConnected(t, broker)
+	status := broker.Status()
+	if status.Transport != "chrome-extension" || status.Client != "ao-chrome-extension" || status.ClientVersion != "1.2.3" {
+		t.Fatalf("status = %#v", status)
+	}
+	_ = accepted.Close()
+	deadline := time.Now().Add(browserRuntimeTestTimeout())
+	for broker.Status().Connected {
+		if time.Now().After(deadline) {
+			t.Fatal("broker did not observe disconnect")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if status := broker.Status(); status.Client != "" || status.ClientVersion != "" {
+		t.Fatalf("client metadata survived disconnect: %#v", status)
+	}
+}
+
+func TestBrokerDefaultsToElectronTransport(t *testing.T) {
+	if got := New(nil).Status().Transport; got != TransportElectron {
+		t.Fatalf("transport = %q, want %q", got, TransportElectron)
+	}
+}
+
+func TestBrokerExclusiveKeepsFirstRuntime(t *testing.T) {
+	broker := New(nil)
+	broker.SetExclusive(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+
+	first, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	if err := json.NewEncoder(first).Encode(wireMessage{Type: "hello", Version: ProtocolVersion, ClientVersion: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	waitConnected(t, broker)
+
+	second, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	if err := json.NewEncoder(second).Encode(wireMessage{Type: "hello", Version: ProtocolVersion, ClientVersion: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.SetReadDeadline(time.Now().Add(time.Second))
+	var rejected wireMessage
+	if err := json.NewDecoder(second).Decode(&rejected); err != nil {
+		t.Fatal(err)
+	}
+	if rejected.Type != "hello-rejected" || rejected.Error == nil || rejected.Error.Code != "BROWSER_RUNTIME_BUSY" {
+		t.Fatalf("rejection = %#v", rejected)
+	}
+	if got := broker.Status().ClientVersion; got != "first" {
+		t.Fatalf("connected runtime = %q, want first", got)
+	}
 }

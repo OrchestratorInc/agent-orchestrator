@@ -218,8 +218,10 @@ describe("CreateProjectAgentSheet", () => {
 		const role = variant === "stacked" ? "option" : "menuitem";
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole(role, { name: "fx" })).toBeInTheDocument();
+		expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+		expect(screen.getByRole(role, { name: "OpenCode" })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByText("Auth unknown")).not.toBeInTheDocument();
 		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));

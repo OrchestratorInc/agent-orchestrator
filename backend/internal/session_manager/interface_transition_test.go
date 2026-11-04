@@ -274,6 +274,25 @@ func (s *transitionStore) AdvanceSessionInterfaceTransition(_ context.Context, i
 	return true, nil
 }
 
+func (s *transitionStore) CompleteSessionInterfaceTransition(_ context.Context, id string, expected domain.SessionInterfaceTransitionPhase, message string, now time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.transitions[id]
+	if !ok || rec.Phase != expected || rec.Phase.Terminal() {
+		return false, nil
+	}
+	rec.Phase = domain.SessionInterfaceTransitionCompleted
+	rec.ErrorCode, rec.ErrorDetail = "", ""
+	rec.UpdatedAt, rec.CompletedAt = now, now
+	s.nextMessage++
+	s.messages[id] = append(s.messages[id], domain.SessionInterfaceTransitionMessage{
+		ID: s.nextMessage, TransitionID: id, ClientMessageID: "interface-transition:" + id + ":context-boundary",
+		Message: message, CreatedAt: now,
+	})
+	s.transitions[id] = rec
+	return true, nil
+}
+
 func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	_ context.Context,
 	sessionID domain.SessionID,
@@ -637,24 +656,6 @@ func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 	return l.store.RestoreSessionControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
-}
-func (l *sqliteTransitionLifecycle) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	return l.store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *sqliteTransitionLifecycle) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	return l.store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *sqliteTransitionLifecycle) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	return l.store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 func (l *sqliteTransitionLifecycle) MarkTerminated(
 	ctx context.Context,

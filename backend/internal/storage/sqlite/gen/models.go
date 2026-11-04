@@ -57,34 +57,34 @@ type AgentModelCatalog struct {
 }
 
 type AgentNativeSession struct {
-	ID               domain.AgentNativeSessionID
-	AoSessionID      domain.SessionID
-	Harness          domain.AgentHarness
+	ID               string
+	AoSessionID      string
+	Harness          string
 	ConfigDir        string
 	NativeSessionID  string
 	TranscriptPath   string
-	LastGenerationID domain.AgentGenerationID
+	LastGenerationID string
 	CreatedAt        time.Time
 	LastUsedAt       time.Time
 }
 
 type AgentSwitch struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
+	ID                      string
+	SessionID               string
 	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
+	RequestFingerprint      string
+	FromHarness             string
+	TargetHarness           string
+	TargetNativeSessionRef  sql.NullString
+	TargetStartMode         string
+	State                   string
+	AgentHandoffStatus      string
+	SourceTranscriptStatus  string
+	SemanticHandoffIncluded int64
 	AgentHandoffPath        string
 	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
+	SourceGenerationID      string
+	TargetGenerationID      string
 	TargetRuntimeHandleID   string
 	TargetAcknowledgedAt    sql.NullTime
 	ErrorCode               string
@@ -149,7 +149,7 @@ type AgentSwitchFailureOutbox struct {
 
 type AgentSwitchFailurePolicy struct {
 	Singleton              int64
-	Enabled                bool
+	Enabled                int64
 	ConsentGeneration      string
 	DestinationFingerprint string
 	UpdatedAt              time.Time
@@ -165,12 +165,14 @@ type AgentSwitchFailureReceipt struct {
 }
 
 type AppSetting struct {
-	ID                 int64
-	DefaultSessionMode domain.SessionMode
-	UpdatedAt          time.Time
-	CloudOffering      bool
-	HarnessDefaults    string
-	VersionRefresh     bool
+	ID                   int64
+	DefaultSessionMode   domain.SessionMode
+	UpdatedAt            time.Time
+	CloudOffering        bool
+	HarnessDefaults      string
+	VersionRefresh       bool
+	ComputerUse          bool
+	SessionRetentionDays int64
 }
 
 type Automation struct {
@@ -187,6 +189,11 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	Model       string
+	Mode        string
+	Effort      string
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {
@@ -269,6 +276,7 @@ type Conversation struct {
 	UsageCurrency              sql.NullString
 	ActiveBranchID             string
 	OpencodeMode               string
+	AutoCompactWindow          string
 }
 
 type ConversationActivity struct {
@@ -309,6 +317,7 @@ type ConversationBranch struct {
 	ProviderScopeID        string
 	ProviderIdsScoped      int64
 	ReviewID               sql.NullString
+	HandoffNote            string
 }
 
 type ConversationEditDelivery struct {
@@ -351,6 +360,11 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+	AuthoredByUser      int64
+}
+
+type ConversationMessagesFt struct {
+	Text string
 }
 
 type ConversationProviderEvent struct {
@@ -386,24 +400,30 @@ type ConversationSteerDelivery struct {
 }
 
 type ConversationTurn struct {
-	ID                   string
-	ConversationID       string
-	HandledBySessionID   domain.SessionID
-	ProviderTurnID       string
-	ControllerGeneration string
-	State                domain.TurnState
-	ErrorMessage         string
-	RequestedAt          time.Time
-	StartedAt            sql.NullTime
-	CompletedAt          sql.NullTime
-	DiffJson             string
-	RolledBackAt         sql.NullTime
-	PlanJson             string
-	BranchID             string
-	PromotionStartedAt   sql.NullTime
-	PromotedToTurnID     sql.NullString
-	RetryOfTurnID        sql.NullString
-	HandledByReviewID    sql.NullString
+	ID                    string
+	ConversationID        string
+	HandledBySessionID    domain.SessionID
+	ProviderTurnID        string
+	ControllerGeneration  string
+	State                 domain.TurnState
+	ErrorMessage          string
+	RequestedAt           time.Time
+	StartedAt             sql.NullTime
+	CompletedAt           sql.NullTime
+	DiffJson              string
+	RolledBackAt          sql.NullTime
+	PlanJson              string
+	BranchID              string
+	PromotionStartedAt    sql.NullTime
+	PromotedToTurnID      sql.NullString
+	RetryOfTurnID         sql.NullString
+	HandledByReviewID     sql.NullString
+	UsageLimitResetsAt    sql.NullTime
+	UsageLimitAutoResume  int64
+	UsageLimitResumeError string
+	BatchedInput          int64
+	ProviderInputText     string
+	FailureCode           string
 }
 
 type Cue struct {
@@ -415,6 +435,16 @@ type Cue struct {
 	Prompt    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type DeletedSessionAccountUsage struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
 }
 
 type ManagedHarnessRelease struct {
@@ -609,6 +639,12 @@ type ReportWorkerInterrupt struct {
 	LastInterruptedAt time.Time
 }
 
+type RepositoryRename struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
 type Review struct {
 	ID                     string
 	SessionID              domain.SessionID
@@ -723,6 +759,10 @@ type Session struct {
 	StaleBinaryVersion               string
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
+	LaunchOptions                    string
+	BranchNaming                     bool
+	TemporaryBranch                  string
+	TerminatedAt                     sql.NullTime
 }
 
 type SessionAgentAccount struct {
@@ -755,6 +795,7 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+	ReportOnly           bool
 }
 
 type SessionHarnessRelease struct {
@@ -781,6 +822,7 @@ type SessionInterfaceTransition struct {
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
 	SourceAccountID      string
 	TargetAccountID      string
+	DegradedKind         string
 }
 
 type SessionInterfaceTransitionMessage struct {
@@ -792,6 +834,29 @@ type SessionInterfaceTransitionMessage struct {
 	ClientMessageID string
 	SenderSessionID string
 	AuthoredByUser  bool
+}
+
+type SessionNumFloor struct {
+	IDPrefix string
+	MaxNum   int64
+}
+
+type SessionTelemetry struct {
+	SessionID         string
+	CreatedBy         string
+	WaitingInputCount int64
+	EndClaimed        int64
+}
+
+type SessionTerminalTurn struct {
+	ID              int64
+	SessionID       string
+	Harness         string
+	NativeSessionID string
+	UserRequest     string
+	AgentResponse   string
+	RequestedAt     time.Time
+	RespondedAt     sql.NullTime
 }
 
 type SessionWorktree struct {
@@ -830,6 +895,11 @@ type TelemetryEvent struct {
 	PayloadJson string
 }
 
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID
@@ -853,6 +923,35 @@ type UsageCodexSourceDiscovery struct {
 	NativeSessionID        string
 	DiscoveredChildIdsJson string
 	HasMixedChildTypes     int64
+}
+
+type UsageMessageSummary struct {
+	SessionID    string
+	PendingCount int64
+	FirstAt      sql.NullTime
+	LastAt       sql.NullTime
+	SteerCount   int64
+	SendCount    int64
+	DesktopCount int64
+	MobileCount  int64
+	CliCount     int64
+}
+
+type UsagePRMeasurement struct {
+	PRKey              string
+	ProjectID          string
+	Historical         int64
+	HistoricalMerged   int64
+	AssociatedReported int64
+	MergedReported     int64
+	ClosedReported     int64
+	MergedVia          string
+}
+
+type UsageProjectIdentity struct {
+	ProjectID   string
+	InstallID   string
+	TelemetryID string
 }
 
 type UsageSessionIntegrity struct {

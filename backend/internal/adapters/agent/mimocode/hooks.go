@@ -121,9 +121,7 @@ func mimoAgentSource(cfg ports.WorkspaceHookConfig) ([]byte, error) {
 	}
 	var b strings.Builder
 	b.WriteString("---\n# " + mimoAgentSentinel + "\ndescription: AO-managed session instructions\nmode: primary\n")
-	if ports.NormalizePermissionMode(cfg.Config.Permissions) == ports.PermissionModeAcceptEdits {
-		b.WriteString("permission:\n  edit: allow\n")
-	}
+	b.WriteString(mimoAgentPermission(cfg.Config.Permissions))
 	b.WriteString("---\n")
 	b.WriteString(strings.TrimSpace(prompt))
 	b.WriteByte('\n')

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
+import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { createLocalHostIdentity } from "./remote-request";
 
@@ -49,6 +49,14 @@ describe("remotesFilePath", () => {
 		} finally {
 			vi.unstubAllEnvs();
 		}
+	});
+});
+
+describe("computerName", () => {
+	it("prefers the macOS Computer Name and falls back to the host name", async () => {
+		await expect(computerName(async () => ({ stdout: "Dhruv’s Mac mini\n" }), "darwin", () => "Dhruvs-Mac-mini.local")).resolves.toBe("Dhruv’s Mac mini");
+		await expect(computerName(async () => { throw new Error("scutil missing"); }, "darwin", () => "Dhruvs-Mac-mini.local")).resolves.toBe("Dhruvs-Mac-mini");
+		await expect(computerName(async () => ({ stdout: "unused" }), "linux", () => "build-box")).resolves.toBe("build-box");
 	});
 });
 

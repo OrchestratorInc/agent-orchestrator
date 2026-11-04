@@ -160,6 +160,24 @@ func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]strin
 	env["PATH"] = strings.Join(parts, string(os.PathListSeparator))
 }
 
+// ProcessEnvForLaunchBinary returns this process's environment with PATH
+// augmented for bin exactly as session launches are, for direct children such
+// as native login flows and auth-status probes. Without it an npm launcher
+// resolved outside PATH fails with `env: node: No such file or directory`.
+func ProcessEnvForLaunchBinary(ctx context.Context, bin string) []string {
+	overlay := map[string]string{"PATH": os.Getenv("PATH")}
+	AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, "")
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(key, "PATH")) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, "PATH="+overlay["PATH"])
+}
+
 func restorePinnedDir(parts []string, dir string) []string {
 	if dir == "" || len(parts) == 0 || parts[0] == dir {
 		return parts

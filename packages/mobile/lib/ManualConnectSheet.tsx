@@ -12,9 +12,11 @@ import { IncompatibleHostVersionError } from "./race";
 import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
+	isLocalNetworkHost,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
 } from "./connectionError";
+import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import type { Theme } from "./theme";
 import { haptics } from "./haptics";
 import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
@@ -57,6 +59,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 					saveHost,
 					renameHost,
 				});
+				if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 				haptics.success();
 				onConnected();
 				return;
@@ -72,6 +75,9 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
 			await pingServer(target);
+			// Reaching a LAN address proves iOS granted Local Network access, so a
+			// later scan that reaches nothing can say so at once (localNetworkWait).
+			if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 			await saveConfig(target);
 			// Store it as a machine and select it. Writing only the legacy config
 			// left resolution reconnecting the previously active machine on the

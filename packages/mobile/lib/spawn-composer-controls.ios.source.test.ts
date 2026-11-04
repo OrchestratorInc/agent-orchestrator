@@ -29,4 +29,10 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain("systemName={projectSystemImage(selectedProject)}");
 		expect(source).toContain("systemName={projectSystemImage(project)}");
 	});
+
+	it("lets the attach button choose a photo or a file", () => {
+		expect(source).toContain('systemImage="paperclip"');
+		expect(source).toContain('<Button label="Choose Photo" systemImage="photo"');
+		expect(source).toContain('<Button label="Choose File" systemImage="doc"');
+	});
 });

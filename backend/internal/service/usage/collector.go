@@ -1477,7 +1477,7 @@ func (c *Collector) discoverClaudeContinuations(
 			// would strand a zero-source binding and fail every reconcile pass.
 			continue
 		}
-		newBinding, err := c.upsertContinuationBinding(ctx, session, nativeID, now)
+		newBinding, err := c.upsertContinuationBinding(ctx, session, binding.Harness, nativeID, now)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -1513,10 +1513,11 @@ func (c *Collector) discoverClaudeContinuations(
 func (c *Collector) upsertContinuationBinding(
 	ctx context.Context,
 	session domain.SessionRecord,
+	harness domain.AgentHarness,
 	nativeID string,
 	now time.Time,
 ) (domain.UsageBindingRecord, error) {
-	existing, exists, err := c.store.GetUsageBinding(ctx, session.ID, session.Harness, nativeID)
+	existing, exists, err := c.store.GetUsageBinding(ctx, session.ID, harness, nativeID)
 	if err != nil {
 		return domain.UsageBindingRecord{}, err
 	}
@@ -1531,7 +1532,7 @@ func (c *Collector) upsertContinuationBinding(
 	}
 	return c.store.UpsertUsageBinding(ctx, domain.UsageBindingRecord{
 		SessionID:    session.ID,
-		Harness:      session.Harness,
+		Harness:      harness,
 		NativeRootID: nativeID,
 		State:        state,
 		UpdatedAt:    now,

@@ -9,6 +9,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useRequestUpdateInstall } from "../../hooks/useRequestUpdateInstall";
 import { useUpdateStatus, requestUpdateDownload } from "../../hooks/useUpdateStatus";
 import type { UpdateChannel, UpdateSettings, UpdateState, UpdateStatus } from "../../../main/update-settings";
+import { localizedUpdateError } from "../../lib/update-error-copy";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -30,9 +31,6 @@ const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
 // on screen to explain it. Releasing the button is always safe: the main process
 // serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
-
-/** Row actions are quiet: ghost, muted until hovered. */
-const GHOST_ACTION = "text-settings-muted hover:text-settings-label";
 
 let updateRequestSequence = 0;
 
@@ -258,7 +256,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 		<>
 			<SettingsSection title={t("settings.updates.versionSection")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
-					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure } : status}
+					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure, errorInfo: undefined } : status}
 					manualCheckRequestId={manualCheckRequestId}
 					startManualCheck={startManualCheck}
 					finishManualCheck={finishManualCheck}
@@ -272,7 +270,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 							: t("settings.updates.featurePinned", { pr: featurePr })}
 						description={t("settings.updates.featureTracking", { pr: featurePr })}
 					>
-						<Button type="button" variant="ghost" size="sm" className={GHOST_ACTION} onClick={() => void handleReturnToHome()}>
+						<Button type="button" variant="quiet" size="sm" onClick={() => void handleReturnToHome()}>
 							{form.channel === "nightly" ? t("settings.updates.returnToNightly") : t("settings.updates.returnToStable")}
 						</Button>
 					</SettingsRow>
@@ -528,7 +526,7 @@ function UpdateActions({
 						{/* The primary error already explains the failed check. Keep a separate
 						    notice only when it adds information (for example beside a staged build). */}
 						{status.checkError && !(displayState === "error" && status.message === status.checkError) && (
-							<UpdateNotice tone="error" text={status.checkError} />
+							<UpdateNotice tone="error" text={localizedUpdateError(status.checkError, status.checkErrorInfo, t("settings.updates.updateFailed"), t)} />
 						)}
 						{!status.checkError && !status.staleCheckNudge && status.checksFailing && (
 							<UpdateNotice tone="warning" text={t("settings.updates.checksFailing")} />
@@ -578,9 +576,8 @@ function UpdateActions({
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
-						variant="ghost"
+						variant="quiet"
 						size="sm"
-						className={GHOST_ACTION}
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>
@@ -693,9 +690,15 @@ function UpdateStatusLine({
 		case "error":
 			className = "text-error";
 			icon = <AlertTriangle className="size-icon-sm shrink-0" aria-hidden="true" />;
+			// The main process already rewrites updater failures and says what they
+			// mean, so the sentence is localized here; the English fallback still
+			// keeps a dump it has not learned yet out of Settings (#5755).
 			label = status.netError
 				? t("settings.updates.netErrorRestartGuidance")
-				: status.message ?? t("settings.updates.updateFailed");
+				: localizedUpdateError(status.message, status.errorInfo, t("settings.updates.updateFailed"), t);
+			// Name the build being held back (a full disk refuses staging, a
+			// download failed) so the user still learns what they are missing.
+			detail = status.version ? t("settings.updates.availableVersion", { version: status.version }) : null;
 			break;
 		default:
 			label = t("settings.updates.notChecked");

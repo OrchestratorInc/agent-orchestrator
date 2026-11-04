@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
 func TestCredentialTypeFromScope(t *testing.T) {
 	for _, tc := range []struct {
@@ -25,24 +22,26 @@ func TestCredentialTypeFromScope(t *testing.T) {
 	}
 }
 
-func TestModelCatalogScopePreservesCredentialScope(t *testing.T) {
-	// A credential scope has no backing project, so it must survive verbatim
-	// (never collapse to the device-global "") even with no project lookup wired.
-	s := &Service{}
-	got, err := s.modelCatalogScope(context.Background(), "@cred:anthropic_api_key")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "@cred:anthropic_api_key" {
-		t.Fatalf("scope = %q, want the credential scope preserved", got)
+func TestModelCatalogScopeKeepsOnlyCredentialScopes(t *testing.T) {
+	// A credential scope has no backing project, so it survives verbatim; every
+	// other scope, including a project ID, is the single device catalog.
+	for _, tc := range []struct{ scope, want string }{
+		{scope: "@cred:anthropic_api_key", want: "@cred:anthropic_api_key"},
+		{scope: "agent-orchestrator", want: ""},
+		{scope: "", want: ""},
+		{scope: "@cred:", want: ""},
+	} {
+		if got := modelCatalogScope(tc.scope); got != tc.want {
+			t.Errorf("modelCatalogScope(%q) = %q, want %q", tc.scope, got, tc.want)
+		}
 	}
 }
 
-func TestModelDiscoveryRequestSetsCredentialTypeWithoutProjectLookup(t *testing.T) {
-	// s.projects is nil: a credential scope must not attempt a project lookup and
-	// must carry the credential type onto the request for the adapter to honor.
+func TestModelDiscoveryRequestSetsCredentialType(t *testing.T) {
+	// A credential scope carries the credential type onto the request for the
+	// adapter to honor.
 	s := &Service{}
-	request, err := s.modelDiscoveryRequest(context.Background(), "opencode", "@cred:openai_api_key", "/bin/opencode")
+	request, err := s.modelDiscoveryRequest("opencode", "@cred:openai_api_key", "/bin/opencode")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

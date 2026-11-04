@@ -80,6 +80,27 @@ func TestBuild_MatchesEmbedded(t *testing.T) {
 	}
 }
 
+func TestBuild_TelemetryIdentityUsesNamedSchema(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	if _, ok := doc.Components.Schemas["TelemetryIdentityResponse"]; !ok {
+		t.Fatal("named TelemetryIdentityResponse schema is missing")
+	}
+	if _, ok := doc.Components.Schemas["ControllersTelemetryIdentityResponse"]; ok {
+		t.Fatal("default controller-prefixed telemetry identity schema remains")
+	}
+}
+
 func TestBuild_InstallJobTargetRemainsAnEnum(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {

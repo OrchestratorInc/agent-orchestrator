@@ -524,7 +524,10 @@ func TestGetAgentHooksSeedsCredentialReferencedByOAuthConfig(t *testing.T) {
 			if string(gotCredentials) != string(scopedCredentials) {
 				t.Fatalf("AO scoped credentials = %s, want %s", gotCredentials, scopedCredentials)
 			}
-			if _, err := os.Stat(filepath.Join(aoHome, "credentials", "kimi-code.json")); !errors.Is(err, os.ErrNotExist) {
+			if tc.writeDefaultSource {
+				// A user signed in to Kimi shares their whole store with AO's Kimi.
+				assertKimiCredentialsShared(t, userHome, aoHome)
+			} else if _, err := os.Stat(filepath.Join(aoHome, "credentials", "kimi-code.json")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("unreferenced default AO credential stat err = %v, want not exist", err)
 			}
 		})
@@ -557,7 +560,9 @@ func TestGetAgentHooksReseedsHookOnlyAOManagedConfigFromOAuthUserKimiHome(t *tes
 		t.Fatalf("GetAgentHooks err = %v", err)
 	}
 
-	assertKimiOAuthProfileSeeded(t, userHome, aoHome, userCredentials, aoCredentials)
+	// AO's stale copy gives way to the user's own login.
+	assertKimiOAuthProfileSeeded(t, userHome, aoHome, userCredentials, userCredentials)
+	assertKimiCredentialsShared(t, userHome, aoHome)
 }
 
 func writeKimiOAuthProfile(t *testing.T, home string, credentials []byte) {
@@ -661,7 +666,9 @@ func TestGetAgentHooksSeedsAOManagedCredentialsFromUserKimiHome(t *testing.T) {
 	}
 }
 
-func TestGetAgentHooksPreservesExistingAOManagedCredentials(t *testing.T) {
+// Kimi renews its 15-minute tokens with a rotating refresh token, so a copy
+// seeded once went stale and could not sign in. AO's Kimi shares the user's.
+func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 	workspace := t.TempDir()
 	userHome := t.TempDir()
 	aoHome := t.TempDir()
@@ -690,8 +697,61 @@ func TestGetAgentHooksPreservesExistingAOManagedCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read AO credentials: %v", err)
 	}
-	if want := `{"access_token":"ao-token"}`; string(got) != want {
+	if want := `{"access_token":"user-token"}`; string(got) != want {
 		t.Fatalf("AO credentials = %s, want %s", got, want)
+	}
+	assertKimiCredentialsShared(t, userHome, aoHome)
+	// A token Kimi renews in AO's home is the user's too.
+	if err := os.WriteFile(targetPath, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if mine, _ := os.ReadFile(filepath.Join(userHome, "credentials", "kimi-code.json")); string(mine) != `{"access_token":"renewed"}` {
+		t.Fatalf("user credentials = %s, want the renewed token", mine)
+	}
+}
+
+// Where no link can be made, the copy follows a newer login.
+func TestSeedKimiCredentialReplacesAnOlderCopy(t *testing.T) {
+	dir := t.TempDir()
+	source, target := filepath.Join(dir, "user.json"), filepath.Join(dir, "ao", "kimi-code.json")
+	for path, data := range map[string]string{source: `{"access_token":"new"}`, target: `{"access_token":"old"}`} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	older := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(target, older, older); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedKimiCredential(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != `{"access_token":"new"}` {
+		t.Fatalf("copy = %s, want the newer login", got)
+	}
+	// A copy newer than the login, as one Kimi renewed itself, is kept.
+	if err := os.WriteFile(target, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(source, older, older); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedKimiCredential(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != `{"access_token":"renewed"}` {
+		t.Fatalf("copy = %s, want the renewed one kept", got)
+	}
+}
+
+func assertKimiCredentialsShared(t *testing.T, userHome, aoHome string) {
+	t.Helper()
+	link, err := os.Readlink(filepath.Join(aoHome, "credentials"))
+	if err != nil || !sameKimiConfigPath(link, filepath.Join(userHome, "credentials")) {
+		t.Fatalf("AO credentials link = %q, %v; want the user's credentials", link, err)
 	}
 }
 
@@ -959,5 +1019,39 @@ func TestContextCancellation(t *testing.T) {
 	}
 	if _, err := ResolveKimiBinary(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveKimiBinary err = %v, want context.Canceled", err)
+	}
+}
+
+// Kimi Code reads <project>/.kimi-code/AGENTS.md, not the older .kimi/ one, so
+// AO's instructions and a switch's handoff note go to both.
+func TestPrepareACPInstructionsWritesWhereKimiCodeReads(t *testing.T) {
+	workspace := t.TempDir()
+	if err := PrepareACPInstructions(context.Background(), workspace, "AO standing instructions"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".kimi-code", ".kimi"} {
+		data, err := os.ReadFile(filepath.Join(workspace, dir, "AGENTS.md"))
+		if err != nil || !strings.Contains(string(data), "AO standing instructions") {
+			t.Fatalf("%s/AGENTS.md = %q, %v; want AO's instructions", dir, data, err)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, dir, ".gitignore")); err != nil {
+			t.Fatalf("%s is not gitignored: %v", dir, err)
+		}
+	}
+}
+
+func TestPrepareACPInstructionsDoesNotWriteThroughALinkedFolder(t *testing.T) {
+	workspace, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(workspace, ".kimi-code")); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareACPInstructions(context.Background(), workspace, "AO standing instructions"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Fatalf("wrote %d files outside the workspace through the link", len(entries))
+	}
+	if !CodeInstructionsOwnedByProject(context.Background(), workspace) {
+		t.Fatal("a linked .kimi-code was not left to the project, so the chat would drop AO's instructions")
 	}
 }

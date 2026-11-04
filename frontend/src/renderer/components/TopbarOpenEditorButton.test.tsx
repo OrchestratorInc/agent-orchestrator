@@ -81,7 +81,7 @@ describe("TopbarOpenEditorButton", () => {
 
 	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
 	// method 'editorHandoff:open': Error: <reason>", and the topbar used to paint
-	// that whole string into the actions row.
+	// that whole string into the error.
 	it("shows the reason, not Electron's remote-method wrapper, when the open fails", async () => {
 		setState(availableState);
 		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
@@ -91,9 +91,10 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
 
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Session workspace is not available");
-		expect(alert.textContent).not.toContain("Error invoking remote method");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			body: "Session workspace is not available",
+			tone: "error",
+		}));
 	});
 
 
@@ -155,11 +156,10 @@ describe("TopbarOpenEditorButton", () => {
 		expect(ghostty.querySelector("image")).not.toBeInTheDocument();
 		expect(ghostty.querySelector("svg path")).toBeInTheDocument();
 		const menu = screen.getByRole("menu");
-		expect(menu.textContent!.indexOf("Open in")).toBeLessThan(menu.textContent!.indexOf("Ghostty"));
-		expect(menu.textContent!.indexOf("Ghostty")).toBeLessThan(menu.textContent!.indexOf("Open with"));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path", "Finder", "Terminal", "Ghostty", "Cursor", "VS Code"]);
+		expect(menu.textContent).toBe("FinderTerminalGhosttyCursorVS CodeCopy path");
+		expect(menu.querySelector("[role='separator']")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Finder", "Terminal", "Ghostty", "Cursor", "VS Code", "Copy path"]);
 		for (const item of screen.getAllByRole("menuitem")) expect(item.querySelector("svg")).toBeInTheDocument();
-		expect(menu.textContent!.indexOf("Copy path")).toBeLessThan(menu.textContent!.indexOf("Open with"));
 		expect(screen.queryByRole("menuitem", { name: "Open in Ghostty" })).not.toBeInTheDocument();
 		await userEvent.click(ghostty);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "ghostty" }));
@@ -203,7 +203,7 @@ describe("TopbarOpenEditorButton", () => {
 		// fire pointer events, so the hoverable element has to be the wrapper) —
 		// the actual topbar group is one level up.
 		const group = button.parentElement?.parentElement;
-		expect(group).toHaveClass("gap-0", "rounded-md", "hover:bg-interactive-hover", "data-[state=open]:bg-interactive-hover");
+		expect(group).toHaveClass("gap-0", "rounded-md", "bg-transparent", "group/nav-row");
 		expect(group).toHaveAttribute("data-state", "closed");
 		await userEvent.click(button);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
@@ -217,7 +217,7 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(options);
 
 		expect(group).toHaveAttribute("data-state", "open");
-		expect(group).toHaveClass("data-[state=open]:bg-interactive-hover");
+		expect(group?.querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 	});
 
 	// No supported editor means the control is simply blocked: no long guidance
@@ -237,9 +237,9 @@ describe("TopbarOpenEditorButton", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open workspace options" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual([
-			"Copy path",
 			"Finder",
 			"Terminal",
+			"Copy path",
 		]);
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("No supported editor found");
@@ -477,6 +477,11 @@ describe("TopbarOpenEditorButton", () => {
 		openMock.mockRejectedValueOnce(new Error("Could not open Cursor. Check that it is installed and try again."));
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Cursor");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Open in Cursor",
+			body: "Could not open Cursor. Check that it is installed and try again.",
+			tone: "error",
+		}));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });

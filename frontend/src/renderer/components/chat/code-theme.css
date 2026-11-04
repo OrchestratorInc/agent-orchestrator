@@ -11,7 +11,7 @@
  * Highlighting is class-based on purpose. Colours resolve at paint time from CSS
  * variables, so flipping the theme re-paints; it does not re-tokenize.
  *
- * Scoped under `.chat-code`, `.diff-code`, and `.markdown-code` so highlight.js
+ * Scoped under `.chat-code`, `.diff-code`, and `.markdown-code` so syntax token
  * class names cannot leak styling into any other surface that happens to use
  * them — all three are deliberate, chosen consumers of the same engine
  * (code-highlight.ts) and the same colour mapping, not a leak. `:is()` carries

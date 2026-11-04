@@ -82,12 +82,31 @@ func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 func (s *Store) BindSessionAgentAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider, accountID string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.BindSessionAgentAccount(ctx, gen.BindSessionAgentAccountParams{
-		SessionID: string(id), Provider: string(p), AccountID: accountID, BoundAt: at.UTC(),
-	}); err != nil {
-		return fmt.Errorf("bind session %s to %s account: %w", id, p, err)
-	}
-	return nil
+	return s.inTx(ctx, fmt.Sprintf("bind session %s to %s account", id, p), func(q *gen.Queries) error {
+		binding := gen.GetSessionAgentAccountParams{SessionID: string(id), Provider: string(p)}
+		previous, previousErr := q.GetSessionAgentAccount(ctx, binding)
+		if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
+			return previousErr
+		}
+		if err := q.BindSessionAgentAccount(ctx, gen.BindSessionAgentAccountParams{
+			SessionID: string(id), Provider: string(p), AccountID: accountID, BoundAt: at.UTC(),
+		}); err != nil {
+			return err
+		}
+		if errors.Is(previousErr, sql.ErrNoRows) {
+			return nil
+		}
+		current, err := q.GetSessionAgentAccount(ctx, binding)
+		if err != nil {
+			return err
+		}
+		if current == previous {
+			return nil
+		}
+		return q.CancelSessionTurnAutoResume(ctx, gen.CancelSessionTurnAutoResumeParams{
+			SessionID: id, Provider: string(p),
+		})
+	})
 }
 
 // GetSessionAgentAccount returns the account the session uses now for the provider.
@@ -102,13 +121,21 @@ func (s *Store) GetSessionAgentAccount(ctx context.Context, id domain.SessionID,
 	return accountID, true, nil
 }
 
-// AgentAccountUsageSince sums model usage per account, UTC day and model.
+// AgentAccountUsageSince sums model usage per account, UTC day and model,
+// including the spend of sessions deleted since. Callers pass the start of a
+// UTC day, so the deleted sessions' day totals line up with the live events.
+// An account, day and model may appear twice (live and deleted); callers sum.
 func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error) {
-	rows, err := s.qr.AgentAccountUsageSince(ctx, sql.NullTime{Time: since.UTC(), Valid: true})
+	since = since.UTC()
+	rows, err := s.qr.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{Since: sql.NullTime{Time: since, Valid: true}})
 	if err != nil {
 		return nil, fmt.Errorf("read agent account usage: %w", err)
 	}
-	out := make([]domain.AgentAccountUsage, 0, len(rows))
+	deleted, err := s.qr.DeletedSessionAccountUsageSince(ctx, since.Format(time.DateOnly))
+	if err != nil {
+		return nil, fmt.Errorf("read deleted sessions' agent account usage: %w", err)
+	}
+	out := make([]domain.AgentAccountUsage, 0, len(rows)+len(deleted))
 	for _, row := range rows {
 		out = append(out, domain.AgentAccountUsage{
 			AccountID: row.AccountID, Day: row.Day, Model: row.ModelID,
@@ -116,5 +143,31 @@ func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]
 			CostNanos: row.EstimatedCostNanos,
 		})
 	}
+	for _, row := range deleted {
+		out = append(out, domain.AgentAccountUsage{
+			AccountID: row.AccountID, Day: row.Day, Model: row.ModelID,
+			InputTokens: row.InputTokens, CachedInputTokens: row.CachedInputTokens, OutputTokens: row.OutputTokens,
+			CostNanos: row.EstimatedCostNanos,
+		})
+	}
 	return out, nil
+}
+
+// foldDeletedSessionAccountUsage adds a session's usage, attributed to its
+// accounts exactly as AgentAccountUsageSince does, to the deleted-session
+// totals. It runs inside the delete's transaction, before the session row (and
+// with it the usage events and account bindings) cascades away.
+func foldDeletedSessionAccountUsage(ctx context.Context, q *gen.Queries, id domain.SessionID) error {
+	rows, err := q.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{
+		Since: sql.NullTime{Time: time.Time{}, Valid: true}, SessionID: string(id),
+	})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := q.AddDeletedSessionAccountUsage(ctx, gen.AddDeletedSessionAccountUsageParams(row)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

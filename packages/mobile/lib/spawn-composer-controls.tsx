@@ -18,7 +18,8 @@ export function SpawnComposerControls({
 	modelSelection,
 	modelLabel,
 	onSelectModel,
-	onAttach,
+	onChoosePhoto,
+	onChooseFile,
 	onSpawn,
 	busy,
 	disabled,
@@ -42,7 +43,10 @@ export function SpawnComposerControls({
 			</View>
 			<View style={styles.rail}>
 				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
-					<Button label="📎" variant="text" onPress={onAttach} style={styles.iconButton} />
+					<Button label="🖼" variant="text" onPress={onChoosePhoto} style={styles.iconButton} />
+				</Host>
+				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
+					<Button label="📎" variant="text" onPress={onChooseFile} style={styles.iconButton} />
 				</Host>
 				<Host style={styles.menuHost} colorScheme={scheme} seedColor={t.accent}>
 					<Picker selectedValue={harness} onValueChange={onSelectHarness} appearance="menu">

@@ -1,7 +1,6 @@
-import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Maximize2, WrapText } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
@@ -19,10 +18,12 @@ import {
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { ArtifactRef, RenderRef } from "../../types/conversation";
+import { BrowserIcon } from "../icons";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
+import { useChatBrowserOpen } from "./ChatMarkdown";
 
 /** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
@@ -241,19 +242,19 @@ function RenderSource({ path }: { path: string }) {
 	);
 }
 
-/** Opens an artifact in the session's Browser panel, on its own preview origin. */
-function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: string; previewUrl: string; onOpen: () => void }) {
+/** Opens the artifact in the session's contextual Artifacts tab. */
+function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
-	const openArtifactPreview = useOpenArtifactPreview(sessionId);
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	return (
 		<RenderAction
 			label={t("chat.artifact.openInPanel")}
 			onClick={() => {
 				onOpen();
-				openArtifactPreview(previewUrl);
+				requestWorkspaceFileOpen(sessionId, path, undefined, "artifact");
 			}}
 		>
-			<Globe2 className="size-3.5" />
+			<FileText className="size-3.5" />
 		</RenderAction>
 	);
 }
@@ -280,6 +281,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
+	const openInBrowserPanel = useChatBrowserOpen();
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
 	// token, which the page could read from its own location.
@@ -319,6 +321,20 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<WrapText aria-hidden="true" className="size-3.5" />
 		</RenderAction>
 	);
+	// The page on its own, as a tab opens it. The render's sandbox CSP keeps it
+	// off the daemon wherever it is opened.
+	const standaloneUrl = () => `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
+	const browserPanelAction = openInBrowserPanel ? (
+		<RenderAction
+			label={t("inspector.openInAOBrowser")}
+			onClick={() => {
+				setExpanded(false);
+				openInBrowserPanel(standaloneUrl());
+			}}
+		>
+			<BrowserIcon aria-hidden="true" className="size-3.5" />
+		</RenderAction>
+	) : null;
 	return (
 		<div className="group/render relative min-w-0">
 			{"artifact" in props ? (
@@ -326,8 +342,8 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 					<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
 					<span className="min-w-0 flex-1 truncate text-muted-foreground">{page.title}</span>
-					{links?.previewUrl ? (
-						<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => undefined} />
+					{links && "artifact" in props ? (
+						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
@@ -339,6 +355,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 				)}
 			>
 				{wrapAction}
+				{browserPanelAction}
 				<RenderAction
 					label={t("chat.render.expand")}
 					onClick={() => {
@@ -385,18 +402,13 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 								<FilePlus className="size-3.5" />
 							</RenderAction>
 						) : null}
-						{links?.previewUrl ? (
-							<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => setExpanded(false)} />
+						{links && "artifact" in props ? (
+							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
 						) : null}
+						{browserPanelAction}
 						<RenderAction
 							label={t("chat.render.openInBrowser")}
-							onClick={() =>
-								window.open(
-									`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`,
-									"_blank",
-									"noopener,noreferrer",
-								)
-							}
+							onClick={() => window.open(standaloneUrl(), "_blank", "noopener,noreferrer")}
 						>
 							<ExternalLink className="size-3.5" />
 						</RenderAction>

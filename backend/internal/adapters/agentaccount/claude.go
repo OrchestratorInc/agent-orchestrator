@@ -48,6 +48,10 @@ type Claude struct {
 	DeviceHome string
 	// DeviceConfig is the computer's own global config (~/.claude.json).
 	DeviceConfig string
+	// DeviceEnv returns the credential AO adds to sessions that run on the
+	// computer's own login (a setup token saved through AO's login menu), so
+	// checks of that account see what its sessions use. Nil adds nothing.
+	DeviceEnv func() map[string]string
 }
 
 var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
@@ -238,6 +242,7 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		w := scoped.claudeUsageWindow
 		add("model:"+scoped.DisplayName, "Weekly · "+scoped.DisplayName, &w)
 	}
+	out.AutoResumeResetsAt = b.autoResumeResetAt(now)
 	if e := r.Spend; e != nil {
 		out.ExtraUsage = &domain.AgentAccountExtraUsage{Enabled: e.Enabled, UsedCredits: e.Used.major(), MonthlyLimit: e.Limit.major()}
 		if e.Used != nil {
@@ -245,6 +250,54 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		}
 	}
 	return out
+}
+
+func (b claudeUsageBody) autoResumeResetAt(now time.Time) *time.Time {
+	r := b.RateLimits
+	if r == nil || (r.Spend != nil && r.Spend.Enabled) {
+		return nil
+	}
+	valid := func(w *claudeUsageWindow) bool {
+		return w != nil && w.Utilization != nil && !math.IsNaN(*w.Utilization) &&
+			!math.IsInf(*w.Utilization, 0) && *w.Utilization >= 0 && *w.Utilization <= 100
+	}
+	// Without a model-specific failure identity, a saturated model meter cannot
+	// establish that the global rolling deadline releases this refusal.
+	models := []*claudeUsageWindow{r.Opus, r.Sonnet}
+	for i := range r.ModelScoped {
+		models = append(models, &r.ModelScoped[i].claudeUsageWindow)
+	}
+	for _, w := range models {
+		if w != nil && (!valid(w) || *w.Utilization >= 100) {
+			return nil
+		}
+	}
+	var latest time.Time
+	for _, w := range []*claudeUsageWindow{r.FiveHour, r.SevenDay} {
+		if w == nil {
+			continue
+		}
+		if !valid(w) {
+			return nil
+		}
+		if *w.Utilization < 100 {
+			continue
+		}
+		if w.ResetsAt == nil {
+			return nil
+		}
+		reset, err := time.Parse(time.RFC3339, *w.ResetsAt)
+		if err != nil || !reset.After(now) {
+			return nil
+		}
+		if reset.After(latest) {
+			latest = reset.UTC()
+		}
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	return &latest
 }
 
 // Prepare links home's history and the user's own config to the computer's
@@ -360,6 +413,11 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 	cmd.Env = os.Environ()
 	for key, value := range c.LaunchEnv(home) {
 		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	if home == "" && c.DeviceEnv != nil {
+		for key, value := range c.DeviceEnv() {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
 	}
 	// A throwaway cwd keeps a project's own Claude settings out of the probe.
 	cmd.Dir = os.TempDir()
