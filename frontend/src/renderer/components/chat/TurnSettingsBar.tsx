@@ -108,7 +108,7 @@ export interface ApprovalModeLimits {
 }
 
 export const TRIGGER_CLASS = cn(
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[length:var(--font-size-base)]! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
 	GHOST_PILL_CLASS,
 );
 export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
@@ -555,6 +555,7 @@ export function TurnSettingsBar({
 								title={startsInNote ?? `Approval policy for ${pendingAgent}`}
 								disabled={optionDisabled}
 								leadIcon={permissionIcon(permissionLook(pending.harness, pendingMode))}
+								showCaret
 								alert={Boolean(startsInNote)}
 							>
 								{startsInNote ? (
@@ -583,6 +584,7 @@ export function TurnSettingsBar({
 								onChange={(value) => applyOption(shownModeOption.id, value)}
 								footer={rememberAction}
 								leadIcon={unified ? permissionIcon(shownModeOption.choices.find((choice) => choice.value === shownModeOption.currentValue)?.permissionMode) : undefined}
+								showCaret
 							/>
 						) : showApprovalMode && onChange ? (
 							<Picker
@@ -590,6 +592,7 @@ export function TurnSettingsBar({
 													title="Approval policy for the next turn"
 													disabled={optionDisabled}
 								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
+								showCaret
 							>
 								{approvalNote ? (
 									<p role="note" className="px-3 py-2 text-[11px] leading-snug text-muted-foreground">{approvalNote}</p>
@@ -1193,6 +1196,7 @@ function ConfigOptionPicker({
 	disabled,
 	footer,
 	leadIcon,
+	showCaret,
 	groupClaude,
 	align,
 }: {
@@ -1203,6 +1207,8 @@ function ConfigOptionPicker({
 	disabled?: boolean;
 	footer?: ReactNode;
 	leadIcon?: LucideIcon;
+	/** Set on the permission control only. */
+	showCaret?: boolean;
 	groupClaude?: boolean;
 	align?: "start" | "end";
 }) {
@@ -1213,6 +1219,7 @@ function ConfigOptionPicker({
 			title={title || option.description || option.name}
 			disabled={disabled}
 			leadIcon={leadIcon}
+			showCaret={showCaret}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
@@ -1566,6 +1573,7 @@ function Picker({
 	children,
 	onFocus,
 	leadIcon: LeadIcon,
+	showCaret = false,
 	alert,
 	align = "end",
 }: {
@@ -1576,6 +1584,8 @@ function Picker({
 	alert?: boolean;
 	/** Set on the permission control: marked with this. */
 	leadIcon?: LucideIcon;
+	/** Show the menu caret. Only the permission control does: it reads as a select. */
+	showCaret?: boolean;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
 	children: React.ReactNode;
@@ -1586,14 +1596,16 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={false}
+					showCaret={showCaret}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
 					className={cn(TRIGGER_CLASS, LeadIcon ? "px-2" : undefined, alert ? "text-destructive" : undefined)}
 				>
+					{/* Never-ask mode is a standing risk: its shield keeps a warning tint so it
+					    never reads as one more muted label, while the text stays neutral. */}
 					{alert ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-destructive" />
-						: LeadIcon ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+						: LeadIcon ? <LeadIcon aria-hidden="true" className={cn("size-3.5 shrink-0", LeadIcon === ShieldAlert && "text-status-needs-you")} /> : null}
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>

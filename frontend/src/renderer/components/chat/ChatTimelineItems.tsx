@@ -687,7 +687,6 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{retry ? (
 					<Button
 						type="button"
@@ -726,12 +725,14 @@ export function TurnActions({
 								disabled={rollbackDisabled}
 								aria-label="Roll back to here"
 							>
-								<Undo2 aria-hidden="true" className="size-3" />
+								<Undo2 aria-hidden="true" className="size-3.5" />
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
 				) : null}
+				{/* After the actions, so copy and roll back sit at the same spot on every reply. */}
+				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -997,7 +998,7 @@ export function HumanMessage({
 	);
 	return (
 		<div
-			className="group/message flex flex-col items-end gap-1"
+			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
@@ -1070,7 +1071,9 @@ export function HumanMessage({
 				</div>
 			)}
 			{editing ? null : (
-				<div className="mt-1 flex h-7 items-center gap-1">
+				// Hover-only actions float under the bubble instead of reserving a blank row;
+				// a branch navigator is always visible, so it keeps its place in the flow.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
@@ -1081,7 +1084,7 @@ export function HumanMessage({
 								onClick={onEditStart}
 								aria-label="Edit user message"
 							>
-								<Pencil aria-hidden="true" className="size-3" />
+								<Pencil aria-hidden="true" className="size-3.5" />
 							</Button>
 						) : null}
 						<CopyButton
@@ -3593,8 +3596,9 @@ export function TurnDuration({ durationMs, inline = false }: { durationMs: numbe
 	return (
 		<span
 			className={cn(
-				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline ? "group-hover/row:text-foreground" : "pl-1.5 pr-0.5",
+				"shrink-0 font-sans text-sm leading-none tabular-nums",
+				// Inline, the fold's own hover color carries the number with the words.
+				inline ? null : "pl-1.5 pr-0.5 text-muted-foreground",
 			)}
 			data-turn-duration={inline ? undefined : ""}
 		>

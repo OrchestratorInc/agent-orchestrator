@@ -211,6 +211,15 @@ describe("macOS signing", () => {
 		expect(macSignOptionsForFile(`${helper}/Contents/MacOS/Orchestrator`)).toEqual(audio);
 	});
 
+	it("gives the app the dictation helper's usage strings", () => {
+		// Signed and nested in the app, the helper is checked against the app's
+		// Info.plist; a missing speech string makes macOS kill it.
+		expect(config.packagerConfig?.extendInfo).toMatchObject({
+			NSSpeechRecognitionUsageDescription: expect.any(String),
+			NSMicrophoneUsageDescription: expect.any(String),
+		});
+	});
+
 	it("keeps electron-osx-sign defaults for every other bundle file", () => {
 		const foreign = join(fixtureDir, "elsewhere", "agent-orchestrator");
 		mkdirSync(join(fixtureDir, "elsewhere"), { recursive: true });

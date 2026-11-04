@@ -8,7 +8,7 @@ import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "../lib/utils";
-import { TopbarActionError, TopbarButton } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -130,8 +130,12 @@ export function TopbarOpenEditorButton({
 		}
 	};
 	const launch = (targetId?: OpenTargetId) => {
-		open.reset();
-		open.mutate({ sessionId, projectId, ...(targetId ? { targetId } : {}) });
+		const target = targetId ? targets.find((entry) => entry.id === targetId) : preferred;
+		// Report from the promise: mutate callbacks are dropped if the button
+		// unmounts (e.g. a session switch) while the launch is in flight.
+		open.mutateAsync({ sessionId, projectId, ...(targetId ? { targetId } : {}) }).catch((error: unknown) => {
+			showGlobalToast(t("editor.openInTarget", { name: target?.name ?? "" }), error instanceof Error ? error.message : undefined, "error");
+		});
 	};
 	// ⌘O opens the workspace in the preferred editor, or in the first available
 	// target (file manager, terminal) when no editor is installed.
@@ -140,7 +144,6 @@ export function TopbarOpenEditorButton({
 		if (preferred) launch();
 		else if (targets[0]) launch(targets[0].id);
 	});
-	const launchError = open.error instanceof Error ? open.error.message : null;
 	const waitingLabel = stateQuery.isPending
 		? t("editor.preparingWorkspace")
 		: (workspaceCheckFailed(state) ? t("editor.checkingWorkspace") : null);
@@ -155,74 +158,64 @@ export function TopbarOpenEditorButton({
 				: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditorTitle"))));
 
 	return (
-		<>
-			{/* Only a launch the user just attempted earns inline topbar space. An
-			    unavailable workspace is a standing state: the controls are disabled
-			    and the reason lives in the main button's tooltip. */}
-			{launchError ? (
-				<TopbarActionError className="max-w-content-max truncate" title={launchError}>
-					{launchError}
-				</TopbarActionError>
-			) : null}
-			<div
-				className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
-				data-state={menuOpen ? "open" : "closed"}
-				style={style}
-			>
-				<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<TopbarButton
-								aria-label={waitingLabel
-									?? (workspaceError
-										?? (preferred
-											? t("editor.openInAria", { name: preferred.name })
-											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
-								className="bg-transparent hover:bg-transparent"
-								highlight={false}
-								disabled={mainDisabled}
-								onClick={() => launch()}
-								variant="icon"
-							>
-								<TargetIcon target={preferred} className="size-icon-md" />
-							</TopbarButton>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
-				</Tooltip>
-				<DropdownMenu onOpenChange={(isOpen) => {
-					setMenuOpen(isOpen);
-					if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
-				}}>
+		<div
+			className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
+			data-state={menuOpen ? "open" : "closed"}
+			style={style}
+		>
+			<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
+			<Tooltip>
+				<TooltipTrigger asChild>
 					<span className="inline-flex">
-						<DropdownMenuTrigger asChild>
-							<TopbarButton
-								aria-label={t("editor.openOptionsAria")}
-								className="bg-transparent hover:bg-transparent"
-								highlight={false}
-								disabled={menuDisabled}
-								variant="icon"
-							>
-								<ChevronDown className="size-icon-sm" aria-hidden="true" />
-							</TopbarButton>
-						</DropdownMenuTrigger>
+						<TopbarButton
+							aria-label={waitingLabel
+								?? (workspaceError
+									?? (preferred
+										? t("editor.openInAria", { name: preferred.name })
+										: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
+							className="bg-transparent hover:bg-transparent"
+							highlight={false}
+							disabled={mainDisabled}
+							onClick={() => launch()}
+							variant="icon"
+						>
+							<TargetIcon target={preferred} className="size-icon-md" />
+						</TopbarButton>
 					</span>
-				
-					<DropdownMenuContent align="end" className="min-w-52">
-						{[...openInTargets, ...editors].map((target) => (
-							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-								<TargetIcon target={target} className="size-icon-sm" />
-								{target.name}
-							</DropdownMenuItem>
-						))}
-						<DropdownMenuItem onSelect={() => void copyPath()}>
-							<Copy className="size-icon-sm" aria-hidden="true" />
-							{t("editor.copyPath")}
+				</TooltipTrigger>
+				<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
+			</Tooltip>
+			<DropdownMenu onOpenChange={(isOpen) => {
+				setMenuOpen(isOpen);
+				if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
+			}}>
+				<span className="inline-flex">
+					<DropdownMenuTrigger asChild>
+						<TopbarButton
+							aria-label={t("editor.openOptionsAria")}
+							className="bg-transparent hover:bg-transparent"
+							highlight={false}
+							disabled={menuDisabled}
+							variant="icon"
+						>
+							<ChevronDown className="size-icon-sm" aria-hidden="true" />
+						</TopbarButton>
+					</DropdownMenuTrigger>
+				</span>
+			
+				<DropdownMenuContent align="end" className="min-w-52">
+					{[...openInTargets, ...editors].map((target) => (
+						<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
+							<TargetIcon target={target} className="size-icon-sm" />
+							{target.name}
 						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
-			</div>
-		</>
+					))}
+					<DropdownMenuItem onSelect={() => void copyPath()}>
+						<Copy className="size-icon-sm" aria-hidden="true" />
+						{t("editor.copyPath")}
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+		</div>
 	);
 }

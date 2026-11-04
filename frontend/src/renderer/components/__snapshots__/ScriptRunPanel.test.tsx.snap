@@ -457,7 +457,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3"
+              class="lucide lucide-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"
@@ -785,7 +785,7 @@ Pulling cache
           >
             <svg
               aria-hidden="true"
-              class="lucide lucide-copy size-3"
+              class="lucide lucide-copy size-3.5"
               fill="none"
               height="24"
               stroke="currentColor"
