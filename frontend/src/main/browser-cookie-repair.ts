@@ -90,17 +90,36 @@ export async function repairCookies(session: RepairSession): Promise<RepairResul
 	return { ...repaired, failed: antiBot.length + widened.length - repaired.antiBot - repaired.duplicates };
 }
 
-async function readRepaired(file: string): Promise<string[]> {
+type RepairState = { kind: "first-run" } | { kind: "unreadable" } | { kind: "ready"; pending: string[] };
+
+async function readState(file: string): Promise<RepairState> {
+	let text: string;
 	try {
-		const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-		const repaired = (parsed as { repaired?: unknown }).repaired;
-		return Array.isArray(repaired) ? repaired.filter((id): id is string => typeof id === "string") : [];
+		text = await readFile(file, "utf8");
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? { kind: "first-run" } : { kind: "unreadable" };
+	}
+	try {
+		const pending = (JSON.parse(text) as { pending?: unknown }).pending;
+		return { kind: "ready", pending: Array.isArray(pending) ? pending.filter((id): id is string => typeof id === "string") : [] };
 	} catch {
-		return [];
+		return { kind: "unreadable" };
 	}
 }
 
-/** Repairs each profile once. Never throws: a failed repair must not stop AO starting. */
+async function writeState(file: string, pending: string[]): Promise<void> {
+	const temporary = `${file}.${process.pid}.tmp`;
+	await writeFile(temporary, `${JSON.stringify({ version: 2, pending })}\n`, { mode: 0o600 });
+	await rename(temporary, file);
+}
+
+/**
+ * Repairs the profiles that existed when this version first ran, once each. Later
+ * profiles earned their own cookies, and a pair a site set itself looks the same
+ * as a widened import, so they are never touched. Failures are logged and not
+ * retried: repeating this at every launch would wipe freshly earned anti-bot
+ * cookies. Never throws, so a failed repair cannot stop AO starting.
+ */
 export async function repairBrowserProfileCookies(options: {
 	stateDir: string;
 	profileIds: string[];
@@ -108,23 +127,28 @@ export async function repairBrowserProfileCookies(options: {
 	log?: (message: string) => void;
 }): Promise<void> {
 	const file = path.join(options.stateDir, STATE_FILE);
-	const repaired = await readRepaired(file);
-	const pending = options.profileIds.filter((id) => !repaired.includes(id));
-	if (pending.length === 0) return;
-	for (const profileId of pending) {
-		try {
-			const result = await repairCookies(options.fromProfile(profileId));
-			options.log?.(`AO: repaired browser profile cookies: ${result.antiBot} anti-bot, ${result.duplicates} duplicates, ${result.failed} failed`);
-			if (result.failed === 0) repaired.push(profileId);
-		} catch (error) {
-			options.log?.(`AO: browser profile cookie repair failed: ${String(error)}`);
-		}
+	const state = await readState(file);
+	if (state.kind === "unreadable") {
+		options.log?.("AO: browser profile cookie repair skipped: its state file is unreadable");
+		return;
 	}
+	const pending = state.kind === "first-run" ? [...options.profileIds] : state.pending;
 	try {
-		const temporary = `${file}.${process.pid}.tmp`;
-		await writeFile(temporary, `${JSON.stringify({ version: 1, repaired })}\n`, { mode: 0o600 });
-		await rename(temporary, file);
+		if (state.kind === "first-run") await writeState(file, pending);
+		for (const profileId of [...pending]) {
+			if (options.profileIds.includes(profileId)) {
+				try {
+					const result = await repairCookies(options.fromProfile(profileId));
+					options.log?.(`AO: repaired browser profile cookies: ${result.antiBot} anti-bot, ${result.duplicates} duplicates, ${result.failed} failed`);
+				} catch (error) {
+					options.log?.(`AO: browser profile cookie repair failed: ${String(error)}`);
+				}
+			}
+			pending.splice(pending.indexOf(profileId), 1);
+			await writeState(file, pending);
+		}
 	} catch (error) {
+		// Without a record the next launch could repeat this, so stop here.
 		options.log?.(`AO: could not record browser profile cookie repair: ${String(error)}`);
 	}
 }

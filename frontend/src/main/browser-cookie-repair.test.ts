@@ -146,27 +146,71 @@ describe("repairCookies", () => {
 });
 
 describe("repairBrowserProfileCookies", () => {
+	const stateFile = (stateDir: string) => path.join(stateDir, "browser-cookie-repair.json");
+
 	async function fixture() {
 		const stateDir = await mkdtemp(path.join(os.tmpdir(), "ao-cookie-repair-"));
 		return { stateDir, cleanup: () => rm(stateDir, { recursive: true, force: true }) };
 	}
 
-	it("repairs each profile once and remembers it across runs", async () => {
+	it("repairs each profile that existed at the update once", async () => {
 		const { stateDir, cleanup } = await fixture();
 		try {
 			const session = fakeSession([cookie(".x.com", "cf_clearance", "stale")]);
 			const fromProfile = vi.fn(() => session);
 			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile });
+			expect(session.jar()).toEqual([]);
 			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile });
 			expect(fromProfile).toHaveBeenCalledOnce();
-			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1", "p2"], fromProfile });
-			expect(fromProfile).toHaveBeenCalledTimes(2);
 		} finally {
 			await cleanup();
 		}
 	});
 
-	it("retries a profile whose repair failed, and still repairs the others", async () => {
+	it("never touches a profile created after the update, which earned its own cookies", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["old"], fromProfile: () => fakeSession([]) });
+			const earned = fakeSession([cookie(".x.com", "cf_clearance", "earned"), cookie(".y.com", "a", "1"), cookie("y.com", "a", "2")]);
+			const fromProfile = vi.fn(() => earned);
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["old", "new"], fromProfile });
+			expect(fromProfile).not.toHaveBeenCalled();
+			expect(earned.jar()).toHaveLength(3);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("does nothing to profiles on a fresh install's later launches", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			await repairBrowserProfileCookies({ stateDir, profileIds: [], fromProfile: () => fakeSession([]) });
+			const fromProfile = vi.fn(() => fakeSession([]));
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["created-later"], fromProfile });
+			expect(fromProfile).not.toHaveBeenCalled();
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("attempts a profile once even when cookies fail, so it cannot wipe new ones every launch", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			const session = fakeSession([cookie(".x.com", "cf_clearance", "stuck")]);
+			session.cookies.set.mockRejectedValueOnce(new Error("nope"));
+			const log = vi.fn();
+			const fromProfile = vi.fn(() => session);
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile, log });
+			expect(log).toHaveBeenCalledWith(expect.stringContaining("1 failed"));
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile, log });
+			expect(fromProfile).toHaveBeenCalledOnce();
+			expect(session.jar()).toHaveLength(1);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("does not retry a profile that could not be opened, and still repairs the others", async () => {
 		const { stateDir, cleanup } = await fixture();
 		try {
 			const good = fakeSession([cookie(".x.com", "cf_clearance", "stale")]);
@@ -176,20 +220,43 @@ describe("repairBrowserProfileCookies", () => {
 			});
 			await repairBrowserProfileCookies({ stateDir, profileIds: ["bad", "good"], fromProfile, log: () => undefined });
 			expect(good.jar()).toEqual([]);
-			const state = JSON.parse(await readFile(path.join(stateDir, "browser-cookie-repair.json"), "utf8"));
-			expect(state.repaired).toEqual(["good"]);
+			expect(JSON.parse(await readFile(stateFile(stateDir), "utf8")).pending).toEqual([]);
 		} finally {
 			await cleanup();
 		}
 	});
 
-	it("survives an unreadable state file", async () => {
+	it("repairs nothing from an unreadable state file, since it can't tell which profiles are old", async () => {
 		const { stateDir, cleanup } = await fixture();
 		try {
-			await writeFile(path.join(stateDir, "browser-cookie-repair.json"), "not json");
-			const session = fakeSession([]);
-			await expect(repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile: () => session })).resolves.toBeUndefined();
-			expect(session.cookies.get).toHaveBeenCalled();
+			await writeFile(stateFile(stateDir), "not json");
+			const fromProfile = vi.fn(() => fakeSession([]));
+			await expect(repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile, log: () => undefined })).resolves.toBeUndefined();
+			expect(fromProfile).not.toHaveBeenCalled();
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("repairs nothing when it can't record the state, so nothing repeats every launch", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			const fromProfile = vi.fn(() => fakeSession([]));
+			await repairBrowserProfileCookies({ stateDir: path.join(stateDir, "missing"), profileIds: ["p1"], fromProfile, log: () => undefined });
+			expect(fromProfile).not.toHaveBeenCalled();
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("finishes the remaining profiles after a crash partway through", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			await writeFile(stateFile(stateDir), JSON.stringify({ version: 2, pending: ["p2"] }));
+			const fromProfile = vi.fn(() => fakeSession([]));
+			await repairBrowserProfileCookies({ stateDir, profileIds: ["p1", "p2"], fromProfile });
+			expect(fromProfile).toHaveBeenCalledOnce();
+			expect(fromProfile).toHaveBeenCalledWith("p2");
 		} finally {
 			await cleanup();
 		}
