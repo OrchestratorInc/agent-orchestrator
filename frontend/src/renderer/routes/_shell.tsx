@@ -1257,6 +1257,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
 	useAppShortcut("next-attention-session", () => navigateSession(1, true));
 	useAppShortcut("history-back", () => {
+		// Settings covers the current route without adding a router history entry.
+		if (settingsPage) {
+			settingsPage.close();
+			return;
+		}
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
@@ -1479,7 +1484,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on
             macOS/Linux. */}
-				<WindowTitlebar />
+				<WindowTitlebar onBack={settingsPage?.close} />
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1593,6 +1598,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
               Rendered first, real clicks get swallowed by window-drag even
               though DOM hit-testing looks correct. */}
 					<TitlebarNav
+						onBack={settingsPage?.close}
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
 						zoomFactor={windowZoomFactor}

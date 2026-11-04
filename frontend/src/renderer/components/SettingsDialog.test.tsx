@@ -561,7 +561,12 @@ describe("SettingsDialog", () => {
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 
 		useUiStore.getState().openGlobalSettings("general");
-		await userEvent.click(await screen.findByRole("button", { name: "Back" }));
+		await screen.findByRole("button", { name: "Back" });
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		// Closing returns to the page immediately, even with section history.
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
