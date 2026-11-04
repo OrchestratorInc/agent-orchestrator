@@ -4020,6 +4020,9 @@ app.on("before-quit", (event) => {
 	}
 	if (!agentQuitCleanupComplete) {
 		event.preventDefault();
+		// Quit has started: a pending crash respawn must not race the agent
+		// shutdown request below.
+		cancelDaemonAutoRestart();
 		if (!agentQuitCleanupPromise) {
 			// Fail open: a crashed, hung, or taken-over daemon must never block
 			// quit or an update restart. Dropping the supervisor link and the exit
