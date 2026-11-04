@@ -183,7 +183,15 @@ const config: ForgeConfig = {
 			InternalName: WINDOWS_DISPLAY_NAME,
 			ProductName: WINDOWS_DISPLAY_NAME,
 		},
-		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
+		extendInfo: {
+			LSHasLocalizedDisplayName: true,
+			CFBundleDevelopmentRegion: "en",
+			// In a signed build, macOS asks the enclosing app for the dictation
+			// helper's speech and microphone access, despite the helper's own
+			// usage strings and its disclaim. Without this key it kills the helper.
+			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
+			NSMicrophoneUsageDescription: "Orchestrator uses the microphone to dictate messages.",
+		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
