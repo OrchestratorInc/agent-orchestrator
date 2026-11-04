@@ -542,7 +542,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 				{cut}
 				<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.document}>
 					{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
-					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
+					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace nestedScroll />
 				</ScrollView>
 			</View>
 		);
