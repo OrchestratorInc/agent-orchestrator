@@ -176,3 +176,44 @@ func assertPiTokenMetricsEqual(t *testing.T, got, want domain.UsageTokenMetrics)
 		}
 	}
 }
+
+// TestParsePiNormalizesEveryAPIFamilyAlike catches a provider family whose
+// counters land differently. Every pi-ai adapter (openai-completions,
+// openai-responses, anthropic-messages, bedrock-converse-stream,
+// google-generative-ai, mistral-conversations) reports input without either
+// cache counter and output with reasoning already included, then prices the
+// same fields; so one rule must hold whatever provider name Pi recorded.
+func TestParsePiNormalizesEveryAPIFamilyAlike(t *testing.T) {
+	providers := []string{
+		"zai", "openrouter", "deepseek", "kimi-coding", "minimax",
+		"amazon-bedrock", "google", "google-vertex", "mistral", "groq",
+		"github-copilot", "azure-openai-responses", "my-custom-gateway",
+	}
+	source := usageSource(domain.UsageSourcePiSession)
+	source.NativeRootID = "pi-session"
+	for _, provider := range providers {
+		t.Run(provider, func(t *testing.T) {
+			record := jsonlRecord{Data: []byte(`{"type":"message","id":"a-1","message":{"role":"assistant","provider":"` + provider +
+				`","model":"m","usage":{"input":100,"output":40,"cacheRead":30,"cacheWrite":20,"reasoning":15,"totalTokens":190,` +
+				`"cost":{"input":0.0001,"output":0.00004,"cacheRead":0.000003,"cacheWrite":0.000025,"total":0.000168}}}}`)}
+			result := parseRecords(source, []jsonlRecord{record}, 100, time.Now())
+			if result.err != nil || len(result.Events) != 1 || result.Cursor.AnomalyCount != 0 {
+				t.Fatalf("result = %+v", result)
+			}
+			event := result.Events[0]
+			if event.ProviderID != domain.UsageProviderOpenAI || event.BillingProviderID != provider ||
+				event.BillingProviderSource != domain.UsageBillingProviderObserved {
+				t.Fatalf("event = %+v", event)
+			}
+			// 150 input = 100 uncached + 30 cache read + 20 cache write; output
+			// stays 40 because its 15 reasoning tokens are already inside it.
+			assertPiTokens(t, event.Tokens, 150, 30, 120, 40)
+			costs := event.Costs
+			if costs.EstimatedCostNanos == nil || *costs.EstimatedCostNanos != 168_000 ||
+				*costs.InputCostNanos != 125_000 || *costs.CachedInputCostNanos != 3_000 ||
+				*costs.OutputCostNanos != 40_000 || costs.PricingVersion != piPricingVersion {
+				t.Fatalf("costs = %+v", costs)
+			}
+		})
+	}
+}
