@@ -65,6 +65,9 @@ type Options struct {
 	HTTPClient *http.Client
 	BaseURL    string
 	UserAgent  string
+	// Host is the GHE.com tenant host this tracker serves; "" means
+	// github.com. It is stamped on returned IDs and required on inputs.
+	Host string
 }
 
 // Tracker implements ports.Tracker against the GitHub REST API.
@@ -79,6 +82,7 @@ type Tracker struct {
 	tokens    TokenSource
 	baseURL   string
 	userAgent string
+	host      string
 
 	// listCache stores one entry per distinct List request path. The key
 	// space is naturally bounded by intake-enabled repo/filter pairs, so no
@@ -110,6 +114,7 @@ func New(opts Options) (*Tracker, error) {
 		tokens:    src,
 		baseURL:   opts.BaseURL,
 		userAgent: opts.UserAgent,
+		host:      opts.Host,
 		listCache: map[string]listCacheEntry{},
 	}
 	if t.http == nil {
@@ -172,7 +177,7 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 	if err := json.Unmarshal(resp, &raw); err != nil {
 		return domain.Issue{}, fmt.Errorf("github tracker: decode issue: %w", err)
 	}
-	return issueFromGH(owner, repo, raw), nil
+	return issueFromGH(t.host, owner, repo, raw), nil
 }
 
 // issueFromGH projects a raw GitHub issue payload into the normalized
@@ -180,7 +185,7 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 // shape is "owner/repo#N" and we want the returned ID to round-trip
 // through the same adapter even if the original caller used a zero
 // Provider.
-func issueFromGH(owner, repo string, raw ghIssue) domain.Issue {
+func issueFromGH(host, owner, repo string, raw ghIssue) domain.Issue {
 	labels := make([]string, 0, len(raw.Labels))
 	for _, l := range raw.Labels {
 		labels = append(labels, l.Name)
@@ -193,6 +198,7 @@ func issueFromGH(owner, repo string, raw ghIssue) domain.Issue {
 		ID: domain.TrackerID{
 			Provider: domain.TrackerProviderGitHub,
 			Native:   fmt.Sprintf("%s/%s#%d", owner, repo, raw.Number),
+			Host:     host,
 		},
 		Title:     raw.Title,
 		Body:      raw.Body,
@@ -248,8 +254,8 @@ func mapStateFromGitHub(state, reason string, labels []string) domain.Normalized
 // out client-side. GitHub pagination is followed until no next link remains;
 // ListFilter.Limit, when set, caps the total accumulated issue count.
 func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter domain.ListFilter) ([]domain.Issue, error) {
-	if repo.Provider != domain.TrackerProviderGitHub {
-		return nil, fmt.Errorf("%w: provider=%q", ErrWrongProvider, repo.Provider)
+	if repo.Provider != domain.TrackerProviderGitHub || repo.Host != t.host {
+		return nil, fmt.Errorf("%w: provider=%q host=%q", ErrWrongProvider, repo.Provider, repo.Host)
 	}
 	owner, repoName, err := parseGitHubRepo(repo.Native)
 	if err != nil {
@@ -324,7 +330,7 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 			if r.PullRequest != nil {
 				continue
 			}
-			pageIssues = append(pageIssues, issueFromGH(owner, repoName, r))
+			pageIssues = append(pageIssues, issueFromGH(t.host, owner, repoName, r))
 		}
 		if etag != "" {
 			t.listCacheMu.Lock()
@@ -479,8 +485,8 @@ func (t *Tracker) parseID(id domain.TrackerID) (owner, repo string, number int, 
 	// this adapter with a non-github Provider is a routing bug, not user
 	// input. Empty Provider is treated the same way — it would round-trip
 	// to an Issue whose ID can't be re-routed.
-	if id.Provider != domain.TrackerProviderGitHub {
-		return "", "", 0, fmt.Errorf("%w: provider=%q", ErrWrongProvider, id.Provider)
+	if id.Provider != domain.TrackerProviderGitHub || id.Host != t.host {
+		return "", "", 0, fmt.Errorf("%w: provider=%q host=%q", ErrWrongProvider, id.Provider, id.Host)
 	}
 	return parseGitHubID(id.Native)
 }

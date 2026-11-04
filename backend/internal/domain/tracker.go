@@ -20,13 +20,14 @@ const (
 // ("owner/repo#123" for GitHub, "group/project#123" for GitLab) and is
 // parsed by the adapter.
 //
-// Host is the GitLab instance host (e.g. "gitlab.example.com"). The zero value
-// "" means the default host gitlab.com, so all existing call sites that
+// Host is the GitLab instance host (e.g. "gitlab.example.com") or, for GitHub,
+// a GHE.com tenant host (e.g. "acme.ghe.com"). The zero value "" means the
+// default host (gitlab.com / github.com), so all existing call sites that
 // construct TrackerID without setting Host continue to work unchanged.
 type TrackerID struct {
 	Provider TrackerProvider `json:"provider"`
 	Native   string          `json:"native"`
-	// Host is the GitLab instance host; "" means gitlab.com.
+	// Host is the GitLab instance or GHE.com tenant host; "" means the default.
 	Host string `json:"host,omitempty"`
 }
 
@@ -66,7 +67,7 @@ type Issue struct {
 type TrackerRepo struct {
 	Provider TrackerProvider `json:"provider"`
 	Native   string          `json:"native"`
-	// Host is the GitLab instance host; "" means gitlab.com.
+	// Host is the GitLab instance or GHE.com tenant host; "" means the default.
 	Host string `json:"host,omitempty"`
 }
 

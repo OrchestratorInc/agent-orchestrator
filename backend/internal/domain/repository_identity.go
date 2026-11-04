@@ -50,6 +50,15 @@ func GHECloudAPIBase(host string) (string, bool) {
 	return "https://api." + host, true
 }
 
+// GHECloudTrackerHost returns the tracker Host for a GitHub origin host: the
+// tenant hostname for GHE.com, "" (github.com) for every other host.
+func GHECloudTrackerHost(host string) string {
+	if _, tenant := GHECloudAPIBase(host); !tenant {
+		return ""
+	}
+	return normalizeHost(host)
+}
+
 func normalizeHost(host string) string {
 	if hostname, _, err := net.SplitHostPort(host); err == nil {
 		host = hostname
