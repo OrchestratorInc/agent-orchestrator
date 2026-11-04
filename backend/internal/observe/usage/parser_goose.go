@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -219,16 +218,4 @@ func valueOrZero(value *int64) int64 {
 		return 0
 	}
 	return *value
-}
-
-// usdToNanos converts a provider-reported dollar amount to AO's nano-USD.
-func usdToNanos(usd float64) (int64, bool) {
-	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
-		return 0, false
-	}
-	nanos := math.Round(usd * 1e9)
-	if nanos > math.MaxInt64/2 {
-		return 0, false
-	}
-	return int64(nanos), true
 }
