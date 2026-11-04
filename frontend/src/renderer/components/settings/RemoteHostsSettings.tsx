@@ -21,8 +21,6 @@ import { ThisComputerAccess } from "./ThisComputerAccess";
 type SavedHost = { hostId: string; label: string; url: string };
 
 /** Row actions are quiet: ghost, muted until hovered. */
-const GHOST_ACTION = "text-settings-muted hover:text-settings-label";
-
 export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
@@ -136,7 +134,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	if (status !== "authenticated") return (
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
 			<SettingsRow label={t("remote.aoCloud")} description={t("remote.signInDescription")}>{status === "unauthenticated" ? (
-				<Button className={GHOST_ACTION} onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button" variant="ghost">
+				<Button onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button" variant="quiet">
 					{t("shell.signIn")}
 				</Button>
 			) : null}</SettingsRow>
@@ -176,24 +174,24 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					)}
 				>
 					<div className="flex items-center gap-1">
-						<Button aria-label={t("remote.editHost", { label: host.label })} className={GHOST_ACTION} disabled={busy || removeBusy} onClick={() => {
+						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
 							setEditing(host);
 							setLabel(host.label);
 							setUrl(host.url);
 							setPassword("");
 							setFormError("");
 							formRef.current?.scrollIntoView?.({ block: "nearest" });
-						}} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
-						<Button aria-label={t("remote.removeHost", { label: host.label })} className={GHOST_ACTION} disabled={busy || removeBusy} onClick={() => {
+						}} size="icon-sm" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
+						<Button aria-label={t("remote.removeHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
 							setConfirmingRemoval(host);
 							setRemoveError("");
-						}} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-icon-base" /></Button>
+						}} size="icon-sm" type="button" variant="destructive-ghost"><Trash2 aria-hidden="true" className="size-icon-base" /></Button>
 					</div>
 				</SettingsRow>
 			))}
 			{loadError ? (
 				<SettingsRow label={t("remote.savedHosts")} description={<span className="text-error" role="alert">{loadError}</span>}>
-					<Button className={GHOST_ACTION} onClick={() => void load()} size="sm" type="button" variant="ghost">{t("notify.retry")}</Button>
+					<Button onClick={() => void load()} size="sm" type="button" variant="quiet">{t("notify.retry")}</Button>
 				</SettingsRow>
 			) : null}
 		</SettingsSection>
@@ -208,8 +206,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="w-80 max-w-full" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
 				<div className="settings-content-row flex items-center justify-end gap-2">
 					{formError ? <p className="mr-auto min-w-0 text-xs text-error" role="alert">{formError}</p> : null}
-					{editing ? <Button className={GHOST_ACTION} disabled={busy} onClick={resetForm} size="sm" type="button" variant="ghost">{t("confirm.cancel")}</Button> : null}
-					<Button className={GHOST_ACTION} disabled={busy || !label.trim() || !url.trim() || (!editing?.hostId && !password)} size="sm" type="submit" variant="ghost">{busy ? t("remote.saving") : editing ? t("remote.saveHost") : t("remote.addHost")}</Button>
+					{editing ? <Button disabled={busy} onClick={resetForm} size="sm" type="button" variant="quiet">{t("confirm.cancel")}</Button> : null}
+					<Button disabled={busy || !label.trim() || !url.trim() || (!editing?.hostId && !password)} size="sm" type="submit" variant="quiet">{busy ? t("remote.saving") : editing ? t("remote.saveHost") : t("remote.addHost")}</Button>
 				</div>
 			</SettingsSection>
 		</form>

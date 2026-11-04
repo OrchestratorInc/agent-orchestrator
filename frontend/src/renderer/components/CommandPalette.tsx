@@ -60,6 +60,7 @@ import { useUiStore } from "../stores/ui-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
+import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
@@ -886,14 +887,16 @@ export function CommandPalette() {
 	// Nested views keep the bar as it is: Back takes the search glyph's place,
 	// so the field never moves.
 	const backButton = view.mode === "root" ? undefined : (
-		<button
+		<Button
 			type="button"
 			onClick={() => requestDismiss("pop")}
-			className="-m-1 grid shrink-0 place-items-center rounded-sm p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground"
+			className="-m-1"
 			aria-label={t("command.back")}
+			size="icon-xs"
+			variant="quiet"
 		>
 			<ArrowLeft className="size-icon-base" aria-hidden="true" />
-		</button>
+		</Button>
 	);
 
 	return (

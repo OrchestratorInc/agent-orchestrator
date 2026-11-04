@@ -21,6 +21,7 @@ import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Pressable } from "../ui/pressable";
 import { copyChatImage, saveChatImage } from "./chat-image-actions";
 import { useChatImageSrc } from "./chat-image-source";
 
@@ -133,12 +134,11 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 	return (
 		<>
 			<ChatImageMenu url={url} label={label}>
-				<button
-					type="button"
+				<Pressable
 					onClick={() => setOpen(true)}
 					aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
 					className={cn(
-						"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+						"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 motion-reduce:transition-none",
 						inline
 							? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
 							: "inline-block align-top",
@@ -169,7 +169,7 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 						)}
 					/>
 					)}
-				</button>
+				</Pressable>
 			</ChatImageMenu>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent

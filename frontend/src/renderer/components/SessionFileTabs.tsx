@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionFileTabState } from "../lib/session-file-tabs";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { Pressable } from "./ui/pressable";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
 function basename(path: string): string {
@@ -57,7 +58,7 @@ export function SessionFileTab({
 	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
 	// to the cross on hover.
 	const closeAction = (
-		<button
+		<Pressable
 			aria-label={t("files.closeTab", { name })}
 			className={terminalTabActionClassName}
 			onClick={(event) => {
@@ -76,8 +77,7 @@ export function SessionFileTab({
 					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
 				</>
 			) : <X className="size-icon-sm" aria-hidden="true" />}
-		</button>
-	
+		</Pressable>
 	);
 	return (
 		<TerminalTabFrame

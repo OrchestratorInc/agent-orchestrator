@@ -6,6 +6,7 @@ import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
 	shell: ShellTerminal;
@@ -127,10 +128,9 @@ export function ShellTerminalTab({
 	};
 	if (appearance === "connected") {
 		const closeAction = isEditing || shell.optimistic ? undefined : (
-			<button {...closeControl} className={terminalTabActionClassName}>
+			<Pressable {...closeControl} className={terminalTabActionClassName}>
 				<X aria-hidden="true" className="size-icon-sm" />
-			</button>
-		
+			</Pressable>
 		);
 		const editingContent = isEditing ? (
 			<input
@@ -203,7 +203,7 @@ export function ShellTerminalTab({
 					value={draft}
 				/>
 			) : (
-				<button
+				<Pressable
 					ref={ref}
 					aria-current={isActive}
 					aria-selected={isActive}
@@ -227,15 +227,14 @@ export function ShellTerminalTab({
 					<span className="inline-flex min-w-0 -translate-y-px items-center">
 						<span className="truncate">{title}</span>
 					</span>
-				</button>
+				</Pressable>
 			)}
-			<button
+			<Pressable
 				{...closeControl}
 				className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
 			>
 				<X aria-hidden="true" className="size-icon-sm" />
-			</button>
-		
+			</Pressable>
 		</span>
 	);
 }

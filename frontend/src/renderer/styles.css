@@ -1247,51 +1247,6 @@ button.settings-row-bar {
 	color: var(--color-text-settings-muted);
 }
 
-@utility settings-footer-button {
-	display: inline-flex;
-	height: var(--size-settings-action-height);
-	flex-shrink: 0;
-	align-items: center;
-	justify-content: center;
-	gap: calc(var(--spacing) * 2);
-	white-space: nowrap;
-	border-radius: var(--radius-settings-action);
-	border: 1px solid var(--color-border-settings-input);
-	background-color: var(--color-bg-settings-input);
-	padding-inline: var(--space-3);
-	font-size: var(--font-size-md);
-	line-height: 1.25rem;
-	color: var(--color-text-settings-row);
-	outline: none;
-	transition-property: color, background-color, border-color, opacity, box-shadow;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		opacity: 0.9;
-	}
-
-	&:focus-visible {
-		box-shadow: none;
-	}
-}
-
-@utility settings-footer-button-primary {
-	border-color: transparent;
-	background-color: var(--color-settings-accent);
-	padding-inline: var(--size-settings-footer-button-padding-x);
-	color: var(--color-settings-footer-button-primary-fg);
-	transition-property: opacity;
-	transition-duration: var(--duration-normal);
-
-	&:hover:not(:disabled) {
-		opacity: 0.9;
-	}
-
-	&:disabled {
-		cursor: not-allowed;
-	}
-}
-
 /* Segmented control — ReportProblem destination picker, ConnectMobile LAN/Tailscale. */
 @utility settings-segment {
 	display: inline-flex;
@@ -1351,35 +1306,6 @@ button.settings-row-bar {
 	font-weight: var(--font-weight-semibold);
 	line-height: 1.5rem;
 	color: var(--color-text-settings-title);
-}
-
-@utility settings-close-button {
-	display: grid;
-	width: calc(var(--spacing) * 8);
-	height: calc(var(--spacing) * 8);
-	place-items: center;
-	border-radius: var(--radius-md);
-	color: var(--color-text-settings-muted);
-	transition-property: color, background-color;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		background-color: var(--color-bg-settings-row-hover);
-		color: var(--color-text-settings-title);
-	}
-
-	&:focus-visible {
-		outline: none;
-		box-shadow: none;
-	}
-}
-
-/* Positioning only — compose with `settings-close-button` at the call site. */
-@utility settings-dialog-close-button {
-	position: absolute;
-	top: var(--space-3);
-	right: var(--space-3);
-	z-index: var(--z-chrome);
 }
 
 @utility import-title {
@@ -2398,12 +2324,6 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	box-shadow: none !important;
 }
 
-/* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   section "+") share the instant icon-button fill on hover and focus-visible. */
-.sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: var(--color-interactive-hover) !important;
-}
-
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
    the host or its inner focusable (session open button). */
 .sidebar-focusless .group\/nav-row:focus-visible,
@@ -2575,43 +2495,6 @@ html.sidebar-reordering * {
 	border-color: var(--color-border) !important;
 }
 
-/* Keep every chat control tactile, including the small native buttons embedded
-   in message rows and activity summaries. The shared Button primitive owns its
-   own transition, but this makes the same interaction contract hold at the
-   thinner timeline boundaries too. */
-.cursor-chat-surface button:not(:disabled) {
-	transition-property: background-color, border-color, color, box-shadow, transform, opacity;
-	transition-duration: 100ms;
-	transition-timing-function: ease-out;
-}
-
-.cursor-chat-surface button:not(:disabled):active {
-	transform: scale(0.96);
-}
-
-/* Menu triggers anchor their menu: scaling one on press would move the open menu,
-   which is positioned from the trigger's box. They get hover and open states only. */
-.cursor-chat-surface .settings-option-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Timeline summaries are disclosure controls, not raised buttons. Keeping their
-   footprint fixed prevents the label from shifting when the pointer lands. */
-.cursor-chat-surface .activity-summary-button:not(:disabled):active {
-	transform: none;
-}
-
-/* Worked is a disclosure row, not a tactile button: keep its geometry and
-   scale stable while the accordion opens. */
-.cursor-chat-surface .chat-worked-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Welcome sample prompt chips hold still when pressed. */
-.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
-	transform: none;
-}
-
 .activity-run-toggle {
 	color: var(--color-text-muted);
 }
@@ -2674,16 +2557,6 @@ html.sidebar-reordering * {
 	.chat-worked-accordion-content[data-state="open"],
 	.chat-worked-accordion-content[data-state="closed"] {
 		animation: none;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.cursor-chat-surface button:not(:disabled) {
-		transition: none;
-	}
-
-	.cursor-chat-surface button:not(:disabled):active {
-		transform: none;
 	}
 }
 
@@ -3434,26 +3307,6 @@ html.sidebar-reordering * {
 	font-weight: var(--font-weight-semibold);
 }
 
-
-.workspace-topbar-actions .topbar-control:active:not(:disabled) {
-	transform: scale(0.96);
-}
-
-/* A control that anchors a popover must not transform while pressed. The menu is
-   positioned from the trigger's rect, so scaling the trigger drags the open menu
-   along with it. Press feedback moves to the glyph, which the menu does not
-   measure. */
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) {
-	transform: none;
-}
-
-.workspace-topbar-actions .topbar-control--static-press > svg {
-	transition: transform var(--duration-fast) ease-out;
-}
-
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) > svg {
-	transform: scale(0.96);
-}
 
 .workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
@@ -5411,13 +5264,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	color: var(--fg);
 }
 
-.browser-panel__tab-actions button:not(:disabled):active,
-.browser-panel__toolbar button:not(:disabled):active,
-.browser-panel__address-bar button:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
 .browser-panel__tab-region {
 	position: relative;
 	display: flex;
@@ -5562,11 +5408,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	background: var(--surface-hover);
 }
 
-.browser-panel__tab-close:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
 .browser-panel__tab-close:disabled {
 	display: none;
 }
@@ -5610,11 +5451,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab-new:focus-visible {
 	outline: 2px solid var(--color-accent);
 	outline-offset: -2px;
-}
-
-.browser-panel__tab-new:active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__url-wrap {

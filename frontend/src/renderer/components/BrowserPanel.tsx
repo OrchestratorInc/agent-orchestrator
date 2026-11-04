@@ -81,6 +81,7 @@ import {
 } from "./ui/dropdown-menu";
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
@@ -1014,7 +1015,7 @@ export function BrowserPanelView({
 									onClick={() => void copyCurrentURL()}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<span className="relative size-icon-base">
 										<Copy
@@ -1046,7 +1047,7 @@ export function BrowserPanelView({
 										onClick={() => void openCurrentPageExternally()}
 										size="icon-sm"
 										type="button"
-										variant="ghost"
+										variant="quiet"
 									>
 										<ExternalLink aria-hidden="true" className={cn("size-icon-base", agentPageOnHost && "opacity-50")} />
 									</Button>
@@ -1069,11 +1070,11 @@ export function BrowserPanelView({
 					sideOffset={4}
 				>
 					{historySuggestions.map((suggestion, index) => (
-						<button
+						<Pressable
 							aria-selected={index === activeHistorySuggestion}
 							className={cn(
 								SETTINGS_MENU_ROW,
-								"flex w-full items-center gap-2.5 px-2.5 py-2 text-left",
+								"flex w-full items-center gap-2.5 px-2.5 py-2",
 								index === activeHistorySuggestion && "bg-settings-menu-selected text-settings-title",
 							)}
 							id={`${historyMenuId}-${index}`}
@@ -1095,7 +1096,7 @@ export function BrowserPanelView({
 								) : null}
 								<span className="block truncate text-caption text-settings-muted">{suggestion.url}</span>
 							</span>
-						</button>
+						</Pressable>
 					))}
 				</PopoverContent>
 			</Popover>
@@ -1141,7 +1142,7 @@ export function BrowserPanelView({
 				</DragOverlay>
 			</DndContext>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
-					<button
+					<Pressable
 						aria-label={t("browser.openNewTab")}
 						className={cn("browser-panel__tab-new", draggedTopTabId && "browser-panel__tab-new--dragging")}
 						disabled={browserUnavailable}
@@ -1149,7 +1150,7 @@ export function BrowserPanelView({
 						type="button"
 					>
 						<Plus aria-hidden="true" className="size-icon-base" />
-					</button>
+					</Pressable>
 				</BrowserControlTooltip>
 		</div>
 	);
@@ -1166,7 +1167,7 @@ export function BrowserPanelView({
 							onClick={() => void annotationAction("discard-all")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="destructive-ghost"
 						>
 							<Trash2 aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -1198,7 +1199,7 @@ export function BrowserPanelView({
 							onClick={() => void annotationAction("capture")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Camera aria-hidden="true" className="size-icon-base" />
 							{annotationState.screenshotCount > 0 ? (
@@ -1231,7 +1232,7 @@ export function BrowserPanelView({
 							onPointerUp={() => void annotationAction("restore-preview")}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Eye aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -1332,7 +1333,7 @@ export function BrowserPanelView({
 								onClick={() => void goBack()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<ArrowLeft aria-hidden="true" className="size-icon-base" />
 							</Button>
@@ -1347,7 +1348,7 @@ export function BrowserPanelView({
 								onClick={() => void goForward()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<ArrowRight aria-hidden="true" className="size-icon-base" />
 							</Button>
@@ -1361,7 +1362,7 @@ export function BrowserPanelView({
 							onClick={() => void (navState.isLoading ? stop() : reload())}
 							size="icon-sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							{navState.isLoading ? (
 								<X aria-hidden="true" className="size-icon-base" />
@@ -1410,7 +1411,7 @@ export function BrowserPanelView({
 								onClick={() => void toggleAnnotationMode()}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<MousePointer2 aria-hidden="true" className="size-icon-base" />
 								{annotationStatusLabel ? (
@@ -1441,7 +1442,7 @@ export function BrowserPanelView({
 									className={cn("relative", hasActiveDownload && "text-accent")}
 										size="icon-sm"
 										type="button"
-										variant="ghost"
+										variant="quiet"
 									>
 										<Download aria-hidden="true" className="size-icon-base" />
 										{hasActiveDownload ? <span aria-hidden="true" className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-accent" /> : null}
@@ -1474,7 +1475,7 @@ export function BrowserPanelView({
 						onClick={() => onTogglePopOut(!poppedOut)}
 						size="icon-sm"
 						type="button"
-						variant="ghost"
+						variant="quiet"
 					>
 						{poppedOut ? <Minimize2 aria-hidden="true" className="size-icon-base" /> : <Maximize2 aria-hidden="true" className="size-icon-base" />}
 					</Button>
@@ -1491,7 +1492,7 @@ export function BrowserPanelView({
 									aria-label={t("browser.controls")}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<MoreVertical aria-hidden="true" className="size-icon-base" />
 								</Button>
@@ -1735,32 +1736,29 @@ export function BrowserPanelView({
 									: ""
 							: ""}
 					</span>
-					<button
-						type="button"
+					<Pressable
 						className="browser-panel__find-button"
 						disabled={!findQuery}
 						aria-label={t("browser.find.previous")}
 						onClick={() => runFind(findQuery, false, false)}
 					>
 						<ChevronUp aria-hidden="true" />
-					</button>
-					<button
-						type="button"
+					</Pressable>
+					<Pressable
 						className="browser-panel__find-button"
 						disabled={!findQuery}
 						aria-label={t("browser.find.next")}
 						onClick={() => runFind(findQuery, true, false)}
 					>
 						<ChevronDown aria-hidden="true" />
-					</button>
-					<button
-						type="button"
+					</Pressable>
+					<Pressable
 						className="browser-panel__find-button"
 						aria-label={t("browser.find.close")}
 						onClick={closeFind}
 					>
 						<X aria-hidden="true" />
-					</button>
+					</Pressable>
 				</div>
 			) : null}
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
@@ -1867,7 +1865,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
 			<BrowserControlTooltip label={label.title}>
-				<button
+				<Pressable
 					{...attributes}
 					{...listeners}
 					aria-selected={selected}
@@ -1883,17 +1881,17 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 					)}
 					<span className="browser-panel__tab-title">{label.title}</span>
-				</button>
+				</Pressable>
 			</BrowserControlTooltip>
 			<BrowserControlTooltip label={closeLabel}>
-				<button
+				<Pressable
 					aria-label={closeLabel}
 					className="browser-panel__tab-close"
 					onClick={() => onClose(tab.id)}
 					type="button"
 				>
 					<X aria-hidden="true" className="size-icon-base" />
-				</button>
+				</Pressable>
 			</BrowserControlTooltip>
 		</div>
 	);

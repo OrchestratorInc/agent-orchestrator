@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { Command, CommandInput, CommandItem, CommandList } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Pressable } from "./ui/pressable";
 
 type Repo = Awaited<ReturnType<typeof aoBridge.app.listGitHubRepos>>[number];
 
@@ -104,19 +105,18 @@ export function GitHubRepoPicker({
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
-				<button
+				<Pressable
 					id="cloneRepositoryUrl"
-					type="button"
 					role="combobox"
 					aria-haspopup="listbox"
 					aria-expanded={open}
 					disabled={disabled}
-					className="flex h-control-form w-full items-center gap-2 rounded-md border border-transparent bg-[var(--color-bg-import-card)] px-3 text-left text-[13px] outline-none transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50"
+					className="flex h-control-form w-full items-center gap-2 rounded-md border border-transparent bg-[var(--color-bg-import-card)] px-3 text-[13px] transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/10 disabled:opacity-50"
 				>
 					<Link2 className="size-4 shrink-0 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 					<span className={`min-w-0 flex-1 truncate ${label ? "" : "text-muted-foreground"}`}>{label || t("firstRun.chooseRepo")}</span>
 					<ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-				</button>
+				</Pressable>
 			</PopoverTrigger>
 			<PopoverContent align="start" className="z-overlay w-(--radix-popover-trigger-width) overflow-hidden p-0">
 				<Command shouldFilter={false} loop>

@@ -9,6 +9,7 @@ import { useUiStore, type CloudReviewUiState } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Checkbox } from "../ui/checkbox";
 import { CloudDiffFile } from "./CloudDiffFile";
 import type { CloudFileOpenOptions } from "./CloudWorkspaceExplorer";
@@ -177,9 +178,9 @@ export function CloudWorkspaceReviewPane({
 
 	return <div className="flex h-full min-h-0 flex-col">
 		<div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-2 py-1.5">
-			{combinedFiles.length > 0 ? <Button aria-pressed={scope === "combined"} onClick={() => selectScope("combined")} size="sm" variant={scope === "combined" ? "secondary" : "ghost"}>{t("files.reviewChanges")}<span className="text-caption text-passive">{combinedFiles.length}</span></Button> : null}
-			{visibleScopes.map((entry) => <Button aria-pressed={scope === entry} key={entry} onClick={() => selectScope(entry)} size="sm" variant={scope === entry ? "secondary" : "ghost"}>{t(`files.section.${entry}`)}<span className="text-caption text-passive">{data.sections[entry].length}</span></Button>)}
-			<Button aria-expanded={commitBrowserOpen} aria-pressed={scope === "committed"} disabled={data.commits.length === 0} onClick={() => setCommitBrowserOpen(!commitBrowserOpen)} size="sm" variant={scope === "committed" ? "secondary" : "ghost"}><GitCommitHorizontal className="size-icon-sm" />{t("files.commits")}{selectedCommit ? <span className="text-caption text-passive">{selectedCommit.sha.slice(0, 7)}</span> : null}</Button>
+			{combinedFiles.length > 0 ? <Button aria-pressed={scope === "combined"} onClick={() => selectScope("combined")} size="sm" variant="ghost">{t("files.reviewChanges")}<span className="text-caption text-passive">{combinedFiles.length}</span></Button> : null}
+			{visibleScopes.map((entry) => <Button aria-pressed={scope === entry} key={entry} onClick={() => selectScope(entry)} size="sm" variant="ghost">{t(`files.section.${entry}`)}<span className="text-caption text-passive">{data.sections[entry].length}</span></Button>)}
+			<Button aria-expanded={commitBrowserOpen} aria-pressed={scope === "committed"} disabled={data.commits.length === 0} onClick={() => setCommitBrowserOpen(!commitBrowserOpen)} size="sm" variant="ghost"><GitCommitHorizontal className="size-icon-sm" />{t("files.commits")}{selectedCommit ? <span className="text-caption text-passive">{selectedCommit.sha.slice(0, 7)}</span> : null}</Button>
 			{!commitBrowserOpen ? <div className="ml-auto flex items-center gap-1 text-caption text-muted-foreground">
 				<span>{t("files.reviewProgress", { total: allFiles.length, viewed: viewedCount })}</span>
 				<Button aria-label={t(allCollapsed ? "files.expandAll" : "files.collapseAll")} onClick={() => setFileStates({ ...fileStates, ...Object.fromEntries(files.map((file) => [file.path, { ...fileStates[file.path], collapsed: !allCollapsed }])) })} size="icon-sm" variant="ghost">{allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}</Button>
@@ -199,7 +200,7 @@ export function CloudWorkspaceReviewPane({
 					<header className="flex h-10 min-w-0 items-center gap-2 bg-surface px-2">
 						<Button aria-label={closed ? t("files.expandFile", { file: file.path }) : t("files.collapseFile", { file: file.path })} onClick={() => toggleCollapsed(file.path)} size="icon-sm" variant="ghost">{closed ? <ChevronRight /> : <ChevronDown />}</Button>
 						<span className={cn("font-mono text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
-						<button className="min-w-0 flex-1 truncate text-left font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)} type="button">{file.path}</button>
+						<Pressable className="min-w-0 flex-1 truncate font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)}>{file.path}</Pressable>
 						<span className="text-caption text-success">+{file.additions}</span><span className="text-caption text-error">−{file.deletions}</span>
 						<Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion: data.workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
 						<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="icon-sm" variant="ghost"><FileCode2 /></Button>
@@ -218,5 +219,5 @@ function CommitBrowser({ commits, filter, onSelect, selectedSha }: { commits: re
 	const { t } = useTranslation();
 	const normalized = filter.trim().toLowerCase();
 	const visible = normalized ? commits.filter((commit) => `${commit.subject} ${commit.author} ${commit.sha} ${commit.files.map((file) => file.path).join(" ")}`.toLowerCase().includes(normalized)) : commits;
-	return <ul aria-label={t("files.commitHistory")} className="board-scrollbar min-h-0 flex-1 overflow-y-auto">{visible.map((commit) => <li key={commit.sha}><button aria-current={selectedSha === commit.sha ? "true" : undefined} className="block w-full border-b border-border px-3 py-3 text-left hover:bg-interactive-hover" onClick={() => onSelect(commit)} type="button"><div className="flex items-center gap-2"><GitCommitHorizontal className="size-icon-sm text-passive" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{commit.subject}</span><span className="font-mono text-caption text-passive">{commit.sha.slice(0, 7)}</span></div><div className="mt-1 pl-6 text-caption text-muted-foreground">{commit.author} · {t("files.count", { count: commit.files.length })}</div></button></li>)}</ul>;
+	return <ul aria-label={t("files.commitHistory")} className="board-scrollbar min-h-0 flex-1 overflow-y-auto">{visible.map((commit) => <li key={commit.sha}><Pressable aria-current={selectedSha === commit.sha ? "true" : undefined} className="block w-full border-b border-border px-3 py-3 hover:bg-interactive-hover" onClick={() => onSelect(commit)}><div className="flex items-center gap-2"><GitCommitHorizontal className="size-icon-sm text-passive" /><span className="min-w-0 flex-1 truncate text-xs font-medium">{commit.subject}</span><span className="font-mono text-caption text-passive">{commit.sha.slice(0, 7)}</span></div><div className="mt-1 pl-6 text-caption text-muted-foreground">{commit.author} · {t("files.count", { count: commit.files.length })}</div></Pressable></li>)}</ul>;
 }

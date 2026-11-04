@@ -19,6 +19,7 @@ import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -217,11 +218,7 @@ function AndroidIcon({ className }: { className?: string }) {
 
 /** One store in the segmented control: platform icon and name. */
 const STORE_SEGMENT_CLASS =
-	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--color-settings-accent)";
-
-/** Icon actions beside the password. */
-const ICON_ACTION_CLASS =
-	"inline-flex size-6 items-center justify-center rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label disabled:opacity-50";
+	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)]";
 
 interface MobileStatus {
 	enabled: boolean;
@@ -818,23 +815,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="flex min-w-0 items-center">
 							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<button
+								<Button
 									type="button"
+									variant="quiet"
+									size="icon-xs"
 									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									className={ICON_ACTION_CLASS}
 									onClick={() => void copyPassword()}
 								>
 									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-								</button>
-							
+								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}
 										<span className="inline-flex">
-											<button
+											<Button
 												type="button"
+												variant="quiet"
+												size="icon-xs"
 												aria-label={t("mobile.regenerate")}
-												className={ICON_ACTION_CLASS}
 												disabled={busy}
 												onClick={() => {
 													clearActionErrors();
@@ -847,7 +845,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 												) : (
 													<RotateCcw className="size-3.5" aria-hidden="true" />
 												)}
-											</button>
+											</Button>
 										</span>
 									</TooltipTrigger>
 									<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
@@ -1001,13 +999,12 @@ function KeepAwakeRow({
 					{t("mobile.keepAwake.combinedHelp")}
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
-								type="button"
+							<Pressable
 								aria-label={t("mobile.keepAwake.details")}
-								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground"
 							>
 								<Info className="size-3.5" aria-hidden="true" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72">
 							{t("mobile.keepAwake.lidHelp")}
@@ -1072,15 +1069,14 @@ function ScanIntro() {
 					{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
 						<Tooltip key={key}>
 							<TooltipTrigger asChild>
-								<button
-									type="button"
+								<Pressable
 									className={STORE_SEGMENT_CLASS}
 									aria-label={t(ariaKey)}
 									onClick={() => void aoBridge.app.openExternal(url)}
 								>
 									<Icon className="size-3.5 shrink-0" />
 									{t(labelKey)}
-								</button>
+								</Pressable>
 							</TooltipTrigger>
 							<TooltipContent side="bottom" className="p-2" data-testid={testId}>
 								<div className="rounded-md bg-(--color-bg-settings-input) p-2">

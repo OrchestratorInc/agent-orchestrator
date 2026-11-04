@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Star, TriangleAlert, X, Zap } from "lucide-react";
+import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "lucide-react";
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -30,6 +30,7 @@ import {
 	type ModelVariant,
 } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
+import { GHOST_PILL_CLASS } from "../ui/button";
 import type { ApprovalMode, TurnSettings } from "../../types/conversation";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import {
@@ -43,6 +44,8 @@ import {
 	OptionMenuTrigger,
 } from "../ui/option-menu";
 import { Switch } from "../ui/switch";
+import { CloseButton } from "../ui/close-button";
+import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
 
@@ -135,8 +138,10 @@ export interface PickerSource {
 	onToggleThinking?: (next: boolean) => void;
 }
 
-const TRIGGER_CLASS =
-	"h-7 gap-1.5 bg-transparent rounded-lg px-2 text-[12px]! leading-none text-foreground hover:bg-interactive-active data-[state=open]:bg-interactive-active";
+const TRIGGER_CLASS = cn(
+	"h-7 gap-1.5 bg-transparent rounded-lg px-2 text-[12px]! leading-none text-foreground",
+	GHOST_PILL_CLASS,
+);
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 const DIVIDER = "mt-1 border-t border-border pt-1";
 
@@ -766,10 +771,7 @@ function isUltraEffort(value: string | undefined): boolean {
 
 export function DismissButton({ label, onClick, disabled, className }: { label: string; onClick: () => void; disabled?: boolean; className?: string }) {
 	return (
-		<button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}
-			className={cn("shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground", className)}>
-			<X aria-hidden="true" className="size-3.5" />
-		</button>
+		<CloseButton size="icon-xs" aria-label={label} title={label} disabled={disabled} onClick={onClick} className={cn("-my-1", className)} />
 	);
 }
 
@@ -812,9 +814,8 @@ export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompact
 			<span className="text-muted-foreground">{t("agentSwitch.autoCompact")}</span>
 			<span role="radiogroup" aria-label={t("agentSwitch.autoCompact")} className="ml-auto flex rounded-md bg-interactive-active p-0.5">
 				{AUTO_COMPACT_CHOICES.map((choice) => (
-					<button
+					<Pressable
 						key={choice.label}
-						type="button"
 						role="radio"
 						aria-checked={value === choice.value}
 						disabled={disabled || value === choice.value}
@@ -825,7 +826,7 @@ export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompact
 						)}
 					>
 						{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
-					</button>
+					</Pressable>
 				))}
 			</span>
 		</div>

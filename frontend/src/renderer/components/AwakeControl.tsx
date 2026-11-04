@@ -5,7 +5,7 @@ import { useStayAwake } from "../hooks/useStayAwake";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type AwakeControlProps = { className?: string; tabIndex?: number };
@@ -40,10 +40,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 		<>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<Button
-						variant="ghost"
-						size="none"
-						type="button"
+					<Pressable
 						tabIndex={tabIndex}
 						aria-label={title}
 						aria-describedby={descriptionId}
@@ -53,7 +50,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						onClick={stay.toggle}
 						className={cn(
 							NAV_ROW_HIGHLIGHT_HOST_CLASS,
-							"h-9 w-9 cursor-pointer rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",
+							"inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg disabled:opacity-50",
 							// The shared navigation highlight owns both the selected fill and hover pill.
 							highlighted ? "text-foreground" : "text-muted-foreground",
 							className,
@@ -64,7 +61,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 							<Coffee className="size-icon-md" aria-hidden="true" />
 							{stay.attention && <TriangleAlert data-testid="awake-inactive-indicator" className="absolute -right-1 -top-1 size-2.5 fill-background text-error" strokeWidth={2.5} aria-hidden="true" />}
 						</span>
-					</Button>
+					</Pressable>
 				</TooltipTrigger>
 				<TooltipContent className="max-w-72 whitespace-pre-line">{description}</TooltipContent>
 			</Tooltip>

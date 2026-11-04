@@ -439,8 +439,8 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/config.ts" sessionId="sess-1" split={false} />);
 
 		expect((await screen.findByText("config.ts")).closest("[title]"))?.toHaveAttribute("title", "src/config.ts");
-		expect(screen.queryByRole("tab", { name: "File" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("tablist", { name: "File display mode" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "File" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("group", { name: "File display mode" })).not.toBeInTheDocument();
 	});
 
 	it("switches a changed file from its diff to the complete file", async () => {
@@ -463,7 +463,7 @@ describe("FileContentPane", () => {
 
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/App.tsx" sessionId="sess-1" split={false} />);
 
-		await userEvent.click(await screen.findByRole("tab", { name: "File" }));
+		await userEvent.click(await screen.findByRole("button", { name: "File" }));
 		expect(await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "export const next = 2;\n")).toBeInTheDocument();
 	});
 
@@ -491,8 +491,8 @@ describe("FileContentPane", () => {
 		expect(breadcrumb).toHaveTextContent("src/App.tsx");
 		// Status and change counts live beside the name, replacing the diff's own header row.
 		expect(breadcrumb).toHaveTextContent("M+1−1");
-		expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
-		await userEvent.click(screen.getByRole("tab", { name: "File" }));
+		expect(screen.getByRole("button", { name: "Diff" })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "File" }));
 		expect(await screen.findByText((_, element) => element?.tagName === "CODE" && element.textContent === "export const next = 2;\n")).toBeInTheDocument();
 	});
 
@@ -518,7 +518,7 @@ describe("FileContentPane", () => {
 
 		expect(await screen.findByRole("heading", { name: "Hello" })).toBeInTheDocument();
 		expect(screen.getByText("M")).toBeInTheDocument();
-		expect(screen.getByRole("tab", { name: "Rich preview" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("button", { name: "Rich preview" })).toHaveAttribute("aria-pressed", "true");
 	});
 
 	it("starts whole-file feedback from the focused file header", async () => {
@@ -595,7 +595,7 @@ describe("FileContentPane", () => {
 		});
 
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="src/App.tsx" sessionId="sess-1" split={false} />);
-		await userEvent.click(await screen.findByRole("tab", { name: "File" }));
+		await userEvent.click(await screen.findByRole("button", { name: "File" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
 		expect(screen.queryByTestId("unsaved-file-indicator")).not.toBeInTheDocument();
 		const editor = screen.getByRole("textbox", { name: "Edit src/App.tsx" });
@@ -734,7 +734,7 @@ describe("FileContentPane", () => {
 		});
 
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="removed.txt" sessionId="sess-1" source={{ kind: "pull_request", number: 42, url: "https://example.test/acme/repo/pull/42", label: "PR #42 · files" }} split={false} />);
-		await userEvent.click(await screen.findByRole("tab", { name: "File" }));
+		await userEvent.click(await screen.findByRole("button", { name: "File" }));
 
 		expect(await screen.findByText("removed text")).toBeInTheDocument();
 		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr/{prNumber}/file/revision", expect.objectContaining({
@@ -874,7 +874,7 @@ describe("FileContentPane", () => {
 		const pane = (sessionId: string, path: string, requestKey = 1) => (
 			<FileContentPane annotation={noopAnnotation()} initialMode="file" initialRequestKey={requestKey} path={path} rememberDisplayMode sessionId={sessionId} split={false} />
 		);
-		const richPreviewTab = () => screen.findByRole("tab", { name: "Rich preview" });
+		const richPreviewTab = () => screen.findByRole("button", { name: "Rich preview" });
 
 		beforeEach(() => {
 			getMock.mockImplementation(async (_route: string, init: { params: { path: { sessionId: string }; query: { path: string } } }) =>
@@ -888,20 +888,20 @@ describe("FileContentPane", () => {
 			first.unmount();
 
 			renderWithQuery(pane("sess-1", "README.md"));
-			expect(await richPreviewTab()).toHaveAttribute("aria-selected", "true");
+			expect(await richPreviewTab()).toHaveAttribute("aria-pressed", "true");
 			expect(await screen.findByRole("heading", { name: "Hello" })).toBeInTheDocument();
 		});
 
 		it("keeps Rich preview after switching to another session and back", async () => {
 			const view = renderWithQuery(pane("sess-1", "README.md"));
 			await userEvent.click(await richPreviewTab());
-			expect(await richPreviewTab()).toHaveAttribute("aria-selected", "true");
+			expect(await richPreviewTab()).toHaveAttribute("aria-pressed", "true");
 
 			view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane("sess-2", "docs/guide.md")}</TooltipProvider></QueryClientProvider>);
-			expect(await screen.findByRole("tab", { name: "File" })).toHaveAttribute("aria-selected", "true");
+			expect(await screen.findByRole("button", { name: "File" })).toHaveAttribute("aria-pressed", "true");
 
 			view.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider>{pane("sess-1", "README.md")}</TooltipProvider></QueryClientProvider>);
-			expect(await richPreviewTab()).toHaveAttribute("aria-selected", "true");
+			expect(await richPreviewTab()).toHaveAttribute("aria-pressed", "true");
 		});
 
 		it("does not carry the mode over to the same path in another session", async () => {
@@ -910,7 +910,7 @@ describe("FileContentPane", () => {
 			first.unmount();
 
 			renderWithQuery(pane("sess-2", "README.md"));
-			expect(await screen.findByRole("tab", { name: "File" })).toHaveAttribute("aria-selected", "true");
+			expect(await screen.findByRole("button", { name: "File" })).toHaveAttribute("aria-pressed", "true");
 		});
 
 		it("leaves panes that do not opt in unchanged", async () => {
@@ -929,9 +929,9 @@ describe("FileContentPane", () => {
 			// The maximized Files panel keeps its own request numbers and does not
 			// opt in, so its explicit diff request #1 still opens as a diff.
 			renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="diff" initialRequestKey={1} path="README.md" sessionId="sess-1" split={false} />);
-			expect(await screen.findByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
+			expect(await screen.findByRole("button", { name: "Diff" })).toHaveAttribute("aria-pressed", "true");
 			// Nor does it record its own picks over the centre tab's.
-			await userEvent.click(screen.getByRole("tab", { name: "File" }));
+			await userEvent.click(screen.getByRole("button", { name: "File" }));
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.fileDisplayModes?.["README.md"]).toEqual({ mode: "rendered", requestKey: 1 });
 		});
 
@@ -958,7 +958,7 @@ describe("FileContentPane", () => {
 			first.unmount();
 
 			renderWithQuery(pane("sess-1", "README.md", 2));
-			expect(await screen.findByRole("tab", { name: "File" })).toHaveAttribute("aria-selected", "true");
+			expect(await screen.findByRole("button", { name: "File" })).toHaveAttribute("aria-pressed", "true");
 		});
 	});
 });

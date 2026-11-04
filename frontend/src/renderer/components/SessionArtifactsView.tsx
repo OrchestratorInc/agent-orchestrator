@@ -341,11 +341,10 @@ function CloudHtmlArtifactView({
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={t("files.addFeedback")}
-					className="text-muted-foreground hover:text-foreground"
 					onClick={() => begin({ path, side: "file", surface: "focused" })}
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
 				</Button>
@@ -526,8 +525,8 @@ export function SessionArtifactsView({
 						) : null}
 						{hasHtmlPreview && previewVersion === null ? (
 							<div className="flex shrink-0 items-center gap-0.5">
-								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
-								<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
+								<Button aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
+								<Button aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
 							</div>
 						) : null}
 						<Tooltip>
@@ -535,11 +534,10 @@ export function SessionArtifactsView({
 								<Button
 									aria-label={fullscreenLabel}
 									aria-pressed={fullscreen}
-									className="text-muted-foreground hover:text-foreground"
 									onClick={() => { if (cloud) pinned.refresh(); setFullscreen((current) => !current); }}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<FullscreenIcon aria-hidden="true" className="size-icon-sm" />
 								</Button>
