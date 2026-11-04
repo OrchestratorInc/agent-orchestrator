@@ -101,7 +101,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// Only this machine's cloud projects start in place: a remote host's board
 	// never reads this machine's cloud settings (as useCloudCp below).
 	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
-	const backgroundTasks = useBackgroundTaskReadings(!hostId && !localCloudBoard);
+	const backgroundTasks = useBackgroundTaskReadings(!hostId && !localCloudBoard, projectId);
 	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
 	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);

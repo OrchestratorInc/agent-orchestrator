@@ -90,7 +90,7 @@ wake a hibernated session. OS processes remain separate, optional Diagnostics.
 | Chat transport | Source | Coverage |
 | --- | --- | --- |
 | Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
-| Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Native shell inventory; event-derived subagent states |
+| Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Always partial: native shell inventory, but event-derived subagents may predate controller attachment |
 | Unreal Agent | Live provider-owned asynchronous Bash operation registry | Native inventory, including after controller reattachment |
 | All other ACP bindings | Negotiated `asyncTasks` lifecycle and explicitly backgrounded tool metadata | Reported jobs; complete native inventory is not available in ACP v1 |
 

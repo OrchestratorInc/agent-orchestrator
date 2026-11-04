@@ -46,7 +46,7 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	id := tool.id
 	// Background result handles outlive the launching tool call. A completed
 	// launch is not a completed background job.
-	nativeID := stringField(output, "task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id")
+	nativeID := backgroundTaskID(output)
 	if nativeID != "" && flagged {
 		c.backgroundObserved.Remove(tool.id)
 		id = nativeID
@@ -56,7 +56,7 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 		return
 	}
 	if !flagged {
-		if referenced := stringField(input, "task_id", "taskId", "sessionID", "sessionId", "session_id"); referenced != "" {
+		if referenced := backgroundTaskID(input); referenced != "" {
 			switch state := stringField(output, "state", "status"); state {
 			case "completed", "failed", "stopped":
 				c.backgroundObserved.Finish(referenced, state, now)
@@ -98,6 +98,10 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 		description = tool.title
 	}
 	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, Kind: kind, Description: description, State: state}, now)
+}
+
+func backgroundTaskID(value map[string]any) string {
+	return stringField(value, "task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id")
 }
 
 func backgroundFlag(value map[string]any) bool {
