@@ -56,10 +56,6 @@ function appliesTo(cookie: RepairCookie, host: string): boolean {
 	return domain.startsWith(".") ? `.${host}`.endsWith(domain) : domain === host;
 }
 
-function sameCookie(a: RepairCookie, b: RepairCookie): boolean {
-	return a.name === b.name && a.domain === b.domain && (a.path ?? "/") === (b.path ?? "/");
-}
-
 export async function repairCookies(session: RepairSession): Promise<RepairResult> {
 	const cookies = await session.cookies.get({});
 	const result: RepairResult = { antiBot: 0, duplicates: 0, failed: 0 };
@@ -79,27 +75,34 @@ export async function repairCookies(session: RepairSession): Promise<RepairResul
 			item.domain?.startsWith(".") &&
 			cookies.some((other) => other.hostOnly && other.name === item.name && other.domain === hostOf(item) && (other.path ?? "/") === (item.path ?? "/")),
 	);
+	// Restore only from the final jar: a removed duplicate must not come back
+	// while another one on an overlapping domain is being repaired.
+	const remaining = cookies.filter((item) => !isAntiBotCookie(item.name) && !widened.includes(item));
 	for (const cookie of widened) {
 		try {
 			// Removal takes every cookie this URL can see with that name, so put
 			// the others back: the site's real one and any parent-domain cookie.
 			const host = hostOf(cookie);
-			const keep = cookies.filter((other) => other.name === cookie.name && !sameCookie(other, cookie) && appliesTo(other, host));
+			const keep = remaining.filter((other) => other.name === cookie.name && appliesTo(other, host));
 			await session.cookies.remove(urlOf(cookie), cookie.name);
-			for (const other of keep) {
-				await session.cookies.set({
-					url: urlOf(other),
-					name: other.name,
-					value: other.value,
-					...(other.hostOnly ? {} : { domain: other.domain }),
-					path: other.path || "/",
-					secure: other.secure === true,
-					httpOnly: other.httpOnly === true,
-					...(other.sameSite ? { sameSite: other.sameSite } : {}),
-					...(other.expirationDate !== undefined ? { expirationDate: other.expirationDate } : {}),
-				});
-			}
 			result.duplicates += 1;
+			for (const other of keep) {
+				try {
+					await session.cookies.set({
+						url: urlOf(other),
+						name: other.name,
+						value: other.value,
+						...(other.hostOnly ? {} : { domain: other.domain }),
+						path: other.path || "/",
+						secure: other.secure === true,
+						httpOnly: other.httpOnly === true,
+						...(other.sameSite ? { sameSite: other.sameSite } : {}),
+						...(other.expirationDate !== undefined ? { expirationDate: other.expirationDate } : {}),
+					});
+				} catch {
+					result.failed += 1;
+				}
+			}
 		} catch {
 			result.failed += 1;
 		}

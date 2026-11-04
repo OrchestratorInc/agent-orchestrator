@@ -80,6 +80,56 @@ describe("repairCookies", () => {
 		expect(session.cookies.remove).not.toHaveBeenCalled();
 	});
 
+	it("does not restore one duplicate while repairing another on an overlapping domain", async () => {
+		const session = fakeSession([
+			cookie(".example.com", "sid", "imported-parent"),
+			cookie("example.com", "sid", "real-parent"),
+			cookie(".sub.example.com", "sid", "imported-child"),
+			cookie("sub.example.com", "sid", "real-child"),
+		]);
+		expect(await repairCookies(session)).toMatchObject({ duplicates: 2, failed: 0 });
+		expect(names(session.jar())).toEqual(["example.com|sid=real-parent", "sub.example.com|sid=real-child"]);
+	});
+
+	it("gives the same result whichever overlapping duplicate comes first", async () => {
+		const session = fakeSession([
+			cookie("sub.example.com", "sid", "real-child"),
+			cookie(".sub.example.com", "sid", "imported-child"),
+			cookie("example.com", "sid", "real-parent"),
+			cookie(".example.com", "sid", "imported-parent"),
+		]);
+		await repairCookies(session);
+		expect(names(session.jar())).toEqual(["example.com|sid=real-parent", "sub.example.com|sid=real-child"]);
+	});
+
+	it("repairs each path and keeps other paths of the same name", async () => {
+		const session = fakeSession([
+			cookie(".example.com", "a", "imported-x", { path: "/x" }),
+			cookie("example.com", "a", "real-x", { path: "/x" }),
+			cookie(".example.com", "a", "imported-y", { path: "/y" }),
+			cookie("example.com", "a", "real-y", { path: "/y" }),
+			cookie(".example.com", "a", "only-z", { path: "/z" }),
+		]);
+		expect(await repairCookies(session)).toMatchObject({ duplicates: 2, failed: 0 });
+		expect(session.jar().map((item) => `${item.domain}${item.path}=${item.value}`).sort()).toEqual([
+			".example.com/z=only-z",
+			"example.com/x=real-x",
+			"example.com/y=real-y",
+		]);
+	});
+
+	it("still restores the other cookies when one restore fails, and reports it", async () => {
+		const session = fakeSession([
+			cookie(".example.com", "sid", "imported"),
+			cookie("example.com", "sid", "real"),
+			cookie(".com", "sid", "parent"),
+		]);
+		session.cookies.set.mockRejectedValueOnce(new Error("nope"));
+		const result = await repairCookies(session);
+		expect(result.failed).toBe(1);
+		expect(session.cookies.set).toHaveBeenCalledTimes(2);
+	});
+
 	it("counts failures and keeps going", async () => {
 		const session = fakeSession([cookie(".a.com", "cf_clearance", "x"), cookie(".b.com", "cf_clearance", "y")]);
 		session.cookies.remove.mockRejectedValueOnce(new Error("nope"));
