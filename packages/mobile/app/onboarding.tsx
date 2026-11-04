@@ -1,9 +1,14 @@
-import { useEffect } from "react";
-import { useRouter } from "expo-router";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { useNavigation, useRouter } from "expo-router";
+import { Alert, Image, StyleSheet, Text, View } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { loadAccount, signInToAccount } from "../lib/account";
+import { syncAccountHosts } from "../lib/accountHosts";
 import { AppSymbol } from "../lib/AppSymbol";
+import { loadHosts } from "../lib/hosts";
+import { completeOnboarding } from "../lib/onboardingNavigation";
+import { useApp } from "../lib/store";
 import { Button, MASCOT_ASPECT } from "../lib/ui";
 import MASCOT from "../assets/mascot.png";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -21,16 +26,44 @@ const PULSE_MS = 1800;
 /**
  * The first screen: what the app is for in a picture and one line, and the one
  * thing to do. How to pair is the pair page's to say, under the scanner it
- * describes. The app needs a machine to show anything, so this is the only way on.
+ * describes. The app needs a machine to show anything, so the ways on are
+ * pairing one, or signing in to pull in the machines an account already has.
  */
 export default function OnboardingScreen() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
+	const { reloadConfig } = useApp();
+	const [signingIn, setSigningIn] = useState(false);
 
 	useEffect(() => {
 		mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingStarted);
 	}, []);
+
+	// The same sign-in as Settings, which an unpaired phone can't reach: the
+	// account's machines come in and the first one opens the board.
+	function signIn() {
+		setSigningIn(true);
+		void (async () => {
+			const account = (await loadAccount()) ?? (await signInToAccount());
+			if (!account) return;
+			await syncAccountHosts(account);
+			await reloadConfig();
+			if ((await loadHosts()).length > 0) {
+				mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
+				completeOnboarding(navigation);
+				return;
+			}
+			Alert.alert(
+				"No machines yet",
+				`${account.email} has no machines in Orchestrator Cloud. Pair one to get started.`,
+				[{ text: "Pair a machine", onPress: () => router.push("/pair?from=onboarding") }],
+			);
+		})().catch((error: unknown) => {
+			Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
+		}).finally(() => setSigningIn(false));
+	}
 
 	return (
 		<View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom + space.lg }]}>
@@ -46,6 +79,13 @@ export default function OnboardingScreen() {
 				icon="link"
 				onPress={() => router.push("/pair?from=onboarding")}
 				style={styles.cta}
+			/>
+			<Button
+				title="Sign in"
+				variant="ghost"
+				loading={signingIn}
+				onPress={signIn}
+				style={styles.signIn}
 			/>
 		</View>
 	);
@@ -129,6 +169,7 @@ const makeStyles = (t: Theme) =>
 		lede: { ...type.callout, color: t.textSecondary, textAlign: "center", marginTop: space.sm, maxWidth: 300 },
 
 		cta: { alignSelf: "center", width: "100%", maxWidth: 400 },
+		signIn: { alignSelf: "center", marginTop: space.sm },
 	});
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

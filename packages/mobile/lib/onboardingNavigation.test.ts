@@ -20,10 +20,16 @@ describe("completeOnboarding", () => {
 		expect(routes).toEqual(["(tabs)"]);
 	});
 
-	// Onboarding has no skip: pairing is the only way on, and it completes there.
+	// Onboarding has no skip: pairing or signing in are the ways on, and each completes it.
 	it("is used after pairing from onboarding", () => {
 		const pair = readFileSync(fileURLToPath(new URL("../app/pair.tsx", import.meta.url)), "utf8");
 		expect(pair).toContain("if (fromOnboarding) completeOnboarding(navigation);");
 		expect(pair).toContain("else backOr(router);");
+	});
+
+	it("is used after signing in from onboarding brings in a machine", () => {
+		const onboarding = readFileSync(fileURLToPath(new URL("../app/onboarding.tsx", import.meta.url)), "utf8");
+		expect(onboarding).toContain('title="Sign in"');
+		expect(onboarding).toMatch(/await syncAccountHosts\(account\);[\s\S]*completeOnboarding\(navigation\);/);
 	});
 });
