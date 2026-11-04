@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -486,10 +487,15 @@ func protoFields(data []byte) ([]protoField, error) {
 			continue
 		case 2:
 			length, n := binary.Uvarint(data)
-			if n <= 0 || length > uint64(len(data)-n) {
+			if n <= 0 || length > math.MaxInt32 {
 				return nil, errProtoMalformed
 			}
-			field.bytes, field.value, data = true, data[n:n+int(length)], data[n+int(length):]
+			data = data[n:]
+			size := int(length)
+			if size > len(data) {
+				return nil, errProtoMalformed
+			}
+			field.bytes, field.value, data = true, data[:size], data[size:]
 		case 5:
 			if len(data) < 4 {
 				return nil, errProtoMalformed

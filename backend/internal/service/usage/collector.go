@@ -2953,10 +2953,10 @@ func discoverDatabasePath(ctx context.Context, root, name string) (string, error
 		return "", nil
 	}
 	path := filepath.Join(root, name)
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return "", nil
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return path, nil
 	}
-	return path, nil
+	return "", nil
 }
 
 func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.SessionID) (string, error) {
