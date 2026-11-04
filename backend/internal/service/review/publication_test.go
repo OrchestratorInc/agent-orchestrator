@@ -207,6 +207,80 @@ func TestSubmitDeliveredPublicationDoesNotRewriteResult(t *testing.T) {
 	}
 }
 
+func TestSubmitRejectsGitLabReceiptWithGitHubReviewID(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run", SessionID: "worker", PRURL: "https://gitlab.example/g/r/-/merge_requests/1",
+		TargetSHA: "head", Status: domain.ReviewRunRunning,
+	}}
+	original := st.run
+	refresh := &recordingReviewRefresher{}
+	svc := New(nil, st, WithThreadRefresher(refresh))
+	input := SubmittedReview{
+		RunID: "run", Verdict: domain.VerdictApproved, GithubReviewID: "123",
+		Publication: &domain.ReviewPublication{
+			Provider: "gitlab", Status: "published", PRURL: st.run.PRURL, TargetSHA: "head",
+			Refs: []domain.ReviewPublicationRef{{Kind: "note", ID: "101"}},
+		},
+	}
+
+	for _, name := range []string{"first submission", "identical repeat"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
+
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("submit error = %v, want ErrInvalid", err)
+			}
+			if st.updateCalls != 0 {
+				t.Errorf("result updates = %d, want zero", st.updateCalls)
+			}
+			if !reflect.DeepEqual(original, st.run) {
+				t.Errorf("invalid submission changed run: got %+v, want %+v", st.run, original)
+			}
+			if len(refresh.prURLs) != 0 {
+				t.Errorf("invalid submission scheduled refreshes: %v", refresh.prURLs)
+			}
+		})
+	}
+}
+
+func TestSubmitGitLabReceiptWithEmptyGitHubIDIsIdempotent(t *testing.T) {
+	st := &fakeStore{ok: true, run: domain.ReviewRun{
+		ID: "run", SessionID: "worker", PRURL: "https://gitlab.example/g/r/-/merge_requests/1",
+		TargetSHA: "head", Status: domain.ReviewRunRunning,
+	}}
+	refresh := &recordingReviewRefresher{}
+	svc := New(nil, st, WithThreadRefresher(refresh))
+	publication := &domain.ReviewPublication{
+		Provider: "gitlab", Status: "published", PRURL: st.run.PRURL, TargetSHA: "head",
+		Refs: []domain.ReviewPublicationRef{{Kind: "note", ID: "101"}},
+	}
+	input := SubmittedReview{RunID: "run", Verdict: domain.VerdictApproved, Publication: publication}
+
+	first, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
+
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first result = %+v, err=%v", first, err)
+	}
+	if first[0].Status != domain.ReviewRunComplete || first[0].GithubReviewID != "" || !reflect.DeepEqual(publication, first[0].Publication) {
+		t.Fatalf("recorded result = %+v, want complete GitLab receipt without a GitHub review ID", first[0])
+	}
+
+	repeated, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
+
+	if err != nil {
+		t.Fatalf("repeat result: %v", err)
+	}
+	if !reflect.DeepEqual(first, repeated) {
+		t.Errorf("repeated result = %+v, want %+v", repeated, first)
+	}
+	if st.updateCalls != 1 {
+		t.Errorf("result updates = %d, want one", st.updateCalls)
+	}
+	if want := []string{st.run.PRURL}; !reflect.DeepEqual(want, refresh.prURLs) {
+		t.Errorf("refresh targets = %v, want %v", refresh.prURLs, want)
+	}
+}
+
 func TestSubmitRejectsContradictoryGitHubReceipt(t *testing.T) {
 	for _, tc := range []struct{ name, status, id, reason string }{
 		{name: "different id", status: "published", id: "999"},

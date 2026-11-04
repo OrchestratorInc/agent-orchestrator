@@ -24,6 +24,9 @@ func validatePublication(run domain.ReviewRun, submitted SubmittedReview) (*doma
 	if err != nil || ref.Key() != target.Key() || p.Provider != target.Provider || p.TargetSHA == "" || p.TargetSHA != run.TargetSHA {
 		return nil, "", fmt.Errorf("publication provider, target and head must match the review run")
 	}
+	if p.Provider == "gitlab" && submitted.GithubReviewID != "" {
+		return nil, "", fmt.Errorf("GitLab publication receipt must not carry githubReviewId")
+	}
 	p.PRURL = target.URL
 	switch p.Status {
 	case "published":
