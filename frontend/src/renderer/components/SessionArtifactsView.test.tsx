@@ -26,7 +26,8 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 	};
 });
 
-const { capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
+const { artifactFileChangesMock, capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
+	artifactFileChangesMock: vi.fn(),
 	capturedSave: { current: undefined as ((input: { content: string; expectedFileFingerprint: string; path: string }) => Promise<unknown>) | undefined },
 	saveCloudArtifactMock: vi.fn(),
 	cloudAccessMock: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}`, editable: true, fileFingerprint: "fingerprint" }),
 	}),
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: artifactFileChangesMock }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
@@ -340,6 +342,29 @@ describe("SessionArtifactsView", () => {
 		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false, refetch: vi.fn() });
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
+		artifactFileChangesMock.mockReset();
+	});
+
+	it("follows an open local file's changes on disk only while it is open", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+	});
+
+	it("follows an open cloud file through its session, and a remote host's files not at all", async () => {
+		const { rerender } = renderView(<SessionArtifactsView hostId="host-1" session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		rerender(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "cloud-1", cloud: { orgId: "org-1" } }), true);
 	});
 
 	it("lists every artifact newest first", () => {
