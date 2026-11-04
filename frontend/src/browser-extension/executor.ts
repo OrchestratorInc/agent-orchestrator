@@ -356,6 +356,8 @@ export class Executor {
 			const finish = (loaded: boolean, error?: Error) => {
 				if (done) return;
 				done = true;
+				chrome.webNavigation.onCommitted.removeListener(onCommitted);
+				chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onCommitted);
 				chrome.webNavigation.onDOMContentLoaded.removeListener(onDomContentLoaded);
 				chrome.webNavigation.onCompleted.removeListener(onCompleted);
 				chrome.webNavigation.onErrorOccurred.removeListener(onError);
@@ -365,12 +367,18 @@ export class Executor {
 				if (error) reject(error);
 				else resolve(loaded);
 			};
+			// Until this navigation commits, load events belong to the page that
+			// was already loading.
+			let committed = false;
+			const onCommitted = (details: { tabId: number; frameId: number }) => {
+				if (details.tabId === tabId && details.frameId === 0) committed = true;
+			};
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const onDomContentLoaded = (details: { tabId: number; frameId: number }) => {
-				if (details.tabId === tabId && details.frameId === 0) graceTimer ??= setTimeout(() => finish(false), LOAD_GRACE_MS);
+				if (committed && details.tabId === tabId && details.frameId === 0) graceTimer ??= setTimeout(() => finish(false), LOAD_GRACE_MS);
 			};
 			const onCompleted = (details: { tabId: number; frameId: number }) => {
-				if (details.tabId === tabId && details.frameId === 0) finish(true);
+				if (committed && details.tabId === tabId && details.frameId === 0) finish(true);
 			};
 			const onError = (details: { tabId: number; frameId: number; error?: string }) => {
 				if (details.tabId === tabId && details.frameId === 0 && details.error !== "net::ERR_ABORTED") {
@@ -379,6 +387,8 @@ export class Executor {
 			};
 			const onAbort = () => finish(false, new BridgeError("BROWSER_COMMAND_CANCELED", "Browser command was canceled"));
 			const timer = setTimeout(() => finish(false), NAVIGATION_TIMEOUT_MS);
+			chrome.webNavigation.onCommitted.addListener(onCommitted);
+			chrome.webNavigation.onReferenceFragmentUpdated.addListener(onCommitted);
 			chrome.webNavigation.onDOMContentLoaded.addListener(onDomContentLoaded);
 			chrome.webNavigation.onCompleted.addListener(onCompleted);
 			chrome.webNavigation.onErrorOccurred.addListener(onError);

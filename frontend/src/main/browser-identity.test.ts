@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	acceptLanguages,
@@ -59,6 +61,13 @@ describe("applyUserAgentFallback", () => {
 		applyBrowserIdentity(fake.session, { chromeVersion: "130.0.6723.191", platform: "darwin", languages: "en-GB" });
 		applyUserAgentFallback(target);
 		expect(target.userAgentFallback).toBe(fake.calls[0]?.[0]);
+	});
+
+	// Without this call Cloudflare sign-in fails in the Browser panel, and no
+	// other test notices.
+	it("runs at startup, before any window exists", () => {
+		const main = readFileSync(path.join(process.cwd(), "src/main.ts"), "utf8");
+		expect(main).toMatch(/app\.whenReady\(\)\.then\(async \(\) => \{\s*applyUserAgentFallback\(app\);/);
 	});
 
 	it("is stable when applied twice", () => {

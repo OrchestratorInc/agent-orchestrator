@@ -452,6 +452,52 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 		}
 	});
 
+	it("goes quiet again after client traffic between AO commands", async () => {
+		const debug = new FakeDebugger();
+		const targets: AgentBrowserTarget[] = [
+			{ id: "t1", url: "https://example.com/", title: "Example", debugger: debug },
+		];
+		const provider = {
+			listTargets: () => targets,
+			createTarget: vi.fn(async () => targets[0]),
+			activateTarget: vi.fn(),
+			closeTarget: vi.fn(),
+		};
+		const bridge = new AgentBrowserCDPBridge(provider);
+		const endpoint = await bridge.start();
+		const socket = await connect(endpoint);
+		const methods = () => debug.sendCommand.mock.calls.map(([method]) => method);
+
+		try {
+			await bridge.beginCommand();
+			const attached = await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			const sessionId = (attached.result as { sessionId: string }).sessionId;
+			await expectRPCResult(socket, 2, "Runtime.enable", {}, sessionId);
+			await bridge.endCommand();
+
+			// A background command wakes Runtime, which must not stay on.
+			await expectRPCResult(socket, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
+			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
+
+			// A client enabling Runtime while idle, as for a new popup, goes quiet too.
+			await expectRPCResult(socket, 4, "Runtime.disable", {}, sessionId);
+			await expectRPCResult(socket, 5, "Runtime.enable", {}, sessionId);
+			expect(methods().at(-1)).toBe("Runtime.enable");
+			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
+
+			// A running command is never interrupted by the idle timer.
+			await bridge.beginCommand();
+			await expectRPCResult(socket, 6, "Runtime.evaluate", { expression: "2" }, sessionId);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			expect(methods().at(-1)).toBe("Runtime.evaluate");
+			await bridge.endCommand();
+			expect(methods().at(-1)).toBe("Runtime.disable");
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
 	it("does not quiet a target whose clients never enabled Runtime", async () => {
 		const debug = new FakeDebugger();
 		const targets: AgentBrowserTarget[] = [

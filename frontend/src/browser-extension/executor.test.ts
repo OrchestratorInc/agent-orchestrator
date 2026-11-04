@@ -53,6 +53,9 @@ class FakeChrome {
 	attached = 0;
 	windowsCreated: string[] = [];
 	holdLoad = false;
+	/** When set, tabs.update leaves the commit to the test. */
+	deferCommit?: () => void;
+	holdCommit = false;
 	windowStates = new Map<number, string>();
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
@@ -64,6 +67,7 @@ class FakeChrome {
 		windowsRemoved: event(),
 		runtimeMessage: event(),
 		navCommitted: event(),
+		navFragment: event(),
 		navDomContentLoaded: event(),
 		navCompleted: event(),
 		navError: event(),
@@ -89,6 +93,11 @@ class FakeChrome {
 	frameResponder?: (frameId: number, message: Record<string, unknown>) => unknown;
 
 	load(tabId: number, url: string) {
+		if (this.holdCommit) {
+			this.holdCommit = false;
+			this.deferCommit = () => this.load(tabId, url);
+			return;
+		}
 		const tab = this.tabs.get(tabId)!;
 		tab.url = url;
 		tab.title = url === "about:blank" ? "" : (PAGES[url]?.match(/<h1>(.*?)<\/h1>/)?.[1] ?? url);
@@ -228,6 +237,7 @@ class FakeChrome {
 			webNavigation: {
 				getAllFrames: async () => self.frames,
 				onCommitted: self.events.navCommitted,
+				onReferenceFragmentUpdated: self.events.navFragment,
 				onDOMContentLoaded: self.events.navDomContentLoaded,
 				onCompleted: self.events.navCompleted,
 				onErrorOccurred: self.events.navError,
@@ -582,6 +592,37 @@ describe("Executor", () => {
 		const opened = await run("open", { url: "https://shop.test/" });
 		expect(opened).toMatchObject({ url: "https://shop.test/", isLoading: true });
 		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	it("ignores load events from the page that was already loading when open started", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const tab = [...fake.tabs.values()].find((candidate) => candidate.url === "https://shop.test/")!;
+		fake.holdCommit = true;
+		let settled = false;
+		const opening = run("open", { url: "https://shop.test/done" }).finally(() => (settled = true));
+		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
+		fake.events.navDomContentLoaded.fire({ tabId: tab.id, frameId: 0, url: "https://shop.test/" });
+		fake.events.navCompleted.fire({ tabId: tab.id, frameId: 0, url: "https://shop.test/" });
+		await new Promise((resolve) => setTimeout(resolve, 1_700));
+		expect(settled).toBe(false);
+		fake.deferCommit!();
+		expect(await opening).toMatchObject({ url: "https://shop.test/done", isLoading: false });
+	});
+
+	it("finishes an open that only changes the URL fragment", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const tab = [...fake.tabs.values()].find((candidate) => candidate.url === "https://shop.test/")!;
+		fake.holdCommit = true;
+		const opening = run("open", { url: "https://shop.test/#more" });
+		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
+		tab.url = "https://shop.test/#more";
+		fake.events.navFragment.fire({ tabId: tab.id, frameId: 0, url: tab.url });
+		fake.events.navCompleted.fire({ tabId: tab.id, frameId: 0, url: tab.url });
+		expect(await opening).toMatchObject({ isLoading: false, target: { tabId: "t1" } });
 	});
 
 	it("reports a fully loaded page when load finishes within the grace period", async () => {

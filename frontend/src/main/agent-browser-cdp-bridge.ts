@@ -71,6 +71,7 @@ type PhysicalTargetAttachment = {
 // Turnstile score it as automation. Keep it on only while an AO command runs.
 // Emulated viewports are visible too (innerWidth no longer matches the window),
 // and AO's own live viewport must not be cleared by a client.
+const IDLE_QUIET_DELAY_MS = 250;
 const SWALLOWED_TARGET_METHODS = new Set([
 	"Emulation.setDeviceMetricsOverride",
 	"Emulation.clearDeviceMetricsOverride",
@@ -83,6 +84,8 @@ export class AgentBrowserCDPBridge {
 	private readonly physical = new Map<string, PhysicalTargetAttachment>();
 	private readonly connections = new Set<ConnectionContext>();
 	private activeCommands = 0;
+	private seenCommand = false;
+	private idleQuietTimer?: ReturnType<typeof setTimeout>;
 	private endpoint = "";
 
 	constructor(private readonly targets: AgentBrowserTargetProvider) {
@@ -112,6 +115,7 @@ export class AgentBrowserCDPBridge {
 	}
 
 	async close(): Promise<void> {
+		clearTimeout(this.idleQuietTimer);
 		for (const sessionId of [...this.attached.keys()]) this.detachTarget(sessionId);
 		for (const socket of this.server.clients) socket.close(1001, "AO browser session closed");
 		await new Promise<void>((resolve) => this.server.close(() => resolve()));
@@ -122,7 +126,9 @@ export class AgentBrowserCDPBridge {
 
 	/** An AO command is about to run: re-enable Runtime where clients want it. */
 	async beginCommand(): Promise<void> {
+		this.seenCommand = true;
 		this.activeCommands += 1;
+		clearTimeout(this.idleQuietTimer);
 		await Promise.all([...this.physical.values()].map((physical) => this.wake(physical)));
 	}
 
@@ -131,6 +137,18 @@ export class AgentBrowserCDPBridge {
 		this.activeCommands = Math.max(0, this.activeCommands - 1);
 		if (this.activeCommands > 0) return;
 		await Promise.all([...this.physical.values()].map((physical) => this.quiet(physical)));
+	}
+
+	/**
+	 * The native daemon can also talk between AO commands, for example to attach
+	 * to a new popup. Anything that turned Runtime on then goes quiet again.
+	 */
+	private scheduleIdleQuiet(): void {
+		if (!this.seenCommand || this.activeCommands > 0) return;
+		clearTimeout(this.idleQuietTimer);
+		this.idleQuietTimer = setTimeout(() => {
+			for (const physical of this.physical.values()) void this.quiet(physical);
+		}, IDLE_QUIET_DELAY_MS);
 	}
 
 	private async quiet(physical: PhysicalTargetAttachment): Promise<void> {
@@ -381,12 +399,16 @@ export class AgentBrowserCDPBridge {
 		if (SWALLOWED_TARGET_METHODS.has(request.method)) return {};
 		const physical = this.physical.get(target.id);
 		if (physical) await this.wake(physical);
-		const result = await (chromiumSessionId
-			? target.debugger.sendCommand(request.method, request.params, chromiumSessionId)
-			: target.debugger.sendCommand(request.method, request.params));
-		if (physical && request.method === "Runtime.enable") physical.runtimeSessions.add(chromiumSessionId ?? "");
-		if (physical && request.method === "Runtime.disable") physical.runtimeSessions.delete(chromiumSessionId ?? "");
-		return result;
+		try {
+			const result = await (chromiumSessionId
+				? target.debugger.sendCommand(request.method, request.params, chromiumSessionId)
+				: target.debugger.sendCommand(request.method, request.params));
+			if (physical && request.method === "Runtime.enable") physical.runtimeSessions.add(chromiumSessionId ?? "");
+			if (physical && request.method === "Runtime.disable") physical.runtimeSessions.delete(chromiumSessionId ?? "");
+			return result;
+		} finally {
+			this.scheduleIdleQuiet();
+		}
 	}
 
 	private ensurePhysical(target: AgentBrowserTarget): PhysicalTargetAttachment {
