@@ -20,15 +20,28 @@ export function TelemetryIdentityRuntime() {
 	const { session, status } = useCloudSession();
 	const userId = session?.authProvider === "workos" ? session.user.id : null;
 	const email = session?.authProvider === "workos" ? session.user.email : "";
-	// A sign-in completed through the website's return page carries that visit's
-	// id, once, on its own notification. Telemetry links it to the account when it
-	// identifies the user, and only if analytics are on.
+	// A sign-in completed through the website's return page adds that visit's
+	// id, which main holds until it is taken, once: here on the session's
+	// notification, or on mounting when the sign-in link started the app.
+	// Telemetry links it to the account when it identifies the user, and only if
+	// analytics are on.
 	useEffect(() => {
 		const cloud = aoBridge.cloud;
 		if (!cloud) return;
-		return cloud.onSessionChanged((account, signIn) => {
-			noteCloudSignInWebVisitor(account?.authProvider === "workos" ? account.user.id : null, signIn?.webDistinctId);
-		});
+		let mounted = true;
+		const takeSignIn = () => {
+			void cloud.takePendingSignIn().then((pending) => {
+				if (!mounted || !pending) return;
+				const { account, signIn } = pending;
+				noteCloudSignInWebVisitor(account.authProvider === "workos" ? account.user.id : null, signIn.webDistinctId);
+			}, () => undefined);
+		};
+		const unsubscribe = cloud.onSessionChanged(takeSignIn);
+		takeSignIn();
+		return () => {
+			mounted = false;
+			unsubscribe();
+		};
 	}, []);
 	useEffect(() => {
 		// Until the session resolves, "no user" only means "not known yet"; telling

@@ -153,6 +153,7 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
+import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
@@ -3579,20 +3580,27 @@ const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
 const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
 // A sign-in completed through the website's return page also hands over that
-// visit's id, once, with its own notification (see CloudSignInContext); every
-// other notification carries the account alone.
+// visit's id (see CloudSignInContext). It waits here until the renderer takes
+// it, once: on the notification below, or when it mounts. A sign-in link that
+// starts the app arrives before any window listens (macOS sends open-url
+// before ready, and elsewhere the window may still be loading), and a context
+// sent then would be lost. A sign-out drops it.
+const pendingCloudSignIn = createPendingCloudSignIn();
+
+ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
+	pendingCloudSignIn.note(account, signIn);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
 	}
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
-	if (account && signIn) contents.send("cloud:sessionChanged", account, signIn);
-	else contents.send("cloud:sessionChanged", account);
+	contents.send("cloud:sessionChanged", account);
 }
 
 installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession);
@@ -3653,12 +3661,9 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		return;
 	}
 	try {
-		const signIn = await handleCloudDeepLink(url, cloudDataDir());
-		if (!signIn) return;
-		notifyRenderersOfCloudSession(
-			signIn.account,
-			signIn.webDistinctId ? { webDistinctId: signIn.webDistinctId } : undefined,
-		);
+		const result = await handleCloudDeepLink(url, cloudDataDir());
+		if (!result) return;
+		notifyRenderersOfCloudSession(result.account, result.signIn);
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);

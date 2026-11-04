@@ -126,7 +126,7 @@ describe("native WorkOS authentication", () => {
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
-    expect(signIn).not.toHaveProperty("webDistinctId");
+    expect(signIn).not.toHaveProperty("signIn");
     const session = signIn?.account;
     expect(session).toMatchObject({
       authProvider: "workos",
@@ -253,12 +253,12 @@ describe("native WorkOS authentication", () => {
       expect(withVisitor.store).toEqual(without.store);
       expect(withVisitor.account).toEqual(without.account);
       expect(without.result).toEqual({ account: without.result?.account });
-      expect(withVisitor.result).toEqual({ account: withVisitor.result?.account, webDistinctId: VISITOR });
+      expect(withVisitor.result).toEqual({ account: withVisitor.result?.account, signIn: { webDistinctId: VISITOR } });
     });
 
     it("decodes the id the website percent-encodes", async () => {
       const { result } = await signInWith("&web_distinct_id=%24device%3Aabc.123_x-y");
-      expect(result?.webDistinctId).toBe("$device:abc.123_x-y");
+      expect(result?.signIn?.webDistinctId).toBe("$device:abc.123_x-y");
     });
 
     it.each([
@@ -284,7 +284,7 @@ describe("native WorkOS authentication", () => {
 
     it("accepts the longest id the website sends", async () => {
       const { result } = await signInWith(`&web_distinct_id=${"a".repeat(200)}`);
-      expect(result?.webDistinctId).toBe("a".repeat(200));
+      expect(result?.signIn?.webDistinctId).toBe("a".repeat(200));
     });
 
     it("hands the id over once: a repeated return link signs nothing in and carries none", async () => {
@@ -295,7 +295,7 @@ describe("native WorkOS authentication", () => {
       // The same code and state with a different id is still the same callback.
       const otherVisitor = await handleCloudDeepLink(callback("&web_distinct_id=someone-else"), dataDir);
 
-      expect(first?.webDistinctId).toBe(VISITOR);
+      expect(first?.signIn?.webDistinctId).toBe(VISITOR);
       expect(again).toEqual({ account: first?.account });
       expect(otherVisitor).toEqual({ account: first?.account });
       expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
@@ -305,7 +305,7 @@ describe("native WorkOS authentication", () => {
       await beginCloudSignIn(dataDir);
       const link = callback(`&web_distinct_id=${VISITOR}`);
       const results = await Promise.all([handleCloudDeepLink(link, dataDir), handleCloudDeepLink(link, dataDir)]);
-      expect(results.filter((result) => result?.webDistinctId === VISITOR)).toHaveLength(1);
+      expect(results.filter((result) => result?.signIn?.webDistinctId === VISITOR)).toHaveLength(1);
       expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
     });
 

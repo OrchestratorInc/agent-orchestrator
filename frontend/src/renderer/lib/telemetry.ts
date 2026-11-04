@@ -369,7 +369,10 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 // sign-in's notification. Held in memory only, and spent by the first identify
 // of that account, or at once when the account is already identified.
 let pendingWebVisitor: { userId: string; webDistinctId: string } | null = null;
-const WEB_VISITOR_LINKED_EVENT = "ao.renderer.cloud_web_visitor_linked";
+// alias() queues $create_alias; PostHog can still refuse the merge (the
+// website id already belongs to an identified person), so this records that
+// the link was asked for, not that it happened.
+const WEB_VISITOR_LINK_REQUESTED_EVENT = "ao.renderer.cloud_web_visitor_link_requested";
 
 /**
  * Notes a cloud session notification: the signed-in WorkOS user (null when
@@ -391,12 +394,12 @@ function linkPendingWebVisitor(userId: string): void {
 	if (!pending || pending.userId !== userId) return;
 	pendingWebVisitor = null;
 	if (analyticsOptedOut || !posthogReady) return;
-	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINKED_EVENT)) return;
+	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINK_REQUESTED_EVENT)) return;
 	// alias(alias, original) sends $create_alias, which merges the website
 	// visitor's distinct id into the person already identified as this user.
 	const aliased = posthog.alias(pending.webDistinctId, userId);
 	if (typeof aliased !== "object" || aliased === null) return;
-	void captureRendererEvent(WEB_VISITOR_LINKED_EVENT, { website_distinct_id: pending.webDistinctId });
+	void captureRendererEvent(WEB_VISITOR_LINK_REQUESTED_EVENT, { website_distinct_id: pending.webDistinctId });
 }
 
 /**
@@ -863,7 +866,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
 			break;
-		case "ao.renderer.cloud_web_visitor_linked":
+		case "ao.renderer.cloud_web_visitor_link_requested":
 			// The website's own pseudonymous PostHog id, never anything typed.
 			if (isWebDistinctId(properties?.website_distinct_id)) safe.website_distinct_id = properties.website_distinct_id;
 			break;
@@ -918,7 +921,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 
 const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_signed_in",
-	"ao.renderer.cloud_web_visitor_linked",
+	"ao.renderer.cloud_web_visitor_link_requested",
 	"ao.renderer.cloud_offering_resolved",
 	"ao.renderer.cloud_project_created",
 	"ao.renderer.cloud_session_create_requested",

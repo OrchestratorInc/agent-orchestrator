@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
-import { isWebDistinctId, type CloudAccount } from "../shared/cloud-account";
+import { isWebDistinctId, type CloudAccount, type CloudSignInContext } from "../shared/cloud-account";
 // Static import (not dynamic): the dynamic import created a static+dynamic
 // import cycle with cloud-auth-local that made the bundler split chunks
 // incorrectly and panic. Both modules only use each other's exports inside
@@ -563,12 +563,12 @@ async function completeCloudSignIn(
 
 export interface CloudDeepLinkSignIn {
   account: CloudAccount;
-  // The website visitor id the orchestrator.inc return page adds for visitors
-  // who accepted analytics there (web_distinct_id). Present only when it is well
-  // formed and this link completed a new sign-in, so a repeated return link
-  // never hands it over twice. Analytics only: it plays no part in signing in,
-  // and nothing stores or logs it.
-  webDistinctId?: string;
+  // What the orchestrator.inc return page adds to the sign-in: the website
+  // visitor id (web_distinct_id) for visitors who accepted analytics there.
+  // Present only when it is well formed and this link completed a new sign-in,
+  // so a repeated return link never hands it over twice. Analytics only: it
+  // plays no part in signing in, and nothing stores or logs it.
+  signIn?: CloudSignInContext;
 }
 
 export async function handleCloudDeepLink(
@@ -592,7 +592,7 @@ export async function handleCloudDeepLink(
   // Read only once signing in has finished, so it cannot change how that went.
   const webDistinctId = url.searchParams.get("web_distinct_id");
   return exchanged && isWebDistinctId(webDistinctId)
-    ? { account, webDistinctId }
+    ? { account, signIn: { webDistinctId } }
     : { account };
 }
 

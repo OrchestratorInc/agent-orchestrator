@@ -189,6 +189,31 @@ describe("preload openFolderPath bridge", () => {
 	});
 });
 
+describe("preload cloud sign-in bridge", () => {
+	it("delivers each session notification's account and removes the exact wrapped listener", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().cloud.onSessionChanged(listener);
+		const wrapped = electronMocks.listeners.get("cloud:sessionChanged");
+		const account = { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" };
+
+		wrapped?.({}, account);
+		wrapped?.({}, null);
+		expect(listener.mock.calls).toEqual([[account], [null]]);
+
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("cloud:sessionChanged", wrapped);
+	});
+
+	it("takes the pending sign-in's context from main and hands back what main returns", async () => {
+		const pending = { account: { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" }, signIn: { webDistinctId: "019a3f5e-8c2b" } };
+		electronMocks.invoke.mockResolvedValueOnce(pending).mockResolvedValueOnce(null);
+
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toEqual(pending);
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toBeNull();
+		expect(electronMocks.invoke.mock.calls).toEqual([["cloud:takePendingSignIn"], ["cloud:takePendingSignIn"]]);
+	});
+});
+
 describe("preload new-session shortcut bridge", () => {
 	it("delivers the IPC event and removes the exact wrapped listener", () => {
 		const listener = vi.fn();

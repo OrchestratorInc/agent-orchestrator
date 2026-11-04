@@ -8,8 +8,11 @@ const hooks = vi.hoisted(() => ({
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
 	noteCloudSignInWebVisitor: vi.fn(),
-	sessionListeners: [] as ((account: unknown, signIn?: { webDistinctId?: string }) => void)[],
+	sessionListeners: [] as ((account: unknown) => void)[],
 	unsubscribe: vi.fn(),
+	// What main holds for the renderer to take, once (cloud:takePendingSignIn).
+	pendingSignIn: [] as unknown[],
+	takePendingSignIn: vi.fn(async (): Promise<unknown> => hooks.pendingSignIn.shift() ?? null),
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: hooks.session, status: hooks.status }) }));
 vi.mock("../lib/bridge", () => ({
@@ -20,6 +23,7 @@ vi.mock("../lib/bridge", () => ({
 				hooks.sessionListeners.push(listener);
 				return hooks.unsubscribe;
 			},
+			takePendingSignIn: hooks.takePendingSignIn,
 		},
 	},
 }));
@@ -41,6 +45,7 @@ describe("TelemetryIdentityRuntime", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		hooks.sessionListeners.length = 0;
+		hooks.pendingSignIn.length = 0;
 		hooks.status = "authenticated";
 		hooks.setCloudUser.mockImplementation(async () => true);
 	});
@@ -195,24 +200,36 @@ describe("TelemetryIdentityRuntime", () => {
 		expect(hooks.setCloudUser).toHaveBeenCalledWith(null);
 	});
 
-	it("hands each session notification, and a sign-in's website visitor id, to telemetry", () => {
+	it("takes a sign-in's website visitor id on each session notification, once, and hands it to telemetry", async () => {
 		hooks.session = account("workos");
 		const view = render(<TelemetryIdentityRuntime />);
+		await act(async () => {});
 		expect(hooks.sessionListeners).toHaveLength(1);
 		const [notify] = hooks.sessionListeners;
+		const notifyWith = async (pending: unknown) => {
+			if (pending) hooks.pendingSignIn.push(pending);
+			await act(async () => { notify(pending ? (pending as { account: unknown }).account : null); });
+		};
 
-		notify(account("workos"), { webDistinctId: "019a3f5e-8c2b" });
-		notify(account("workos"));
-		notify(account("local"), { webDistinctId: "019a3f5e-8c2b" });
-		notify(null);
+		await notifyWith({ account: account("workos"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
+		await notifyWith(null);
+		await notifyWith({ account: account("local"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
 		expect(hooks.noteCloudSignInWebVisitor.mock.calls).toEqual([
 			["user_01H", "019a3f5e-8c2b"],
-			["user_01H", undefined],
 			[null, "019a3f5e-8c2b"],
-			[null, undefined],
 		]);
 
 		view.unmount();
 		expect(hooks.unsubscribe).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes the sign-in that started the app when it mounts, before any notification", async () => {
+		// The sign-in link launched the app: its notification went out before
+		// this window was listening, so main kept the context.
+		hooks.pendingSignIn.push({ account: account("workos"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
+		hooks.session = account("workos");
+		render(<TelemetryIdentityRuntime />);
+		await act(async () => {});
+		expect(hooks.noteCloudSignInWebVisitor.mock.calls).toEqual([["user_01H", "019a3f5e-8c2b"]]);
 	});
 });

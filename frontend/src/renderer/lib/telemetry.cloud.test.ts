@@ -55,7 +55,7 @@ describe("cloud funnel event allowlist", () => {
 	});
 
 	it("keeps only a well-formed website visitor id on the visit link event", async () => {
-		const event = "ao.renderer.cloud_web_visitor_linked";
+		const event = "ao.renderer.cloud_web_visitor_link_requested";
 		const visitor = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
 		expect(await sanitizeRendererProperties(event, { website_distinct_id: visitor, email: "a@b.c", user_id: "user_A" })).toEqual({
 			website_distinct_id: visitor,

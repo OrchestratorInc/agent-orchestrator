@@ -592,8 +592,10 @@ If you accepted analytics on that website, the page passes your website
 PostHog `distinct_id` to the desktop app along with the sign-in result. The
 desktop app uses it only when Share usage analytics is on: right after it
 identifies you, it calls PostHog `alias` once, which links your website visits
-to your AO Cloud person, and sends one `ao.renderer.cloud_web_visitor_linked`
-event carrying that website ID as `website_distinct_id`. This can link your
+to your AO Cloud person, and sends one `ao.renderer.cloud_web_visitor_link_requested`
+event carrying that website ID as `website_distinct_id`. The event records
+that the link was requested: PostHog can still refuse the merge, for example
+when that website ID already belongs to an identified person. This can link your
 website visit to your AO Cloud account. The website ID plays no part in signing
 in, is not written to disk, settings, or logs, and is not sent again on later
 launches, token refreshes, or a repeated return link. If you did not accept

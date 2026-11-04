@@ -538,7 +538,7 @@ describe("PostHog identity and opt-out", () => {
 // website visitor's PostHog id; the renderer links it to the account once.
 describe("linking a website visit at sign-in", () => {
 	const VISITOR = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
-	const EVENT = "ao.renderer.cloud_web_visitor_linked";
+	const EVENT = "ao.renderer.cloud_web_visitor_link_requested";
 	const userA = { id: "user_A", email: "a@example.com" };
 	const userB = { id: "user_B", email: "b@example.com" };
 	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [] as string[], eventsEnabled: true, consentGeneration: "g" };

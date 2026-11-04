@@ -39,6 +39,16 @@ export interface CloudSignInContext {
 	webDistinctId?: string;
 }
 
+/**
+ * A completed sign-in's context, with the account it signed in, held in main
+ * until the renderer takes it (once): on the session notification, or when it
+ * mounts if the sign-in link was what started the app.
+ */
+export interface CloudPendingSignIn {
+	account: CloudAccount;
+	signIn: CloudSignInContext;
+}
+
 // The shape the website's return page itself enforces. The placeholder ids
 // PostHog never merges are refused too: a link joins two people for good.
 const WEB_DISTINCT_ID_PATTERN = /^[A-Za-z0-9._$:-]{1,200}$/;
