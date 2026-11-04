@@ -23,6 +23,13 @@ it("keeps typed daemon 503 errors as breadcrumbs while reporting untyped 503s", 
 	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "message" }));
 });
 
+it("tags a daemon API failure with its origin and leaves its request id out", () => {
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", "laptop.local/AbCd-000001");
+	const sent = capture.mock.calls.at(-1)?.[0];
+	expect(sent.tags).toMatchObject({ origin: "daemon", http_status: "500", code: "INTERNAL_ERROR" });
+	expect(JSON.stringify(sent)).not.toContain("laptop.local");
+});
+
 it("classifies unhandled renderer errors as sampled nonfatal errors", () => {
 	captureExceptionToSentry(new TypeError("private"), { unhandled: true });
 	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "exception", level: "error" }));

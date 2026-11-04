@@ -67,6 +67,8 @@ import type {
 	CloudCpProxyBinaryRequestInit,
 	CloudCpProxyBinaryResponse,
 	CloudCpStreamEvent,
+	CloudCpOpenStreamResult,
+	CloudCpDiagnostics,
 } from "./main/cloud-cp-proxy";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
@@ -908,11 +910,14 @@ const api = {
 			binaryRequestsInFlight.delete(requestId);
 			ipcRenderer.send("cloudCp:cancelBinary", requestId);
 		},
+		/** The stream, or the control plane's refusal as structured fields (status, code, requestId). */
 		openStream: (init: CloudCpProxyRequestInit) =>
-			ipcRenderer.invoke("cloudCp:openStream", init) as Promise<{ streamId: string }>,
+			ipcRenderer.invoke("cloudCp:openStream", init) as Promise<CloudCpOpenStreamResult>,
 		closeStream: (streamId: string) => {
 			ipcRenderer.send("cloudCp:closeStream", streamId);
 		},
+		/** The configured control plane, its last release and recent failures, for Report a problem. */
+		diagnostics: () => ipcRenderer.invoke("cloudCp:diagnostics") as Promise<CloudCpDiagnostics>,
 		/** A cloud session's agent browser for its agent tab; "" when its sandbox has none. */
 		agentBrowserUrl: (baseUrl: string, orgId: string, sessionId: string) =>
 			ipcRenderer.invoke("cloudCp:agentBrowserUrl", baseUrl, orgId, sessionId) as Promise<string>,

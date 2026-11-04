@@ -22,6 +22,27 @@ describe("GlobalToast", () => {
 		expect(screen.getByText("Second")).toBeInTheDocument();
 	});
 
+	it("says an error toast came from AO Cloud, with the start of its request id and a copy of all of it", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		const before = window.ao!.clipboard.writeText;
+		window.ao!.clipboard.writeText = writeText;
+		try {
+			useUiStore.getState().showGlobalToast("Couldn't start the session", undefined, {
+				tone: "error",
+				reference: { origin: "network", requestId: "0f8fad5b-d9cb-469f-a165-70867728950e" },
+			});
+			render(<GlobalToast />);
+			const alert = screen.getByRole("alert");
+			expect(alert).toHaveTextContent("Can't reach AO Cloud");
+			expect(alert).toHaveTextContent("ref 0f8fad5b");
+			fireEvent.click(screen.getByRole("button", { name: "Copy full request ID" }));
+			await act(async () => undefined);
+			expect(writeText).toHaveBeenCalledWith("0f8fad5b-d9cb-469f-a165-70867728950e");
+		} finally {
+			window.ao!.clipboard.writeText = before;
+		}
+	});
+
 	it("pauses auto-dismiss while hovered and keeps errors up longer", () => {
 		vi.useFakeTimers();
 		const store = useUiStore.getState();

@@ -695,7 +695,7 @@ describe("ArtifactsView", () => {
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Agent is not ready" }));
 		expect(mocks.navigate).not.toHaveBeenCalled();
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_failed", { scope: "standalone" });
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_failed", { scope: "standalone", source: "daemon" });
 		expect(screen.getByRole("button", { name: "Create artifact" })).toBeEnabled();
 	});
 

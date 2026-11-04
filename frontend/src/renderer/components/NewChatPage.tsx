@@ -26,6 +26,7 @@ import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSec
 import { useUiStore } from "../stores/ui-store";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { CloudErrorReference } from "./CloudErrorReference";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -332,6 +333,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
 			<span>{task.error}</span>
+			{task.errorReference ? <CloudErrorReference reference={task.errorReference} /> : null}
 			{task.errorAction ? <div className="flex items-center gap-2">
 				{task.errorAction.input ? <input
 					aria-label={task.errorAction.input.label}
@@ -342,6 +344,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
 			</div> : null}
 		</div>
+	) : task.error && task.errorReference ? (
+		// The composer shows the message; this says whether AO Cloud answered and its request id.
+		<p className="px-1 text-xs text-destructive"><CloudErrorReference reference={task.errorReference} /></p>
 	) : task.status ? (
 		<p role="status" className="px-1 text-xs text-foreground">{task.status}</p>
 	) : task.fallbackAction ? (

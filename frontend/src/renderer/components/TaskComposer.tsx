@@ -16,6 +16,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
+import { cloudErrorReference, failureTelemetry, type CloudErrorReference as CloudErrorRef } from "../lib/error-origin";
 import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import {
@@ -56,6 +57,7 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
+import { CloudErrorReference } from "./CloudErrorReference";
 import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { type EffortAvailability } from "./settings/EffortPicker";
@@ -108,15 +110,23 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 }
 
 class TaskCreateError extends Error {
+	/** For a Cloud create: whether AO Cloud answered with this error or was not reached. */
+	readonly cloudOrigin?: CloudErrorRef["origin"];
+	/** For a Cloud create: the request id AO Cloud's logs carry. */
+	readonly requestId?: string;
+
 	constructor(
 		message: string,
 		readonly code?: string,
 		readonly details?: components["schemas"]["APIError"]["details"],
 		/** The control plane's HTTP status for a Cloud create: a 5xx says nothing about whether it went through. */
 		readonly status?: number,
+		reference?: CloudErrorRef,
 	) {
 		super(message);
 		this.name = "TaskCreateError";
+		this.cloudOrigin = reference?.origin;
+		this.requestId = reference?.requestId;
 	}
 }
 
@@ -180,7 +190,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// Only a permission the user picks is sent; otherwise the project's own applies.
 	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
-	const [error, setError] = useState<string | undefined>();
+	const [failure, setFailure] = useState<{ message: string; reference?: CloudErrorRef }>();
+	const error = failure?.message;
+	// A Cloud failure keeps which kind it was and its request id, shown beside the message.
+	const setError = (message: string | undefined, reference?: CloudErrorRef) =>
+		setFailure(message === undefined ? undefined : { message, reference });
 	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
@@ -272,9 +286,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
 				return session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId, ...failureTelemetry(err, "cloud") });
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
-				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
+				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status, cloudErrorReference(err));
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
@@ -311,7 +325,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
 				return data.workerId;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId, ...failureTelemetry(err, "daemon") });
 				if (
 					err instanceof TaskCreateError &&
 					err.code &&
@@ -356,7 +370,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
 			return data.session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone", ...failureTelemetry(err, "daemon") });
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
@@ -998,6 +1012,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 						retryErr.code,
 						undefined,
 						retryErr.status,
+						cloudErrorReference(retryErr),
 					);
 				}
 			}
@@ -1068,9 +1083,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 					} else message = t("newTask.branchInUseElsewhere", { defaultValue: "That branch is open elsewhere. Choose another project or try again later." });
 				}
 			}
-			setError(message);
+			setError(message, cloudErrorReference(err));
 			throw err instanceof TaskCreateError
-				? new TaskCreateError(message, err.code, err.details, err.status)
+				? new TaskCreateError(message, err.code, err.details, err.status, cloudErrorReference(err))
 				: err instanceof Error ? err : new Error(message);
 		} finally {
 			launchingPreparationRef.current = "";
@@ -1198,6 +1213,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
 		error,
+		/** For an AO Cloud failure: whether AO Cloud answered or was not reached, and the request id to quote. */
+		errorReference: failure?.reference,
 		status,
 		errorAction: errorAction === "install-agent" ? {
 			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
@@ -1400,6 +1417,7 @@ export function TaskComposer({
 			submission={{
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
+				errorDetail: task.error && task.errorReference ? <CloudErrorReference reference={task.errorReference} /> : undefined,
 				status: task.status,
 				errorAction: task.errorAction,
 				isSubmitting: task.isSubmitting,

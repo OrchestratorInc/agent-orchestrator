@@ -887,6 +887,17 @@ const CLOUD_FUNNEL_EVENTS = new Set([
 
 const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES);
 
+// Where a failure that can come from either side came from: AO Cloud
+// answering with an error, AO Cloud not reached, or the local daemon.
+const FAILURE_SOURCES = new Set(["cloud", "network", "daemon"]);
+
+/** A failure event's `source` and its machine `error_code`, from fixed shapes only. */
+function failureSourceProperties(properties: TelemetryProperties | undefined, safe: TelemetryProperties): void {
+	if (typeof properties?.source !== "string" || !FAILURE_SOURCES.has(properties.source)) return;
+	safe.source = properties.source;
+	if (typeof properties.error_code === "string" && CLOUD_CODE_PATTERN.test(properties.error_code)) safe.error_code = properties.error_code;
+}
+
 const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
 
@@ -937,6 +948,7 @@ export async function sanitizeRendererProperties(
 			if ((event === "ao.renderer.task_create_failed" || event === "ao.renderer.task_create_succeeded") && properties?.scope === "standalone") {
 				safe.scope = "standalone";
 			}
+			if (event === "ao.renderer.task_create_failed" || event === "ao.renderer.session_kill_failed") failureSourceProperties(properties, safe);
 			break;
 		}
 		case "ao.renderer.cloud_orchestrator_spawn_succeeded":
@@ -945,6 +957,7 @@ export async function sanitizeRendererProperties(
 			// offering's core loop; only a hashed project id rides along.
 			const cloudProjectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (cloudProjectIDHash) safe.project_id_hash = cloudProjectIDHash;
+			if (event === "ao.renderer.cloud_orchestrator_spawn_failed") failureSourceProperties(properties, safe);
 			break;
 		}
 		case "ao.renderer.cloud_workers_viewed":
@@ -988,6 +1001,7 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.artifact_create_failed":
 			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
+			if (event === "ao.renderer.artifact_create_failed") failureSourceProperties(properties, safe);
 			break;
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;

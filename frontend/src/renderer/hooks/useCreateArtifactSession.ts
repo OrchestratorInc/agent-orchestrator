@@ -7,6 +7,7 @@ import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent } fr
 import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
+import { cloudErrorReference, failureTelemetry } from "../lib/error-origin";
 import { useUiStore } from "../stores/ui-store";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
 import { useCloudCp } from "./useCloudCp";
@@ -81,10 +82,11 @@ export function useCreateArtifactSession() {
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 				navigateToSession(projectId, data.session.id);
 			} catch (error) {
-				void captureRendererEvent("ao.renderer.artifact_create_failed", { scope });
+				void captureRendererEvent("ao.renderer.artifact_create_failed", { scope, ...failureTelemetry(error, cloudOrgId ? "cloud" : "daemon") });
+				const reference = cloudErrorReference(error);
 				useUiStore
 					.getState()
-					.showGlobalToast(error instanceof Error ? error.message : t("artifacts.createError"), undefined, "error");
+					.showGlobalToast(error instanceof Error ? error.message : t("artifacts.createError"), undefined, reference ? { tone: "error", reference } : "error");
 			} finally {
 				setPending(false);
 			}

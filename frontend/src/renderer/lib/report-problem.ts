@@ -1,3 +1,5 @@
+import type { CloudCpErrorRecord } from "../../main/cloud-cp-proxy";
+import { isOpaqueRequestId, safeCloudRelease, safeErrorCode } from "../../shared/cloud-cp-errors";
 import { aoBridge } from "./bridge";
 import { routeSurface } from "./telemetry";
 
@@ -17,7 +19,21 @@ export type ReportProblemDiagnostics = {
 	generatedAt: string;
 	platform: string;
 	routeSurface: string;
+	/** AO Cloud as main last saw it: no message, path or body of any failure. */
+	cloud?: ReportProblemCloudDiagnostics;
 };
+
+export type ReportProblemCloudDiagnostics = {
+	/** The configured control plane. */
+	baseUrl?: string;
+	/** The control plane release named by its last response. */
+	release?: string;
+	/** The last few failed AO Cloud requests, oldest first. */
+	recentErrors: CloudCpErrorRecord[];
+};
+
+/** At most this many recent AO Cloud failures go into a report. */
+const MAX_REPORTED_CLOUD_ERRORS = 3;
 
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
@@ -56,11 +72,14 @@ export function sanitizeReportText(value: string): string {
 }
 
 export async function collectReportProblemDiagnostics(now = new Date()): Promise<ReportProblemDiagnostics> {
-	const [versionResult, daemonResult] = await Promise.allSettled([
+	const [versionResult, daemonResult, cloudResult] = await Promise.allSettled([
 		aoBridge.app.getVersion(),
 		aoBridge.daemon.getStatus(),
+		// A bridge without the cloud channel leaves the AO Cloud lines out, not the report.
+		Promise.resolve().then(() => aoBridge.cloudCp.diagnostics()),
 	]);
 	const daemonStatus = daemonResult.status === "fulfilled" ? daemonResult.value : undefined;
+	const cloud = cloudResult.status === "fulfilled" ? cloudResult.value : undefined;
 
 	return {
 		appVersion: versionResult.status === "fulfilled" ? versionResult.value : "unknown",
@@ -70,6 +89,15 @@ export async function collectReportProblemDiagnostics(now = new Date()): Promise
 		generatedAt: now.toISOString(),
 		platform: typeof navigator === "undefined" ? "unknown" : navigator.platform || "unknown",
 		routeSurface: typeof window === "undefined" ? "unknown" : routeSurface(currentRoutePath()),
+		...(cloud && (cloud.baseUrl || cloud.recentErrors.length > 0)
+			? {
+				cloud: {
+					...(cloud.baseUrl ? { baseUrl: cloud.baseUrl } : {}),
+					...(cloud.release ? { release: cloud.release } : {}),
+					recentErrors: cloud.recentErrors.slice(-MAX_REPORTED_CLOUD_ERRORS),
+				},
+			}
+			: {}),
 	};
 }
 
@@ -225,7 +253,41 @@ function formatDiagnostics(diagnostics: ReportProblemDiagnostics): string {
 	if (diagnostics.daemonMessage?.trim()) {
 		lines.push(`Daemon message: ${sanitizeReportText(diagnostics.daemonMessage.trim())}`);
 	}
+	if (diagnostics.cloud) lines.push(...formatCloudDiagnostics(diagnostics.cloud));
 	return lines.map((line) => `- ${line}`).join("\n");
+}
+
+/** The control plane, its release and recent failures: when, which kind, status, code and request id only. */
+function formatCloudDiagnostics(cloud: ReportProblemCloudDiagnostics): string[] {
+	const lines = [
+		`AO Cloud: ${cloudBaseUrl(cloud.baseUrl)}`,
+		`AO Cloud release: ${safeCloudRelease(cloud.release) ?? "unknown"}`,
+	];
+	const errors = cloud.recentErrors.slice(-MAX_REPORTED_CLOUD_ERRORS);
+	if (errors.length === 0) {
+		lines.push("Recent AO Cloud errors: none");
+		return lines;
+	}
+	for (const record of errors) {
+		const at = Number.isNaN(Date.parse(record.at)) ? "unknown time" : new Date(record.at).toISOString();
+		const origin = record.origin === "network" ? "network (not reached)" : "cloud";
+		const status = Number.isInteger(record.status) && record.status >= 0 && record.status <= 599 ? record.status : "unknown";
+		const code = safeErrorCode(record.code) ?? "none";
+		const requestId = isOpaqueRequestId(record.requestId) ? record.requestId : "none";
+		lines.push(`AO Cloud error: ${at} origin=${origin} status=${status} code=${code} requestId=${requestId}`);
+	}
+	return lines;
+}
+
+/** The control plane's origin and mount path; never credentials, a query or a fragment. */
+function cloudBaseUrl(value: string | undefined): string {
+	if (!value) return "not configured";
+	try {
+		const url = new URL(value);
+		return sanitizeReportText(`${url.origin}${url.pathname.replace(/\/+$/, "")}`) || "unknown";
+	} catch {
+		return "unknown";
+	}
 }
 
 function currentRoutePath(): string {

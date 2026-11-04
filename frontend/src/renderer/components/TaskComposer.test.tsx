@@ -1430,6 +1430,30 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
+	it("says whether AO Cloud refused a Cloud create or was not reached, with the request id to quote", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+		const requestId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+		h.cloudCreateSession
+			.mockRejectedValueOnce(new CloudCpError("AO Cloud could not be reached.", { status: 0, code: "CLOUD_UNREACHABLE", requestId }))
+			.mockRejectedValueOnce(new CloudCpError("The session limit is reached.", { status: 429, code: "SESSION_LIMIT_REACHED", requestId }));
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		fireEvent.click(startTask());
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("AO Cloud could not be reached.");
+		expect(alert).toHaveTextContent("Can't reach AO Cloud");
+		expect(alert).toHaveTextContent("ref 0f8fad5b");
+		expect(alert).not.toHaveTextContent(requestId);
+		expect(screen.getByRole("button", { name: "Copy full request ID" })).toBeInTheDocument();
+		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { project_id: "cloud-1", source: "network", error_code: "CLOUD_UNREACHABLE" });
+
+		fireEvent.click(startTask());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("AO Cloud error"));
+		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { project_id: "cloud-1", source: "cloud", error_code: "SESSION_LIMIT_REACHED" });
+	});
+
 	// An older control plane lists this device's models, whose first one the cloud VM may not run.
 	it("leaves an unreported cloud default model to the cloud VM", async () => {
 		const queryClient = cloudFixture("codex");
@@ -1822,7 +1846,7 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Say hello" } });
 		fireEvent.click(screen.getByText("Start task"));
 		expect(await screen.findByRole("alert")).toHaveTextContent("no session");
-		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { scope: "standalone" });
+		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { scope: "standalone", source: "daemon", error_code: "SESSION_CREATE_FAILED" });
 	});
 
 	it("reports dirty then clears it on unmount", () => {

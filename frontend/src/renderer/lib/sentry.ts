@@ -47,8 +47,43 @@ export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {})
 		...(triage.report ? { exception: { type: safeSentryExceptionType((error as Error)?.name), frames: safeRendererFrames(error) } } : {}),
 	});
 }
+/** A daemon API failure; its origin tag says so, apart from AO Cloud's. */
 export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
 	const meta: CaptureMeta = { operation, category, httpStatus: status, code, requestId, domain: domainOf(operation) };
 	const triage = classifyError(meta);
-	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
+	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: { ...tagsFor(meta, triage), origin: "daemon" } });
+}
+
+export type CloudFailureCategory = "http_5xx" | "network_error" | "malformed_response";
+
+/**
+ * An unexpected AO Cloud failure (cloud-error-report.ts decides which are).
+ * Tagged with where it came from, its status, the control plane's code and the
+ * request id its logs carry; never its message, path or body.
+ */
+export function captureCloudErrorToSentry(
+	category: CloudFailureCategory,
+	failure: { origin: "cloud" | "network"; status: number; code?: string; requestId?: string },
+): void {
+	const triage = classifyError({ category, httpStatus: failure.status || undefined, code: failure.code });
+	// The shared triage keeps network errors as breadcrumbs; reaching here means
+	// AO Cloud was unreachable while this computer was online, which is worth one.
+	const report = category === "http_5xx" ? triage.report : true;
+	const level = category === "network_error" ? "warning" : category === "malformed_response" ? "error" : triage.level;
+	void aoBridge.telemetry?.capture({
+		kind: report ? "message" : "breadcrumb",
+		message: `AO Cloud ${category}`,
+		level,
+		tags: {
+			platform: context.platform ?? "desktop",
+			surface: "cloud",
+			category,
+			...(failure.code ? { code: failure.code } : {}),
+			http_status: String(failure.status),
+			origin: failure.origin,
+			...(failure.requestId ? { request_id: failure.requestId } : {}),
+			severity: triage.severity,
+			owner: triage.owner,
+		},
+	});
 }

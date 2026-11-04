@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { CloudErrorReference } from "../lib/error-origin";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
@@ -126,10 +127,12 @@ export type GlobalToast = {
 	dismissible?: boolean;
 	durationMs?: number;
 	dedupeKey?: string;
+	/** An AO Cloud failure's kind and request id, shown under the body. */
+	reference?: CloudErrorReference;
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "reference">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;

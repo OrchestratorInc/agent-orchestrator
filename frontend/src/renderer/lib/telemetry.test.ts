@@ -603,6 +603,34 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
+	it("says where a failure that can come from AO Cloud or the daemon came from, with its code and nothing else", async () => {
+		for (const [event, base] of [
+			["ao.renderer.task_create_failed", { project_id: "demo-project" }],
+			["ao.renderer.session_kill_failed", { project_id: "demo-project" }],
+			["ao.renderer.cloud_orchestrator_spawn_failed", { project_id: "demo-project" }],
+			["ao.renderer.artifact_create_failed", { scope: "project" }],
+		] as const) {
+			for (const source of ["cloud", "network", "daemon"]) {
+				const props = await sanitizeRendererProperties(event, {
+					...base, source, error_code: "WORKER_UNAVAILABLE", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e", message: "private",
+				});
+				expect(props).toMatchObject({ source, error_code: "WORKER_UNAVAILABLE" });
+				expect(props).not.toHaveProperty("request_id");
+				expect(props).not.toHaveProperty("message");
+			}
+			const bad = await sanitizeRendererProperties(event, { ...base, source: "/Users/alice", error_code: "a sentence with spaces" });
+			expect(bad).not.toHaveProperty("source");
+			expect(bad).not.toHaveProperty("error_code");
+			// A code rides only with a source.
+			expect(await sanitizeRendererProperties(event, { ...base, error_code: "WORKER_UNAVAILABLE" })).not.toHaveProperty("error_code");
+			const unsafeCode = await sanitizeRendererProperties(event, { ...base, source: "cloud", error_code: "/Users/alice/x" });
+			expect(unsafeCode).toMatchObject({ source: "cloud" });
+			expect(unsafeCode).not.toHaveProperty("error_code");
+		}
+		// Success events carry neither.
+		expect(await sanitizeRendererProperties("ao.renderer.task_create_succeeded", { source: "cloud", error_code: "X" })).toEqual({});
+	});
+
 	it("keeps only the scope enum on artifact_create events", async () => {
 		for (const event of [
 			"ao.renderer.artifact_create_succeeded",

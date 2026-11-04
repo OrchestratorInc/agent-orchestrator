@@ -115,6 +115,9 @@ export type TaskComposerSubmission = {
 	error?: string;
 	status?: string;
 	errorAction?: { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } };
+	// Rendered under the error by the host, for example which service failed and
+	// the request id to quote.
+	errorDetail?: ReactNode;
 	isSubmitting: boolean;
 	// A string renders as plain warning text; a node lets the host render its
 	// own notice (for example one with a login action).
@@ -390,7 +393,12 @@ export function TaskComposerView({
 							className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
 							role="alert"
 						>
-							<span>{submission.error}</span>
+							{submission.errorDetail ? (
+								<div className="flex min-w-0 flex-col gap-0.5">
+									<span>{submission.error}</span>
+									{submission.errorDetail}
+								</div>
+							) : <span>{submission.error}</span>}
 							{submission.errorAction ? (
 								<div className="flex shrink-0 items-center gap-2">
 									{submission.errorAction.input ? <input

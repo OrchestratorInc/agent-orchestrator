@@ -4,7 +4,7 @@ vi.mock("electron", () => ({ ipcMain: { handle: vi.fn(), on: vi.fn() } }));
 const { tokenMock } = vi.hoisted(() => ({ tokenMock: vi.fn() }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: tokenMock }));
 
-import { createCloudCpProxy, MAX_CLOUD_CP_BINARY_BYTES } from "./cloud-cp-proxy";
+import { cloudCpLogPath, createCloudCpProxy, MAX_CLOUD_CP_BINARY_BYTES } from "./cloud-cp-proxy";
 
 const base = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments?name=a.png", method: "POST" };
 const controlPlaneUrl = async () => "https://cp.example.com";
@@ -139,5 +139,121 @@ describe("cloud control-plane URL pinning", () => {
 		for (const [, init] of fetchImpl.mock.calls) {
 			expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token-1");
 		}
+	});
+});
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Every CP request gets an id to match against the CP's logs, failures say
+// whether the CP answered, and nothing secret is logged.
+describe("cloud control-plane request ids, failures and diagnostics", () => {
+	const get = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/org_1/sessions/s-9/workspace/file?path=secret.txt", method: "GET" };
+	const sender = () => ({ id: 3, isDestroyed: () => false, send: vi.fn(), once: vi.fn() });
+	const unreachable = () => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND cp.example.com"), { code: "ENOTFOUND" }) });
+
+	it("sends a fresh UUID X-Request-ID, keeping only a caller's own UUID", async () => {
+		const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const own = "0f8fad5b-d9cb-469f-a165-70867728950e";
+		await proxy.request(get);
+		await proxy.request(get);
+		await proxy.request({ ...get, headers: { "X-Request-ID": own } });
+		await proxy.request({ ...get, headers: { "X-Request-ID": "laptop.local/abc-000001" } });
+		const ids = fetchImpl.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-request-id"));
+		for (const id of ids) expect(id).toMatch(UUID);
+		expect(ids[0]).not.toBe(ids[1]);
+		expect(ids[2]).toBe(own);
+		expect(ids[3]).not.toBe("laptop.local/abc-000001");
+	});
+
+	it("answers a CP it could not reach with status 0, CLOUD_UNREACHABLE and the id it sent, and logs nothing secret", async () => {
+		const warn = vi.fn();
+		const fetchImpl = vi.fn(async () => { throw unreachable(); });
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch, warn });
+		const response = await proxy.request(get);
+		const sent = new Headers((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].headers).get("x-request-id");
+		expect(response.status).toBe(0);
+		expect(response.headers["x-request-id"]).toBe(sent);
+		expect(JSON.parse(response.body)).toMatchObject({ code: "CLOUD_UNREACHABLE", requestId: sent, cause: "ENOTFOUND" });
+		expect(warn).toHaveBeenCalledOnce();
+		const line = warn.mock.calls[0][0] as string;
+		expect(line).toContain("GET /api/cloud/v1/orgs/:id/sessions/:id/workspace/file failed: origin=network status=0 code=CLOUD_UNREACHABLE");
+		expect(line).toContain(`requestId=${sent}`);
+		expect(line).toContain("cause=ENOTFOUND");
+		expect(line).not.toMatch(/token-1|secret\.txt|org_1|s-9|\?/);
+	});
+
+	it("reads a failed response's code and id from the envelope, else the X-Request-ID header, and keeps the CP release", async () => {
+		const warn = vi.fn();
+		const headerId = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+		const responses = [
+			new Response(JSON.stringify({ error: "x", code: "WORKER_UNAVAILABLE", message: "down", requestId: "9b2c1f3e-1111-4222-8333-944455556666" }), { status: 503, headers: { "x-ao-release": "cp-2026.11.01" } }),
+			new Response("<html>bad gateway</html>", { status: 502, headers: { "x-request-id": headerId } }),
+		];
+		const fetchImpl = vi.fn(async () => responses.shift() as Response);
+		let now = 1_000;
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch, warn, now: () => (now += 5) });
+		expect((await proxy.request(get)).status).toBe(503);
+		const second = await proxy.request(get);
+		expect(second.headers["x-request-id"]).toBe(headerId);
+		expect(warn.mock.calls[0][0]).toContain("origin=cloud status=503 code=WORKER_UNAVAILABLE requestId=9b2c1f3e-1111-4222-8333-944455556666 durationMs=5");
+		expect(warn.mock.calls[1][0]).toContain(`status=502 code=- requestId=${headerId}`);
+		const diagnostics = await proxy.diagnostics();
+		expect(diagnostics.baseUrl).toBe("https://cp.example.com");
+		expect(diagnostics.release).toBe("cp-2026.11.01");
+		expect(diagnostics.recentErrors.map(({ origin, status, code, requestId }) => ({ origin, status, code, requestId }))).toEqual([
+			{ origin: "cloud", status: 503, code: "WORKER_UNAVAILABLE", requestId: "9b2c1f3e-1111-4222-8333-944455556666" },
+			{ origin: "cloud", status: 502, code: undefined, requestId: headerId },
+		]);
+		expect(JSON.stringify(diagnostics)).not.toContain("down");
+	});
+
+	it("keeps only the last three failures for Report a problem", async () => {
+		const fetchImpl = vi.fn(async () => new Response("{}", { status: 500 }));
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch, warn: vi.fn() });
+		for (let i = 0; i < 5; i += 1) await proxy.request(get);
+		expect((await proxy.diagnostics()).recentErrors).toHaveLength(3);
+		// A success is not a failure, and a signed-out request never reaches the CP.
+		tokenMock.mockResolvedValue(null);
+		await proxy.request(get);
+		expect((await proxy.diagnostics()).recentErrors).toHaveLength(3);
+	});
+
+	it("answers a stream the CP refused or could not be reached for as fields, not a message to parse", async () => {
+		const requestId = "9b2c1f3e-1111-4222-8333-944455556666";
+		const fetchImpl = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({ code: "SESSION_TERMINATED", message: "gone", requestId }), { status: 410 }))
+			.mockRejectedValueOnce(unreachable());
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch, warn: vi.fn() });
+		expect(await proxy.openStream(sender(), get)).toEqual({ error: { status: 410, code: "SESSION_TERMINATED", message: "gone", requestId } });
+		expect(await proxy.openStream(sender(), get)).toEqual({ error: expect.objectContaining({ status: 0, code: "CLOUD_UNREACHABLE", cause: "ENOTFOUND", requestId: expect.stringMatching(UUID) }) });
+		tokenMock.mockResolvedValue(null);
+		expect(await proxy.openStream(sender(), get)).toEqual({ error: expect.objectContaining({ status: 401, code: "no_token" }) });
+	});
+
+	it("ends a stream whose connection drops with the code and the stream's request id", async () => {
+		const requestId = "9b2c1f3e-1111-4222-8333-944455556666";
+		let fail: (error: unknown) => void = () => undefined;
+		const body = new ReadableStream<Uint8Array>({ start(controller) { fail = (error) => controller.error(error); } });
+		const fetchImpl = vi.fn(async () => new Response(body, { status: 200, headers: { "x-request-id": requestId } }));
+		const warn = vi.fn();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch, warn });
+		const target = sender();
+		const opened = await proxy.openStream(target, get);
+		expect(opened).toEqual({ streamId: expect.any(String) });
+		await new Promise((resolve) => setImmediate(resolve));
+		fail(Object.assign(new TypeError("terminated"), { cause: { code: "UND_ERR_SOCKET" } }));
+		await vi.waitFor(() => expect(target.send).toHaveBeenCalled());
+		expect(target.send.mock.calls[0][1]).toMatchObject({ type: "error", status: 0, code: "CLOUD_UNREACHABLE", requestId, cause: "UND_ERR_SOCKET" });
+		expect(warn.mock.calls[0][0]).toContain("cause=UND_ERR_SOCKET");
+	});
+});
+
+describe("cloudCpLogPath", () => {
+	it("keeps the route's words and replaces identifiers, names and the query", () => {
+		expect(cloudCpLogPath("https://cp.example.com/api/cloud/v1/orgs/org_1/projects/p-1/cues?x=1")).toBe("/api/cloud/v1/orgs/:id/projects/:id/cues");
+		expect(cloudCpLogPath("https://cp.example.com/mount/api/cloud/v1/orgs/acme/sessions/abc/artifacts/notes")).toBe("/api/cloud/v1/orgs/:id/sessions/:id/artifacts/:id");
+		expect(cloudCpLogPath("https://cp.example.com/api/cloud/v1/me")).toBe("/api/cloud/v1/me");
+		expect(cloudCpLogPath("not a url")).toBe("unknown");
 	});
 });

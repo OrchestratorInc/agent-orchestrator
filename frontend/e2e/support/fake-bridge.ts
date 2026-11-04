@@ -421,6 +421,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					diagnostics: async () => ({ baseUrl: null, recentErrors: [] }),
 					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
@@ -1334,6 +1335,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					diagnostics: async () => ({ baseUrl: null, recentErrors: [] }),
 					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
