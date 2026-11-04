@@ -447,7 +447,7 @@ describe("send keys", () => {
 		expect(field).toHaveClass("min-h-[4.5rem]");
 	});
 
-	it("uses a muted circular send control that lights up when armed", async () => {
+	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
 		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
@@ -455,7 +455,7 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("bg-foreground", "text-on-foreground");
+		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {
@@ -1348,6 +1348,19 @@ describe("sent message recall", () => {
 
 		expect(press(field, "ArrowUp")).toBe(false);
 		expect(composerWireText(field)).toBe("my draft");
+	});
+
+	it("preserves a native caret move when composer padding is pressed before selectionchange", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "abcdef");
+		const text = field.querySelector("[data-lexical-text]")?.firstChild;
+		const form = field.closest("form");
+		if (!text || !form) throw new Error("Expected composer text and form");
+		window.getSelection()?.collapse(text, 4);
+		expect(fireEvent.mouseDown(form, { button: 0 })).toBe(false);
+		fireEvent.click(form);
+		expect(document.activeElement).toBe(field);
+		expect(window.getSelection()?.anchorOffset).toBe(4);
 	});
 
 	it("reads the caret the browser shows before Lexical has caught up with it", async () => {

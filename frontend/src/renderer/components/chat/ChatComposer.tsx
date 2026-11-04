@@ -56,7 +56,7 @@ import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
-import { Button } from "../ui/button";
+import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
 import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
@@ -1913,9 +1913,9 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-			onClick={(e) => {
-					if (controlsDisabled) return;
-					// Portal menus still bubble clicks here; focusing the editor would close them.
+				onMouseDown={(e) => {
+					if (controlsDisabled || e.button !== 0) return;
+					// Portal menus still bubble mouse events here; focusing the editor would close them.
 					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
@@ -1923,6 +1923,8 @@ export const ChatComposer = memo(function ChatComposer({
 						e.target === e.currentTarget ||
 						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
+						// Preserve the live caret before the browser selects the padding.
+						e.preventDefault();
 						editor.current?.focus();
 					}
 				}}
@@ -1943,14 +1945,15 @@ export const ChatComposer = memo(function ChatComposer({
 				{editingQueuedTurnId ? (
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>Editing queued message</span>
-						<button
+						<Button
 							type="button"
+							variant="quiet"
+							size="xs"
 							disabled={controlsDisabled || queuedEditRecovery}
 							onClick={onCancelQueuedEdit}
-							className="rounded px-1.5 py-0.5 hover:text-foreground focus-visible:outline focus-visible:outline-ring"
 						>
 							Cancel edit
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
@@ -1976,8 +1979,10 @@ export const ChatComposer = memo(function ChatComposer({
 										>
 											{file.name}
 										</span>
-										<button
+										<Button
 											type="button"
+											variant="destructive-ghost"
+											size="icon-xs"
 											onMouseDown={(event) => {
 												if (event.button === 0) event.preventDefault();
 											}}
@@ -1996,10 +2001,9 @@ export const ChatComposer = memo(function ChatComposer({
 											}}
 											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 											aria-label={`Remove ${file.name}`}
-											className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											<X aria-hidden="true" className="size-3" />
-										</button>
+										</Button>
 									</li>
 									);
 								})}
@@ -2016,8 +2020,10 @@ export const ChatComposer = memo(function ChatComposer({
 											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
 										</span>
 										{/* Removing a file while it attaches cancels it. */}
-										<button
+										<Button
 											type="button"
+											variant="destructive-ghost"
+											size="icon-xs"
 											onMouseDown={(event) => {
 												if (event.button === 0) event.preventDefault();
 											}}
@@ -2026,10 +2032,9 @@ export const ChatComposer = memo(function ChatComposer({
 												editor.current?.focus();
 											}}
 											aria-label={`Cancel attaching ${file.name}`}
-											className="text-muted-foreground hover:text-foreground"
 										>
 											<X aria-hidden="true" className="size-3" />
-										</button>
+										</Button>
 									</li>
 								))}
 							</ul>
@@ -2159,7 +2164,7 @@ export const ChatComposer = memo(function ChatComposer({
 											disabled={controlsDisabled}
 											aria-label="Add"
 											title="Add files or change mode"
-											className="size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active"
+											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}
 										>
 											<Plus aria-hidden="true" className="size-3.5" />
 										</OptionMenuTrigger>
@@ -2184,24 +2189,20 @@ export const ChatComposer = memo(function ChatComposer({
 										</OptionMenuContent>
 									</OptionMenu>
 								) : (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon-sm"
-												disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-												onClick={() => filePicker.current?.click()}
-												aria-label="Attach a file"
-												className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
-											>
-												<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">Attach a file</TooltipContent>
-								</Tooltip>
+								<span className="inline-flex">
+									<Button
+										type="button"
+										variant="quiet"
+										size="icon-sm"
+										shape="pill"
+										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onClick={() => filePicker.current?.click()}
+										aria-label="Attach a file"
+										className="shrink-0"
+									>
+										<Plus aria-hidden="true" className="size-3.5" />
+									</Button>
+								</span>
 								)}
 							</>
 						) : null}
@@ -2210,7 +2211,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
-							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
 								Steer
 							</Button>
 						) : null}
@@ -2220,8 +2221,9 @@ export const ChatComposer = memo(function ChatComposer({
 									<span className="inline-flex">
 										<Button
 											type="button"
-											variant="ghost"
+											variant={dictating ? "primary" : "quiet"}
 											size="none"
+											shape="pill"
 											disabled={!dictating && controlsDisabled}
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
@@ -2233,11 +2235,8 @@ export const ChatComposer = memo(function ChatComposer({
 											aria-label={dictating ? "Finish dictation" : "Dictate"}
 											aria-pressed={dictating}
 											className={cn(
-												// Important: the chat surface's button rule (styles.css) would otherwise drop width from the transition.
-												"mr-1 h-7 overflow-hidden rounded-full p-0 transition-[width,background-color,color]! duration-200! ease-[cubic-bezier(0.23,1,0.32,1)]! active:translate-y-0! active:transform-none! active:scale-100! motion-reduce:transition-none!",
-												dictating
-													? "w-[76px] bg-foreground text-on-foreground hover:bg-foreground/90! hover:text-on-foreground dark:hover:bg-foreground/90!"
-													: "w-7 text-muted-foreground hover:bg-interactive-active! hover:text-foreground",
+												"mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+												dictating ? "w-[76px]" : "w-7",
 											)}
 										>
 											{dictating ? (
@@ -2256,17 +2255,12 @@ export const ChatComposer = memo(function ChatComposer({
 								<span className="inline-flex">
 									<Button
 										type={canStopTurn || canContinueTurn ? "button" : "submit"}
-										variant="ghost"
+										variant="primary"
 										size="icon-sm"
+										shape="pill"
 										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
 										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
-										className={cn(
-											"size-7 rounded-full border-transparent focus-visible:ring-ring/40",
-											canStopTurn || canContinueTurn || sendActionEnabled
-												? "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
-												: "bg-primary text-primary-foreground",
-										)}
 									>
 										{canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />

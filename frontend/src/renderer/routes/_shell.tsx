@@ -336,6 +336,7 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
+	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
@@ -369,7 +370,6 @@ function ShellLayout() {
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
-	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
 	// Body-level popout portals sit outside #root; they read the platform here.
@@ -408,6 +408,7 @@ function ShellLayout() {
 		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const openShellTerminal = useOpenShellTerminal(routeParams.hostId);
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
@@ -1325,11 +1326,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(
 		() =>
 			aoBridge.app.onNewShellTerminalShortcut(() => {
-				if (!routeParams.hostId && routeParams.sessionId) {
-					requestNewShellTerminal();
-				}
+				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
-		[requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
+		[requestNewShellTerminal, routeParams.sessionId],
 	);
 
 	// The shell layout is the single consumer of that signal, because it is the
@@ -1339,9 +1338,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (routeParams.hostId || !routeParams.sessionId) return;
+		if (!routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
-			projectId: scopedProjectId,
+			projectId: routeParams.hostId ? routeParams.projectId : scopedProjectId,
 			sessionId: routeParams.sessionId,
 			cloud: scopedSession?.cloud,
 		});
@@ -1354,6 +1353,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		scopedSession?.cloud,
 		routeParams.sessionId,
 		routeParams.hostId,
+		routeParams.projectId,
 		setActiveShellTerminal,
 	]);
 
@@ -1428,7 +1428,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
 				{isDragActive ? (
 					<div

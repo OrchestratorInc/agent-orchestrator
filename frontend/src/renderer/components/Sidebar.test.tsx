@@ -1070,8 +1070,8 @@ describe("Sidebar", () => {
 		});
 
 		for (const label of ["New project", "Open a new agent"]) {
-			// Shared 24px row-action button; the icon is centered by the grid, no optical nudge.
-			expect(screen.getByRole("button", { name: label })).toHaveClass("size-6", "place-items-center");
+			// Shared 24px row-action button (Button icon-xs); the icon is centered, no optical nudge.
+			expect(screen.getByRole("button", { name: label })).toHaveClass("size-control-sm", "justify-center");
 		}
 	});
 

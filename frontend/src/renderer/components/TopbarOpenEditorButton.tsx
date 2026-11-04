@@ -189,30 +189,26 @@ export function TopbarOpenEditorButton({
 							</TopbarButton>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{mainTitle}</TooltipContent>
+					<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
 				</Tooltip>
 				<DropdownMenu onOpenChange={(isOpen) => {
 					setMenuOpen(isOpen);
 					if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 				}}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<span className="inline-flex">
-								<DropdownMenuTrigger asChild>
-									<TopbarButton
-										aria-label={t("editor.openOptionsAria")}
-										className="bg-transparent hover:bg-transparent"
-										highlight={false}
-										disabled={menuDisabled}
-										variant="icon"
-									>
-										<ChevronDown className="size-icon-sm" aria-hidden="true" />
-									</TopbarButton>
-								</DropdownMenuTrigger>
-							</span>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("editor.openOptionsAria")}</TooltipContent>
-					</Tooltip>
+					<span className="inline-flex">
+						<DropdownMenuTrigger asChild>
+							<TopbarButton
+								aria-label={t("editor.openOptionsAria")}
+								className="bg-transparent hover:bg-transparent"
+								highlight={false}
+								disabled={menuDisabled}
+								variant="icon"
+							>
+								<ChevronDown className="size-icon-sm" aria-hidden="true" />
+							</TopbarButton>
+						</DropdownMenuTrigger>
+					</span>
+				
 					<DropdownMenuContent align="end" className="min-w-52">
 						{[...openInTargets, ...editors].map((target) => (
 							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>

@@ -231,6 +231,9 @@ func TestSideExcerptOnlyFallbackAndFrozenReceipt(t *testing.T) {
 			if turn.Text != want {
 				t.Fatalf("fallback %q", turn.Text)
 			}
+			if sides, err := h.svc.ListIndependentSideChats(context.Background(), testSession); err != nil || len(sides) != 1 || sides[0].Label != want || sides[0].ManualLabel {
+				t.Fatalf("excerpt-only title = %+v, %v", sides, err)
+			}
 			h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
 			delivered := h.provider(0).sentTexts()[0]
 			for _, part := range []string{want, "Selected source text.", "seed", "this", "it"} {

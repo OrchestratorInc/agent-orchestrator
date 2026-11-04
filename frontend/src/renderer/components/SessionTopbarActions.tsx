@@ -85,6 +85,7 @@ export function SessionTopbarActions({
 	});
 	const orchestratorTooltip = isProjectRestarting ? t("shell.restarting") : isSpawning
 		? t("shell.spawning") : orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
+	const orchestratorTooltipShortcut = !isProjectRestarting && !isSpawning && orchestrator ? "open-orchestrator" : undefined;
 
 	const openBoard = () => void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 
@@ -118,7 +119,7 @@ export function SessionTopbarActions({
 								</TopbarButton>
 							</span>
 						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("shell.newTask")}</TooltipContent>
+						<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
 					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -230,7 +231,7 @@ export function SessionTopbarActions({
 							</TopbarButton>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{orchestratorTooltip}</TooltipContent>
+					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
 				</Tooltip>
 			) : null}
 		</PageTopbarActions>
@@ -297,7 +298,7 @@ export function TopbarArchiveButton({
 						/>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("shell.archiveSession")}</TooltipContent>
+				<TooltipContent shortcut="archive-session" side="bottom">{t("shell.archiveSession")}</TooltipContent>
 			</Tooltip>
 			{error ? <TopbarActionError>{error}</TopbarActionError> : null}
 		</div>

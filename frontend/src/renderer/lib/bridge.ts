@@ -23,6 +23,7 @@ export const aoBridge: AoBridge =
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
 		getGitHubLogin: async (_repoPath?: string) => "",
+		listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 		refreshGitHubOwners: async () => [],
 		checkGitHubRepositoryAvailability: async () => ({ available: true }),
@@ -94,6 +95,24 @@ export const aoBridge: AoBridge =
 				setTimeout(() => URL.revokeObjectURL(url), 0);
 				return true;
 			},
+		},
+		// Publishing reads local files in the main process: desktop only.
+		cloudShare: {
+			available: async () => false,
+			inspect: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			list: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			publish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			cancel: async () => undefined,
+			unpublish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			onProgress: () => () => undefined,
 		},
 		cloudArtifact: {
 			fetch: async (url: string) => {
@@ -318,6 +337,10 @@ export const aoBridge: AoBridge =
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
+			getFirstRunProjectPrompt: async () => "seen" as const,
+			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
 			setEnabled: async () => undefined,

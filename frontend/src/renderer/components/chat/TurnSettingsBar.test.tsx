@@ -99,10 +99,12 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			</div>,
 		);
 		const open = async () => {
-			await user.click(screen.getByRole("button", {
+			const trigger = screen.getByRole("button", {
 				name: path === "ACP standalone" ? "Model" : "Model and reasoning effort for the next turn",
-			}));
-			if (path !== "ACP standalone") await user.keyboard("{ArrowDown}{ArrowRight}");
+			});
+			const alreadyOpen = trigger.getAttribute("aria-expanded") === "true";
+			if (!alreadyOpen) await user.click(trigger);
+			if (path !== "ACP standalone") await user.keyboard(alreadyOpen ? "{ArrowRight}" : "{ArrowDown}{ArrowRight}");
 		};
 		return { user, onChange, onComposerClick, open };
 	}
@@ -137,6 +139,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			expect(onChange).toHaveBeenCalledWith("model", { value: "provider-1/model-99" });
 		}
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(path === "ACP standalone" ? 0 : 1);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -261,6 +264,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(0);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -854,8 +858,27 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
-	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
+	// Hermes' default session mode governs only its file-edit tool; ordinary
+	// shell commands still run without asking, so the hint copy must not read
+	// stronger than Hermes behaves.
+	it("describes what Hermes' Default actually gates in the approval menu", async () => {
+		const user = userEvent.setup();
 		render(
+			<TurnSettingsBar
+				harness="hermes"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByText("Asks before file edits; shell commands run without asking")).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
 			<TurnSettingsBar
 				harness="codex"
 				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
