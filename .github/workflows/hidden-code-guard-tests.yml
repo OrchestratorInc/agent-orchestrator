@@ -1,0 +1,22 @@
+name: Hidden code guard tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/hidden-code-guard.mjs"
+      - ".github/scripts/hidden-code-guard.test.mjs"
+      - ".github/workflows/hidden-code-guard.yml"
+      - ".github/workflows/hidden-code-guard-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test hidden code guard
+        run: node --test .github/scripts/hidden-code-guard.test.mjs
