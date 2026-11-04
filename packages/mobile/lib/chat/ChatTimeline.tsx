@@ -397,9 +397,14 @@ export const ChatTimeline = memo(function ChatTimeline({
 							}}
 							scrollEventThrottle={100}
 							onLayout={(event) => {
-								const measured = !viewportHeight.current;
+								const previous = viewportHeight.current;
+								const measured = !previous;
 								viewportHeight.current = event.nativeEvent.layout.height;
-								if (measured && followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								// The keyboard shrinks the list from below while the composer rides
+								// up over it, so a list at its end would leave the newest message
+								// behind the composer. Following the end, it stays at the end.
+								const shrank = !measured && viewportHeight.current < previous;
+								if ((measured || shrank) && followsTail.current) requestAnimationFrame(() => scrollToLatest(shrank));
 								settleOpening();
 							}}
 							onContentSizeChange={(_width, height) => {

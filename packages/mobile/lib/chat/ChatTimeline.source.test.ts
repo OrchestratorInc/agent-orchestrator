@@ -122,6 +122,11 @@ describe("jump to latest", () => {
 	it("lets only a drag stop following the newest message", () => {
 		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));");
 	});
+	// The keyboard shrinks the list while the composer rides up by a transform.
+	it("keeps the newest message in view when the list shrinks at its end", () => {
+		expect(source).toContain("const shrank = !measured && viewportHeight.current < previous;");
+		expect(source).toContain("if ((measured || shrank) && followsTail.current) requestAnimationFrame(() => scrollToLatest(shrank));");
+	});
 	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
 	it("floats the native control over the list", () => {
 		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
