@@ -2072,6 +2072,29 @@ textarea,
 	}
 }
 
+/* A sidebar marker (needs you / ready) appearing on a row that was already on
+   screen: one short pop, then still. Transform and opacity only. */
+@keyframes session-marker-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.6);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.session-marker-pop {
+	animation: session-marker-pop 200ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-marker-pop {
+		animation: none;
+	}
+}
+
 @keyframes attention-card-pulse {
 	0%,
 	100% {
@@ -6118,4 +6141,23 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 @keyframes build-info-twinkle {
 	0%, 100% { opacity: 0.15; }
 	50% { opacity: 1; }
+}
+
+/* Sidebar hover preview: lift the card off the sidebar. It resolves to the same
+ * surface as the sidebar, so mix in some foreground and add a hairline + shadow. */
+[data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
+		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* Keep the session row lit while its hover preview card is open (pointer on the card). */
+.group\/nav-row[data-preview-open] [data-nav-row-highlight-idle] {
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+.group\/nav-row[data-preview-open] {
+	color: var(--color-foreground);
 }

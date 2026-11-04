@@ -6,6 +6,7 @@ import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
+import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
@@ -258,6 +259,9 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const projectAvatars = useUiStore((state) => state.projectAvatars);
+	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
 	const chatSendKeyOptions = [
@@ -317,6 +321,11 @@ export function GeneralSettingsSection({
 					</div>
 				</SettingsRow>
 				{isMacPlatform() && <WindowTranslucencyRow />}
+				{newSidebarDesign && (
+					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
+						<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
+					</SettingsRow>
+				)}
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -402,6 +411,7 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <NewSidebarDesignRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -502,6 +512,18 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for the new left sidebar design. On by default. */
+function NewSidebarDesignRow() {
+	const { t } = useTranslation();
+	const newSidebarDesign = useUiStore((state) => state.newSidebarDesign);
+	const setNewSidebarDesign = useUiStore((state) => state.setNewSidebarDesign);
+	return (
+		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
+			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
 		</SettingsRow>
 	);
 }

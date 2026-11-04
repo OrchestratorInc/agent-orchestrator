@@ -36,6 +36,8 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -138,6 +140,11 @@ export function BoardSessionCardAdapter({
 	);
 }
 
+/** The board card for a session, rendered static for a sidebar hover preview. */
+export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
+	return <DesktopSessionCard interactive={false} session={session} still />;
+}
+
 export function ArchivedSessionCardAdapter({
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -201,6 +208,7 @@ function DesktopSessionCard({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -216,6 +224,7 @@ function DesktopSessionCard({
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
+	still?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -283,6 +292,7 @@ function DesktopSessionCard({
 		</Tooltip>
 	) : undefined;
 
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
 		<SessionCardView
 			action={action}
@@ -338,6 +348,8 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			still={still}
+			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);
