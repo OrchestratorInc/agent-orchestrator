@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -608,6 +610,107 @@ func TestModelDiscoveryStopsOnServiceShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("discovery did not stop on service shutdown")
+	}
+}
+
+func TestOpenCodeV2DiscoveryOutlivesCLITimeoutForDataHomeMigration(t *testing.T) {
+	previousTimeout := modelCatalogLoadTimeout
+	modelCatalogLoadTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { modelCatalogLoadTimeout = previousTimeout })
+
+	discoverer := successfulModelDiscoverer()
+	// Longer than the CLI discovery timeout, well inside the migration budget
+	// that covers OpenCode 2's first-use data-store copy.
+	discoverer.delay = 40 * time.Millisecond
+	svc := newService([]agentregistry.HarnessAgent{
+		harnessAgent("opencode-v2", "OpenCode 2", nil),
+	}, &fakeModelCache{}, discoverer)
+
+	catalog, err := svc.Models(context.Background(), "opencode-v2", "", true)
+	if err != nil {
+		t.Fatalf("Models(opencode-v2): %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "model-one" {
+		t.Fatalf("catalog = %#v, want a completed discovery", catalog)
+	}
+}
+
+// fixedBinaryAgent resolves to a test-owned executable instead of the fake
+// adapter's default path, so a test can drive the real discovery adapter.
+type fixedBinaryAgent struct {
+	fakeAgent
+	binary string
+}
+
+func (a fixedBinaryAgent) ResolveBinary(context.Context) (string, error) { return a.binary, nil }
+
+// TestOpenCodeV2CatalogMigratesLegacyStoreEndToEnd exercises the reported path
+// through every real layer: the service's discovery budget, modelcatalog's
+// OpenCode 2 data-home preparation, the legacy-store copy, and `opencode
+// models`. The legacy database stays locked for longer than the CLI discovery
+// timeout, so the catalog only succeeds when the migration is allowed to
+// outlive that timeout.
+func TestOpenCodeV2CatalogMigratesLegacyStoreEndToEnd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake opencode CLI is a POSIX shell script")
+	}
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	legacy := filepath.Join(parent, "opencode")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "auth.json"), []byte(`{"anthropic":{"type":"api"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(legacy, "opencode.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = db.Exec(`ROLLBACK`) }()
+
+	binary := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'anthropic/claude-opus-5-5\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousTimeout := modelCatalogLoadTimeout
+	modelCatalogLoadTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { modelCatalogLoadTimeout = previousTimeout })
+
+	svc := newService([]agentregistry.HarnessAgent{{
+		Harness:  domain.HarnessOpenCodeV2,
+		Manifest: adapters.Manifest{ID: "opencode-v2", Name: "OpenCode 2"},
+		Agent:    fixedBinaryAgent{binary: binary},
+	}}, &fakeModelCache{}, modelcatalog.Discoverer{})
+
+	// Release the legacy database after the CLI timeout but well inside the
+	// migration budget.
+	time.AfterFunc(200*time.Millisecond, func() { _, _ = db.Exec(`ROLLBACK`) })
+
+	catalog, err := svc.Models(context.Background(), "opencode-v2", "", true)
+	if err != nil {
+		t.Fatalf("Models(opencode-v2): %v", err)
+	}
+	if len(catalog.Models) == 0 || catalog.Models[0].ID != "anthropic/claude-opus-5-5" {
+		t.Fatalf("catalog = %#v, want models from the migrated data store", catalog)
+	}
+}
+
+func TestModelCatalogLoadBudgetOnlyExtendsOpenCodeV2(t *testing.T) {
+	if got, want := modelCatalogLoadBudget("opencode-v2"), opencodeV2MigrationTimeout+modelCatalogLoadTimeout; got != want {
+		t.Fatalf("opencode-v2 budget = %s, want %s", got, want)
+	}
+	if got, want := modelCatalogLoadBudget("codex"), modelCatalogLoadTimeout; got != want {
+		t.Fatalf("codex budget = %s, want the CLI discovery timeout %s", got, want)
 	}
 }
 

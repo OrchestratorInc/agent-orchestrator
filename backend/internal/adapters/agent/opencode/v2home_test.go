@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,6 +186,76 @@ func TestPrepareV2DataHomeStopsWaitingForMigrationLockOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("first migration did not finish after releasing SQLite lock")
+	}
+}
+
+func TestPrepareV2DataHomeExplainsAbortedMigration(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	legacy := filepath.Join(parent, "opencode")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credentialPath := filepath.Join(legacy, "auth.json")
+	if err := os.WriteFile(credentialPath, []byte(`{"anthropic":{"type":"api"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(legacy, "opencode.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = db.Exec(`ROLLBACK`) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := PrepareV2DataHome(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("migration error = %v, want deadline", err)
+	} else if !strings.Contains(err.Error(), "left unchanged") || !strings.Contains(err.Error(), legacy) {
+		t.Fatalf("migration error = %v, want actionable legacy-store guidance", err)
+	}
+	if _, err := os.Stat(credentialPath); err != nil {
+		t.Fatalf("aborted migration changed the legacy store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, v2DataHomeDirName, "opencode")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aborted migration activated an isolated store: %v", err)
+	}
+}
+
+func TestSnapshotSQLiteDatabaseReportsProlongedLock(t *testing.T) {
+	previous := v2LegacyDatabaseBusyTimeout
+	v2LegacyDatabaseBusyTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { v2LegacyDatabaseBusyTimeout = previous })
+
+	source := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = db.Exec(`ROLLBACK`) }()
+
+	started := time.Now()
+	err = snapshotSQLiteDatabase(context.Background(), source, filepath.Join(t.TempDir(), "snapshot.db"))
+	if err == nil || !strings.Contains(err.Error(), "quit OpenCode 1") {
+		t.Fatalf("snapshot error = %v, want actionable lock guidance", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("snapshot retried a locked database for %s", elapsed)
 	}
 }
 
