@@ -12,7 +12,9 @@ import (
 
 // A table shaped like LiteLLM's: the three required providers, a provider a
 // harness routes to directly (minimax), Vertex's per-publisher providers,
-// Bedrock's converse provider, and a reseller listing a first-party model name.
+// Bedrock's converse provider, a reseller listing a first-party model name, and
+// a doubled prefix the live table carries (perplexity/perplexity/...), which
+// must cost that row alone rather than the whole catalog.
 const everyProviderTable = `{
 "anthropic/claude-test":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000003,"output_cost_per_token":0.000015},
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.00001},
@@ -22,6 +24,8 @@ const everyProviderTable = `{
 "gemini-test":{"litellm_provider":"vertex_ai-language-models","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.000004},
 "bedrock/writer.palmyra-test":{"litellm_provider":"bedrock_converse","mode":"chat","input_cost_per_token":0.000002,"output_cost_per_token":0.000006},
 "azure/gpt-test":{"litellm_provider":"azure","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.00001},
+"perplexity/perplexity/doubled":{"litellm_provider":"perplexity","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
+"perplexity/sonar-test":{"litellm_provider":"perplexity","mode":"chat","input_cost_per_token":0.000001,"output_cost_per_token":0.000001},
 "bad/provider":{"litellm_provider":"../escape","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`
 
@@ -34,7 +38,7 @@ func TestRuntimeCatalogPricesEveryProviderTheTableDoes(t *testing.T) {
 		t.Fatalf("Catalog: %v", err)
 	}
 	snapshot := catalog.Snapshot()
-	want := []string{"anthropic", "azure", "bedrock", "minimax", "openai", "vertex_ai", "zai"}
+	want := []string{"anthropic", "azure", "bedrock", "minimax", "openai", "perplexity", "vertex_ai", "zai"}
 	if got := snapshot.ProviderIDs(); !slices.Equal(got, want) {
 		t.Fatalf("providers = %v, want %v", got, want)
 	}
