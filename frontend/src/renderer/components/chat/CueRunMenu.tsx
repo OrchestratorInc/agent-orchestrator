@@ -83,6 +83,10 @@ function CueRunMenuTrigger({
 	// pointer is still inside. Escape is the keyboard escape hatch.
 	const pointerInsideControl = useRef(false);
 	const escapeRequested = useRef(false);
+	// A menu the pointer opened must not hand focus back to the trigger when it
+	// closes: Chromium can mark that returned focus :focus-visible, which keeps
+	// the hover highlight lit after the pointer has left.
+	const openedByPointer = useRef(false);
 	const invokeMutation = useInvokeCueMutation();
 	const cloud = useCueHost(cloudOrgId);
 	const openShellTerminal = useOpenShellTerminal();
@@ -111,7 +115,10 @@ function CueRunMenuTrigger({
 		pointerInsideControl.current = true;
 		cancelHoverClose();
 		if (disabled || spinner || creating) return;
-		if (!open) openMenu();
+		if (!open) {
+			openedByPointer.current = true;
+			openMenu();
+		}
 	};
 
 	const handlePointerLeave = () => {
@@ -133,6 +140,7 @@ function CueRunMenuTrigger({
 	const handleOpenChange = (next: boolean) => {
 		if (next) {
 			if (creating) return;
+			openedByPointer.current = false;
 			openMenu();
 			return;
 		}
@@ -212,6 +220,7 @@ function CueRunMenuTrigger({
 			// Nothing to run: leave the hover menu up so its empty state can
 			// offer creating the first cue.
 			if (!lastCue) {
+				openedByPointer.current = true;
 				openMenu();
 				return;
 			}
@@ -273,6 +282,9 @@ function CueRunMenuTrigger({
 						onEscapeKeyDown={() => {
 							escapeRequested.current = true;
 						}}
+						onCloseAutoFocus={(event) => {
+							if (openedByPointer.current) event.preventDefault();
+						}}
 					/>
 				) : null}
 			</DropdownMenu>
@@ -291,6 +303,7 @@ function CueMenuItems({
 	onPointerEnter,
 	onPointerLeave,
 	onEscapeKeyDown,
+	onCloseAutoFocus,
 }: {
 	projectId: string;
 	cloudOrgId?: string;
@@ -300,6 +313,7 @@ function CueMenuItems({
 	onPointerEnter: () => void;
 	onPointerLeave: () => void;
 	onEscapeKeyDown: () => void;
+	onCloseAutoFocus: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
 	const query = useProjectCuesQuery(projectId, true, cloudOrgId);
@@ -321,6 +335,7 @@ function CueMenuItems({
 			onPointerEnter={onPointerEnter}
 			onPointerLeave={onPointerLeave}
 			onEscapeKeyDown={onEscapeKeyDown}
+			onCloseAutoFocus={onCloseAutoFocus}
 		>
 			{query.isError && !query.isFetching ? (
 				<>
