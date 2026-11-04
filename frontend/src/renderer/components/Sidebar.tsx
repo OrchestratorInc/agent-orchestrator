@@ -1924,7 +1924,7 @@ const ProjectItem = memo(function ProjectItem({
 										// Projects header so icons and labels share one left edge.
 										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
-										"pr-sidebar-project-actions",
+										isPinned ? "pr-sidebar-project-actions-pinned" : "pr-sidebar-project-actions",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
@@ -1984,14 +1984,6 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
-									{isPinned ? (
-										<Pin
-											aria-label={t("shell.pinnedProject")}
-											className="sidebar-expanded-chrome relative z-[1] size-3 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden"
-											data-project-pinned=""
-											role="img"
-										/>
-									) : null}
 									{/* The host badge shrinks and truncates in narrow sidebars so it never
 									    runs under the row actions; half the row stays for the name. */}
 									{hostLabel && (
@@ -2039,6 +2031,24 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
+								{isPinned ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												size="icon-xs"
+												variant="quiet"
+												aria-label={t("shell.unpinProject")}
+												className={HOVER_ACTION_CLASS}
+												data-project-pinned=""
+												onClick={() => setProjectPinned(workspace.id, false)}
+												type="button"
+											>
+												<Pin aria-hidden="true" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.unpinProject")}</TooltipContent>
+									</Tooltip>
+								) : null}
 								{/* A guest may open a shared orchestrator but never start one, and the
 								    project's own actions belong to its organization. */}
 								{!workspace.shared || orchestrator ? (

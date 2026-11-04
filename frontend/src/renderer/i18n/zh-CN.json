@@ -1877,7 +1877,6 @@
 	"shell.unpinSession": "取消固定会话",
 	"shell.pinProject": "Pin to top",
 	"shell.unpinProject": "Unpin",
-	"shell.pinnedProject": "Pinned",
 	"shell.projects": "项目",
 	"shell.showMore": "显示更多",
 	"shell.showLess": "显示更少",

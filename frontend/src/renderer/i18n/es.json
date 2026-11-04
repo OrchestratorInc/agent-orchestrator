@@ -2946,7 +2946,6 @@
 	"shell.unpinSession": "Unpin session",
 	"shell.pinProject": "Pin to top",
 	"shell.unpinProject": "Unpin",
-	"shell.pinnedProject": "Pinned",
 	"newTask.task": "Task",
 	"newTask.taskPlaceholders": [
 		"Revisa los archivos del backend y dime si hay algún código muerto",

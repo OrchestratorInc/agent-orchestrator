@@ -2898,7 +2898,6 @@
 	"shell.unpinSession": "Unpin session",
 	"shell.pinProject": "Pin to top",
 	"shell.unpinProject": "Unpin",
-	"shell.pinnedProject": "Pinned",
 	"newTask.task": "Task",
 	"newTask.taskPlaceholders": [
 		"バックエンドのファイルを確認し、デッドコードがないか教えてください",
