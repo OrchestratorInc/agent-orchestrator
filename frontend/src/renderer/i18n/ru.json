@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake выключен. Нажмите, чтобы включить.",
+	"awake.activeTooltip": "Stay Awake включён. Нажмите, чтобы выключить.",
+	"awake.pausedBattery": "Приостановлено: заряд ниже {{percent}}%.\nВозобновится после зарядки.",
+	"awake.pausedHeat": "Приостановлено, пока Mac остывает. Выключите и включите для повтора.",
+	"awake.pausedUnknownBattery": "Состояние батареи недоступно. Выключите и включите для повтора.",
+	"awake.toggleFailed": "Не удалось изменить Stay Awake. Повторите попытку.",
+	"awake.pausedTooltip": "Stay Awake приостановлен. Нажмите, чтобы выключить.",
 	"sideChat.closingTab": "Закрытие",
 	"sideChat.closing": "Боковой чат закрывается. Он исчезнет после подтверждения завершения работы.",
 	"sideChat.retryClose": "Повторить закрытие",

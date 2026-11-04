@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake está desligado. Clique para ligar.",
+	"awake.activeTooltip": "Stay Awake está ligado. Clique para desligar.",
+	"awake.pausedBattery": "Pausado: bateria abaixo de {{percent}}%.\nRetoma após carregar.",
+	"awake.pausedHeat": "Pausado enquanto o Mac esfria. Desative e ative para tentar novamente.",
+	"awake.pausedUnknownBattery": "Estado da bateria indisponível. Desative e ative para tentar novamente.",
+	"awake.toggleFailed": "Não foi possível alterar o Stay Awake. Tente novamente.",
+	"awake.pausedTooltip": "Stay Awake está pausado. Clique para desativar.",
 	"sideChat.closingTab": "Fechando",
 	"sideChat.closing": "Fechando conversa lateral. Ela desaparecerá após a confirmação.",
 	"sideChat.retryClose": "Tentar fechar novamente",

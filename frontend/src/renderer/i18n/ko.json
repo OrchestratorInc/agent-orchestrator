@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake가 꺼져 있습니다. 클릭하여 켜세요.",
+	"awake.activeTooltip": "Stay Awake가 켜져 있습니다. 클릭하여 끄세요.",
+	"awake.pausedBattery": "배터리가 {{percent}}% 미만이라 일시 중지됨.\n충전 후 다시 시작합니다.",
+	"awake.pausedHeat": "Mac 냉각 중 일시 중지됨. 껐다 켜서 다시 시도하세요.",
+	"awake.pausedUnknownBattery": "배터리 상태를 확인할 수 없습니다. 껐다 켜서 다시 시도하세요.",
+	"awake.toggleFailed": "Stay Awake를 변경하지 못했습니다. 다시 시도하세요.",
+	"awake.pausedTooltip": "Stay Awake가 일시 중지되었습니다. 클릭하여 끄세요.",
 	"sideChat.closingTab": "닫는 중",
 	"sideChat.closing": "사이드 채팅을 닫는 중입니다. 종료가 확인되면 사라집니다.",
 	"sideChat.retryClose": "닫기 재시도",
