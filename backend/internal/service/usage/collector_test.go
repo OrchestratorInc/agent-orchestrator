@@ -600,24 +600,24 @@ func TestCollectorReactivateSessionWaitsForLockAndHonorsCancellation(t *testing.
 	collector := NewCollector(store, SourceRoots{}, nil)
 
 	t.Run("waits and reports completion", func(t *testing.T) {
-		mustNoError(t, collector.mu.LockContext(context.Background()))
+		mustNoError(t, collector.mu.Acquire(context.Background(), 1))
 		done := make(chan error, 1)
 		go func() {
 			done <- collector.ReactivateSession(context.Background(), session.ID, "launch-current")
 		}()
 		select {
 		case err := <-done:
-			collector.mu.Unlock()
+			collector.mu.Release(1)
 			t.Fatalf("reactivation returned before serialized work ran: %v", err)
 		case <-time.After(50 * time.Millisecond):
 		}
-		collector.mu.Unlock()
+		collector.mu.Release(1)
 		mustNoError(t, <-done)
 	})
 
 	t.Run("canceled waiter returns context error", func(t *testing.T) {
-		mustNoError(t, collector.mu.LockContext(context.Background()))
-		defer collector.mu.Unlock()
+		mustNoError(t, collector.mu.Acquire(context.Background(), 1))
+		defer collector.mu.Release(1)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if err := collector.ReactivateSession(ctx, session.ID, "launch-current"); !errors.Is(err, context.Canceled) {
@@ -630,7 +630,7 @@ func TestCollectorFinalizeSessionHonorsCancellationWhileWaitingForLock(t *testin
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessCodex, "native-contended", false)
 	collector := NewCollector(store, SourceRoots{}, nil)
-	mustNoError(t, collector.mu.LockContext(context.Background()))
+	mustNoError(t, collector.mu.Acquire(context.Background(), 1))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -640,12 +640,12 @@ func TestCollectorFinalizeSessionHonorsCancellationWhileWaitingForLock(t *testin
 	}()
 	select {
 	case err := <-done:
-		collector.mu.Unlock()
+		collector.mu.Release(1)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("FinalizeSession error = %v, want context.Canceled", err)
 		}
 	case <-time.After(time.Second):
-		collector.mu.Unlock()
+		collector.mu.Release(1)
 		<-done
 		t.Fatal("FinalizeSession did not observe cancellation while waiting for collector lock")
 	}

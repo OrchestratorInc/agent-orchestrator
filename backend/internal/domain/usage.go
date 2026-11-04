@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -52,12 +53,7 @@ var AllUsageSourceKinds = []UsageSourceKind{
 
 // IsKnown reports whether k is a certified usage source kind.
 func (k UsageSourceKind) IsKnown() bool {
-	for _, known := range AllUsageSourceKinds {
-		if k == known {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(AllUsageSourceKinds, k)
 }
 
 // UsageBindingState tracks the root native-session binding lifecycle.

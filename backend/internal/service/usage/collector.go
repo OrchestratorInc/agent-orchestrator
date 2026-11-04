@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -181,18 +182,6 @@ const (
 	openCodeApp = "opencode"
 	kiloApp     = "kilo"
 )
-
-// sqliteUsageHarness reports whether the harness stores usage in a SQLite
-// database, or a snapshot file it rewrites whole (Grok's usage.json), read by
-// row cursor rather than in an append-only JSONL transcript.
-func sqliteUsageHarness(harness domain.AgentHarness) bool {
-	switch harness {
-	case domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode,
-		domain.HarnessGrok, domain.HarnessAgy:
-		return true
-	}
-	return false
-}
 
 // grokHome mirrors Grok Build's GROK_HOME override for its local state, as
 // the AO adapter does; otherwise ~/.grok.
@@ -363,7 +352,7 @@ type Collector struct {
 	codexLogicalSourceLimit int
 	now                     func() time.Time
 	logger                  *slog.Logger
-	mu                      contextMutex
+	mu                      *semaphore.Weighted // one holder; waiting honors ctx
 	// Guarded separately from mu, which RecordHook holds across the whole hook.
 	routeMu sync.RWMutex
 }
@@ -447,29 +436,6 @@ func (c *Collector) routeResolvedHandler() func() {
 	return c.notifyRouteResolved
 }
 
-type contextMutex struct {
-	token chan struct{}
-}
-
-func newContextMutex() contextMutex {
-	token := make(chan struct{}, 1)
-	token <- struct{}{}
-	return contextMutex{token: token}
-}
-
-func (m *contextMutex) LockContext(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-m.token:
-		return nil
-	}
-}
-
-func (m *contextMutex) Unlock() {
-	m.token <- struct{}{}
-}
-
 // NewCollector constructs a transcript source registrar.
 func NewCollector(store collectorStore, roots SourceRoots, notifySourcesChanged func(reconcile bool)) *Collector {
 	return newCollectorWithCodexSourceLimit(store, roots, notifySourcesChanged, defaultCodexLogicalSourceLimit)
@@ -490,7 +456,7 @@ func newCollectorWithCodexSourceLimit(
 		notifySourcesChanged:    notifySourcesChanged,
 		codexLogicalSourceLimit: limit,
 		now:                     time.Now,
-		mu:                      newContextMutex(),
+		mu:                      semaphore.NewWeighted(1),
 		logger:                  slog.Default(),
 	}
 }
@@ -505,10 +471,10 @@ func (c *Collector) FinalizeSession(
 	expectedRuntimeLaunchID string,
 	expectedSessionRevision int64,
 ) error {
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 
 	now := c.now().UTC()
 	bindings, err := c.store.FinalizeUsageBindingsForSessionLaunch(
@@ -540,10 +506,10 @@ func (c *Collector) ReactivateSession(
 	sessionID domain.SessionID,
 	expectedRuntimeLaunchID string,
 ) error {
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 	return c.reactivateSessionLocked(ctx, sessionID, expectedRuntimeLaunchID)
 }
 
@@ -630,10 +596,11 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 			return err
 		}
 	}
+	// A hook that names no transcript is resolved by native session ID. Claude
+	// falls back to that only when a finalizing hook arrives for a session
+	// never bound.
 	if signal.NativeSessionID != "" && mainPath == "" &&
-		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || isPiFamilyHarness(session.Harness) ||
-			session.Harness == domain.HarnessQwen || sqliteUsageHarness(session.Harness) ||
-			finalizing && !existsForDiscovery) {
+		(session.Harness != domain.HarnessClaudeCode || finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
 			return err
@@ -658,10 +625,10 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 		}
 	}
 
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 	session, proceed, err = c.hookSession(ctx, sessionID, signal, finalizing)
 	if err != nil || !proceed {
 		return err
@@ -955,10 +922,10 @@ func (c *Collector) validateHookArtifact(
 // BackfillActive discovers transcript files only for live/resumable AO
 // sessions. It deliberately does not import terminated session history.
 func (c *Collector) BackfillActive(ctx context.Context) error {
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 
 	sessions, err := c.store.ListAllSessions(ctx)
 	if err != nil {
@@ -1144,10 +1111,10 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 // A negative limit reconciles every eligible binding; zero uses the bounded
 // default.
 func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 
 	var errs []error
 	sessions, err := c.store.ListAllSessions(ctx)
@@ -1182,10 +1149,10 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 // ReconcilePath uses Codex rollout metadata to validate replacements and reach
 // newly-created child bindings independently of the bounded discovery queue.
 func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
-	if err := c.mu.LockContext(ctx); err != nil {
+	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
 	}
-	defer c.mu.Unlock()
+	defer c.mu.Release(1)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -2563,15 +2530,18 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if len(path) > maxUsagePathBytes {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
-	wantExt := ".jsonl"
-	if sqliteUsageHarness(harness) {
-		wantExt = ".db"
-	}
-	if harness == domain.HarnessGrok {
-		wantExt = ".json"
-	}
-	if harness == domain.HarnessDeepSeek {
-		wantExt = ".zstd"
+	// Most harnesses append to a JSONL transcript read by byte offset. The rest
+	// keep usage in a SQLite database, or a snapshot file they rewrite whole,
+	// read by row or generation cursor; a snapshot's identity is pinned so a
+	// rewrite stays the same source.
+	wantExt, whole, pinnedIdentity := ".jsonl", false, ""
+	switch harness {
+	case domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode, domain.HarnessAgy:
+		wantExt, whole = ".db", true
+	case domain.HarnessGrok:
+		wantExt, whole, pinnedIdentity = ".json", true, grokSnapshotIdentity
+	case domain.HarnessDeepSeek:
+		wantExt, whole, pinnedIdentity = ".zstd", true, deepseekSnapshotIdentity
 	}
 	if !filepath.IsAbs(path) || strings.ToLower(filepath.Ext(path)) != wantExt {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
@@ -2617,19 +2587,17 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if err != nil {
 		return "", "", 0, err
 	}
-	if harness == domain.HarnessGrok {
-		return resolved, grokSnapshotIdentity, math.MaxInt64, nil
+	if !whole {
+		return resolved, identity, info.Size(), nil
 	}
-	if harness == domain.HarnessDeepSeek {
-		return resolved, deepseekSnapshotIdentity, math.MaxInt64, nil
+	// A whole-file source's cursor is a row ID or generation, which the file's
+	// byte length says nothing about (new SQLite rows may still sit in the
+	// WAL). Only the identity decides whether a registered generation is
+	// still current.
+	if pinnedIdentity != "" {
+		identity = pinnedIdentity
 	}
-	if sqliteUsageHarness(harness) {
-		// A SQLite source's cursor is a row ID, which the database's byte length
-		// says nothing about (new rows may still sit in the WAL). Only the file
-		// identity decides whether a registered generation is still current.
-		return resolved, identity, math.MaxInt64, nil
-	}
-	return resolved, identity, info.Size(), nil
+	return resolved, identity, math.MaxInt64, nil
 }
 
 func validateSourceAttribution(
@@ -3043,8 +3011,9 @@ func (c *Collector) discoverKimiPath(ctx context.Context, nativeID string) (stri
 }
 
 // piFamilyHarness is one harness that writes Pi-format session transcripts:
-// Pi itself and the forks that kept its session manager (OMP, Kimchi,
-// prime-agent).
+// Pi itself, the forks that kept its session manager (OMP, Kimchi,
+// prime-agent), and DeepSeek Harness, whose zstd session log holds the same
+// records.
 type piFamilyHarness struct {
 	harness domain.AgentHarness
 	kind    domain.UsageSourceKind

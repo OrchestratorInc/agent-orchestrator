@@ -228,16 +228,13 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateCodexDirectParent(source, state.Codex); err != nil {
 			return nil, err
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
-		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
-		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
-		domain.UsageSourceGrokUsage, domain.UsageSourceDeepSeekSession,
-		domain.UsageSourceAgyConversation:
+	default:
+		if !source.Kind.IsKnown() {
+			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
+		}
 		if state.Claude != nil || state.Codex != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
-	default:
-		return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 	}
 	return &state, nil
 }
@@ -255,15 +252,12 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
-		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
-		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
-		domain.UsageSourceGrokUsage, domain.UsageSourceDeepSeekSession,
-		domain.UsageSourceAgyConversation:
-		// These formats carry replay-stable native IDs, so no provider-specific
-		// cumulative baseline is required.
 	default:
-		return nil, fmt.Errorf("unsupported source kind %q", kind)
+		// Every other format carries replay-stable native IDs, so no
+		// provider-specific cumulative baseline is required.
+		if !kind.IsKnown() {
+			return nil, fmt.Errorf("unsupported source kind %q", kind)
+		}
 	}
 	return state, nil
 }
