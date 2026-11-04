@@ -109,12 +109,23 @@ test("renderer: clone dialog shows live git progress while the prepare call runs
 		releasePrepare = resolve;
 	});
 	let progressPolls = 0;
+	let released = false;
 	let addRequest: Record<string, unknown> | null = null;
 
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		const pathname = new URL(route.request().url()).pathname;
 		if (pathname.startsWith("/api/v1/agents/readiness")) {
 			await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
+			return;
+		}
+		if (pathname === "/api/v1/projects/clone/check") {
+			// The flow re-checks the destination once prepare settles; a
+			// released clone owns the checkout, and the hook bypasses the
+			// conflict for the flow's own preparation.
+			await route.fulfill({ json: {
+				remoteUrl: "https://example.com/example.git", path: "/repos/example",
+				exists: released, canUseExisting: released,
+			} });
 			return;
 		}
 		if (pathname === "/api/v1/projects/clone/prepare") {
@@ -182,7 +193,11 @@ test("renderer: clone dialog shows live git progress while the prepare call runs
 	expect(progressPolls).toBeGreaterThan(0);
 
 	releasePrepare?.();
-	await page.getByRole("button", { name: "Clone", exact: true }).click();
+	released = true;
+	// Current main auto-continues to the setup step once the re-check sees
+	// the flow's own prepared checkout; registering the project (and with it
+	// the clone's preparation ID) happens on Create and start.
+	await page.getByRole("button", { name: "Create and start", exact: true }).click({ timeout: 30_000 });
 	await expect.poll(() => addRequest).toMatchObject({
 		path: "/repos/example",
 		clonePreparationId: "prep-1",
