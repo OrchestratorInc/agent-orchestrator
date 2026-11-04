@@ -66,6 +66,9 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 // chat launcher. Anything else means two writers on one conversation.
 
 type recordingLauncher struct {
+	// Empty preserves the default identity used by ordinary Chat fixtures.
+	providerConversationID string
+
 	permissionModes  []ports.PermissionMode
 	preflightErr     error
 	startErr         error
@@ -75,9 +78,6 @@ type recordingLauncher struct {
 	afterReady       func()
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
-
-	// Harness-specific resume tests must report the native ID they loaded.
-	providerConversationID string
 
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode

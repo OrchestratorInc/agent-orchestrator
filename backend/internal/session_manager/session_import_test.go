@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -966,7 +967,7 @@ func TestRelocateImportedSessionHandsTheProviderItsLaunchDirectoryAndPinsIt(t *t
 		SourceCWD:       "/work",
 		LaunchCWD:       "/ao/worktree/child",
 	}
-	if len(got) != 1 || got[0] != want {
+	if len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("relocations = %+v, want [%+v]", got, want)
 	}
 	if rec.Metadata.ImportSource.ResumeCwd != "/ao/worktree/child" {

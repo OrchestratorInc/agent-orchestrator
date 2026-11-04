@@ -2017,7 +2017,9 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									<ChatComposer
+									{session?.mode === "tui" && session.needsResume ? (
+										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
+									) : <ChatComposer
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
@@ -2129,7 +2131,7 @@ function ChatWorkspaceContent({
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
-									/>
+									/>}
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}

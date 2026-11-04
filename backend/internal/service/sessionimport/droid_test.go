@@ -22,7 +22,7 @@ func TestScanDoesNotOfferDroidWithReadableHistory(t *testing.T) {
 	if got, err := readTranscript(context.Background(), domain.HarnessDroid, root, path); err != nil || len(got.messages) != 1 {
 		t.Fatalf("readable Droid fixture: %+v %v", got, err)
 	}
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	svc.home = canonical(home)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessDroid: root}
 	preview, err := svc.Scan(context.Background())

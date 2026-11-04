@@ -2039,7 +2039,7 @@ func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID
 // controller state is reported separately so the client can distinguish "no
 // history" from "agent not running".
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -2157,7 +2157,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}

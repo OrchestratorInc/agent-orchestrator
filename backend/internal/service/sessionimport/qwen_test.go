@@ -122,7 +122,7 @@ func TestQwenDiscoverSkipsArchiveAndNonTranscripts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	files, err := svc.discover(context.Background(), domain.HarnessQwen, canonical(root))
 	if err != nil {
 		t.Fatalf("discover: %v", err)
@@ -165,7 +165,7 @@ func TestQwenImportIsFullResume(t *testing.T) {
 	root := t.TempDir()
 	project := t.TempDir()
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessQwen: root}
 	writeQwenChat(t, root, project, qwenID, qwenConversation(project))
 
@@ -231,7 +231,7 @@ func TestQwenScanGroupsNativeIDAcrossProjects(t *testing.T) {
 	if err := os.WriteFile(copyPath, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "")
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessQwen: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {

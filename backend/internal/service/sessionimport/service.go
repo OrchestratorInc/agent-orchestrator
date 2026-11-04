@@ -76,6 +76,9 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
+	// fingerprint covers the exact content inputs (including WAL/metadata) the
+	// importer read. It also pins selection and first-open copy validation.
+	fingerprint string
 }
 
 type parsed struct {
@@ -86,18 +89,19 @@ type parsed struct {
 
 // Service owns the current opaque handles. Re-reading selected sources prevents stale preview writes.
 type Service struct {
-	store      Store
-	roots      map[domain.AgentHarness]string
-	home       string
-	excluded   []string
-	mu         sync.Mutex
-	selections map[string]selection
-	cache      map[string]parsed
+	store        Store
+	supportsChat func(domain.AgentHarness) bool
+	roots        map[domain.AgentHarness]string
+	home         string
+	excluded     []string
+	mu           sync.Mutex
+	selections   map[string]selection
+	cache        map[string]parsed
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
 // data directory holds its managed worktrees, which are never import sources.
-func New(store Store, dataDir string) *Service {
+func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) bool) *Service {
 	home, _ := os.UserHomeDir()
 	claude, codex := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CODEX_HOME")
 	if claude == "" {
@@ -126,7 +130,15 @@ func New(store Store, dataDir string) *Service {
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
-	s := &Service{store: store, home: canonical(home), roots: roots}
+	for harness, importer := range harnessImporters {
+		if importer.root == nil {
+			continue
+		}
+		if root := importer.root(home); root != "" {
+			roots[harness] = root
+		}
+	}
+	s := &Service{store: store, supportsChat: supportsChat, home: canonical(home), roots: roots}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -398,6 +410,9 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
+	if importer, ok := harnessImporters[harness]; ok {
+		return importer.discover(ctx, root)
+	}
 	// Per-harness layouts that do not fit the projects/sessions directory model
 	// discover their own conversations.
 	switch harness {
@@ -536,6 +551,9 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
+	if importer, ok := harnessImporters[f.harness]; ok && importer.nativeID != nil {
+		return importer.nativeID(f)
+	}
 	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid || f.harness == domain.HarnessQwen) && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
@@ -552,7 +570,7 @@ func (f sourceFiles) nativeID() string {
 }
 
 func (f sourceFiles) cacheKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
 }
 
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
@@ -593,14 +611,28 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
+	projects := s.registeredDiscoveryRoots(dests)
 	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessCopilot, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen}
+	for harness := range harnessImporters {
+		harnesses = append(harnesses, harness)
+	}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
-		if !ok {
+		importer := harnessImporters[harness]
+		if !ok && importer.discoverRegistered == nil {
 			continue
 		}
 		root := canonical(configured)
-		files, err := s.discover(ctx, harness, root)
+		var files []sourceFiles
+		var err error
+		if importer.discoverRegistered != nil {
+			files, err = importer.discoverRegistered(ctx, projects)
+			files = registeredSources(files, projects)
+		} else if importer.discoverWithProjects != nil {
+			files, err = importer.discoverWithProjects(ctx, root, projects)
+		} else {
+			files, err = s.discover(ctx, harness, root)
+		}
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Preview{}, ctxErr
@@ -619,7 +651,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		for i, file := range files {
 			// AO's own sessions are never offered; skip reading their histories.
 			if _, own := managed[file.nativeID()]; own {
-				if _, wasImported := imported[[2]string{root, file.nativeID()}]; !wasImported {
+				if _, wasImported := imported[[2]string{file.root, file.nativeID()}]; !wasImported {
 					results[i] = parsed{err: errManagedByAO}
 					continue
 				}
@@ -629,11 +661,12 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				continue
 			}
 			group.Go(func() error {
-				source, err := readTranscript(groupCtx, harness, root, file.paths...)
+				source, err := readTranscriptForProjects(groupCtx, harness, file.root, projects, file.paths...)
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
 				count := len(source.messages)
+				source.fingerprint = file.fingerprint
 				source.messages = nil // Retain only metadata between preview and import.
 				results[i] = parsed{source: source, count: count, err: err}
 				return nil
@@ -649,7 +682,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			}
 			cache[file.cacheKey()] = result
 			source := result.source
-			id := candidateID(harness, root, source.nativeID)
+			id := candidateID(harness, source.root, source.nativeID)
 			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
 				continue
 			}
@@ -662,7 +695,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				title = "Imported conversation"
 			}
 			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
-			if sessionID, ok := imported[[2]string{root, source.nativeID}]; ok {
+			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if sessionID, ok := managed[source.nativeID]; ok {
 				c.SessionID = sessionID
@@ -682,17 +715,40 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 
 // RefreshArchive rereads an imported conversation just before its first open,
 // so turns added in another app since the import stay in the visible history.
-// A relocation checkpoint pins the matching native copy and archive; later
-// source turns must not enter the archive while that copy is kept on retry.
+// Once native preparation is checkpointed, retain the matching archive on
+// retries: later source turns need not exist in the pinned native copy.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
 	replacer, ok := s.store.(interface {
 		ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
 	})
-	if source == nil || source.Adopted || source.ResumeCwd != "" || !ok {
+	if source == nil || source.Adopted {
+		return nil
+	}
+	if source.ResumeNativeID != "" || source.ResumeCwd != "" {
+		return nil
+	}
+	if source.Fingerprint != "" {
+		dests, err := s.destinations(ctx)
+		if err != nil {
+			return err
+		}
+		path := rec.Metadata.NativeTranscriptPath
+		if source.SourceTranscriptPath != "" {
+			path = source.SourceTranscriptPath
+		}
+		selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
+		if err := s.checkSourceFingerprint(ctx, selected, s.registeredDiscoveryRoots(dests)); err != nil {
+			return err
+		}
+	}
+	if !ok {
 		return nil
 	}
 	paths := []string{rec.Metadata.NativeTranscriptPath}
+	if source.SourceTranscriptPath != "" {
+		paths = []string{source.SourceTranscriptPath}
+	}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -703,12 +759,25 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
+	dests, err := s.destinations(ctx)
 	if err != nil {
 		return err
 	}
-	if fresh.nativeID != source.NativeID || len(fresh.messages) == 0 {
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, s.registeredDiscoveryRoots(dests), paths...)
+	if err != nil {
+		return err
+	}
+	if fresh.nativeID != source.NativeID {
 		return errors.New("the source no longer holds this conversation")
+	}
+	if source.Fingerprint != "" && fresh.cwd != source.CWD {
+		return errSourceFingerprintChanged
+	}
+	if len(fresh.messages) == 0 {
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
+			return nil // A native server-side conversation need not expose a transcript.
+		}
+		return errors.New("the source no longer holds readable conversation history")
 	}
 	return replacer.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
 }
@@ -737,8 +806,15 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		return result
 	}
 	now := time.Now().UTC()
-	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
+	mode := domain.SessionModeTUI
+	if s.supportsChat != nil && s.supportsChat(source.harness) {
+		mode = domain.SessionModeChat
+	}
+	if harnessImporters[source.harness].mode == domain.SessionModeTUI {
+		mode = domain.SessionModeTUI
+	}
+	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
 	// Claude and Pi resume on AO's or the user's default model unless told
 	// otherwise, which may be a provider the chat never used; keep the chat's own.
 	switch source.harness {
@@ -792,8 +868,16 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 				continue
 			}
 			group.Go(func() error {
+				projects := s.registeredDiscoveryRoots(dests)
+				if err := s.checkSourceFingerprint(ctx, item.source, projects); err != nil {
+					reads[i].err = err
+					return nil //nolint:nilerr // Collected per item so the batch reports every result.
+				}
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-				reads[i].source, reads[i].err = readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
+				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
+				if reads[i].err == nil {
+					reads[i].err = s.checkSourceFingerprint(ctx, item.source, projects)
+				}
 				return nil
 			})
 		}

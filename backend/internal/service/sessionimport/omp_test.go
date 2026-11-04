@@ -136,7 +136,7 @@ func TestOMPDiscoverImportAndRefresh(t *testing.T) {
 	path := writeFile(t, ompFile(root), body)
 	writeFile(t, path+".lock.os", "not a transcript")
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "omp-project", Path: cwd}}}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessOMP: root}
 	preview, err := svc.Scan(ctx)
 	if err != nil || len(preview.Candidates) != 1 {
@@ -210,7 +210,7 @@ func TestOMPRootOverrideAndDefault(t *testing.T) {
 		t.Fatalf("default root = %q", got)
 	}
 	t.Setenv(ompConfigDirEnv, "/custom/omp")
-	if got := New(&importStore{}, "").roots[domain.HarnessOMP]; got != "/custom/omp" {
+	if got := New(&importStore{}, "", chatSupported).roots[domain.HarnessOMP]; got != "/custom/omp" {
 		t.Fatalf("override root = %q", got)
 	}
 }

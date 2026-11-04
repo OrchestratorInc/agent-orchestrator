@@ -809,6 +809,18 @@ type LaunchConfig struct {
 	Env map[string]string
 }
 
+// WorkspaceRestoreMode distinguishes a fresh launch from native restore intent.
+type WorkspaceRestoreMode string
+
+const (
+	// WorkspaceRestoreFresh is the zero value used by existing fresh launches.
+	WorkspaceRestoreFresh WorkspaceRestoreMode = ""
+	// WorkspaceRestoreNative resumes an already managed native conversation.
+	WorkspaceRestoreNative WorkspaceRestoreMode = "native_restore"
+	// WorkspaceRestoreImported is the first native open of an imported conversation.
+	WorkspaceRestoreImported WorkspaceRestoreMode = "imported_first_open"
+)
+
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
 type WorkspaceHookConfig struct {
 	Config           AgentConfig
@@ -818,6 +830,11 @@ type WorkspaceHookConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Restore fields are empty for fresh launches. NativeSessionID is the exact
+	// selected identity after imported-session preparation, never a guessed id.
+	NativeSessionID string
+	RestoreMode     WorkspaceRestoreMode
+	ImportConfigDir string
 }
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.

@@ -201,7 +201,7 @@ func TestCopilotScanImportRefreshAndDeduplication(t *testing.T) {
 	path := copilotFixture(t, root, copilotTestID, project)
 	store := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
 	t.Setenv("COPILOT_HOME", root)
-	svc := New(store, "")
+	svc := New(store, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCopilot: svc.roots[domain.HarnessCopilot]}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
@@ -244,13 +244,13 @@ func TestCopilotScanImportRefreshAndDeduplication(t *testing.T) {
 
 func TestCopilotDefaultRootAndManagedHistories(t *testing.T) {
 	t.Setenv("COPILOT_HOME", "")
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	if svc.roots[domain.HarnessCopilot] != filepath.Join(svc.home, ".copilot") {
 		t.Fatalf("default Copilot root = %q", svc.roots[domain.HarnessCopilot])
 	}
 	root := t.TempDir()
 	copilotFixture(t, root, copilotTestID, t.TempDir())
-	svc = New(&importStore{sessions: []domain.SessionRecord{{Harness: domain.HarnessCopilot, Metadata: domain.SessionMetadata{ProviderConversationID: copilotTestID}}}}, "")
+	svc = New(&importStore{sessions: []domain.SessionRecord{{Harness: domain.HarnessCopilot, Metadata: domain.SessionMetadata{ProviderConversationID: copilotTestID}}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCopilot: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 0 {

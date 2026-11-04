@@ -66,7 +66,7 @@ func TestOMPFailedFirstLoadKeepsArchivePairedWithRelocatedCopy(t *testing.T) {
 	m, st, _ := newChatManager(launcher)
 	m.agents = relocatingAgents{agent: ompRetryAgent{}}
 	archive := &ompRetryArchiveStore{fakeStore: st}
-	m.SetImportArchiveRefresher(sessionimport.New(archive, ""))
+	m.SetImportArchiveRefresher(sessionimport.New(archive, "", func(domain.AgentHarness) bool { return true }))
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessOMP, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
 	rec.Metadata = domain.SessionMetadata{
 		WorkspacePath:          launch,

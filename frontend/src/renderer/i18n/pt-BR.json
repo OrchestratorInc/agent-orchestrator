@@ -3749,6 +3749,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
+	"sessionImport.terminalArchive": "Histórico salvo. Esta conversa continua no Terminal quando o agente é retomado.",
 	"sessionImport.description": "Importe as conversas do {{agent}} deste computador. Uma conversa de uma pasta Git que ainda não é um projeto adiciona essa pasta como projeto.",
 	"sessionImport.allProjects": "Todos os projetos e conversas independentes",
 	"sessionImport.selectionHelp": "Conversas ativas nos últimos 30 dias são pré-selecionadas. Você também pode selecionar conversas mais antigas. Todas as sessões permanecem ociosas após a importação.",

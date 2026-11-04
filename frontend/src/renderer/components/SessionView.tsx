@@ -1521,7 +1521,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderedSessionMode = interfaceUi.renderedMode;
 	const showChatSurface =
 		session !== undefined &&
-		renderedSessionMode === "chat" &&
+		(renderedSessionMode === "chat" || session.needsResume) &&
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
 	const chatViewActive =
 		session?.mode === "chat" &&

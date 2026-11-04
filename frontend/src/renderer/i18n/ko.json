@@ -3683,6 +3683,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
+	"sessionImport.terminalArchive": "저장된 기록입니다. 에이전트를 재개하면 터미널에서 대화가 계속됩니다.",
 	"sessionImport.description": "이 컴퓨터의 {{agent}} 대화를 가져옵니다. 아직 프로젝트가 아닌 Git 폴더의 대화는 그 폴더를 프로젝트로 추가합니다.",
 	"sessionImport.allProjects": "모든 프로젝트 및 독립 대화",
 	"sessionImport.selectionHelp": "지난 30일 동안 활동한 대화가 미리 선택됩니다. 이전 대화도 선택할 수 있습니다. 가져온 모든 세션은 대기 상태로 유지됩니다.",

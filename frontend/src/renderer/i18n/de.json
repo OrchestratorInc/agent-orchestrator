@@ -3683,6 +3683,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
+	"sessionImport.terminalArchive": "Gespeicherter Verlauf. Diese Unterhaltung wird nach dem Fortsetzen des Agenten im Terminal fortgeführt.",
 	"sessionImport.description": "{{agent}}-Unterhaltungen von diesem Computer importieren. Eine Unterhaltung aus einem Git-Ordner, der noch kein Projekt ist, fügt diesen Ordner als Projekt hinzu.",
 	"sessionImport.allProjects": "Alle Projekte und eigenständigen Unterhaltungen",
 	"sessionImport.selectionHelp": "Unterhaltungen mit Aktivität in den letzten 30 Tagen sind vorausgewählt. Ältere Unterhaltungen können ebenfalls ausgewählt werden. Nach dem Import bleiben alle Sitzungen inaktiv.",

@@ -712,7 +712,7 @@ func Run(buildVersion string) error {
 	// servers isn't clobbered. See preview_wiring.go (issue #4500).
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
-	sessionImportSvc := sessionimport.New(store, cfg.DataDir)
+	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)

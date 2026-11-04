@@ -139,7 +139,7 @@ func TestPiDiscoverGroupsEachFileByNativeID(t *testing.T) {
 	other := "01a11ac8-2222-7c7b-84ab-e32998fa4fb2"
 	writeFile(t, filepath.Join(root, "sessions", "--other--", "2026-10-09T09-11-21-828Z_"+other+".jsonl"), `{"type":"session","version":1,"id":"`+other+`","timestamp":"2026-10-09T09:11:21.828Z","cwd":"/work/other"}
 `)
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	files, err := svc.discover(context.Background(), domain.HarnessPi, canonical(root))
 	if err != nil {
 		t.Fatal(err)

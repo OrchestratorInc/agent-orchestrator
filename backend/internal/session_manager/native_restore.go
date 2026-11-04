@@ -56,41 +56,94 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 	if err := poll(plan.Ready); err != nil {
 		return err
 	}
-	fence := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before input"))
-	outcome, err := m.messenger.DeliverUnderMutationChecked(ctx, original.ID, plan.ResumeInput(), func(writeCtx context.Context, current domain.SessionRecord) error {
-		if err := fence(writeCtx, current); err != nil {
-			return err
-		}
-		output, err := rendered.GetStyledOutput(writeCtx, handle, 200)
+	input := plan.ResumeInput()
+	if input != "" {
+		fence := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before input"))
+		outcome, err := m.messenger.DeliverUnderMutationChecked(ctx, original.ID, input, func(writeCtx context.Context, current domain.SessionRecord) error {
+			if err := fence(writeCtx, current); err != nil {
+				return err
+			}
+			output, err := rendered.GetStyledOutput(writeCtx, handle, 200)
+			if err != nil {
+				return err
+			}
+			ready, err := plan.Ready(writeCtx, launchID, output)
+			if err != nil {
+				return err
+			}
+			if !ready || plan.ResumeInput() != input {
+				return errors.New("native readiness lost before resume input")
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		ready, err := plan.Ready(writeCtx, launchID, output)
-		if err != nil {
-			return err
+		if outcome != sessionguard.Sent {
+			return fmt.Errorf("native resume input suppressed: %v", outcome)
 		}
-		if !ready {
-			return errors.New("native readiness lost before resume input")
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if outcome != sessionguard.Sent {
-		return fmt.Errorf("native resume input suppressed: %v", outcome)
 	}
 	if err := poll(plan.Restored); err != nil {
 		return err
 	}
-	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: plan.TargetID(), Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
+	target := strings.TrimSpace(plan.TargetID())
+	if target == "" || target != plan.TargetID() {
+		return errors.New("native restore did not identify its conversation")
+	}
+	current, err := m.getRecord(ctx, original.ID)
+	if err != nil {
+		return err
+	}
+	if current.IsTerminated {
+		return errors.New("native restore terminated before publication")
+	}
+	if err := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before publication"))(ctx, current); err != nil {
+		return err
+	}
+	var transcriptPath string
+	if target != original.Metadata.AgentSessionID {
+		takeover, ok := plan.(ports.NativeRestoreIdentityTakeover)
+		if !ok || !original.NeedsImportResume() || takeover.SourceNativeSessionID() != original.Metadata.AgentSessionID {
+			return errors.New("native restore changed the requested conversation")
+		}
+	}
+	if source := original.Metadata.ImportSource; source != nil && target != source.NativeID && m.agents != nil {
+		if agent, ok := m.agents.Agent(original.Harness); ok {
+			if locator, ok := agent.(ports.AgentTranscriptLocator); ok {
+				ref := importedNativeRef(source)
+				ref.NativeSessionID = target
+				path, found, err := locator.LocateTranscript(ctx, ref)
+				if err != nil {
+					return err
+				}
+				if !found || path == "" {
+					return errors.New("native import transcript binding could not be verified")
+				}
+				transcriptPath = path
+			}
+		}
+	}
+	if target != original.Metadata.AgentSessionID {
+		store, ok := m.store.(importedIdentityStore)
+		if !ok {
+			return errors.New("native import identity publication is unavailable")
+		}
+		updated, err := store.CommitImportedNativeSessionID(ctx, original.ID, original.Metadata.ImportSource, handle.ID, launchID, target)
+		if err != nil {
+			return err
+		}
+		if !updated {
+			return errors.New("native import identity publication lost ownership")
+		}
+	}
+	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: target, TranscriptPath: transcriptPath, Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
 		return err
 	}
 	rec, err := m.getRecord(ctx, original.ID)
 	if err != nil {
 		return err
 	}
-	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != plan.TargetID() || rec.Metadata.AgentSessionIDLaunchID != launchID {
+	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != target || rec.Metadata.AgentSessionIDLaunchID != launchID {
 		return errors.New("native restore identity publication not confirmed")
 	}
 	return nil

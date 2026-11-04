@@ -56,6 +56,8 @@ type transcript struct {
 	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
+	// fingerprint is the optional native-input evidence captured by discovery.
+	fingerprint string
 }
 
 type textBlock struct{ Type, Text string }
@@ -349,6 +351,9 @@ type claudeNode struct {
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
+	if importer, ok := harnessImporters[harness]; ok {
+		return importer.read(ctx, root, paths...)
+	}
 	if harness == domain.HarnessOMP {
 		return readOMPTranscript(ctx, root, paths...)
 	}

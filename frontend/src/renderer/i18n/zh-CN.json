@@ -3665,6 +3665,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
+	"sessionImport.terminalArchive": "已保存的历史记录。恢复代理后，此对话将在终端中继续。",
 	"sessionImport.description": "导入此电脑上的 {{agent}} 对话。来自尚未成为项目的 Git 文件夹的对话会将该文件夹添加为项目。",
 	"sessionImport.allProjects": "所有项目和独立会话",
 	"sessionImport.selectionHelp": "默认选中最近 30 天有活动的对话。您也可以选择更早的对话。导入后所有会话均保持空闲。",

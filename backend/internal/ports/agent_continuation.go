@@ -44,7 +44,22 @@ type AgentFreshNativeSessionIDProvider interface {
 type NativeSessionRef struct {
 	NativeSessionID string
 	ConfigDir       string
+	// TranscriptPath optionally identifies the private prepared native history.
+	// AO retains the source archive and uses this path for the resumed binding.
+	TranscriptPath string
 }
+
+// MetadataKeyImportSourceNativeID identifies the immutable source conversation
+// during strict interactive import initialization.
+const MetadataKeyImportSourceNativeID = "importSourceNativeId"
+
+// MetadataKeyImportResumeNativeID identifies an already prepared/forked native
+// conversation, so retries resume that identity instead of forking again.
+const MetadataKeyImportResumeNativeID = "importResumeNativeId"
+
+// MetadataKeyImportConfigDir identifies the selected native state root during
+// imported restore initialization, including a private prepared copy.
+const MetadataKeyImportConfigDir = "importConfigDir"
 
 // AgentNativeSessionConfigProvider resolves the provider state root used for
 // a launch. AO stores the returned path with the native-session binding so a
@@ -96,6 +111,17 @@ type ImportedSessionRelocation struct {
 	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
 	// provider's own path normalization, such as resolving symlinks.
 	LaunchCWD string
+	// SourceFingerprint is optional immutable selection evidence. An adapter
+	// that sets a discovery fingerprint must compare it with the exact native
+	// inputs it snapshots before copying, including sidecars such as a WAL.
+	// A mismatch is an error; a verified private copy may be reused on retry.
+	SourceFingerprint string
+	// Env is a read-only clone of resolved launch overrides, including the
+	// selected account and project values. Present empty values clear inherited
+	// variables; missing keys inherit the daemon environment. Adapters must not
+	// mutate, persist, log, or include these potentially secret values in errors.
+	// Import-root overrides can change after native preparation returns its ref.
+	Env map[string]string
 }
 
 // AgentImportedSessionRelocator is implemented by adapters whose provider finds
@@ -112,4 +138,28 @@ type ImportedSessionRelocation struct {
 // resumed, that copy holds AO's later turns.
 type AgentImportedSessionRelocator interface {
 	RelocateImportedSession(ctx context.Context, r ImportedSessionRelocation) error
+}
+
+// AgentImportedSessionPreparer imports native history into the AO worktree
+// before its first launch and returns the exact resumable identity. The source
+// must remain untouched. Implementations must reuse their private prepared copy
+// on retries, identify it authoritatively, and fail rather than create an empty
+// conversation. An empty ConfigDir retains the original provider state root.
+// When SourceFingerprint is set, preparation may precede original-source
+// availability/archive reads: verify a private copy against that selection
+// proof, or validate the exact selected source before creating a new copy.
+// Success must identify the proven native target; absence or mismatch fails.
+// AO checkpoints the returned ref before launch; providers using the same id
+// without a new state root can keep AgentImportedSessionRelocator instead.
+type AgentImportedSessionPreparer interface {
+	PrepareImportedSession(context.Context, ImportedSessionRelocation) (NativeSessionRef, error)
+}
+
+// NativeRestoreIdentityTakeover opts an interactive first-open plan into a
+// provider-generated native fork. SourceNativeSessionID must match the exact
+// resume target supplied by AO. Restored must prove the fork's history and
+// worktree execution before TargetID returns its nonempty, observed new id.
+// Ordinary restores and plans without this capability cannot change identity.
+type NativeRestoreIdentityTakeover interface {
+	SourceNativeSessionID() string
 }

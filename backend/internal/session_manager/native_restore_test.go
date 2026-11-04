@@ -73,6 +73,9 @@ func (l *nativeBindingLCM) ApplyActivitySignal(ctx context.Context, id domain.Se
 		r.Metadata.AgentSessionID = s.AgentSessionID
 		r.Metadata.AgentSessionIDLaunchID = s.LaunchID
 	}
+	if s.TranscriptPath != "" {
+		r.Metadata.NativeTranscriptPath = s.TranscriptPath
+	}
 	l.store.sessions[id] = r
 	return nil
 }

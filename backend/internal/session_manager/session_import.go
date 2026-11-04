@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -28,23 +29,34 @@ type ImportArchiveRefresher interface {
 	RefreshArchive(context.Context, domain.SessionRecord) error
 }
 
-// SetImportArchiveRefresher late-binds the import service; nil skips the refresh.
+// SetImportArchiveRefresher late-binds the import service. Nil skips optional
+// archive refresh, but cannot validate a fingerprinted first-open source.
 func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 	m.importArchive = refresher
 }
 
 // refreshImportArchive keeps turns added in another app since the import in the
 // visible history. The copy taken at import remains when the source is unreadable.
-func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
-	if source := rec.Metadata.ImportSource; source != nil && source.ResumeCwd != "" {
-		return // Keep the archive paired with its checkpointed native copy.
+func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
+	source := rec.Metadata.ImportSource
+	if source != nil && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
+		return nil // Retain the archive paired with the checkpointed native copy.
 	}
+	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
 	if m.importArchive == nil {
-		return
+		if required {
+			return importNotice("native source snapshot validation is unavailable; retry after the import service is ready")
+		}
+		return nil
 	}
 	if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
+		if required {
+			m.logger.Warn("native import source snapshot could not be verified", "sessionID", rec.ID, "error", err)
+			return importNotice("the native source changed or could not be verified; retry, or remove this pending import and scan again")
+		}
 		m.logger.Warn("imported history refresh failed; keeping the import-time copy", "sessionID", rec.ID, "error", err)
 	}
+	return nil
 }
 
 // importReplayedThrough is the last sequence of the provider replay projected
@@ -86,10 +98,18 @@ var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there
 // relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
-	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
+	if source == nil {
+		return
+	}
+	ref := importedNativeRef(source)
+	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return
 	}
 	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
+	hooks := importedHarnesses[rec.Harness]
+	if hooks.configEnvKey != "" {
+		key = hooks.configEnvKey
+	}
 	if key == "" {
 		return
 	}
@@ -103,10 +123,10 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		if provider, ok := agent.(ports.AgentNativeSessionConfigProvider); ok {
 			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil {
-				if sameDirectory(current, source.ConfigDir) {
+				if sameDirectory(current, ref.ConfigDir) {
 					return
 				}
-				if rel, err := filepath.Rel(source.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
+				if rel, err := filepath.Rel(ref.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
 					// Codex compresses an inactive rollout in place and restores it on resume.
 					plain := strings.TrimSuffix(rel, ".zst")
 					for _, name := range []string{plain, plain + ".zst"} {
@@ -118,11 +138,14 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 			}
 		}
 	}
-	value := source.ConfigDir
+	value := ref.ConfigDir
 	if rec.Harness == domain.HarnessDroid {
 		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
 		// not the state dir itself, so point it at the parent of the config dir.
-		value = filepath.Dir(source.ConfigDir)
+		value = filepath.Dir(ref.ConfigDir)
+	}
+	if hooks.configValue != nil {
+		value = hooks.configValue(ref.ConfigDir)
 	}
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
@@ -137,7 +160,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 // finding the same copy, which then holds AO's turns. If the copy is still not
 // where the provider looks, the required first-open replay comes back without
 // messages and the import fails rather than continuing an empty chat.
-func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string) (domain.SessionRecord, error) {
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, launchEnv ...map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil || m.agents == nil {
 		return rec, nil
@@ -146,19 +169,29 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	if !ok {
 		return rec, nil
 	}
+	var env map[string]string
+	if len(launchEnv) > 0 {
+		env = launchEnv[0]
+	}
+	if preparer, ok := agent.(ports.AgentImportedSessionPreparer); ok {
+		prepared, err := m.prepareImportedNativeSession(ctx, rec, launchPath, preparer, env)
+		return prepared, agentlaunch.RedactError(err, env)
+	}
 	relocator, ok := agent.(ports.AgentImportedSessionRelocator)
 	if !ok {
 		return rec, nil
 	}
 	err := relocator.RelocateImportedSession(ctx, ports.ImportedSessionRelocation{
-		NativeSessionID: source.NativeID,
-		ConfigDir:       source.ConfigDir,
-		TranscriptPath:  rec.Metadata.NativeTranscriptPath,
-		SourceCWD:       source.CWD,
-		LaunchCWD:       launchPath,
+		NativeSessionID:   source.NativeID,
+		ConfigDir:         source.ConfigDir,
+		TranscriptPath:    rec.Metadata.NativeTranscriptPath,
+		SourceCWD:         source.CWD,
+		LaunchCWD:         launchPath,
+		SourceFingerprint: source.Fingerprint,
+		Env:               maps.Clone(env),
 	})
 	if err != nil {
-		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), err)
+		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), agentlaunch.RedactError(err, env))
 	}
 	if source.ResumeCwd == launchPath {
 		return rec, nil
@@ -213,6 +246,12 @@ func sameDirectory(a, b string) bool {
 // to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
+	if source == nil {
+		return false
+	}
+	if hooks := importedHarnesses[rec.Harness]; hooks.ownedElsewhere != nil {
+		return hooks.ownedElsewhere(ctx, rec)
+	}
 	switch rec.Harness {
 	case domain.HarnessCodex:
 		if providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", source.NativeID+".lock")) {
@@ -258,6 +297,9 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil {
 		return false
+	}
+	if hooks := importedHarnesses[rec.Harness]; hooks.adoptedOwnedElsewhere != nil {
+		return hooks.adoptedOwnedElsewhere(ctx, rec)
 	}
 	nativeID := cmp.Or(rec.Metadata.ProviderConversationID, source.NativeID)
 	switch rec.Harness {
@@ -350,8 +392,12 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid") || strings.Contains(command, "copilot") || strings.Contains(command, "omp")) {
-			return true
+		if line == "aw" || line == "au" {
+			for _, name := range importedProcessNames {
+				if strings.Contains(command, name) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -387,11 +433,17 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return rec, ports.ErrChatUnsupported
+		return rec, fmt.Errorf("no agent adapter for harness %q", rec.Harness)
 	}
 	source := rec.Metadata.ImportSource
-	if prober, ok := agent.(ports.AgentNativeSessionProber); ok {
-		available, err := prober.ProbeNativeSession(ctx, ports.NativeSessionRef{NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir})
+	deferSourceProbe := source.Prepared && rec.Metadata.WorkspacePath != "" &&
+		source.ResumeNativeID == "" && source.ResumeCwd == "" && m.hasFingerprintImportPreparer(rec)
+	if deferSourceProbe {
+		workspace, statErr := os.Stat(rec.Metadata.WorkspacePath)
+		deferSourceProbe = statErr == nil && workspace.IsDir()
+	}
+	if prober, ok := agent.(ports.AgentNativeSessionProber); ok && !deferSourceProbe {
+		available, err := prober.ProbeNativeSession(ctx, importedNativeRef(source))
 		if err != nil {
 			return rec, err
 		}

@@ -3683,6 +3683,7 @@
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
+	"sessionImport.terminalArchive": "保存済みの履歴です。エージェントを再開すると、ターミナルで会話を続けられます。",
 	"sessionImport.description": "このコンピューターの {{agent}} の会話をインポートします。まだプロジェクトではない Git フォルダーの会話は、そのフォルダーをプロジェクトとして追加します。",
 	"sessionImport.allProjects": "すべてのプロジェクトと単独の会話",
 	"sessionImport.selectionHelp": "過去30日間にアクティブだった会話が選択されています。古い会話も選択できます。インポート後、すべてのセッションは待機状態になります。",

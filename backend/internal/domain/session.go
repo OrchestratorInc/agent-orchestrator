@@ -183,6 +183,17 @@ type SessionImportSource struct {
 	// Every later launch of the session uses it, so the provider keeps finding
 	// the same copy even if WorkingSubdir appears or disappears in between.
 	ResumeCwd string `json:"resumeCwd,omitempty"`
+	// ResumeNativeID and ResumeConfigDir name a provider-created import/fork.
+	// NativeID and ConfigDir remain the immutable source/deduplication identity.
+	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
+	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
+	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
+	// SourceTranscriptPath preserves the archive's source when preparation
+	// selects a different native transcript for the resumed binding.
+	SourceTranscriptPath string `json:"sourceTranscriptPath,omitempty"`
+	// Fingerprint pins optional provider content/sidecar evidence from selection.
+	// First-open native preparation must verify it before copying that source.
+	Fingerprint string `json:"fingerprint,omitempty"`
 	// HistoryThrough is the last conversation sequence the provider replayed
 	// while adopting. The timeline shows the archive in place of that replay.
 	HistoryThrough int64 `json:"historyThrough,omitempty"`

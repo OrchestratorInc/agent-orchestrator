@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -54,5 +55,22 @@ func (s *Service) importedSnapshot(ctx context.Context, rec domain.SessionRecord
 	if len(messages) > 0 {
 		oldest = messages[0].Sequence
 	}
-	return Snapshot{SessionID: rec.ID, Harness: rec.Harness, Mode: domain.SessionModeChat, Controller: ports.ChatControllerStopped, Conversation: domain.ConversationRecord{ID: "import:" + string(rec.ID), SessionID: rec.ID, ProjectID: rec.ProjectID, Scope: domain.ConversationScopeSession}, Messages: messages, HasMoreBefore: more, OldestSequence: oldest}, nil
+	return Snapshot{SessionID: rec.ID, Harness: rec.Harness, Mode: domain.NormalizeSessionMode(rec.Mode), Controller: ports.ChatControllerStopped, Conversation: domain.ConversationRecord{ID: "import:" + string(rec.ID), SessionID: rec.ID, ProjectID: rec.ProjectID, Scope: domain.ConversationScopeSession}, Messages: messages, HasMoreBefore: more, OldestSequence: oldest}, nil
+}
+
+// requireReadableConversation permits only a pending import's archive outside
+// Chat mode. Every Chat mutation still uses requireChatSession, so displaying a
+// Terminal import never starts a Chat controller or accepts a Chat prompt.
+func (s *Service) requireReadableConversation(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, fmt.Errorf("read session %s: %w", id, err)
+	}
+	if !found {
+		return domain.SessionRecord{}, ports.ErrSessionNotFound
+	}
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat && !rec.NeedsImportResume() {
+		return domain.SessionRecord{}, ErrNotChatMode
+	}
+	return rec, nil
 }

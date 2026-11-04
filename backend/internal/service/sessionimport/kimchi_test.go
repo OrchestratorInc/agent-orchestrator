@@ -122,7 +122,7 @@ func TestKimchiDiscoverGroupsEachFileByNativeID(t *testing.T) {
 	other := "019fe4d5-2222-77ac-a0e3-d3c18b37dcef"
 	writeFile(t, kimchiPath(root, "--work-other--", other), `{"type":"session","version":3,"id":"`+other+`","timestamp":"2026-08-09T05:43:21.669Z","cwd":"/work/other"}
 `)
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	files, err := svc.discover(context.Background(), domain.HarnessKimchi, canonical(root))
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestKimchiDiscoverSkipsAOResumeCopies(t *testing.T) {
 	writeFile(t, kimchiPath(root, "--"+folderDashes(worktree)+"--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T06:43:21.669Z","cwd":"`+worktree+`"}
 `+kimchiMsg("u1", kimchiSession, "user", "hi")+`
 `)
-	svc := New(&importStore{}, dataDir)
+	svc := New(&importStore{}, dataDir, chatSupported)
 	files, err := svc.discover(context.Background(), domain.HarnessKimchi, canonical(root))
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +228,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 	cwd := canonical(t.TempDir())
 	store := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}
 	t.Setenv("KIMCHI_CODING_AGENT_DIR", t.TempDir())
-	svc := New(store, "")
+	svc := New(store, "", chatSupported)
 	if svc.roots[domain.HarnessKimchi] != root {
 		t.Fatal("Kimchi discovery followed an override its runtime ignores")
 	}

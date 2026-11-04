@@ -16,8 +16,11 @@ import (
 // CreateImportedSession registers identity and its archive in one transaction. A retry returns the original row.
 func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRecord, messages []domain.ImportedMessage) (domain.SessionRecord, bool, error) {
 	source := rec.Metadata.ImportSource
-	if source == nil || source.NativeID == "" || source.ConfigDir == "" || len(messages) == 0 {
+	if source == nil || source.NativeID == "" || source.ConfigDir == "" {
 		return rec, false, errors.New("readable native history is required")
+	}
+	if len(messages) == 0 && (rec.Mode != domain.SessionModeTUI || rec.Metadata.AgentSessionID != source.NativeID || rec.Metadata.ProviderConversationID != source.NativeID) {
+		return rec, false, errors.New("native Terminal identity is required without a readable transcript")
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -158,6 +161,55 @@ func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.Session
 		})
 		updated = rows > 0
 		return err
+	})
+	return updated, err
+}
+
+// CommitImportedNativeSessionID checkpoints a provider-observed native fork and
+// publishes both native bindings atomically for the exact pending launch. The
+// immutable source identity remains available for import deduplication.
+func (s *Store) CommitImportedNativeSessionID(ctx context.Context, id domain.SessionID, expected *domain.SessionImportSource, handleID, launchID, nativeID string) (bool, error) {
+	if expected == nil || handleID == "" || launchID == "" || nativeID == "" {
+		return false, errors.New("native import identity and launch are required")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	updated := false
+	err := s.inTx(ctx, "commit imported native identity", func(q *gen.Queries) error {
+		row, err := q.GetSession(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rec := rowToRecord(row)
+		source := rec.Metadata.ImportSource
+		if !rec.NeedsImportResume() || rec.IsTerminated || *source != *expected || rec.Metadata.RuntimeHandleID != handleID || rec.Metadata.RuntimeLaunchID != launchID {
+			return nil
+		}
+		next := *source
+		next.ResumeNativeID = nativeID
+		// Preparation's path named the former identity. The observed fork's
+		// locator supplies its actual path through the fenced activity signal.
+		next.ResumeTranscriptPath = ""
+		rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = nativeID, nativeID
+		rec.Metadata.AgentSessionIDLaunchID = launchID
+		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+			return err
+		}
+		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{
+			ID: id, NewSource: marshalImportSource(&next), Branch: rec.Metadata.Branch, WorkspacePath: rec.Metadata.WorkspacePath,
+			WorkspaceRepoPath: rec.Metadata.WorkspaceRepoPath, DiffBaseSha: rec.Metadata.DiffBaseSHA, DiffBaseRef: rec.Metadata.DiffBaseRef, UpdatedAt: rec.UpdatedAt,
+		})
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return errors.New("native import identity checkpoint lost ownership")
+		}
+		updated = true
+		return nil
 	})
 	return updated, err
 }
