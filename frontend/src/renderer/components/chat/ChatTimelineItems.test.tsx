@@ -208,7 +208,7 @@ describe("TurnOutcome", () => {
 		expect(onRollback).toHaveBeenCalledOnce();
 	});
 
-	it("leads the row with how long the turn ran when no fold above says so", () => {
+	it("ends the row with how long the turn ran when no fold above says so", () => {
 		render(
 			<TurnOutcome
 				state="interrupted"
@@ -221,7 +221,7 @@ describe("TurnOutcome", () => {
 		const duration = screen.getByText("1m");
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
 		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		// Alone on the row, the number carries its name for a screen reader.
 		expect(duration).toHaveTextContent("Worked for 1m");
 	});
