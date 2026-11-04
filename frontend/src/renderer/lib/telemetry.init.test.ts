@@ -395,7 +395,10 @@ describe("PostHog identity and opt-out", () => {
 		first.stack = "TypeError: private first error\n    at fail (app://renderer/assets/app.js:10:2)";
 		const second = new TypeError("private second error");
 		second.stack = "TypeError: private second error\n    at fail (app://renderer/assets/app.js:20:2)";
-		for (let i = 0; i < 6; i++) await captureRendererException(first, properties);
+		for (let i = 0; i < 6; i++) {
+			const occurrence = new TypeError("private first error"); occurrence.stack = first.stack;
+			await captureRendererException(occurrence, properties);
+		}
 		expect(captureToMain).toHaveBeenCalledTimes(5);
 		await captureRendererException(second, properties);
 		expect(captureToMain).toHaveBeenCalledTimes(6);

@@ -21,6 +21,32 @@ describe("main error capture", () => {
 		expect(sink).toHaveBeenCalledTimes(20);
 	});
 
+	it("deduplicates side-chat recovery errors across IPC and bounds retry storms", () => {
+		const sink = vi.fn(); setMainErrorSink(sink);
+		const error = new TypeError("private failure");
+		captureMainError({ category: "side_chat", reason: "recovery", error });
+		captureMainError({ category: "ipc", reason: "handler", error });
+		expect(sink).toHaveBeenCalledOnce();
+		for (let i = 0; i < 10; i++) captureMainError({ category: "side_chat", reason: "recovery", error: new Error("retry") });
+		expect(sink).toHaveBeenCalledTimes(5);
+	});
+
+	it("caps side-chat retries across minutes until the next day", () => {
+		const clock = vi.spyOn(Date, "now");
+		try {
+			const base = Date.UTC(2026, 10, 4, 0, 0, 0);
+			const sink = vi.fn(); setMainErrorSink(sink);
+			for (let i = 0; i <= 200; i++) {
+				clock.mockReturnValue(base + i * 60_000);
+				captureMainError({ category: "side_chat", reason: "recovery" });
+			}
+			expect(sink).toHaveBeenCalledTimes(200);
+			clock.mockReturnValue(base + 86_400_000);
+			captureMainError({ category: "side_chat", reason: "recovery" });
+			expect(sink).toHaveBeenCalledTimes(201);
+		} finally { clock.mockRestore(); }
+	});
+
 	it("drops unknown categories and reasons and any free-text detail", () => {
 		expect(sanitizeMainErrorCapture({ category: "made_up" as never, reason: "exited" })).toBeNull();
 		expect(sanitizeMainErrorCapture({ category: "daemon", reason: "made_up" as never })).toBeNull();

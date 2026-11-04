@@ -9,6 +9,7 @@ const electronMocks = vi.hoisted(() => {
 		exposeInMainWorld: vi.fn(),
 		getPathForFile: vi.fn(),
 		invoke: vi.fn(),
+		executeInMainWorld: vi.fn(),
 		listeners,
 		off: vi.fn(),
 		on: vi.fn((channel: string, listener: (...args: unknown[]) => void) => {
@@ -19,9 +20,9 @@ const electronMocks = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld },
+	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld, executeInMainWorld: electronMocks.executeInMainWorld },
 	ipcRenderer: {
-		invoke: electronMocks.invoke,
+		invoke: (...args: unknown[]) => Promise.resolve(electronMocks.invoke(...args)),
 		off: electronMocks.off,
 		on: electronMocks.on,
 		send: electronMocks.send,
@@ -102,6 +103,7 @@ describe("preload telemetry generation bridge", () => {
 		vi.resetModules();
 		await import("./preload");
 		const bridge = electronMocks.exposeInMainWorld.mock.calls.at(-1)?.[1] as AoBridge;
+		electronMocks.invoke.mockClear();
 		electronMocks.invoke.mockResolvedValue(false);
 		for (let i = 0; i < 25; i++) await bridge.telemetry.capture({ kind: "message", message: "early" });
 		expect(electronMocks.invoke).not.toHaveBeenCalled();

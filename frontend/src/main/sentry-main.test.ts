@@ -100,6 +100,15 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify([first, second])).not.toContain(secret);
 	});
 
+	it("scrubs side-chat recovery faults before the SDK sends them", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("private-session /Users/private token=secret"), detail: "private-project" });
+		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
+		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "" }] } });
+		expect(JSON.stringify(event)).not.toMatch(/private|Users|secret/);
+	});
+
 	it("matches daemon Sentry environments for stable, nightly, and development versions", async () => {
 		vi.stubEnv("AO_TELEMETRY_APP_VERSION", undefined);
 		for (const [version, environment] of [["1.0.0", "stable"], ["1.0.1-nightly.20261029", "nightly"], ["1.0.1-edge.1", "development"], ["1.0.1-pr7386.1", "development"], ["", "unknown"]]) {

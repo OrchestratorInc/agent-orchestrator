@@ -1,9 +1,9 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, ChevronRight, Folder, FolderGit2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -29,7 +29,7 @@ export function RemoteDirectoryPicker({ hostId, hostLabel, connected, initialPat
 		retry: false,
 		queryFn: async () => {
 			const { data, error } = await clientForHost(hostId).GET("/api/v1/fs/dirs", { params: { query: lookup ? { path: lookup } : {} } });
-			if (error || !data) throw new Error(apiErrorMessage(error, t("remote.directoryPicker.listFailed")));
+			if (error || !data) throw apiErrorException(error, t("remote.directoryPicker.listFailed"));
 			return data;
 		},
 	});

@@ -4,6 +4,7 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import { markApiError, withApiErrorOwnership } from "./reported-errors";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -326,6 +327,7 @@ export async function reportingFetch(input: Request): Promise<Response> {
 	try {
 		response = await fetch(input);
 	} catch (error) {
+		markApiError(error);
 		if (!(error instanceof DOMException && error.name === "AbortError")) reportApiError(operation, "network_error");
 		throw error;
 	}
@@ -380,6 +382,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	try {
 		response = await send();
 	} catch (error) {
+		markApiError(error);
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
 			reportApiError(operation, "network_error");
@@ -390,10 +393,10 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	return response;
 }
 
-export const apiClient = createClient<paths>({
+export const apiClient = withApiErrorOwnership(createClient<paths>({
 	baseUrl: initialApiBaseUrl,
 	fetch: runtimeFetch,
-});
+}));
 
 // Build each request against the daemon's current address, so runtimeFetch
 // passes it straight to fetch. Rebasing a request built against the

@@ -33,7 +33,7 @@ builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
 All consented desktop error reports are kept, subject to the renderer's
-per-error budget. This includes fatal crashes, handled main-process failures,
+per-error budget and side-chat recovery budgets. This includes fatal crashes, handled main-process failures,
 unhandled renderer window errors, and rejected promises.
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
@@ -52,6 +52,21 @@ filename. The asset filename preserves the location needed for source map matchi
 filesystem paths, full URLs, and raw exception messages are removed before sending.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
+Preload installs main-world error and rejection handlers before renderer imports
+and reads the consent policy itself. An import failure can therefore report even
+when the renderer never starts. Early reports contain fixed text, a standard
+exception type, and validated asset locations only. Once the renderer starts,
+the same listeners hand off to its normal reporter. Early captures are not
+replayed through the later renderer boundaries.
+Router error boundaries and query/mutation cache callbacks also report unexpected
+client failures. Query keys, mutation inputs, route parameters and error text are
+not sent. API failures retain a local ownership marker through message wrapping,
+so these callbacks do not duplicate the API client's report or escalate expected
+API state. Repeated observations of the same exception object are reported once.
+Background side-chat restore and snapshot failures use the same main-owned
+consent gate, with fixed titles and no launch-state payload. Expected connection,
+authentication, cancellation and stale-attachment states stay out. Repeated
+recovery reports are limited to five per minute and 200 per UTC day.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the

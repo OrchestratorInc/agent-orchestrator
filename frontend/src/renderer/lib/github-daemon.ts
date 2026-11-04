@@ -1,4 +1,5 @@
 import { getApiBaseUrl, reportingFetch } from "./api-client";
+import { markApiError } from "./reported-errors";
 
 export interface GitHubStatusResponse {
 	connected: boolean;
@@ -26,6 +27,7 @@ export class GitHubDaemonError extends Error {
 	) {
 		super(message);
 		this.name = "GitHubDaemonError";
+		markApiError(this);
 	}
 }
 

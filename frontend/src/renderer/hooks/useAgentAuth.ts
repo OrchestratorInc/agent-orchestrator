@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
@@ -74,7 +75,7 @@ export const agentAuthPlansQueryKeyForHost = (hostId?: string) => hostId ? ["age
 
 async function fetchAgentAuthPlans(hostId?: string): Promise<AgentAuthPlan[]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/auth-plans");
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not load agent authentication plans."));
+	if (error || !data) throw apiErrorException(error, "Could not load agent authentication plans.");
 	return data.plans;
 }
 
@@ -90,7 +91,7 @@ export function useStartAgentAuth(hostId?: string, action: "login" | "logout" = 
 			const { data, error } = await clientForSessionHost(hostId).POST(action === "logout" ? "/api/v1/agents/{agent}/logout" : "/api/v1/agents/{agent}/auth", {
 				params: { path: { agent: agentId } },
 			});
-			if (error || !data) throw new Error(apiErrorMessage(error, action === "logout" ? "Could not start agent logout." : "Could not start agent authentication."));
+			if (error || !data) throw apiErrorException(error, action === "logout" ? "Could not start agent logout." : "Could not start agent authentication.");
 			return data;
 		},
 		onSuccess: (result) => {

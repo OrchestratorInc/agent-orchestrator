@@ -8,6 +8,8 @@ import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
+import { reserveException } from "./reported-errors";
+import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -1176,18 +1178,7 @@ export async function sanitizeRendererExceptionProperties(
 export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
-	window.addEventListener("error", (event) => {
-		void captureRendererException(event.error ?? new Error(event.message), {
-			source: "window-error",
-			unhandled: true,
-		});
-	});
-	window.addEventListener("unhandledrejection", (event) => {
-		void captureRendererException(normalizeException(event.reason), {
-			source: "unhandledrejection",
-			unhandled: true,
-		});
-	});
+	installRendererErrorHandlers((error, source) => { void captureRendererException(error, { source, unhandled: true }); });
 }
 
 type PostHogClient = typeof posthogModule;
@@ -1407,6 +1398,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+	if (!reserveException(error)) return;
 	try {
 		await initTelemetry();
 	} catch {

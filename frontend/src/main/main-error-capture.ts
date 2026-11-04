@@ -5,7 +5,7 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 // module is the single path from those sites to the consented Sentry
 // transport. Only fixed categories and reasons cross it; error text never does.
 
-export const MAIN_ERROR_CATEGORIES = ["daemon", "update", "ipc", "window", "acp_runtime"] as const;
+export const MAIN_ERROR_CATEGORIES = ["daemon", "update", "ipc", "window", "acp_runtime", "side_chat"] as const;
 export type MainErrorCategory = (typeof MAIN_ERROR_CATEGORIES)[number];
 
 export const MAIN_ERROR_REASONS = [
@@ -19,6 +19,7 @@ export const MAIN_ERROR_REASONS = [
 	"unresponsive", "did_fail_load", "render_process_gone",
 	// acp_runtime
 	"rebuild",
+	"recovery",
 ] as const;
 export type MainErrorReason = (typeof MAIN_ERROR_REASONS)[number];
 
@@ -44,6 +45,8 @@ export class ExpectedIpcError extends Error {}
 
 let sink: Sink | null = null;
 let pending: MainErrorCapture[] = [];
+let reported = new WeakSet<object>();
+let sideBudget = { minute: 0, day: 0, minuteCount: 0, dayCount: 0 };
 
 export function isSafeMainErrorDetail(value: unknown): value is string {
 	return typeof value === "string" && SAFE_DETAIL.test(value);
@@ -67,12 +70,26 @@ export function setMainErrorSink(next: Sink | null): void {
 	if (!next) return;
 	const held = pending;
 	pending = [];
-	for (const capture of held) captureMainError(capture);
+	for (const capture of held) {
+		try { next(capture); } catch { /* reporting must never break startup */ }
+	}
 }
 
 export function captureMainError(capture: MainErrorCapture): void {
 	const safe = sanitizeMainErrorCapture(capture);
 	if (!safe) return;
+	if (safe.error instanceof ExpectedIpcError) return;
+	if (safe.error && typeof safe.error === "object") {
+		if (reported.has(safe.error)) return;
+		reported.add(safe.error);
+	}
+	if (safe.category === "side_chat") {
+		const minute = Math.floor(Date.now() / 60_000), day = Math.floor(Date.now() / 86_400_000);
+		if (sideBudget.day !== day) sideBudget = { minute, day, minuteCount: 0, dayCount: 0 };
+		if (sideBudget.minute !== minute) { sideBudget.minute = minute; sideBudget.minuteCount = 0; }
+		if (sideBudget.minuteCount >= 5 || sideBudget.dayCount >= 200) return;
+		sideBudget.minuteCount++; sideBudget.dayCount++;
+	}
 	if (sink) {
 		try { sink(safe); } catch { /* reporting must never break the caller */ }
 		return;
@@ -110,5 +127,7 @@ export function installIpcErrorCapture(ipcMain: Pick<IpcMain, "handle">): void {
 export function resetMainErrorCaptureForTests(): void {
 	sink = null;
 	pending = [];
+	reported = new WeakSet<object>();
+	sideBudget = { minute: 0, day: 0, minuteCount: 0, dayCount: 0 };
 	ipcCaptureInstalled = false;
 }

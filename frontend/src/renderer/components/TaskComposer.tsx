@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
@@ -378,7 +379,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			const { data, error: apiError } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId ?? "" } },
 			});
-			if (apiError) throw new Error(apiErrorMessage(apiError));
+			if (apiError) throw apiErrorException(apiError);
 			if (data?.status !== "ok") throw new Error(t("newTask.configUnavailable"));
 			return data.project as Project;
 		},

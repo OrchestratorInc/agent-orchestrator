@@ -7,7 +7,7 @@ import { DesktopTelemetryController, telemetryRetryDelayMs } from "./desktop-tel
 import { nodeTelemetryPolicyFileSystem, TelemetryPolicyAuthority } from "./telemetry-policy-file";
 
 describe("DesktopTelemetryController", () => {
-	it("gates held main errors on consent and discards them before a later opt-in", async () => {
+	it.each(["daemon", "side_chat"] as const)("gates held %s errors on consent and discards them before a later opt-in", async (category) => {
 		const { captureMainError, resetMainErrorCaptureForTests, setMainErrorSink } = await import("./main-error-capture");
 		resetMainErrorCaptureForTests();
 		try {
@@ -17,16 +17,16 @@ describe("DesktopTelemetryController", () => {
 				authority, environmentAllowsEvents: true, productionEnabled: true,
 				transportFactory: async () => ({ capture: vi.fn(), captureMain, closeAndDrain: async () => {}, clearCache: async () => {} }),
 			});
-			captureMainError({ category: "daemon", reason: "spawn_failed" });
+			captureMainError({ category, reason: category === "daemon" ? "spawn_failed" : "recovery" });
 			await controller.initialize();
 			setMainErrorSink((capture) => { controller.captureMain(capture); });
 			expect(captureMain).not.toHaveBeenCalled();
 			await controller.setEventsEnabled(true, "generation-off");
 			expect(captureMain).not.toHaveBeenCalled();
-			captureMainError({ category: "daemon", reason: "exited" });
+			captureMainError({ category, reason: category === "daemon" ? "exited" : "recovery" });
 			expect(captureMain).toHaveBeenCalledOnce();
 			await controller.setEventsEnabled(false, controller.snapshot().consentGeneration);
-			captureMainError({ category: "daemon", reason: "exited" });
+			captureMainError({ category, reason: category === "daemon" ? "exited" : "recovery" });
 			expect(captureMain).toHaveBeenCalledOnce();
 		} finally { resetMainErrorCaptureForTests(); }
 	});

@@ -1,8 +1,9 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isMacPlatform } from "../../lib/platform";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
@@ -48,7 +49,7 @@ const previewStatus: ChromeStatus = {
 async function fetchChromeStatus(): Promise<ChromeStatus> {
 	if (usesPreviewWorkspaceData) return previewStatus;
 	const { data, error } = await apiClient.GET("/api/v1/browser/chrome");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -69,7 +70,7 @@ export function BrowserChromeSection() {
 			const { data, error } = enable
 				? await apiClient.POST("/api/v1/browser/chrome")
 				: await apiClient.DELETE("/api/v1/browser/chrome");
-			if (error || !data) throw new Error(apiErrorMessage(error));
+			if (error || !data) throw apiErrorException(error);
 			queryClient.setQueryData(browserChromeQueryKey, data);
 			if (enable && !data.connected) await startLoading(data.extensionPath);
 		},
