@@ -81,6 +81,71 @@ func TestCaptureBackgroundGroupsOnlyValidatedTags(t *testing.T) {
 	}
 }
 
+type blockingBackgroundTransport struct {
+	recordingTransport
+	release chan struct{}
+}
+
+func (transport *blockingBackgroundTransport) SendEvent(event *sentry.Event) {
+	transport.events <- event
+	<-transport.release
+}
+
+func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T) {
+	transport := &blockingBackgroundTransport{
+		recordingTransport: recordingTransport{events: make(chan *sentry.Event, 5)},
+		release:            make(chan struct{}),
+	}
+	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		SetPolicyCheck(nil)
+		close(transport.release)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := Drain(ctx); err != nil {
+			t.Error(err)
+		}
+		enabled.Store(false)
+	})
+	SetPolicyCheck(func(context.Context) bool { return true })
+	for _, operation := range []string{"model_discovery", "agent_install", "chat_turn", "chat_spawn"} {
+		returned := make(chan struct{})
+		go func() {
+			CaptureBackground(context.Background(), errors.New("boom"), "chat", operation, nil)
+			close(returned)
+		}()
+		select {
+		case <-returned:
+		case <-time.After(time.Second):
+			t.Fatal("background capture blocked on transport")
+		}
+		select {
+		case event := <-transport.events:
+			if event.Tags["operation"] != operation {
+				t.Fatalf("concurrent scope mixed tags: %v", event.Tags)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("admitted send did not reach transport")
+		}
+	}
+	// Saturation drops the diagnostic without waiting or retaining a queue.
+	CaptureBackground(context.Background(), errors.New("overflow"), "chat", "chat_wake", nil)
+	SetPolicyCheck(nil)
+	CaptureBackground(context.Background(), errors.New("opted out"), "chat", "chat_wake", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := Drain(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("opt-out did not wait for admitted sends: %v", err)
+	}
+	select {
+	case event := <-transport.events:
+		t.Fatalf("saturated or opted-out capture reached transport: %v", event)
+	default:
+	}
+}
+
 func TestFaultCodesAreTitledAndTimeoutsDetected(t *testing.T) {
 	t.Parallel()
 	for _, code := range []string{"SPAWN_TIMEOUT", "CHAT_RESUME_FAILED", "GIT_INIT_FAILED", "COMPUTER_USE_DAEMON_START_FAILED"} {

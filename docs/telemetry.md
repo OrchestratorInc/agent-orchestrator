@@ -625,10 +625,11 @@ interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
-only: the daemon's Sentry capture of reportable 5xx errors, failed agent
-relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
-goroutine panics; and Electron main capture of process crashes, uncaught
-exceptions, unhandled rejections, and reportable renderer errors. Sentry
+only: the daemon's Sentry capture of reportable 5xx errors, registered fault
+codes answered as 4xx or 503, background failures, and handler or background
+goroutine panics; and Electron main capture of process crashes, handled
+daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
+and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry
@@ -643,15 +644,20 @@ a fixed function name or bounded bundle location; renderer API titles use a
 fixed error code or category.
 Both have scrubbed exception values and the same
 installation ID as Sentry `user.id`.
-Canceled requests, transient 503 responses, and expected upstream link-preview
-502 responses do not create Sentry issues. Registered route templates remain
+Canceled requests, plain transient 503 responses, and expected upstream link-preview
+502 responses do not create Sentry issues. A 503 caused by a server deadline or
+a registered daemon fault code is reportable. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
 Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
 Sentry policy. Untyped renderer 503 responses remain reportable. The existing
 API client skips its confirmed expected 409 probes, while other 409 responses
 remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
-name at five per minute and 200 per day. The daemon admits the first five
+name and call site at five per minute and 200 per day. Background daemon sends
+admit at most four concurrent reports, dropping diagnostics at capacity without
+retaining a queue. Their transport runs outside the caller's locks and database
+transactions, and opt-out waits for admitted sends before it completes.
+The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then
 uses one overflow group. It samples

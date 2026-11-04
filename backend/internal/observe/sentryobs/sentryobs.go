@@ -522,7 +522,8 @@ func RecoverBackground() {
 }
 
 func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, isPanic bool) {
-	sentry.WithScope(func(scope *sentry.Scope) {
+	hub := sentry.CurrentHub().Clone()
+	hub.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(level)
 		applyTags(scope, tags, route)
 		if fingerprint != "" {
@@ -535,7 +536,7 @@ func capture(level sentry.Level, tags map[string]string, fingerprint string, rou
 		} else {
 			event.Exception = []sentry.Exception{{}}
 		}
-		sentry.CaptureEvent(event)
+		hub.CaptureEvent(event)
 	})
 }
 

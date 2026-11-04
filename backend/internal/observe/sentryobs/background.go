@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/getsentry/sentry-go"
 )
 
 // Background capture covers daemon work that never answers an HTTP request:
@@ -48,6 +50,11 @@ var backgroundOperationLabels = map[string]string{
 // safeAgentID matches AO's fixed harness identifiers (claude-code, codex,
 // opencode, ...). It is a tag only; the identifier never becomes a title.
 var safeAgentID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// Background callers may hold a controller lock or a storage transaction.
+// Never wait for remote telemetry there. There is no pending queue: at most
+// four sends are admitted, and saturation drops the diagnostic.
+var backgroundSends = make(chan struct{}, 4)
 
 func init() {
 	for operation, label := range backgroundOperationLabels {
@@ -100,7 +107,27 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		}
 	}
 	fingerprint := telemetrymeta.Fingerprint("background", component, operation, errorType, code, tags["agent"], tags["reason"])
-	captureErrorFor(ctx, err, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, operation)
+	if !enterCapture(ctx) {
+		return
+	}
+	select {
+	case backgroundSends <- struct{}{}:
+	default:
+		leaveCapture()
+		return
+	}
+	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+		<-backgroundSends
+		leaveCapture()
+		return
+	}
+	// Admission pins the existing consent gate before scheduling. Opt-out closes
+	// intake and Drain waits for this send, so it cannot replay after opt-in.
+	go func() {
+		defer leaveCapture()
+		defer func() { <-backgroundSends }()
+		capture(sentry.LevelError, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, false)
+	}()
 }
 
 // backgroundReasons are fixed sub-reasons a background capture may tag, for
