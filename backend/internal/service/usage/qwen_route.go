@@ -3,12 +3,14 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
 // qwenProviderHint names the provider that bills a Qwen session. Qwen's usage
@@ -66,6 +68,7 @@ type qwenSettings struct {
 	Security struct {
 		Auth struct {
 			SelectedType string `json:"selectedType"`
+			BaseURL      string `json:"baseUrl"`
 		} `json:"auth"`
 	} `json:"security"`
 	Env            map[string]string `json:"env"`
@@ -80,8 +83,11 @@ type qwenRoute struct {
 	authType     string
 	defaultModel string
 	defaultURL   string
-	envURL       string
-	modelURLs    map[string]string // auth type + "/" + lower-case model id
+	authURL      string // security.auth.baseUrl, which Qwen still reads
+	envURLs      map[string]string
+	// modelURLs is keyed by provider id + "/" + lower-case model id. The
+	// provider id is an auth type or a custom id Qwen maps to one.
+	modelURLs map[string]string
 }
 
 func (r *qwenRoute) merge(data []byte) {
@@ -98,8 +104,16 @@ func (r *qwenRoute) merge(data []byte) {
 	if value := strings.TrimSpace(settings.Model.BaseURL); value != "" {
 		r.defaultURL = value
 	}
-	if value := strings.TrimSpace(settings.Env["OPENAI_BASE_URL"]); value != "" {
-		r.envURL = value
+	if value := strings.TrimSpace(settings.Security.Auth.BaseURL); value != "" {
+		r.authURL = value
+	}
+	for _, name := range []string{"OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"} {
+		if value := strings.TrimSpace(settings.Env[name]); value != "" {
+			if r.envURLs == nil {
+				r.envURLs = make(map[string]string)
+			}
+			r.envURLs[name] = value
+		}
 	}
 	for authType, models := range settings.ModelProviders {
 		for _, model := range models {
@@ -128,71 +142,171 @@ func (r qwenRoute) provider(model, authType string) string {
 	}
 	baseURL := r.modelURLs[r.authType+"/"+strings.ToLower(model)]
 	if baseURL == "" {
-		// A model the settings do not list goes to the default endpoint.
-		baseURL = r.defaultURL
+		baseURL = r.onlyURLFor(model)
 	}
 	if baseURL == "" {
-		baseURL = firstNonEmptyString(r.envURL, strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")))
+		// A model the settings do not list goes to the default endpoint.
+		baseURL = firstNonEmptyString(r.defaultURL, r.authURL)
 	}
-	if provider := qwenEndpointProvider(baseURL); provider != "" {
-		return provider
+	if baseURL == "" {
+		envName := "OPENAI_BASE_URL"
+		if r.authType == "anthropic" {
+			envName = "ANTHROPIC_BASE_URL"
+		}
+		baseURL = firstNonEmptyString(r.envURLs[envName], strings.TrimSpace(os.Getenv(envName)))
 	}
+	if baseURL != "" {
+		// An endpoint names its provider, or leaves the route unknown: an
+		// auth type is no evidence once a base URL points elsewhere.
+		return qwenEndpointProvider(baseURL)
+	}
+	// No base URL anywhere: the auth type's SDK talks to its own provider.
 	switch r.authType {
 	case "gemini":
 		return "gemini"
 	case "vertex-ai":
 		return "vertex_ai"
 	case "anthropic":
-		if baseURL == "" {
-			return "anthropic"
-		}
+		return "anthropic"
 	case "openai", "openai-responses":
-		if baseURL == "" {
-			return "openai"
-		}
+		return "openai"
 	}
 	return ""
 }
 
-// qwenEndpointProvider maps an endpoint host to its pricing catalog provider.
+// onlyURLFor finds a model under any provider id, for a model that a custom
+// provider id (mapped to a protocol by providerProtocol) declares. It answers
+// only when every entry for that model agrees on one endpoint.
+func (r qwenRoute) onlyURLFor(model string) string {
+	found := ""
+	suffix := "/" + strings.ToLower(model)
+	for key, baseURL := range r.modelURLs {
+		if !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		if found != "" && found != baseURL {
+			return ""
+		}
+		found = baseURL
+	}
+	return found
+}
+
+// qwenEndpointProvider names the provider that bills an endpoint. Qwen can
+// point at any OpenAI-, Anthropic- or Gemini-compatible server, so a fixed host
+// list would leave most of them unnamed: an API host is named after its
+// provider (api.fireworks.ai, api.together.xyz), and that name, in the
+// catalog's spelling, is the route. Hosts whose name says something else, and
+// endpoints whose list price is not the provider's (a mainland-China region, a
+// subscription plan), are named explicitly. A local or private server has no
+// list price and yields "".
 func qwenEndpointProvider(baseURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return ""
 	}
-	host := strings.ToLower(parsed.Hostname())
-	switch {
-	case host == "":
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "" || privateQwenHost(host) {
 		return ""
-	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai"):
-		return "zai"
-	case host == "open.bigmodel.cn":
-		// Zhipu's mainland platform, which LiteLLM prices apart from z.ai.
-		return "bigmodel"
-	case host == "api.openai.com":
-		return "openai"
-	case host == "api.anthropic.com":
-		return "anthropic"
-	case strings.HasPrefix(host, "dashscope") && strings.HasSuffix(host, ".aliyuncs.com"):
-		return "dashscope"
-	case host == "generativelanguage.googleapis.com":
-		return "gemini"
-	case host == "openrouter.ai":
-		return "openrouter"
-	case host == "api.deepseek.com":
-		return "deepseek"
-	case host == "api.moonshot.ai" || host == "api.moonshot.cn":
-		return "moonshot"
-	case host == "api.x.ai":
-		return "xai"
-	case host == "api.mistral.ai":
-		return "mistral"
-	case host == "api.groq.com":
-		return "groq"
-	case host == "api.minimax.io" || host == "api.minimaxi.com" || host == "api.minimax.chat":
-		return "minimax"
 	}
-	return ""
+	// Vertex's regional hosts prefix the region with a dash.
+	if strings.HasSuffix(host, "aiplatform.googleapis.com") {
+		return "vertex_ai"
+	}
+	for _, rule := range qwenHostRules {
+		if host == rule.host || strings.HasSuffix(host, "."+rule.host) {
+			return rule.provider
+		}
+	}
+	label, mainland := registrableLabel(host)
+	if label == "" {
+		return ""
+	}
+	provider := pricing.CanonicalProviderID(label)
+	if mainland {
+		// Mainland endpoints bill in their own price list.
+		provider += "-cn"
+	}
+	return provider
+}
+
+// qwenHostRules name hosts the generic rule would get wrong, longest suffix
+// first where two overlap.
+var qwenHostRules = []struct{ host, provider string }{
+	// Alibaba: pay-as-you-go DashScope internationally and in Beijing, and the
+	// Coding and Token plans, which bill a subscription rather than tokens.
+	{"coding.dashscope.aliyuncs.com", "dashscope-coding-plan-cn"},
+	{"coding-intl.dashscope.aliyuncs.com", "dashscope-coding-plan"},
+	{"maas.aliyuncs.com", "dashscope-token-plan"},
+	{"token-plan.maas.qwencloudapi.com", "qwencloud-token-plan"},
+	{"token-plan.maas.qianwenaiapi.com", "qwencloud-token-plan-cn"},
+	{"dashscope-intl.aliyuncs.com", "dashscope"},
+	{"dashscope-us.aliyuncs.com", "dashscope"},
+	{"dashscope.aliyuncs.com", "dashscope-cn"},
+	{"qwencloudapi.com", "qwencloud"},
+	{"qianwenaiapi.com", "qwencloud-cn"},
+	// Zhipu: z.ai internationally, bigmodel on the mainland platform.
+	{"z.ai", "zai"},
+	{"open.bigmodel.cn", "bigmodel"},
+	// MiniMax and Moonshot run separate mainland platforms.
+	{"api.minimaxi.com", "minimax-cn"},
+	{"api.minimax.chat", "minimax-cn"},
+	{"x.ai", "xai"},
+	{"generativelanguage.googleapis.com", "gemini"},
+	{"openai.azure.com", "azure"},
+	{"services.ai.azure.com", "azure_ai"},
+	{"models.ai.azure.com", "azure_ai"},
+	{"amazonaws.com", "bedrock"},
+	{"githubcopilot.com", "github_copilot"},
+	{"ai-gateway.vercel.sh", "vercel_ai_gateway"},
+	// Cloudflare's gateway forwards to any upstream; Workers AI is its own.
+	{"gateway.ai.cloudflare.com", "cloudflare-ai-gateway"},
+	{"api.cloudflare.com", "cloudflare"},
+	{"cohere.com", "cohere_chat"},
+	{"cohere.ai", "cohere_chat"},
+	{"friendli.ai", "friendliai"},
+	{"lambda.ai", "lambda_ai"},
+	{"lambdalabs.com", "lambda_ai"},
+	{"ollama.com", "ollama"},
+}
+
+// registrableLabel returns the name a host registers under (fireworks for
+// api.fireworks.ai) and whether it sits under China's country domain.
+func registrableLabel(host string) (string, bool) {
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return "", false
+	}
+	tld := labels[len(labels)-1]
+	suffixLen := 1
+	// Second-level registries: example.com.cn, example.co.uk.
+	if len(labels) >= 3 {
+		switch labels[len(labels)-2] {
+		case "com", "co", "net", "org", "ac", "gov", "edu":
+			suffixLen = 2
+		}
+	}
+	if len(labels) <= suffixLen {
+		return "", false
+	}
+	return labels[len(labels)-1-suffixLen], tld == "cn"
+}
+
+// privateQwenHost reports a server with no public list price: a loopback or
+// private address, or a name that only resolves on a private network.
+func privateQwenHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return true
+	}
+	if host == "localhost" || !strings.Contains(host, ".") {
+		return true
+	}
+	for _, suffix := range []string{".localhost", ".local", ".internal", ".lan", ".home.arpa", ".test", ".example"} {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmptyString(values ...string) string {

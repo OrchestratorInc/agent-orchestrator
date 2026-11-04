@@ -144,3 +144,81 @@ func TestQwenProviderHintSurvivesAnotherSessionsSelection(t *testing.T) {
 		t.Fatalf("hint after another session's selection = %q, err = %v, want zai", got, err)
 	}
 }
+
+// Break caught: a fixed list of a dozen hosts. Qwen talks to any compatible
+// server, and every endpoint off that list was recorded with no provider, so
+// a Fireworks or Together session could never be priced.
+func TestQwenEndpointProviderNamesAnyCompatibleServer(t *testing.T) {
+	for baseURL, want := range map[string]string{
+		// Named by the host itself, in the catalog's spelling.
+		"https://api.fireworks.ai/inference/v1":     "fireworks_ai",
+		"https://api.together.xyz/v1":               "together_ai",
+		"https://api.deepinfra.com/v1/openai":       "deepinfra",
+		"https://api.cerebras.ai/v1":                "cerebras",
+		"https://api.novita.ai/openai":              "novita",
+		"https://inference.baseten.co/v1":           "baseten",
+		"https://api.studio.nebius.com/v1":          "nebius",
+		"https://api.deepseek.com/anthropic":        "deepseek",
+		"https://api.minimax.io/anthropic":          "minimax",
+		"https://openrouter.ai/api/v1":              "openrouter",
+		"https://router.requesty.ai/v1":             "requesty",
+		"https://api.anthropic.com/v1":              "anthropic",
+		"https://api.openai.com/v1":                 "openai",
+		"https://API.Mistral.AI./v1":                "mistral",
+		"https://generativelanguage.googleapis.com": "gemini",
+		"https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/endpoints/openapi": "vertex_ai",
+		"https://my-res.openai.azure.com/openai/v1":                                                           "azure",
+		"https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1":                                           "bedrock",
+		"https://api.x.ai/v1":          "xai",
+		"https://api.z.ai/api/paas/v4": "zai",
+		// Mainland-China platforms and subscription plans bill apart from the
+		// provider's list price, so they never borrow it.
+		"https://dashscope-intl.aliyuncs.com/compatible-mode/v1":             "dashscope",
+		"https://dashscope.aliyuncs.com/compatible-mode/v1":                  "dashscope-cn",
+		"https://coding-intl.dashscope.aliyuncs.com/v1":                      "dashscope-coding-plan",
+		"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1": "dashscope-token-plan",
+		"https://maas.qwencloudapi.com/compatible-mode/v1":                   "qwencloud",
+		"https://open.bigmodel.cn/api/paas/v4":                               "bigmodel",
+		"https://api.minimaxi.com/v1":                                        "minimax-cn",
+		"https://api.moonshot.cn/v1":                                         "moonshot-cn",
+		"https://api.moonshot.ai/v1":                                         "moonshot",
+		"https://api.example.com.cn/v1":                                      "example-cn",
+		"https://llm.acme.co.uk/v1":                                          "acme",
+		// Local and private servers have no list price.
+		"http://localhost:11434/v1":    "",
+		"http://127.0.0.1:8000/v1":     "",
+		"http://vllm.internal:8000/v1": "",
+		"http://gpu-box:1234/v1":       "",
+		"":                             "",
+	} {
+		if got := qwenEndpointProvider(baseURL); got != want {
+			t.Errorf("qwenEndpointProvider(%q) = %q, want %q", baseURL, got, want)
+		}
+	}
+}
+
+// Qwen lets a model live under a custom provider id mapped to a protocol by
+// providerProtocol, reads the deprecated security.auth.baseUrl, and an
+// Anthropic auth type takes its endpoint from ANTHROPIC_BASE_URL.
+func TestQwenRouteFollowsEveryPlaceQwenReadsAnEndpoint(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	for _, tc := range []struct {
+		settings, model, authType, want string
+	}{
+		{`{"modelProviders":{"idealab":[{"id":"kimi-k3","baseUrl":"https://api.moonshot.ai/v1"}]}}`, "kimi-k3", "openai", "moonshot"},
+		{`{"modelProviders":{"idealab":[{"id":"kimi-k3","baseUrl":"https://api.moonshot.ai/v1"}]}}`, "kimi-k3", "idealab", "moonshot"},
+		{`{"security":{"auth":{"selectedType":"openai","baseUrl":"https://api.groq.com/openai/v1"}}}`, "", "", "groq"},
+		{`{"security":{"auth":{"selectedType":"anthropic"}},"env":{"ANTHROPIC_BASE_URL":"https://api.minimax.io/anthropic"}}`, "", "", "minimax"},
+		{`{"security":{"auth":{"selectedType":"anthropic"}},"env":{"OPENAI_BASE_URL":"https://api.groq.com/openai/v1"}}`, "", "", "anthropic"},
+		// Two providers serving one model id: the session's model alone
+		// cannot say which billed, so the default endpoint decides.
+		{`{"model":{"baseUrl":"https://api.deepseek.com/v1"},"modelProviders":{"a":[{"id":"m","baseUrl":"https://api.together.xyz/v1"}],"b":[{"id":"m","baseUrl":"https://api.fireworks.ai/inference/v1"}]}}`, "m", "openai", "deepseek"},
+	} {
+		var route qwenRoute
+		route.merge([]byte(tc.settings))
+		if got := route.provider(tc.model, tc.authType); got != tc.want {
+			t.Errorf("settings %s model %q auth %q: provider = %q, want %q", tc.settings, tc.model, tc.authType, got, tc.want)
+		}
+	}
+}
