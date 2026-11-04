@@ -1,17 +1,15 @@
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { formatCountdown, groupAccounts, limitWindowPace, remainingPercent } from "../../lib/usage-limits";
+import { formatCountdown, groupAccounts, limitWindowPace, PROVIDER_HARNESS, remainingPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Button } from "../ui/button";
-
-const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
 
 /** Low reads as a warning and none as an error, as in the account settings; otherwise the agent's colour. */
 function remainingTone(remaining: number): string | null {

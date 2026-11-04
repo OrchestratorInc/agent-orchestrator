@@ -3,13 +3,12 @@ import { TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { agentAccountProviderNames } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { DAY_MINUTES, formatCountdown, spanPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
+import { DAY_MINUTES, formatCountdown, PROVIDER_HARNESS, spanPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-const PROVIDER_HARNESS = { codex: "codex", claude: "claude-code" } as const;
 const HOUR_MS = 3_600_000;
 /** A weekly window not read for this long is shown as stale. */
 const STALE_MS = HOUR_MS;

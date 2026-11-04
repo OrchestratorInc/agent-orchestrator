@@ -375,7 +375,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 					aria-expanded={showAll}
 					onClick={() => setShowAll((all) => !all)}
 				>
-					{showAll ? t("shell.showLess") : t("browser.downloads.showAll")}
+					{t(showAll ? "shell.showLess" : "shell.showMore")}
 				</button>
 			) : null}
 		</section>

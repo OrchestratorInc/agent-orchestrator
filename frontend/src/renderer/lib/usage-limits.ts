@@ -18,6 +18,9 @@ export type ProviderAccounts = {
 
 const PROVIDER_ORDER: AgentAccountProvider[] = ["codex", "claude"];
 
+/** The harness whose avatar and colour stand for each account provider. */
+export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
+
 /** Groups signed-in accounts per provider. Each account keeps its own limit windows. */
 export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccounts[] {
 	return PROVIDER_ORDER.flatMap((provider) => {
