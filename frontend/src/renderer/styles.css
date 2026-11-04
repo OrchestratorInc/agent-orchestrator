@@ -6226,9 +6226,10 @@ html[data-window-translucent="true"] [data-testid="first-run-onboarding"] {
 	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
 }
 
-/* First-run onboarding previews draw the app window translucent over a
- * wallpaper, with the same material model as above: the stage keeps solid
- * copies of the theme, the window clears its canvases, blurs the wallpaper
+/* First-run onboarding previews draw the app window translucent over the
+ * onboarding page itself (the stage paints no background of its own, so copy
+ * and preview share one surface), with the same material model as above: the stage keeps solid copies
+ * of the theme, the window clears its canvases, blurs what is behind it
  * (standing in for native vibrancy) and paints the tint, a little more
  * opaque than the app's 70% so the preview reads clearly. */
 /* A translucent app window already holds these solid copies on :root (above),
@@ -6242,15 +6243,6 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	--solid-secondary: var(--secondary);
 	--solid-accent: var(--accent);
 	--solid-sidebar-accent: var(--sidebar-accent);
-}
-
-.onboarding-preview-stage {
-	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
-	background:
-		linear-gradient(#0a1428, #0a1428),
-		linear-gradient(#7fb4f5, #7fb4f5),
-		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
-	background-blend-mode: screen, multiply, normal;
 }
 
 .onboarding-preview-window {
@@ -6299,6 +6291,102 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 
 .onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
 	background-color: color-mix(in srgb, var(--background) 100%, transparent);
+}
+
+/* Onboarding illustration style: a black-and-white line drawing. Strokes
+ * only: every fill is clear, so the drawing sits on the onboarding page, and
+ * one thin line weight in the page's own foreground draws every edge (white
+ * on black in dark theme, black on white in light). No colour, glow or
+ * shadow; labels are monospace. Scoped to the stage, so the real app is
+ * untouched. Utilities read the leaf tokens directly (@theme inline), so the
+ * leaves are set here. */
+[data-testid="first-run-onboarding"] {
+	/* Resolved here, outside the stage's overrides: the page's real colours.
+	 * --schematic-solid stays opaque in a translucent window too (its canvas
+	 * colour is cleared there), for parts that must hide what is behind them. */
+	--schematic-page: var(--color-bg-primary);
+	--schematic-solid: var(--solid-bg-primary, var(--color-bg-primary));
+	--schematic-fg: var(--foreground);
+}
+
+.onboarding-preview-stage {
+	--schematic-line: color-mix(in srgb, var(--schematic-fg) 28%, transparent);
+	--schematic-line-strong: color-mix(in srgb, var(--schematic-fg) 40%, transparent);
+	--schematic-text: var(--schematic-fg);
+	--schematic-text-muted: color-mix(in srgb, var(--schematic-fg) 60%, transparent);
+	--schematic-text-passive: color-mix(in srgb, var(--schematic-fg) 42%, transparent);
+
+	--background: transparent;
+	--foreground: var(--schematic-text);
+	--card: transparent;
+	--popover: var(--schematic-page);
+	--sidebar: transparent;
+	--primary: transparent;
+	--primary-foreground: var(--schematic-text);
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+	--muted-foreground: var(--schematic-text-muted);
+	--border: var(--schematic-line);
+	--input: var(--schematic-line-strong);
+	--sidebar-border: var(--schematic-line);
+	--color-bg-primary: transparent;
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-elevated: var(--schematic-page);
+	--color-text-primary: var(--schematic-text);
+	--color-text-muted: var(--schematic-text-muted);
+	--color-text-passive: var(--schematic-text-passive);
+	--color-border: var(--schematic-line);
+	--color-border-strong: var(--schematic-line-strong);
+	--color-status-working: var(--schematic-text);
+	--color-status-needs-you: var(--schematic-text);
+	--color-status-validating: var(--schematic-text);
+	--color-status-in-review: var(--schematic-text);
+	--color-status-ready: var(--schematic-text);
+	--color-status-merged: var(--schematic-text);
+	--color-status-idle: var(--schematic-text-passive);
+	--font-family-base: var(--font-family-mono);
+	--font-sans: var(--font-family-mono);
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage * {
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage .onboarding-preview-window {
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+}
+
+/* No glass, tint or shadow: the window is only its outline. */
+.onboarding-preview-stage .onboarding-preview-plate,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: transparent;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+.onboarding-preview-stage .onboarding-preview-panel-backing,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: transparent;
+	box-shadow: 0 0 0 1px var(--schematic-line);
+}
+
+/* Status dots: plain foreground dots, no colour or glow. */
+.onboarding-preview-stage [class*="bg-status-"] {
+	background-color: var(--schematic-text);
+}
+
+.onboarding-preview-stage .bg-status-idle {
+	background-color: var(--schematic-text-passive);
 }
 
 /* The preview board never scrolls; letting its lanes overflow means a card

@@ -58,18 +58,8 @@ import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow 
 import appIcon from "../../assets/app-icon.png";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
-import {
-	PreviewBoard,
-	PreviewChat,
-	PreviewNewChat,
-	PreviewScene,
-	PreviewSidebar,
-	PreviewStage,
-	type PreviewCard,
-	type PreviewSidebarProject,
-	type ScenePage,
-} from "./OnboardingPreviews";
-import { PhoneWorkersScreen } from "./OnboardingPhone";
+import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
+import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
 // Four pages: what Orchestrator is (with its three-part story playing in the
 // preview), the optional account, the tools a worker needs (GitHub CLI and a
@@ -128,14 +118,20 @@ const STARTER_PROMPTS = [
 const ORCH_POINTS = [
 	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
 	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
+	{ title: "firstRun.orchPointCiTitle", body: "firstRun.orchPointCiBody" },
 	{ title: "firstRun.orchPoint3Title", body: "firstRun.orchPoint3Body" },
 ] as const;
+/** The part where pull requests go through CI and code review on GitHub. */
+const CI_POINT = 2;
 /** How long each part of the story holds before the next plays. */
-const POINT_HOLD_MS = [4200, 3800, 5200] as const;
-/** The order the last point settles the example work (task indexes), and the
- * gap between moves. The one waiting on you settles last, in place. */
+const POINT_HOLD_MS = [4200, 3800, 8800, 4600] as const;
+/** The order the example work settles (task indexes). The CI part settles the
+ * first three, the ones with pull requests, a beat apart: long enough for each
+ * round trip to GitHub (OnboardingSchematic). The last part settles the one
+ * waiting on you. */
 const SORT_ORDER = [3, 2, 0, 1] as const;
-const SORT_BEAT_MS = 520;
+const PR_SORTS = 3;
+const SORT_BEAT_MS = 2200;
 
 type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
 type InstallJob = components["schemas"]["InstallJob"];
@@ -327,11 +323,11 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		}, POINT_HOLD_MS[point]);
 		return () => window.clearTimeout(timer);
 	}, [step, point]);
-	// The last point sorts the board one card at a time, a beat apart, so each
-	// move reads on its own instead of all cards crossing at once. The beat is
-	// keyed to the loop and point it belongs to, so a new run starts from 0 on
-	// its first frame instead of flashing the previous run's finished board.
-	const sorting = step === "welcome" && point === ORCH_POINTS.length - 1;
+	// The CI point sorts the board one pull request at a time, a beat apart, so
+	// each trip to GitHub reads on its own; the last point settles the rest.
+	// The beat is keyed to the loop and point it belongs to, so a new run starts
+	// from 0 on its first frame instead of flashing the previous run's board.
+	const sorting = step === "welcome" && point === CI_POINT;
 	const sortKey = `${cycle}:${point}`;
 	const [sort, setSort] = useState({ key: "", beat: 0 });
 	useEffect(() => {
@@ -340,22 +336,26 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		const timer = window.setInterval(() => {
 			beat += 1;
 			setSort({ key: sortKey, beat });
-			if (beat >= SORT_ORDER.length) window.clearInterval(timer);
+			if (beat >= PR_SORTS) window.clearInterval(timer);
 		}, SORT_BEAT_MS);
 		return () => window.clearInterval(timer);
 	}, [sorting, sortKey]);
 	const sortBeat = !sorting ? SORT_ORDER.length : sort.key === sortKey ? sort.beat : 0;
+	const githubShown = sorting;
 	const toolAgents = useToolAgents();
-	const account = cloud.status === "authenticated" ? cloud.session : null;
 	const scene = (
 		<OnboardingScene
 			step={step}
 			point={point}
 			cycle={cycle}
 			sortBeat={sortBeat}
-			account={account ? { name: account.user.displayName?.trim() || account.user.email, avatarUrl: account.user.avatarUrl } : null}
 			pickerAgents={toolAgents.pickerAgents}
 			selectedAgentId={toolAgents.selectedId}
+			// The phone stays put into the project page (the stage closes over
+			// it), so going back doesn't slide it in a second time.
+			phoneShown={step === "signin" || (step === "project" && phoneWasShown)}
+			phoneDelay={phoneDelay}
+			githubShown={githubShown}
 		/>
 	);
 
@@ -370,14 +370,14 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		>
 			{/* Window drag strip over the top edge; the macOS traffic lights sit in it. */}
 			<div aria-hidden="true" className="absolute inset-x-0 top-0 z-10 h-toolbar" style={dragStyle} />
-			{/* The copy changes per step; the preview stage on the right stays
+			{/* The copy changes per step; the preview stage on the left stays
 			    mounted with one app window whose parts animate from step to step
 			    (OnboardingScene), so nothing in it is ever swapped out whole. */}
 			{/* On the project step the copy's column widens over the whole window
 			    (the stage column closes to nothing) so the setup sits centred; the
 			    stage keeps its full layout width meanwhile and is cropped, not
 			    rescaled. */}
-			<div ref={rowRef} className="flex min-h-0 flex-1 overflow-hidden">
+			<div ref={rowRef} className="flex min-h-0 flex-1 flex-row-reverse overflow-hidden">
 				{/* A CSS transition, not a JS spring: it always lands, even if frames
 				    are dropped while the next page mounts. */}
 				<div
@@ -415,19 +415,13 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 						    the theme in the same colours. */}
 						<PreviewStage
 							frameWidth={rowWidth - COPY_WIDTH}
-							phoneDelay={phoneDelay}
-							phone={<ExamplePhone />}
-							// The phone stays put into the project page (the stage closes over
-							// it), so going back doesn't slide it in a second time.
-							phoneShown={step === "signin" || (step === "project" && phoneWasShown)}
-							opaque={step === "signin" || (step === "project" && phoneWasShown)}
 						>
 							{scene}
 						</PreviewStage>
 					</div>
 				) : null}
 			</div>
-			<div className="flex h-14 shrink-0 items-center justify-between gap-3 border-t border-border pl-12 pr-4">
+			<div className="flex h-14 shrink-0 items-center justify-between gap-3 pl-12 pr-4">
 				<Progress index={index} />
 				<div className="flex items-center gap-2">
 					{/* Only from the project page on: the earlier pages are quick, and
@@ -640,29 +634,31 @@ function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStag
 }
 
 /**
- * The flow's one app window. Its state comes from the step (and, on Welcome,
- * the story's current part). It looks exactly like the app; only the changes
- * are eased: the center panel swaps pages with a short blurred cross-fade,
- * session rows unfold in the sidebar, cards settle onto the board and glide
- * between lanes, the agent picker opens like the app's menus, and the account
- * row rolls over.
+ * The flow's one app window, drawn as a line drawing (OnboardingSchematic).
+ * Its state comes from the step (and, on Welcome, the story's current part):
+ * the pages cross-fade, session rows unfold in the sidebar, cards settle onto
+ * the board and glide between lanes, and the agent picker opens.
  */
 function OnboardingScene({
 	step,
 	point,
 	cycle,
 	sortBeat,
-	account,
 	pickerAgents,
 	selectedAgentId,
+	phoneShown,
+	phoneDelay,
+	githubShown,
 }: {
 	step: Step;
 	point: number;
 	cycle: number;
 	sortBeat: number;
-	account: { name: string; avatarUrl?: string } | null;
 	pickerAgents: Array<{ id: string; label: string; dimmed?: boolean }>;
 	selectedAgentId?: string;
+	phoneShown: boolean;
+	phoneDelay: number;
+	githubShown: boolean;
 }) {
 	const { t } = useTranslation();
 	const tasks = useExampleTasks();
@@ -676,52 +672,39 @@ function OnboardingScene({
 	// mounts fresh so its cards arrive again.
 	const boardCards = stage === "none" ? exampleCards(tasks, "sorted") : cards;
 	const boardKey = stage === "none" ? `${cycle}-previous` : `${cycle}`;
-	const sidebarProject: PreviewSidebarProject = {
-		name: project,
-		active: page === "board",
-		orchestratorActive: page === "chat",
-		sessions: cards
-			.slice()
-			.sort((a, b) => tasks.findIndex((task) => task.id === a.id) - tasks.findIndex((task) => task.id === b.id))
-			.map((card) => ({ title: card.title, status: card.status, working: card.working, minutesAgo: card.minutesAgo })),
-	};
+	const sidebarCards = cards
+		.slice()
+		.sort((a, b) => tasks.findIndex((task) => task.id === a.id) - tasks.findIndex((task) => task.id === b.id));
 	return (
-		<PreviewScene
+		<SchematicScene
 			page={page}
-			sidebar={<PreviewSidebar projects={[sidebarProject]} account={account} />}
-			chat={
-				<PreviewChat
-					runId={cycle}
-					title={t("shell.orchestrator")}
-					provider="claude-code"
-					message={t("firstRun.exampleMessage")}
-					reply={t("firstRun.exampleReply")}
-				/>
-			}
-			board={
-				<PreviewBoard
-					key={boardKey}
-					cards={boardCards}
-				/>
-			}
-			newChat={
-				<PreviewNewChat
-					agents={pickerAgents}
-					selectedId={selectedAgentId}
-					project={project}
-					menuOpen={page === "new"}
-				/>
-			}
+			project={project}
+			cards={boardCards}
+			sidebarCards={sidebarCards}
+			boardKey={boardKey}
+			runId={cycle}
+			pileCards={exampleCards(tasks, "working")}
+			pickerAgents={pickerAgents}
+			selectedAgentId={selectedAgentId}
+			phone={<ExamplePhone />}
+			phoneShown={phoneShown}
+			phoneDelay={phoneDelay}
+			githubShown={githubShown}
+			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : "overview"}
 		/>
 	);
 }
+
+/** What the camera frames through the welcome story: the request, the
+ * workers at it, the CI round trips, then the whole board. */
+const STORY_FOCUS: readonly SceneFocus[] = ["chat", "working", "ci", "overview"];
 
 /** The same example work on the mobile app's Workers tab, as the story ends. */
 function ExamplePhone() {
 	const { t } = useTranslation();
 	const [task1, task2, task3, task4] = useExampleTasks();
 	return (
-		<PhoneWorkersScreen
+		<SchematicPhoneScreen
 			project={t("firstRun.projectPlaceholder")}
 			workers={[
 				{ ...task2, status: "needs_input", minutesAgo: 4 },
