@@ -637,13 +637,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
-/* The inspector rail spans the bar's band too: its fill and left divider
- * start at the panel's top edge, so the band above stays window chrome. */
+/* The inspector rail spans the bar's band too: its fill starts at the panel's
+ * top edge, so the band above stays window chrome. Its divider line is drawn
+ * by the session column (below). */
 .center-panel-shell--floating-topbar [data-slot="inspector-container"] {
 	border-left-color: transparent;
-	background:
-		linear-gradient(var(--color-border-strong), var(--color-border-strong)) 0 var(--floating-panel-top) / 1px 100% no-repeat border-box,
-		linear-gradient(var(--color-bg-primary), var(--color-bg-primary)) 0 var(--floating-panel-top) / 100% 100% no-repeat border-box;
+	background: linear-gradient(var(--color-bg-primary), var(--color-bg-primary)) 0 var(--floating-panel-top) / 100% 100% no-repeat border-box;
 }
 
 .center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector {
@@ -3554,6 +3553,27 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	margin-inline: var(--space-1);
 	background: var(--color-border);
+}
+
+/* With the inspector open, the session column draws the line between it and
+ * the rail along its own last pixel column, and the top bar's divider steps
+ * past the region's end padding onto that same column, so the two read as one
+ * line. (The rail can't draw it: the column clips the bar's divider at its
+ * edge, one pixel short of the rail.) */
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child::after {
+	content: "";
+	position: absolute;
+	top: var(--floating-panel-top);
+	right: 0;
+	bottom: 0;
+	z-index: var(--z-index-chrome);
+	width: 1px;
+	background: var(--color-border-strong);
+	pointer-events: none;
+}
+
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions .topbar-divider {
+	margin-inline-end: calc(-1 * var(--gap-topbar-control));
 }
 
 /* The editor control's menu chevron belongs to its labeled button: narrow,
