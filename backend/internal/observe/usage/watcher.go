@@ -49,6 +49,26 @@ func NewTranscriptWatcher(ctx context.Context, roots []string) (*TranscriptWatch
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	normalized, err := resolveWatchRoots(ctx, roots)
+	if err != nil {
+		return nil, err
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("create transcript watcher: %w", err)
+	}
+	result := &TranscriptWatcher{
+		watcher: watcher,
+		roots:   normalized,
+		watched: make(map[string]struct{}),
+		events:  make(chan TranscriptEvent, transcriptEventBuffer),
+		errors:  make(chan error, watcherErrorBuffer),
+		done:    make(chan struct{}),
+	}
+	return result, nil
+}
+
+func resolveWatchRoots(ctx context.Context, roots []string) ([]string, error) {
 	normalized, err := normalizeTranscriptRoots(roots)
 	if err != nil {
 		return nil, err
@@ -67,19 +87,23 @@ func NewTranscriptWatcher(ctx context.Context, roots []string) (*TranscriptWatch
 			return nil, fmt.Errorf("inspect transcript root: %w", redactFilesystemError(err))
 		}
 	}
-	watcher, err := fsnotify.NewWatcher()
+	return normalized, nil
+}
+
+// SetRoots refreshes the allowed provider directories before Rebuild updates
+// exact-file watches. The coordinator calls it when session inventory changes.
+func (w *TranscriptWatcher) SetRoots(ctx context.Context, roots []string) error {
+	resolved, err := resolveWatchRoots(ctx, roots)
 	if err != nil {
-		return nil, fmt.Errorf("create transcript watcher: %w", err)
+		return err
 	}
-	result := &TranscriptWatcher{
-		watcher: watcher,
-		roots:   normalized,
-		watched: make(map[string]struct{}),
-		events:  make(chan TranscriptEvent, transcriptEventBuffer),
-		errors:  make(chan error, watcherErrorBuffer),
-		done:    make(chan struct{}),
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("transcript watcher is closed")
 	}
-	return result, nil
+	w.roots = resolved
+	return nil
 }
 
 // Events returns filesystem-triggered transcript changes.
@@ -183,9 +207,12 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 	path := canonicalTranscriptPath(event.Name)
 	emit := ""
 	discovery := false
+	w.mu.Lock()
+	withinRoot := w.withinDesiredRoot(ctx, path)
+	w.mu.Unlock()
 	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
 		filepath.Ext(path) == ".jsonl" &&
-		w.withinDesiredRoot(ctx, path) {
+		withinRoot {
 		emit = path
 		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
 	}

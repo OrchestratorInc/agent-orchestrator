@@ -29,6 +29,10 @@ func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 		CodexSessions:  t.TempDir(),
 		CodexArchived:  t.TempDir(),
 		KimiHome:       kimiHome,
+		PiSessions:     t.TempDir(),
+		QwenUsage:      t.TempDir(),
+		OMPSessions:    t.TempDir(),
+		KimchiSessions: t.TempDir(),
 	}
 	watcher, err := usagepipeline.NewTranscriptWatcher(
 		context.Background(), usagePipelineWatchRoots(roots),

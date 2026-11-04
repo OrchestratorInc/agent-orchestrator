@@ -23,7 +23,8 @@ const (
 	fetchTimeout = time.Minute
 )
 
-// Catalog builds a runtime catalog from one copy of LiteLLM's price table. The
+// Catalog builds a runtime catalog from one copy of LiteLLM's price table,
+// with every provider it prices: a harness can bill through any of them. The
 // manifest names that copy by its git blob id, which `git hash-object`
 // reproduces from the same bytes.
 func Catalog(upstream []byte) (*pricing.Catalog, error) {
@@ -31,7 +32,7 @@ func Catalog(upstream []byte) (*pricing.Catalog, error) {
 		Repository: "BerriAI/litellm",
 		Revision:   gitBlobID(upstream),
 		Path:       "model_prices_and_context_window.json",
-	})
+	}, true)
 	if err != nil {
 		return nil, err
 	}

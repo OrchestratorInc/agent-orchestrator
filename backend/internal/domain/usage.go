@@ -16,7 +16,35 @@ const (
 	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	UsageSourcePiSession      UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
+	UsageSourceOMPSession     UsageSourceKind = "omp_session"
+	UsageSourceKimchiSession  UsageSourceKind = "kimchi_session"
 )
+
+// AllUsageSourceKinds lists every certified usage artifact shape. The schema no
+// longer enumerates source kinds, so a new usage source adds its kind here and
+// the store rejects anything else.
+var AllUsageSourceKinds = []UsageSourceKind{
+	UsageSourceClaudeMain,
+	UsageSourceClaudeSubagent,
+	UsageSourceCodexRollout,
+	UsageSourceKimiWire,
+	UsageSourcePiSession,
+	UsageSourceQwenMonthly,
+	UsageSourceOMPSession,
+	UsageSourceKimchiSession,
+}
+
+// IsKnown reports whether k is a certified usage source kind.
+func (k UsageSourceKind) IsKnown() bool {
+	for _, known := range AllUsageSourceKinds {
+		if k == known {
+			return true
+		}
+	}
+	return false
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string

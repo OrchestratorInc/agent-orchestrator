@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -193,11 +194,10 @@ func mergeInitialActivations(cached, remote []ProviderActivation) []ProviderActi
 		byProvider[activation.ProviderID] = activation
 	}
 	merged := make([]ProviderActivation, 0, len(byProvider))
-	for _, providerID := range []string{"anthropic", "openai", "zai"} {
-		if activation, ok := byProvider[providerID]; ok {
-			merged = append(merged, activation)
-		}
+	for _, activation := range byProvider {
+		merged = append(merged, activation)
 	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].ProviderID < merged[j].ProviderID })
 	return merged
 }
 
