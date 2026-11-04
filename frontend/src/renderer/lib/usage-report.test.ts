@@ -61,6 +61,14 @@ describe("usage report aggregation", () => {
 		expect(models[2].costPerMillionNanos).toBeNull();
 	});
 
+	it("keeps one model run by two agents in separate rows", () => {
+		const models = usageByModel([
+			row({ harness: "qwen", model: "glm-5.3", inputTokens: 100, costNanos: 600 }),
+			row({ harness: "kimchi", model: "glm-5.3", inputTokens: 50, costNanos: 0 }),
+		], "cost");
+		expect(models.map((model) => [model.harness, model.model, model.costNanos])).toEqual([["qwen", "glm-5.3", 600], ["kimchi", "glm-5.3", 0]]);
+	});
+
 	it("lists periods with usage newest first and groups sessions by project", () => {
 		expect(usageByPeriod(report).map((entry) => entry.period)).toEqual(["2026-10-25", "2026-10-24"]);
 		expect(usageByProject(report.sessions, "cost")).toEqual([

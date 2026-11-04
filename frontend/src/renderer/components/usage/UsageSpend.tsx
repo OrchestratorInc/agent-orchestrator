@@ -1,3 +1,4 @@
+import { Info } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -20,6 +21,7 @@ import {
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { seriesTone, UsageBarChart } from "./UsageChart";
 
 type Breakdown = "model" | "day" | "project" | "session";
@@ -37,6 +39,8 @@ const SPEED_LABELS = {
 	unknown: "usage.speed.unknown",
 } as const satisfies Record<SpeedGroup, string>;
 const SESSION_ROWS = 50;
+/** Breakdown rows shown before "Show all". */
+const BREAKDOWN_ROWS = 10;
 
 /** The Cost and Tokens views: one layout, measured in dollars or in tokens. */
 export function UsageSpend({
@@ -62,9 +66,9 @@ export function UsageSpend({
 	const hourly = report.resolution === "hour";
 
 	return (
-		<div className="flex flex-col gap-10">
+		<div className="flex flex-col gap-8">
 			<section className="grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,1fr)]">
-				<div className="flex min-w-0 flex-col gap-5">
+				<div className="flex min-h-0 min-w-0 flex-col gap-5">
 					<div className="flex flex-col gap-1">
 						<SettingsOptionMenu
 							aria-label={t("usage.unit")}
@@ -75,50 +79,66 @@ export function UsageSpend({
 							triggerClassName="h-6! w-fit gap-1! self-start bg-transparent! px-1.5! -ms-1.5 text-xs! text-muted-foreground! hover:text-foreground! data-[state=open]:text-foreground!"
 							renderTrigger={() => <span>{t(unit === "cost" ? "usage.total.cost" : "usage.total.tokens")}</span>}
 						/>
-						<p className="text-heading-lg font-semibold tabular-nums text-foreground">{format(total)}</p>
-						<p className="text-xs text-muted-foreground">
-							{t("usage.sessionCount", { count: report.sessions.length })}
-							{unit === "cost" ? ` · ${t("usage.estimateNote")}` : null}
+						<p className="flex items-center gap-1.5 text-heading-lg font-semibold tabular-nums text-foreground">
+							{format(total)}
+							{unit === "cost" ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											aria-label={t("usage.estimateNote")}
+											className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+										>
+											<Info aria-hidden="true" className="size-icon-sm" />
+										</button>
+									</TooltipTrigger>
+									<TooltipContent>{t("usage.estimateNote")}</TooltipContent>
+								</Tooltip>
+							) : null}
 						</p>
-						{unit === "cost" && unpriced > 0 ? (
-							<p className="text-xs text-muted-foreground">{t("usage.unpricedNote", { value: unpriced.toLocaleString(locale) })}</p>
-						) : null}
+						<p className="truncate text-xs text-muted-foreground">
+							{t("usage.sessionCount", { count: report.sessions.length })}
+							{unit === "cost" && unpriced > 0 ? ` · ${t("usage.unpricedNote", { value: unpriced.toLocaleString(locale) })}` : null}
+						</p>
 					</div>
-					<ul className="flex flex-col gap-3" aria-label={t("usage.byAgent")}>
-						{harnesses.map((harness) => {
-							const value = unit === "cost" ? harness.costNanos : harness.tokens;
-							const share = total > 0 ? value / total : 0;
-							// An agent with no priced usage is unknown, not free: no $0.00, no 0% share.
-							const unpricedAgent = unit === "cost" && harness.pricedEvents === 0;
-							return (
-								<li key={harness.harness} className="flex min-w-0 items-start gap-2.5">
-									<span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full" style={{ backgroundColor: agentTone(harness.harness) }} />
-									<AgentAvatar provider={harness.harness} decorative className="mt-0.5 size-4 shrink-0" />
-									<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-										<div className="flex items-baseline justify-between gap-3">
-											<span className="truncate text-control text-foreground">
+					{/* Beside the chart the list takes the height the chart sets and scrolls, rather than stretching the row. */}
+					<div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pe-2 lg:[contain:size]">
+						<ul className="flex flex-col gap-2.5" aria-label={t("usage.byAgent")}>
+							{harnesses.map((harness) => {
+								const value = unit === "cost" ? harness.costNanos : harness.tokens;
+								const share = total > 0 ? value / total : 0;
+								// An agent with no priced usage is unknown, not free: no $0.00, no 0% share.
+								const unpricedAgent = unit === "cost" && harness.pricedEvents === 0;
+								const detail = unpricedAgent
+									? t("usage.harnessUnpricedLine", { tokens: formatTokens(harness.tokens, locale) })
+									: unit === "cost"
+										? t("usage.harnessCostLine", { share: formatShare(share, locale), tokens: formatTokens(harness.tokens, locale) })
+										: t("usage.harnessTokenLine", { share: formatShare(share, locale), cost: formatUsd(harness.costNanos, locale) });
+								return (
+									<li key={harness.harness} className="flex min-w-0 flex-col gap-1.5" title={detail}>
+										<div className="flex min-w-0 items-center gap-2.5">
+											<span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: agentTone(harness.harness) }} />
+											<AgentAvatar provider={harness.harness} decorative className="size-4 shrink-0" />
+											<span className="min-w-0 flex-1 truncate text-control text-foreground">
 												{agentLabel(harness.harness)}
 												<span className="ms-1.5 text-xs text-muted-foreground">{t("usage.sessionCount", { count: harness.sessions })}</span>
 											</span>
 											{unpricedAgent ? (
 												<span className="shrink-0 text-control text-muted-foreground">{t("usage.notPriced")}</span>
 											) : (
-												<span className="shrink-0 text-control tabular-nums text-foreground">{format(value)}</span>
+												<>
+													<span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatShare(share, locale)}</span>
+													<span className="w-16 shrink-0 text-end text-control tabular-nums text-foreground">{format(value)}</span>
+												</>
 											)}
 										</div>
-										<ShareBar fraction={share} tone={agentTone(harness.harness)} className="my-1" />
-										<span className="text-xs tabular-nums text-muted-foreground">
-											{unpricedAgent
-												? t("usage.harnessUnpricedLine", { tokens: formatTokens(harness.tokens, locale) })
-												: unit === "cost"
-													? t("usage.harnessCostLine", { share: formatShare(share, locale), tokens: formatTokens(harness.tokens, locale) })
-													: t("usage.harnessTokenLine", { share: formatShare(share, locale), cost: formatUsd(harness.costNanos, locale) })}
-										</span>
-									</div>
-								</li>
-							);
-						})}
-					</ul>
+										<ShareBar fraction={share} tone={agentTone(harness.harness)} className="ms-11" />
+										<span className="sr-only">{detail}</span>
+									</li>
+								);
+							})}
+						</ul>
+					</div>
 				</div>
 				<div className="flex min-w-0 flex-col gap-3">
 					<h2 className="text-control font-medium text-foreground">
@@ -226,7 +246,12 @@ function PartsBar({
 function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageReport; unit: UsageUnit; projectNames: ReadonlyMap<string, string>; total: number }) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.language;
-	const [breakdown, setBreakdown] = useState<Breakdown>("model");
+	const [breakdown, setBreakdownState] = useState<Breakdown>("model");
+	const [showAll, setShowAll] = useState(false);
+	const setBreakdown = (next: Breakdown) => {
+		setBreakdownState(next);
+		setShowAll(false);
+	};
 	const navigateToSession = useNavigateToSession();
 	const fraction = (cost: number, tokens: number) => (total > 0 ? (unit === "cost" ? cost : tokens) / total : 0);
 	// A bar in the agent's colour where the row belongs to one agent, neutral where it mixes them.
@@ -237,6 +262,14 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 		</span>
 	);
 	const projectName = (projectId: string | undefined) => (projectId ? projectNames.get(projectId) ?? projectId : t("usage.noProject"));
+	const models = breakdown === "model" ? usageByModel(report.rows, unit) : [];
+	const periods = breakdown === "day" ? usageByPeriod(report) : [];
+	const projects = breakdown === "project" ? usageByProject(report.sessions, unit) : [];
+	const sessions = breakdown === "session"
+		? [...report.sessions].sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens)).slice(0, SESSION_ROWS)
+		: [];
+	const rowCount = models.length + periods.length + projects.length + sessions.length;
+	const limit = <T,>(items: T[]) => (showAll ? items : items.slice(0, BREAKDOWN_ROWS));
 
 	return (
 		<section aria-labelledby="usage-breakdown" className="flex flex-col gap-3">
@@ -277,8 +310,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 					</tr>
 				</thead>
 				<tbody className="tabular-nums">
-					{breakdown === "model" ? usageByModel(report.rows, unit).map((model, index) => (
-						<tr key={model.model} className="border-t border-border/60">
+					{limit(models).map((model, index) => (
+						<tr key={`${model.harness}:${model.model}`} className="border-t border-border/60">
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="min-w-0 py-2.5">
 								<span className="flex min-w-0 items-center gap-2">
@@ -292,8 +325,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 ps-6 text-muted-foreground">{share(model.costNanos, model.tokens, model.harness)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(model.tokens, locale)}</td>
 						</tr>
-					)) : null}
-					{breakdown === "day" ? usageByPeriod(report).map((period, index) => (
+					))}
+					{limit(periods).map((period, index) => (
 						<tr key={period.period} className="border-t border-border/60">
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="py-2.5 text-foreground">{formatPeriod(period.period, locale, "long")}</td>
@@ -301,8 +334,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 ps-6 text-muted-foreground">{share(period.costNanos, period.tokens)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(period.tokens, locale)}</td>
 						</tr>
-					)) : null}
-					{breakdown === "project" ? usageByProject(report.sessions, unit).map((project, index) => (
+					))}
+					{limit(projects).map((project, index) => (
 						<tr key={project.projectId} className="border-t border-border/60">
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="truncate py-2.5 text-foreground">{projectName(project.projectId)}</td>
@@ -311,33 +344,40 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 ps-6 text-muted-foreground">{share(project.costNanos, project.tokens)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(project.tokens, locale)}</td>
 						</tr>
-					)) : null}
-					{breakdown === "session" ? [...report.sessions]
-						.sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens))
-						.slice(0, SESSION_ROWS)
-						.map((session, index) => (
-							<tr key={session.sessionId} className="border-t border-border/60">
-								<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
-								<td className="min-w-0 py-1.5">
-									<button
-										type="button"
-										className="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-start hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-										onClick={() => navigateToSession(session.projectId, session.sessionId)}
-									>
-										<AgentAvatar provider={session.harness} decorative className="size-4 shrink-0" />
-										<span className="flex min-w-0 flex-col">
-											<span className="truncate text-foreground">{session.title}</span>
-											<span className="truncate text-xs text-muted-foreground">{projectName(session.projectId)}</span>
-										</span>
-									</button>
-								</td>
-								<td className="py-2.5 text-end text-foreground">{formatUsd(session.costNanos, locale)}</td>
-								<td className="py-2.5 ps-6 text-muted-foreground">{share(session.costNanos, session.tokens, session.harness)}</td>
-								<td className="py-2.5 text-end text-foreground">{formatTokens(session.tokens, locale)}</td>
-							</tr>
-						)) : null}
+					))}
+					{limit(sessions).map((session, index) => (
+						<tr key={session.sessionId} className="border-t border-border/60">
+							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
+							<td className="min-w-0 py-1.5">
+								<button
+									type="button"
+									className="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-start hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+									onClick={() => navigateToSession(session.projectId, session.sessionId)}
+								>
+									<AgentAvatar provider={session.harness} decorative className="size-4 shrink-0" />
+									<span className="flex min-w-0 flex-col">
+										<span className="truncate text-foreground">{session.title}</span>
+										<span className="truncate text-xs text-muted-foreground">{projectName(session.projectId)}</span>
+									</span>
+								</button>
+							</td>
+							<td className="py-2.5 text-end text-foreground">{formatUsd(session.costNanos, locale)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(session.costNanos, session.tokens, session.harness)}</td>
+							<td className="py-2.5 text-end text-foreground">{formatTokens(session.tokens, locale)}</td>
+						</tr>
+					))}
 				</tbody>
 			</table>
+			{rowCount > BREAKDOWN_ROWS ? (
+				<button
+					type="button"
+					className="self-start rounded-md px-1.5 py-0.5 -ms-1.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					aria-expanded={showAll}
+					onClick={() => setShowAll((all) => !all)}
+				>
+					{showAll ? t("shell.showLess") : t("browser.downloads.showAll")}
+				</button>
+			) : null}
 		</section>
 	);
 }

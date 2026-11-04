@@ -129,13 +129,15 @@ export type ModelUsage = {
 	costPerMillionNanos: number | null;
 };
 
+/** One entry per agent and model: two agents running the same model are billed apart and keep separate rows. */
 export function usageByModel(rows: readonly UsageReportRow[], unit: UsageUnit): ModelUsage[] {
 	const byModel = new Map<string, ModelUsage & { input: number; cacheRead: number; pricedTokens: number }>();
 	for (const row of rows) {
-		let found = byModel.get(row.model);
+		const key = `${row.harness}\u0000${row.model}`;
+		let found = byModel.get(key);
 		if (!found) {
 			found = { model: row.model, harness: row.harness, costNanos: 0, tokens: 0, events: 0, pricedEvents: 0, cacheHitRate: 0, costPerMillionNanos: null, input: 0, cacheRead: 0, pricedTokens: 0 };
-			byModel.set(row.model, found);
+			byModel.set(key, found);
 		}
 		const tokens = rowTokens(row);
 		found.costNanos += row.costNanos;
@@ -152,7 +154,7 @@ export function usageByModel(rows: readonly UsageReportRow[], unit: UsageUnit): 
 			cacheHitRate: input > 0 ? cacheRead / input : 0,
 			costPerMillionNanos: model.pricedEvents > 0 && pricedTokens > 0 ? (model.costNanos / pricedTokens) * 1_000_000 : null,
 		}))
-		.sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens) || b.tokens - a.tokens || a.model.localeCompare(b.model));
+		.sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens) || b.tokens - a.tokens || a.model.localeCompare(b.model) || a.harness.localeCompare(b.harness));
 }
 
 export type PeriodUsage = { period: string; costNanos: number; tokens: number; events: number };
