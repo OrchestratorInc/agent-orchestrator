@@ -679,7 +679,7 @@ describe("telemetry sanitizers", () => {
 			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "run_cue", view: "worker" }),
 		).toEqual({ action: "run_cue", view: "worker" });
 		expect(
-			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "/Users/me/repo", view: "board", extra: 1 }),
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "/Users/me/repo", view: "settings", extra: 1 }),
 		).toEqual({});
 	});
 

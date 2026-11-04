@@ -17,25 +17,31 @@ const actions: ProjectOrchestratorAction = {
 };
 
 describe("ProjectBoardActions", () => {
-	it("keeps Orchestrator the one filled header action on a cloud board", () => {
+	it("keeps New task the one filled header action on a cloud board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} cloud placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: "New task" })).not.toHaveClass("bg-accent-strong");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		// Orchestrator leads, matching the session top bar.
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});
 
-	it("keeps Orchestrator the one filled header action on an empty local board", () => {
+	it("keeps New task the one filled header action on an empty local board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} placement="header" quiet />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: "New task" })).not.toHaveClass("bg-accent-strong");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		// Orchestrator leads, matching the session top bar.
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});
 });

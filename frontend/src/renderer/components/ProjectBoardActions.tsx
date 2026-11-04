@@ -5,6 +5,7 @@ import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorA
 import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { OrchestratorIcon } from "./icons";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ProjectBoardActions({ actions, placement, quiet = false, cloud = false, style }: {
@@ -33,9 +34,13 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
-						onClick={() => openOrchestrator()}
-						// The header never demotes Orchestrator; it is the region's one primary.
-						variant={header || !quiet ? "primary" : "secondary"}
+						onClick={() => {
+							if (header) captureTopbarAction("open_orchestrator", "board");
+							openOrchestrator();
+						}}
+						// Every top bar shows Orchestrator the same way: quiet, labeled, first.
+						// The empty board's body keeps it as the call to action.
+						variant={header ? "action" : quiet ? "secondary" : "primary"}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
@@ -54,9 +59,12 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						className={header ? "topbar-control--labeled" : undefined}
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}
-						onClick={openNewTask}
-						// One filled primary per region: in the header Task stays a utility control.
-						variant={header ? "action" : quiet || cloud ? "secondary" : "accent"}
+						onClick={() => {
+							if (header) captureTopbarAction("new_task", "board");
+							openNewTask();
+						}}
+						// New task is the top bar's one filled action, as on the orchestrator page.
+						variant={header ? "primary" : quiet || cloud ? "secondary" : "accent"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{t(header ? "newTask.task" : "shell.newTask")}</span>
@@ -74,7 +82,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant="primary">{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
-	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>
+	return header ? <>{feedback}{orchestratorButton}{newTaskButton}</> : <>
 		<div className="mt-5 flex items-center gap-2">{orchestratorButton}{newTaskButton}</div>
 		{feedback}
 	</>;

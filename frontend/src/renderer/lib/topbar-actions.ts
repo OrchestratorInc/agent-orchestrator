@@ -11,5 +11,5 @@ export const TOPBAR_ACTIONS = [
 ] as const;
 export type TopbarAction = (typeof TOPBAR_ACTIONS)[number];
 
-export const TOPBAR_VIEWS = ["worker", "orchestrator"] as const;
+export const TOPBAR_VIEWS = ["worker", "orchestrator", "board"] as const;
 export type TopbarView = (typeof TOPBAR_VIEWS)[number];
