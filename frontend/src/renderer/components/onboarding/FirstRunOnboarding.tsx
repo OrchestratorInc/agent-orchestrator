@@ -36,6 +36,7 @@ import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
 import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { freshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { writeChatComposerText } from "../../lib/chat-drafts";
 import { useCloudSession } from "../../lib/cloud-session";
@@ -140,6 +141,7 @@ type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2
 type InstallJob = components["schemas"]["InstallJob"];
 
 function readStoredStep(): Step {
+	if (freshMachineSim) return "welcome";
 	try {
 		const stored = window.localStorage.getItem(STEP_STORAGE_KEY);
 		if (STEPS.includes(stored as Step)) return stored as Step;
@@ -180,6 +182,11 @@ export function FirstRunOnboarding() {
 		(usesPreviewWorkspaceData || !migrationOffer.isPending);
 
 	useEffect(() => {
+		// TEMPORARY: the simulated fresh machine always gets the flow.
+		if (freshMachineSim) {
+			setStatus("pending");
+			return;
+		}
 		let mounted = true;
 		void aoBridge.appState.getFirstRunProjectPrompt()
 			.then((next) => { if (mounted) setStatus(next); })
@@ -190,6 +197,7 @@ export function FirstRunOnboarding() {
 	const markSeen = () => {
 		setStatus("seen");
 		storeStep(null);
+		if (freshMachineSim) return;
 		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
 			// A failed write leaves the flag pending; the flow shows again next launch.
 		});
@@ -197,7 +205,7 @@ export function FirstRunOnboarding() {
 
 	useEffect(() => {
 		if (status !== "pending" || !ready || open) return;
-		if (projectCount > 0 || migrationOffer.data?.show) {
+		if (!freshMachineSim && (projectCount > 0 || migrationOffer.data?.show)) {
 			markSeen();
 			return;
 		}
@@ -1133,6 +1141,8 @@ function SourceTile({ icon, label, hint, onClick }: { icon: ReactNode; label: st
 }
 
 /** The user's own local projects, for the sidebar previews. */
+type LocalProject = ReturnType<typeof useLocalProjects>[number];
+
 function useLocalProjects() {
 	return (useWorkspaceQuery().data ?? []).filter(
 		(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.kind !== CLOUD_PROJECT_KIND,
@@ -1144,6 +1154,14 @@ function useLocalProjects() {
  * orchestrator. The stage is closed here, so both phases sit centred. */
 function FirstProjectStep({ onFinish }: { onFinish: () => void }) {
 	const project = useLocalProjects()[0];
+	// TEMPORARY: the simulated fresh machine adds a pretend project; nothing is
+	// created on disk or in the daemon, and no orchestrator is spawned.
+	const [simulatedProject, setSimulatedProject] = useState<LocalProject | null>(null);
+	if (freshMachineSim) {
+		return simulatedProject
+			? <FirstTask project={simulatedProject} onFinish={onFinish} />
+			: <ProjectChooser onSimulatedAdd={(name) => setSimulatedProject({ id: "simulated-project", name } as LocalProject)} />;
+	}
 	return project ? <FirstTask project={project} onFinish={onFinish} /> : <ProjectChooser />;
 }
 
@@ -1160,12 +1178,13 @@ function useBestReadyAgent(): string | undefined {
 	}, [readiness.data]);
 }
 
-function ProjectChooser() {
+function ProjectChooser({ onSimulatedAdd }: { onSimulatedAdd?: (name: string) => void }) {
 	const { t } = useTranslation();
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const projects = useWorkspaceQuery().data ?? [];
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource; nonce: number } | null>(null);
-	const request = (source: ProjectSource) => setSourceSignal({ source, nonce: Date.now() });
+	const request = (source: ProjectSource) =>
+		onSimulatedAdd ? onSimulatedAdd(source === "clone" ? "cloned-repo" : "my-project") : setSourceSignal({ source, nonce: Date.now() });
 	const creating = useUiStore((state) => state.projectCreationPending);
 	// No agent questions on the first project: the best ready agent runs both
 	// the workers and the orchestrator.
@@ -1211,7 +1230,7 @@ function ProjectChooser() {
 	);
 }
 
-function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalProjects>[number]; onFinish: () => void }) {
+function FirstTask({ project, onFinish }: { project: LocalProject; onFinish: () => void }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const workspaces = useWorkspaceQuery().data ?? [];
@@ -1238,6 +1257,12 @@ function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalP
 		void navigate(sessionNavigateTarget(project.id, session.id));
 	}, [completeTask, navigate, onFinish, project.id]);
 	const send = () => {
+		// TEMPORARY: the simulated fresh machine sends nothing and spawns nothing.
+		if (freshMachineSim) {
+			console.info("[fresh-machine sim] would send the first task:", prompt.trim());
+			onFinish();
+			return;
+		}
 		setSending(true);
 		if (orchestrator) void deliver(orchestrator, prompt.trim());
 	};
@@ -1276,7 +1301,7 @@ function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalP
 					))}
 				</div>
 			</div>
-			{provisioning || !orchestrator ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
+			{!freshMachineSim && (provisioning || !orchestrator) ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
 			<StepAction>
 				<Button variant="primary" onClick={send} disabled={!prompt.trim() || sending}>
 					{sending ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}

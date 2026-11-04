@@ -2,6 +2,7 @@ import createClient from "openapi-fetch";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
+import { freshMachineSim, simulateFreshMachine } from "./fresh-machine-sim";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
 
@@ -335,6 +336,12 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			keepalive: input.keepalive,
 		});
 	};
+
+	// TEMPORARY: fresh-machine onboarding simulation (VITE_AO_FRESH_MACHINE=1).
+	if (freshMachineSim) {
+		const simulated = await simulateFreshMachine(input, send);
+		if (simulated) return simulated;
+	}
 
 	let response: Response;
 	try {
