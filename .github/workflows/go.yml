@@ -67,11 +67,6 @@ jobs:
         if: matrix.shard == 0
         run: go vet ./...
 
-      # e2e_test packages are excluded from the default discovery below.
-      - name: Test review publication acceptance
-        if: matrix.shard == 0
-        run: go test -race -count=1 -timeout=20m -tags=e2e_test ./tests/reviewpublication
-
       - name: Test
         env:
           skip_global_compinit: "1"

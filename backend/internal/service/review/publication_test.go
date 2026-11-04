@@ -1,10 +1,9 @@
 package review
 
 import (
+	"errors"
+	"reflect"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -30,15 +29,31 @@ func TestSubmitPublicationStateControlsRefreshAndTelemetry(t *testing.T) {
 
 			runs, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
 
-			require.NoError(t, err)
-			require.Len(t, runs, 1)
-			assert.Equal(t, tc.publication, runs[0].Publication)
-			assert.Empty(t, runs[0].GithubReviewID)
-			assert.Equal(t, tc.posted, runs[0].PublishedToProvider())
-			assert.Equal(t, tc.posted, len(refresh.prURLs) == 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 {
+				t.Fatalf("runs = %+v, want one result", runs)
+			}
+			if !reflect.DeepEqual(tc.publication, runs[0].Publication) {
+				t.Errorf("publication = %+v, want %+v", runs[0].Publication, tc.publication)
+			}
+			if runs[0].GithubReviewID != "" {
+				t.Errorf("GitLab review ID = %q, want empty", runs[0].GithubReviewID)
+			}
+			if got := runs[0].PublishedToProvider(); got != tc.posted {
+				t.Errorf("published = %v, want %v", got, tc.posted)
+			}
+			if got := len(refresh.prURLs) == 1; got != tc.posted {
+				t.Errorf("refresh targets = %v, posted=%v", refresh.prURLs, tc.posted)
+			}
 			events := sink.named("ao.review.submitted")
-			require.Len(t, events, 1)
-			assert.Equal(t, tc.posted, events[0].Payload["posted_to_provider"])
+			if len(events) != 1 {
+				t.Fatalf("submit events = %+v, want one", events)
+			}
+			if got := events[0].Payload["posted_to_provider"]; got != tc.posted {
+				t.Errorf("posted_to_provider = %v, want %v", got, tc.posted)
+			}
 
 			// A changed session toggle and an idempotent AO retry cannot rewrite
 			// the original snapshot or schedule another provider refresh.
@@ -46,11 +61,21 @@ func TestSubmitPublicationStateControlsRefreshAndTelemetry(t *testing.T) {
 			st.sessionAutoInjectReview = &disabled
 			_, err = svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
 
-			require.NoError(t, err)
-			assert.True(t, st.run.AutoInjectReview)
-			assert.Equal(t, 1, st.updateCalls)
-			assert.Len(t, sink.named("ao.review.submitted"), 1)
-			assert.Equal(t, tc.posted, len(refresh.prURLs) == 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !st.run.AutoInjectReview {
+				t.Error("retry changed the original auto-inject snapshot")
+			}
+			if st.updateCalls != 1 {
+				t.Errorf("result updates = %d, want one", st.updateCalls)
+			}
+			if got := len(sink.named("ao.review.submitted")); got != 1 {
+				t.Errorf("submit events after retry = %d, want one", got)
+			}
+			if got := len(refresh.prURLs) == 1; got != tc.posted {
+				t.Errorf("refresh targets = %v, posted=%v", refresh.prURLs, tc.posted)
+			}
 		})
 	}
 }
@@ -84,9 +109,15 @@ func TestSubmitRejectsInvalidPublicationBindingAndEvidence(t *testing.T) {
 
 			_, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{{RunID: "run", Verdict: domain.VerdictChangesRequested, Body: "Fix main.go", Publication: &tc.publication}})
 
-			require.ErrorIs(t, err, ErrInvalid)
-			assert.Zero(t, st.updateCalls)
-			assert.Empty(t, refresh.prURLs)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("submit error = %v, want ErrInvalid", err)
+			}
+			if st.updateCalls != 0 {
+				t.Errorf("result updates = %d, want zero", st.updateCalls)
+			}
+			if len(refresh.prURLs) != 0 {
+				t.Errorf("invalid receipt scheduled refreshes: %v", refresh.prURLs)
+			}
 		})
 	}
 }
@@ -97,20 +128,32 @@ func TestSubmitPublicationReplayRejectsReplacedReceipt(t *testing.T) {
 	p := &domain.ReviewPublication{Provider: "gitlab", Status: "published", PRURL: st.run.PRURL, TargetSHA: "head", Refs: []domain.ReviewPublicationRef{{Kind: "note", ID: "1"}, {Kind: "discussion", ID: "abc"}, {Kind: "note", ID: "2"}}}
 	input := SubmittedReview{RunID: "run", Verdict: domain.VerdictChangesRequested, Body: "Fix main.go", Publication: p}
 	_, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	p.Refs[0].ID = "different"
 	_, err = svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
 
-	require.ErrorIs(t, err, ErrInvalid)
-	assert.Equal(t, 1, st.updateCalls)
-	assert.Equal(t, "abc", st.run.Publication.Refs[0].ID)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("submit error = %v, want ErrInvalid", err)
+	}
+	if st.updateCalls != 1 {
+		t.Errorf("result updates = %d, want one", st.updateCalls)
+	}
+	if st.run.Publication == nil || len(st.run.Publication.Refs) == 0 || st.run.Publication.Refs[0].ID != "abc" {
+		t.Fatalf("stored receipt changed with caller mutation: %+v", st.run.Publication)
+	}
 
 	// Legacy clients can replay without a receipt, but cannot erase it.
 	input.Publication = nil
 	_, err = svc.SubmitMany(t.Context(), "worker", []SubmittedReview{input})
-	require.NoError(t, err)
-	assert.NotNil(t, st.run.Publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.run.Publication == nil {
+		t.Error("omitted replay erased the stored receipt")
+	}
 }
 
 func TestSubmitMixedProviderReceiptsPreserveLegacyGitHubID(t *testing.T) {
@@ -128,11 +171,21 @@ func TestSubmitMixedProviderReceiptsPreserveLegacyGitHubID(t *testing.T) {
 		{RunID: "gl", Verdict: domain.VerdictApproved, Publication: &domain.ReviewPublication{Provider: "gitlab", Status: "published", PRURL: st.batchRuns[2].PRURL, TargetSHA: "gl-head", Refs: []domain.ReviewPublicationRef{{Kind: "note", ID: "123"}}}},
 	})
 
-	require.NoError(t, err)
-	require.Len(t, runs, 2)
-	assert.Equal(t, "123", runs[0].GithubReviewID)
-	assert.Empty(t, runs[1].GithubReviewID)
-	assert.Equal(t, []string{runs[0].PRURL, runs[1].PRURL}, refresh.prURLs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %+v, want two current results", runs)
+	}
+	if runs[0].GithubReviewID != "123" {
+		t.Errorf("GitHub review ID = %q, want 123", runs[0].GithubReviewID)
+	}
+	if runs[1].GithubReviewID != "" {
+		t.Errorf("GitLab review ID = %q, want empty", runs[1].GithubReviewID)
+	}
+	if want := []string{runs[0].PRURL, runs[1].PRURL}; !reflect.DeepEqual(want, refresh.prURLs) {
+		t.Errorf("refresh targets = %v, want %v", refresh.prURLs, want)
+	}
 }
 
 func TestSubmitDeliveredPublicationDoesNotRewriteResult(t *testing.T) {
@@ -143,9 +196,15 @@ func TestSubmitDeliveredPublicationDoesNotRewriteResult(t *testing.T) {
 
 	result, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{{RunID: "run", Verdict: domain.VerdictChangesRequested, Body: "late result", Publication: &domain.ReviewPublication{Status: "invalid"}}})
 
-	require.NoError(t, err)
-	assert.Equal(t, []domain.ReviewRun{stored}, result)
-	assert.Zero(t, st.updateCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual([]domain.ReviewRun{stored}, result) {
+		t.Errorf("delivered result = %+v, want %+v", result, stored)
+	}
+	if st.updateCalls != 0 {
+		t.Errorf("result updates = %d, want zero", st.updateCalls)
+	}
 }
 
 func TestSubmitRejectsContradictoryGitHubReceipt(t *testing.T) {
@@ -160,8 +219,12 @@ func TestSubmitRejectsContradictoryGitHubReceipt(t *testing.T) {
 
 			_, err := svc.SubmitMany(t.Context(), "worker", []SubmittedReview{{RunID: "run", Verdict: domain.VerdictApproved, GithubReviewID: tc.id, Publication: &domain.ReviewPublication{Provider: "github", Status: tc.status, PRURL: st.run.PRURL, TargetSHA: "head", Error: tc.reason, Refs: []domain.ReviewPublicationRef{{Kind: "review", ID: "123"}}}}})
 
-			require.ErrorIs(t, err, ErrInvalid)
-			assert.Zero(t, st.updateCalls)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("submit error = %v, want ErrInvalid", err)
+			}
+			if st.updateCalls != 0 {
+				t.Errorf("result updates = %d, want zero", st.updateCalls)
+			}
 		})
 	}
 }

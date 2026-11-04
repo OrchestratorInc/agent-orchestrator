@@ -2,11 +2,9 @@ package store_test
 
 import (
 	"cmp"
+	"reflect"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -30,51 +28,107 @@ func TestReviewPublicationRoundTrip(t *testing.T) {
 			runURL := cmp.Or(tc.runURL, target)
 			s := newTestStore(t)
 			now := time.Now().UTC().Truncate(time.Second)
-			require.NoError(t, s.UpsertProject(t.Context(), domain.ProjectRecord{ID: "mer", Path: t.TempDir(), RegisteredAt: now}))
+			seedProject(t, s, "mer")
 			session, err := s.CreateSession(t.Context(), sampleRecord("mer"))
-			require.NoError(t, err)
-			require.NoError(t, s.UpsertReview(t.Context(), domain.Review{ID: "review", SessionID: session.ID, ProjectID: "mer", Harness: "claude-code", PRURL: runURL, CreatedAt: now, UpdatedAt: now}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.UpsertReview(t.Context(), domain.Review{ID: "review", SessionID: session.ID, ProjectID: "mer", Harness: "claude-code", PRURL: runURL, CreatedAt: now, UpdatedAt: now}); err != nil {
+				t.Fatalf("seed review: %v", err)
+			}
 			running := domain.ReviewRun{ID: "run", ReviewID: "review", SessionID: session.ID, BatchID: "batch", Harness: "claude-code", PRURL: runURL, TargetSHA: "head", Status: domain.ReviewRunRunning, CreatedAt: now}
 			running.Publication = tc.publication
-			require.NoError(t, s.InsertReviewRun(t.Context(), running))
+			if err := s.InsertReviewRun(t.Context(), running); err != nil {
+				t.Fatalf("insert running review: %v", err)
+			}
 			pending, err := s.ListRunningReviewRunsBySession(t.Context(), session.ID)
-			require.NoError(t, err)
-			require.Len(t, pending, 1)
-			assert.Equal(t, tc.publication, pending[0].Publication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pending) != 1 {
+				t.Fatalf("running reviews = %+v, want one", pending)
+			}
+			if !reflect.DeepEqual(tc.publication, pending[0].Publication) {
+				t.Errorf("running publication = %+v, want %+v", pending[0].Publication, tc.publication)
+			}
 
 			updated, err := s.UpdateReviewRunResult(t.Context(), "run", domain.ReviewRunComplete, domain.VerdictChangesRequested, "Fix main.go", tc.githubID, false, tc.publication)
 
-			require.NoError(t, err)
-			require.True(t, updated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !updated {
+				t.Fatal("first result did not update the running review")
+			}
 			run, found, err := s.GetReviewRun(t.Context(), "run")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, tc.publication, run.Publication)
-			assert.Equal(t, tc.githubID, run.GithubReviewID)
-			assert.False(t, run.AutoInjectReview)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				t.Fatal("review run not found")
+			}
+			if !reflect.DeepEqual(tc.publication, run.Publication) {
+				t.Errorf("publication = %+v, want %+v", run.Publication, tc.publication)
+			}
+			if run.GithubReviewID != tc.githubID {
+				t.Errorf("GitHub review ID = %q, want %q", run.GithubReviewID, tc.githubID)
+			}
+			if run.AutoInjectReview {
+				t.Error("stored result did not snapshot the disabled policy")
+			}
 			byTarget, found, err := s.GetReviewRunBySessionPRAndSHA(t.Context(), session.ID, runURL, "head")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, run, byTarget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				t.Fatal("review run not found")
+			}
+			if !reflect.DeepEqual(run, byTarget) {
+				t.Errorf("target lookup = %+v, want %+v", byTarget, run)
+			}
 			byHarness, found, err := s.GetReviewRunBySessionPRSHAAndHarness(t.Context(), session.ID, runURL, "head", "claude-code")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, run, byHarness)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				t.Fatal("review run not found")
+			}
+			if !reflect.DeepEqual(run, byHarness) {
+				t.Errorf("harness lookup = %+v, want %+v", byHarness, run)
+			}
 			batch, err := s.ListReviewRunsByBatch(t.Context(), session.ID, "batch")
-			require.NoError(t, err)
-			assert.Equal(t, []domain.ReviewRun{run}, batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual([]domain.ReviewRun{run}, batch) {
+				t.Errorf("batch reviews = %+v, want %+v", batch, run)
+			}
 			runs, err := s.ListReviewRunsBySession(t.Context(), session.ID)
-			require.NoError(t, err)
-			assert.Equal(t, batch, runs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(batch, runs) {
+				t.Errorf("session reviews = %+v, want %+v", runs, batch)
+			}
 
 			updated, err = s.UpdateReviewRunResult(t.Context(), "run", domain.ReviewRunComplete, domain.VerdictApproved, "replacement", "other", true)
 
-			require.NoError(t, err)
-			assert.False(t, updated)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated {
+				t.Error("completed result was replaced")
+			}
 			unchanged, found, err := s.GetReviewRun(t.Context(), "run")
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, run, unchanged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				t.Fatal("review run not found")
+			}
+			if !reflect.DeepEqual(run, unchanged) {
+				t.Errorf("completed result changed: got %+v, want %+v", unchanged, run)
+			}
 		})
 	}
 }
