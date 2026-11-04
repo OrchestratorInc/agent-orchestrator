@@ -1079,19 +1079,15 @@ export function HumanMessage({
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<button
-										type="button"
-										onClick={onEditStart}
-										aria-label="Edit user message"
-										className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-									>
-										<Pencil aria-hidden="true" className="size-3" />
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">Edit user message</TooltipContent>
-							</Tooltip>
+							<button
+								type="button"
+								onClick={onEditStart}
+								aria-label="Edit user message"
+								className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
+							>
+								<Pencil aria-hidden="true" className="size-3" />
+							</button>
+						
 						) : null}
 						<CopyButton
 							text={visibleMessageText}

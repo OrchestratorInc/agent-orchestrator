@@ -1023,7 +1023,7 @@ export function Sidebar({
 							<PanelLeft aria-hidden="true" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="right">
+					<TooltipContent shortcut="toggle-sidebar" side="right">
 						{isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
 					</TooltipContent>
 				</Tooltip>
@@ -1377,7 +1377,7 @@ export function Sidebar({
 								</span>
 							</button>
 						</TooltipTrigger>
-						<TooltipContent side="right">{t("shell.settings")}</TooltipContent>
+						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
 					</Tooltip>
 				</div>
 				</>
@@ -2738,9 +2738,7 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				{session.cloud?.shared ? null : <Tooltip>
-					<TooltipTrigger asChild>
-						<button
+				{session.cloud?.shared ? null : <button
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 							className={cn(
 								SESSION_ACTION_CLASS,
@@ -2754,12 +2752,7 @@ const SessionActions = memo(function SessionActions({
 							type="button"
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent side="top">
-						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-					</TooltipContent>
-				</Tooltip>}
+						</button>}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">

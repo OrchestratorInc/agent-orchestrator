@@ -50,7 +50,7 @@ import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
@@ -1079,34 +1079,30 @@ const NotificationItem = memo(function NotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<button
+						aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
+						title=""
+						className={cn(
+							"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						type="button"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</button>
+				
 					</div>
 				</div>
 			</div>
@@ -1250,34 +1246,30 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: notification.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<button
+						aria-label={t("notify.clearOne", { title: notification.title })}
+						title=""
+						className={cn(
+							"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						type="button"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</button>
+				
 					</div>
 				</div>
 			</div>
