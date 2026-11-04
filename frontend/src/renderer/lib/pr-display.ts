@@ -87,6 +87,11 @@ function canonicalKey(url: string, number: number): string {
 	return canonicalURL(url) || `number:${number}`;
 }
 
+/** The key that tells two observations of one pull request apart from others. */
+export function prDisplayKey(pr: { url: string; number: number }): string {
+	return canonicalKey(pr.url, pr.number);
+}
+
 function canonicalURL(rawUrl: string): string | undefined {
 	return prURL({ url: rawUrl, htmlUrl: rawUrl, mergeability: { prUrl: rawUrl } } as SessionPRSummary);
 }

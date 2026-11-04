@@ -15,6 +15,7 @@ import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
+import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
@@ -1440,6 +1441,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<NotificationRuntime />
 				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
+				<SharedWithYouNotifier />
 				{isDragActive ? (
 					<div
 						aria-hidden="true"
