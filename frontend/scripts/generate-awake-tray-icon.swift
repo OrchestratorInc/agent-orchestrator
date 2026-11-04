@@ -10,7 +10,7 @@ let height = 20.0
 let mascotMaxWidth = 18.0
 let mascotMaxHeight = 16.0
 let mascotLeft = 2.0
-let cupSize = 16.0
+let cupSize = 13.0
 let gap = 3.0
 
 let source = NSImage(contentsOf: assets.appendingPathComponent("ao-mascot.png"))!
