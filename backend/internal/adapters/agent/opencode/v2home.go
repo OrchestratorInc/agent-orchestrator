@@ -131,6 +131,10 @@ func v1HomebrewCandidates() []string { return homebrewOptBinaries("opencode") }
 
 var v2DataMigrationLock = make(chan struct{}, 1)
 
+// walkLegacyData is a seam over filepath.Walk so tests can reproduce a legacy
+// store that OpenCode prunes while the migration is still copying it.
+var walkLegacyData = filepath.Walk
+
 // PrepareV2DataHome returns the isolated OpenCode 2 data home after copying a
 // pre-isolation OpenCode store into it once. The legacy store is left intact
 // for OpenCode 1; an existing isolated store is never overwritten.
@@ -193,20 +197,29 @@ func PrepareV2DataHome(ctx context.Context) (string, error) {
 // into; the migration leaves it behind.
 const legacyToolCacheDir = "bin"
 
+// copyTree copies the legacy data store. Entries that disappear while the
+// walk is in progress are skipped: OpenCode prunes its own shell-session files
+// concurrently, and a stale reference must not abort the whole migration.
 func copyTree(ctx context.Context, source, destination string) error {
 	sourceRoot, err := os.OpenRoot(source)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	destinationRoot, err := os.OpenRoot(destination)
 	if err != nil {
 		return errors.Join(err, sourceRoot.Close())
 	}
-	walkErr := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+	walkErr := walkLegacyData(source, func(path string, info os.FileInfo, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
 			return walkErr
 		}
 		relative, err := filepath.Rel(source, path)
@@ -221,7 +234,10 @@ func copyTree(ctx context.Context, source, destination string) error {
 			if relative == legacyToolCacheDir {
 				return filepath.SkipDir
 			}
-			return destinationRoot.Mkdir(relative, info.Mode().Perm())
+			if err := destinationRoot.Mkdir(relative, info.Mode().Perm()); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
 		}
 		if relative == "opencode.db" || relative == "opencode.db-wal" || relative == "opencode.db-shm" || relative == "opencode.db-journal" {
 			return nil
@@ -231,11 +247,17 @@ func copyTree(ctx context.Context, source, destination string) error {
 		}
 		input, err := sourceRoot.Open(relative)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		output, err := destinationRoot.OpenFile(relative, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
 		if err != nil {
 			_ = input.Close()
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		copyErr := copyFileContext(ctx, output, input)

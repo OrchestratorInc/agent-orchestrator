@@ -203,6 +203,59 @@ func TestCopyTreeStopsOnCancel(t *testing.T) {
 	}
 }
 
+func TestCopyTreeToleratesVanishedLegacyStore(t *testing.T) {
+	// OpenCode may prune its shell-session store between the migration's
+	// existence check and the walk. That must not fail the whole migration.
+	source := filepath.Join(t.TempDir(), "opencode")
+	destination := t.TempDir()
+
+	if err := copyTree(context.Background(), source, destination); err != nil {
+		t.Fatalf("copyTree error = %v, want vanished legacy store to be skipped", err)
+	}
+}
+
+func TestCopyTreeToleratesEntryVanishedBeforeCopy(t *testing.T) {
+	source, destination := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "auth.json"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce OpenCode pruning a shell-session directory after its entries
+	// have been read but before they are lstat'ed, which is the reported
+	// `lstat ... sh_*.out: no such file or directory` failure from #7714.
+	shellSession := "9b29c8a3ea477dcfbde51766b401cd337ce370e8"
+	staleDir := filepath.Join(source, "shell", shellSession)
+	if err := os.MkdirAll(staleDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, "sh_1a52baa1f003.out"), []byte("output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalWalk := walkLegacyData
+	t.Cleanup(func() { walkLegacyData = originalWalk })
+	pruned := false
+	walkLegacyData = func(root string, walkFn filepath.WalkFunc) error {
+		return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if !pruned && err == nil && info != nil && info.IsDir() && info.Name() == shellSession {
+				pruned = true
+				if err := os.RemoveAll(path); err != nil {
+					return err
+				}
+			}
+			return walkFn(path, info, err)
+		})
+	}
+
+	if err := copyTree(context.Background(), source, destination); err != nil {
+		t.Fatalf("copyTree error = %v, want pruned legacy entry to be skipped", err)
+	}
+	if !pruned {
+		t.Fatal("test did not prune the legacy shell session during the walk")
+	}
+	if _, err := os.Stat(filepath.Join(destination, "auth.json")); err != nil {
+		t.Fatalf("copyTree dropped a surviving entry: %v", err)
+	}
+}
+
 func TestSnapshotSQLiteDatabasePreservesDeadline(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "opencode.db")
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(source))
