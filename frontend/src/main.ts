@@ -180,6 +180,8 @@ import {
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
 import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
+import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
+import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
@@ -837,6 +839,12 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	await repairBrowserProfileCookies({
+		stateDir: browserProfileStateDir(),
+		profileIds: browserProfileStore.profiles.map((profile) => profile.id),
+		fromProfile: (profileId) => session.fromPartition(browserProfilePartition(profileId)),
+		log: (message) => console.info(message),
+	});
 	const browserHistoryStore = new BrowserHistoryStore({ stateDir: browserProfileStateDir() });
 	const profileImporter = new BrowserProfileImportService({
 		stateDir: browserProfileStateDir(),
