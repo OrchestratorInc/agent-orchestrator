@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -313,4 +314,21 @@ func fetchedNumbers(batches [][]ports.SCMPRRef) map[int]bool {
 		}
 	}
 	return m
+}
+
+func TestResolveIdentitiesSeparatesGHECloudTenant(t *testing.T) {
+	com := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "o", Name: "r", Repo: "o/r"}
+	tenant := ports.SCMRepo{Provider: "github", Host: "acme.ghe.com", Owner: "team", Name: "app", Repo: "team/app"}
+	r := &fakeScopedIdentityResolver{identities: map[string]ports.SCMIdentity{
+		identityKey("github", "github.com"):   {Login: "octocat", Human: true},
+		identityKey("github", "acme.ghe.com"): {Login: "octocat_acme", Human: true},
+	}}
+	o := &Observer{scopedIdentityResolver: r, logger: slog.New(slog.DiscardHandler)}
+	got := o.resolveIdentities(context.Background(), []sessionRepo{{repo: tenant}, {repo: com}})
+	if got[identityKey("github", "github.com")].Login != "octocat" || got[identityKey("github", "acme.ghe.com")].Login != "octocat_acme" {
+		t.Fatalf("identities = %+v, want one login per GitHub host", got)
+	}
+	if cooldownKey(com) == cooldownKey(tenant) || cooldownKey(com) != "github" {
+		t.Fatalf("cooldown keys %q / %q: tenant must not share github.com's quota", cooldownKey(com), cooldownKey(tenant))
+	}
 }

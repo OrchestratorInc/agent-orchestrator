@@ -28,7 +28,11 @@ func (p *Provider) RequestReview(ctx context.Context, request ports.SCMReviewReq
 	payload := struct {
 		Reviewers []string `json:"reviewers"`
 	}{Reviewers: []string{reviewer}}
-	resp, err := p.client.doREST(ctx, http.MethodPost,
+	c, err := p.clientFor(request.PR.Repo.Host)
+	if err != nil {
+		return err
+	}
+	resp, err := c.doREST(ctx, http.MethodPost,
 		repoPath(request.PR.Repo.Owner, request.PR.Repo.Name, "pulls", strconv.Itoa(request.PR.Number), "requested_reviewers"),
 		nil, payload)
 	if err != nil {

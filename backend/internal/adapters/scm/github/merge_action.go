@@ -37,7 +37,11 @@ func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeR
 		SHA         string `json:"sha"`
 		MergeMethod string `json:"merge_method"`
 	}{SHA: expectedHead, MergeMethod: string(request.Method)}
-	resp, err := p.client.doREST(ctx, http.MethodPut,
+	c, err := p.clientFor(request.PR.Repo.Host)
+	if err != nil {
+		return ports.SCMMergeResult{}, err
+	}
+	resp, err := c.doREST(ctx, http.MethodPut,
 		repoPath(request.PR.Repo.Owner, request.PR.Repo.Name, "pulls", strconv.Itoa(request.PR.Number), "merge"),
 		nil, payload)
 	if err != nil {
