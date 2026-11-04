@@ -2,17 +2,73 @@
 package pricing
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 // CanonicalProviderID normalizes a reported provider for exact catalog lookup.
+// The catalog names providers as LiteLLM does; a harness that spells the same
+// billing account another way is mapped onto that name.
 func CanonicalProviderID(raw string) string {
 	providerID := strings.ToLower(strings.TrimSpace(raw))
-	if providerID == "z.ai" {
-		return "zai"
+	if alias, ok := providerAliases[providerID]; ok {
+		return alias
 	}
 	return providerID
+}
+
+// providerAliases maps the names harnesses use for a provider onto the
+// catalog's. An alias is the same account under another spelling, never a
+// sibling: a regional or plan-priced endpoint (minimax-cn, zai-coding-cn,
+// moonshotai-cn) bills at rates the catalog does not carry, so it stays
+// unpriced instead of borrowing its parent's list rate.
+var providerAliases = map[string]string{
+	"z.ai":                   "zai",
+	"google":                 "gemini",
+	"google-gemini":          "gemini",
+	"google_gemini":          "gemini",
+	"google-vertex":          "vertex_ai",
+	"google_vertex":          "vertex_ai",
+	"vertex":                 "vertex_ai",
+	"vertex-ai":              "vertex_ai",
+	"vertexai":               "vertex_ai",
+	"amazon-bedrock":         "bedrock",
+	"amazon_bedrock":         "bedrock",
+	"aws-bedrock":            "bedrock",
+	"bedrock_converse":       "bedrock",
+	"azure-openai":           "azure",
+	"azure_openai":           "azure",
+	"azure-openai-responses": "azure",
+	"github-copilot":         "github_copilot",
+	"copilot":                "github_copilot",
+	"vercel-ai-gateway":      "vercel_ai_gateway",
+	"fireworks":              "fireworks_ai",
+	"together":               "together_ai",
+	"togetherai":             "together_ai",
+	"moonshotai":             "moonshot",
+	"mistralai":              "mistral",
+	"x-ai":                   "xai",
+	"opencode-go":            "opencode_go",
+	"xiaomi":                 "xiaomi_mimo",
+	"cloudflare-workers-ai":  "cloudflare",
+	"cohere":                 "cohere_chat",
+	"friendli":               "friendliai",
+	"lambda":                 "lambda_ai",
+}
+
+// RequiredProviderIDs are the providers every catalog must price. A catalog
+// missing one is a broken build of the upstream table, not a smaller one.
+// They are also the whole of the catalog committed to the repository: releases
+// that read that copy accept exactly these three.
+var RequiredProviderIDs = []string{"anthropic", "openai", "zai"}
+
+var providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// ValidProviderID reports whether id can name a catalog provider: it is also a
+// path segment of the provider's blob.
+func ValidProviderID(id string) bool {
+	return len(id) <= 64 && providerIDPattern.MatchString(id)
 }
 
 // UnidentifiedBillingRoute marks a Claude route the hook saw and could not

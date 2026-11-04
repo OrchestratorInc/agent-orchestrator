@@ -1955,6 +1955,35 @@ func TestPiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestQwenUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessQwen)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "qwen-session", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceQwenMonthly,
+		NativeSessionID: "qwen-session", ArtifactPath: "/tmp/qwen/token-usage-2026-08.jsonl",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	event := usageEvent("qwen-event", canonicalUsageTokens(30, 9, 21, 16))
+	event.ModelID = "qwen3-coder"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}); err != nil {
+		t.Fatalf("apply Qwen usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 1 || models[0].Harness != domain.HarnessQwen ||
+		models[0].ModelID != "qwen3-coder" ||
+		usageTokenValue(models[0].Tokens.InputTokens) != 30 ||
+		usageTokenValue(models[0].Tokens.OutputTokens) != 16 {
+		t.Fatalf("Qwen aggregate = %+v", models)
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"
@@ -2297,5 +2326,28 @@ WHERE source_event_key = 'provider-promotion'`).Scan(
 	mustNoError(t, err, "check promoted attribution")
 	if open {
 		t.Fatal("observed replacement remains open for attribution repair")
+	}
+}
+
+// TestUsageStoreRejectsUnknownHarnessAndKind covers the store guard that
+// replaced the schema's enumerated harness and source-kind CHECK lists.
+func TestUsageStoreRejectsUnknownHarnessAndKind(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessCodex)
+	if _, err := s.UpsertUsageBinding(context.Background(), domain.UsageBindingRecord{
+		SessionID: session.ID, Harness: domain.AgentHarness("not-a-harness"),
+		NativeRootID: "native", State: domain.UsageBindingActive, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("UpsertUsageBinding accepted an unknown harness")
+	}
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "native", State: domain.UsageBindingActive,
+	})
+	if _, err := s.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceKind("not_a_kind"),
+		ArtifactPath: "/tmp/unknown.jsonl", State: domain.UsageSourcePending, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("InsertUsageSource accepted an unknown source kind")
 	}
 }
