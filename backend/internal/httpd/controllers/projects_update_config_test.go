@@ -8,6 +8,47 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
+func TestProjectsAPI_UpdateConfigRejectsInvalidDefaultBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "dry run", body: `{"defaultBranch":"bad..name","dryRun":true}`},
+		{name: "write", body: `{"defaultBranch":"bad..name"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(t)
+			repo := gitRepo(t, "update-config-invalid-branch")
+			body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/projects", `{"path":`+quote(repo)+`,"projectId":"update-config-invalid-branch","config":{"defaultBranch":"main"}}`)
+			if status != http.StatusCreated {
+				t.Fatalf("seed project = %d, want 201; body=%s", status, body)
+			}
+
+			path := "/api/v1/projects/update-config-invalid-branch"
+			body, status, _ = doRequest(t, srv, http.MethodPatch, path+"/config", tc.body)
+			if status != http.StatusBadRequest {
+				t.Errorf("invalid branch patch = %d, want 400; body=%s", status, body)
+			} else {
+				assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_PROJECT_CONFIG")
+			}
+
+			body, status, _ = doRequest(t, srv, http.MethodGet, path, "")
+			if status != http.StatusOK {
+				t.Fatalf("get project = %d, want 200; body=%s", status, body)
+			}
+			var got struct {
+				Project struct {
+					Config *domain.ProjectConfig `json:"config"`
+				} `json:"project"`
+			}
+			mustJSON(t, body, &got)
+			if got.Project.Config == nil || got.Project.Config.DefaultBranch != "main" {
+				t.Fatalf("invalid branch patch changed saved config: %s", body)
+			}
+		})
+	}
+}
+
 func TestProjectsAPI_UpdateConfigNullAndEmptyString(t *testing.T) {
 	srv := newTestServer(t)
 	repo := gitRepo(t, "update-config-null")

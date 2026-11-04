@@ -211,6 +211,9 @@ func (c ProjectConfig) IsZero() bool {
 // Validate rejects values outside the typed vocabulary so a bad config is
 // refused when it is set (CLI/API) rather than surfacing at spawn.
 func (c ProjectConfig) Validate() error {
+	if !validDefaultBranch(c.DefaultBranch) {
+		return fmt.Errorf("defaultBranch: invalid Git branch name")
+	}
 	if c.CanonicalRepoURL != "" {
 		if err := c.ValidateCanonicalRepository(c.CanonicalRepoURL); err != nil {
 			return err
@@ -264,6 +267,27 @@ func (c ProjectConfig) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func validDefaultBranch(branch string) bool {
+	if branch == "" {
+		return true
+	}
+	if branch == "HEAD" || strings.HasPrefix(branch, "-") || strings.HasSuffix(branch, ".") ||
+		strings.Contains(branch, "..") || strings.Contains(branch, "@{") || strings.ContainsAny(branch, `~^:?*[\`) {
+		return false
+	}
+	for _, component := range strings.Split(branch, "/") {
+		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	for _, char := range branch {
+		if char <= ' ' || char == '\x7f' {
+			return false
+		}
+	}
+	return true
 }
 
 func validEnvName(name string) bool {

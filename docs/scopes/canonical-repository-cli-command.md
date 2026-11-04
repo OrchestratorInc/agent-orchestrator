@@ -97,11 +97,10 @@ Recommended request:
 }
 ```
 
-For clearing a supported field, send its explicit null value. The response should use the same change-list shape for every field, for example:
+To clear either supported field, send an empty string. An omitted field or explicit `null` leaves the current value unchanged. The response should use the same change-list shape for every field, for example:
 
 ```json
 {
-  "project": { "id": "agent-orchestrator", "repo": "https://github.com/Untrivial-ai/agent-orchestrator.git", "config": { "canonicalRepoURL": "https://github.com/OrchestratorInc/agent-orchestrator" } },
   "dryRun": false,
   "changes": [
     { "path": "config.canonicalRepoURL", "from": "https://github.com/Untrivial-ai/agent-orchestrator", "to": "https://github.com/OrchestratorInc/agent-orchestrator" },
