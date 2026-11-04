@@ -127,6 +127,13 @@ type conversation struct {
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
 	permissionMode    ports.PermissionMode
+	// pendingMode holds a session mode the agent refused to apply mid-turn
+	// (see isACPModeBusyRejection), with the approval it maps to. It is
+	// retried when the session goes idle instead of failing the settings
+	// application — most commonly on a resume that reattaches to a
+	// still-running conversation.
+	pendingMode       string
+	pendingApproval   ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
 	validateSettings  TurnSettingsValidator
@@ -633,6 +640,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		}
 	}
 	effectiveApproval := settings.Approval
+	modeDeferred := false
 	if modeFor != nil {
 		if mode := modeFor(settings.Approval); mode != "" {
 			// Some ACP agents rebuild their permission modes after a model switch.
@@ -653,7 +661,18 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_mode %q", ErrACPSetterUnsupported, mode)
 				}
-				return fmt.Errorf("set ACP session mode %q: %w", mode, err)
+				if !isACPModeBusyRejection(err) {
+					return fmt.Errorf("set ACP session mode %q: %w", mode, err)
+				}
+				// The agent is mid-turn (typically a resume that reattached to a
+				// still-running conversation). ACP forbids mode changes until the
+				// session is idle, so defer instead of failing the whole settings
+				// application; the pending mode is retried when the turn releases.
+				c.mu.Lock()
+				c.pendingMode = mode
+				c.pendingApproval = effectiveApproval
+				c.mu.Unlock()
+				modeDeferred = true
 			}
 		}
 	}
@@ -664,12 +683,54 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 	}
-	if settings.Approval != "" {
+	if settings.Approval != "" && !modeDeferred {
 		c.mu.Lock()
 		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
 		c.mu.Unlock()
 	}
 	return nil
+}
+
+// applyPendingMode retries a session mode the agent refused mid-turn. It runs
+// once the active turn releases and the session is idle again; a repeated busy
+// answer leaves the mode pending for the next idle transition. Any other
+// failure is dropped here: the next settings application reports it in context.
+func (c *conversation) applyPendingMode() {
+	c.mu.Lock()
+	mode := c.pendingMode
+	sessionID := c.sessionID
+	approval := c.pendingApproval
+	c.mu.Unlock()
+	if mode == "" || sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if _, err := c.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{
+		SessionId: acpsdk.SessionId(sessionID), ModeId: acpsdk.SessionModeId(mode),
+	}); err != nil {
+		if !isACPModeBusyRejection(err) {
+			c.mu.Lock()
+			c.pendingMode = ""
+			c.pendingApproval = ""
+			c.mu.Unlock()
+			c.log.Info("chat: ACP deferred session mode set failed",
+				"mode", mode, "error", err)
+			return
+		}
+		// Still busy; the next idle transition retries.
+		return
+	}
+	c.mu.Lock()
+	if c.pendingMode == mode {
+		c.pendingMode = ""
+		c.pendingApproval = ""
+		if approval != "" {
+			c.permissionMode = ports.NormalizePermissionMode(approval)
+		}
+	}
+	c.mu.Unlock()
+	c.log.Info("chat: ACP deferred session mode applied", "mode", mode)
 }
 
 // applySessionOptions sets config options that are fixed for the whole session
@@ -997,6 +1058,14 @@ func (c *conversation) finishPrompt(
 	}
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
+	// The session just went idle. If a mode set was deferred mid-turn (a resume
+	// that reattached to this running conversation), it lands now.
+	c.mu.Lock()
+	pendingMode := c.pendingMode
+	c.mu.Unlock()
+	if pendingMode != "" {
+		go c.applyPendingMode()
+	}
 }
 
 func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {

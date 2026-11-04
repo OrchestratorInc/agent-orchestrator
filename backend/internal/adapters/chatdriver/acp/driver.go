@@ -1097,6 +1097,22 @@ func isACPMethodNotFound(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32601
 }
 
+// isACPModeBusyRejection reports whether err is an ACP agent's refusal of a
+// session/set_mode issued while a turn is still in flight. ACP forbids mode
+// changes until the session is idle; agents answer -32603 and ask the caller
+// to retry after the turn. Resume that reattaches to a still-running
+// conversation hits this on its initial settings application, so the desired
+// mode is deferred (conversation.pendingMode) and retried when the session
+// goes idle instead of failing the whole resume.
+func isACPModeBusyRejection(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(requestErr.Message),
+		"mode changes apply when the session is idle")
+}
+
 func isACPInvalidParams(err error) bool {
 	var requestErr *acpsdk.RequestError
 	return errors.As(err, &requestErr) && requestErr.Code == -32602

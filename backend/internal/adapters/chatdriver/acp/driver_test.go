@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -815,6 +816,10 @@ type fakeAgent struct {
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
+	// busyWhilePrompting answers SetSessionMode with ACP's mid-turn rejection
+	// ("Mode changes apply when the session is idle") while any prompt runs.
+	busyWhilePrompting  bool
+	promptsInFlight     atomic.Int32
 	modeRequiresOption  SessionOption
 	configNotFound      bool // SetSessionConfigOption returns -32601
 	configErr           error
@@ -1163,11 +1168,19 @@ func (a *fakeAgent) SetSessionMode(_ context.Context, params acpsdk.SetSessionMo
 		a.mu.Unlock()
 		return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound("session/set_mode")
 	}
+	if a.busyWhilePrompting && a.promptsInFlight.Load() > 0 {
+		a.mu.Unlock()
+		return acpsdk.SetSessionModeResponse{}, &acpsdk.RequestError{
+			Code: -32603, Message: "Mode changes apply when the session is idle; try again after this turn.",
+		}
+	}
 	a.mode = string(params.ModeId)
 	a.mu.Unlock()
 	return acpsdk.SetSessionModeResponse{}, nil
 }
 func (a *fakeAgent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+	a.promptsInFlight.Add(1)
+	defer a.promptsInFlight.Add(-1)
 	a.mu.Lock()
 	a.promptParams = params
 	promptNoPermission := a.promptNoPermission
@@ -5448,6 +5461,115 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	defer agent.mu.Unlock()
 	if agent.options["agent"] != "ao-sess1" {
 		t.Errorf("after Resume: agent option = %q, want ao-sess1", agent.options["agent"])
+	}
+}
+
+// A resume that reattaches while the provider session is still mid-turn must
+// not fail: ACP agents refuse session/set_mode while busy ("Mode changes apply
+// when the session is idle; try again after this turn."), so the driver defers
+// the desired mode and applies it once the session is idle again instead of
+// failing the whole resume with 409.
+func TestACPDriverResumeDuringActiveTurnDefersModeSet(t *testing.T) {
+	agent := &fakeAgent{
+		promptBlock:        true,
+		promptStarted:      make(chan struct{}, 2),
+		busyWhilePrompting: true,
+	}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true,
+			ports.ChatCapabilityResume: true,
+		},
+		Probe:       func(context.Context) error { return nil },
+		Launch:      func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionMode: func(ports.PermissionMode) string { return "dont_ask" },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	// The original controller's conversation, with a turn that never finishes.
+	first, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer first.Close()
+	go func() {
+		for range first.Events() { //nolint:revive // drain so lifecycle emits never block
+		}
+	}()
+	_ = nextEvent(t, first.Events()) // controller ready from session setup
+
+	ref, err := first.SendTurn(context.Background(), ports.ChatUserMessage{
+		Text:     "long-running turn",
+		Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions},
+	})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := first.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-agent.promptStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first prompt did not start")
+	}
+
+	// A replacement controller resumes the same provider session while the
+	// turn above is still in flight. This must succeed.
+	resumed, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID:              domain.SessionID("sess1"),
+		WorkspacePath:          t.TempDir(),
+		ProviderConversationID: "claude-session-1",
+		Permissions:            ports.PermissionModeBypassPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Resume while a provider turn is active: %v", err)
+	}
+	defer resumed.Close()
+	go func() {
+		for range resumed.Events() { //nolint:revive // drain so lifecycle emits never block
+		}
+	}()
+
+	// The deferred mode set lands on the agent once the session is idle. The
+	// resumed conversation re-applies its settings at its next turn start, and
+	// the pending retry fires when that turn releases.
+	resumedRef, err := resumed.SendTurn(context.Background(), ports.ChatUserMessage{
+		Text:     "after resume",
+		Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions},
+	})
+	if err != nil {
+		t.Fatalf("SendTurn after resume: %v", err)
+	}
+	if err := resumed.(ports.ChatDeferredTurnStarter).StartDeferredTurn(resumedRef.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn after resume: %v", err)
+	}
+	select {
+	case <-agent.promptStarted:
+	case <-time.After(time.Second):
+		t.Fatal("resumed conversation's prompt did not start")
+	}
+	if err := first.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt first conversation: %v", err)
+	}
+	if err := resumed.Interrupt(context.Background(), resumedRef.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt resumed conversation: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		agent.mu.Lock()
+		mode := agent.mode
+		agent.mu.Unlock()
+		if mode == "dont_ask" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent mode = %q after the session went idle, want dont_ask", mode)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
