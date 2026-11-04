@@ -2775,7 +2775,7 @@ const SessionActions = memo(function SessionActions({
 							/>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent shortcut="archive-session" side="top">{t("shell.archiveSession")}</TooltipContent>
+					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
 				</Tooltip>
 			</div>
 			<SessionMessageAge session={session} />
