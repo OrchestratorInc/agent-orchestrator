@@ -98,7 +98,9 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 	const [access, setAccess] = useState<ShareAccess>("viewer");
 	const [modeCap, setModeCap] = useState<ShareModeCap>("standard");
 	const [expiry, setExpiry] = useState<ShareExpiry>("168");
-	const [created, setCreated] = useState<string>();
+	// The link just created: its id, so revoking it takes its URL off screen.
+	const [createdLink, setCreatedLink] = useState<{ id: string; url: string }>();
+	const created = createdLink?.url;
 	const [copied, setCopied] = useState(false);
 	const linksKey = shareLinksQueryKey(baseUrl, orgId, projectId);
 	const links = useActiveShareLinks({ orgId, projectId, sessionId, scope, enabled: open });
@@ -107,10 +109,10 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
 			const url = createdShareLinkUrl(baseUrl, orgId, link);
 			if (!url) throw new Error(t("share.noToken"));
-			return url;
+			return { id: link.id, url };
 		},
-		onSuccess: (url) => {
-			setCreated(url);
+		onSuccess: (link) => {
+			setCreatedLink(link);
 			setCopied(false);
 			setComposing(false);
 			void queryClient.invalidateQueries({ queryKey: linksKey });
@@ -118,6 +120,10 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 	});
 	const revoke = useMutation({
 		mutationFn: (linkId: string) => client.revokeShareLink(orgId, projectId, linkId),
+		onSuccess: (_result, linkId) => {
+			// Its one-time URL no longer opens anything.
+			setCreatedLink((current) => (current?.id === linkId ? undefined : current));
+		},
 		onSettled: () => void queryClient.invalidateQueries({ queryKey: linksKey }),
 	});
 	const copy = async () => {
@@ -210,7 +216,7 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 						className="-ml-2.5 gap-1.5"
 						onClick={() => {
 							setComposing(true);
-							setCreated(undefined);
+							setCreatedLink(undefined);
 						}}
 						data-share-create-link=""
 					>

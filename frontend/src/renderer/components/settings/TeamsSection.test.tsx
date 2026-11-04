@@ -280,7 +280,52 @@ describe("TeamsSection", () => {
 		// You don't remove yourself from here; you leave.
 		expect(rows[0]!.querySelector("[data-member-actions]")).toBeNull();
 		await userEvent.click(within(rows[0] as HTMLElement).getByRole("button", { name: "Role for Asha Rao" }));
-		expect(await screen.findByRole("menuitem", { name: "Member" })).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitem", { name: /^Member/ })).toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("says why a role can't be chosen", async () => {
+		mocks.teams = [team("t-platform", "Platform")];
+		renderSection();
+		await userEvent.click(await screen.findByText("Platform"));
+		const page = await teamPage();
+		const rows = () => [...page.querySelectorAll<HTMLElement>("[data-team-member]")];
+		await within(page).findByText("People · 4");
+		await userEvent.click(within(rows()[0]!).getByRole("button", { name: "Role for Asha Rao" }));
+		const member = await screen.findByRole("menuitem", { name: /^Member/ });
+		expect(member).toHaveAttribute("aria-disabled", "true");
+		expect(member.textContent).toContain("A team needs an owner. Make someone else an owner first.");
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(within(rows()[3]!).getByRole("button", { name: "Role for sam@contractor.io" }));
+		const owner = await screen.findByRole("menuitem", { name: /^Owner/ });
+		expect(owner).toHaveAttribute("aria-disabled", "true");
+		expect(owner.textContent).toContain("Only people in this workspace can be owners");
+	});
+
+	it("doesn't offer the only owner a Leave that can only fail, and says why", async () => {
+		mocks.teams = [team("t-platform", "Platform")];
+		renderSection();
+		await userEvent.click(await screen.findByText("Platform"));
+		const page = await teamPage();
+		await within(page).findByText("People · 4");
+		await userEvent.click(within(page).getByRole("button", { name: "Team actions" }));
+		const leave = await screen.findByRole("menuitem", { name: /^Leave team/ });
+		expect(leave).toHaveAttribute("aria-disabled", "true");
+		expect(leave.textContent).toContain("You're its only owner. Make someone else an owner first, or delete the team.");
+		await userEvent.click(leave);
+		expect(screen.queryByText("Leave Platform?")).toBeNull();
+	});
+
+	it("lets an owner leave once someone else is an owner too", async () => {
+		mocks.teams = [team("t-platform", "Platform")];
+		mocks.details["t-platform"]!.members[2]!.role = "owner";
+		renderSection();
+		await userEvent.click(await screen.findByText("Platform"));
+		const page = await teamPage();
+		await within(page).findByText("People · 4");
+		await userEvent.click(within(page).getByRole("button", { name: "Team actions" }));
+		const leave = await screen.findByRole("menuitem", { name: /^Leave team/ });
+		expect(leave).not.toHaveAttribute("aria-disabled");
+		expect(leave.textContent).not.toContain("only owner");
 	});
 
 	it("only lets people in the workspace become owners, and shows the new role at once", async () => {
@@ -290,7 +335,7 @@ describe("TeamsSection", () => {
 		renderSection();
 		await userEvent.click(await screen.findByText("Platform"));
 		await userEvent.click(await screen.findByRole("button", { name: "Role for Ben Ortiz" }));
-		expect(await screen.findByRole("menuitem", { name: "Owner" })).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitem", { name: /^Owner/ })).toHaveAttribute("aria-disabled", "true");
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(screen.getByRole("button", { name: "Role for Farah Nasser" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Owner" }));

@@ -131,6 +131,26 @@ describe("sharing a session", () => {
 		writeText.mockRestore();
 	});
 
+	it("takes a link's one-time URL off screen when that link is revoked, and only that link", async () => {
+		mocks.client.listShareLinks.mockReset().mockResolvedValue({
+			links: [
+				shareLink({ id: "new", sessionId: "s1", role: "editor", interaction: "interact", modeCap: "standard" }),
+				shareLink({ id: "whole-project", role: "editor", interaction: "interact" }),
+			],
+		});
+		mocks.client.createShareLink.mockResolvedValue({ link: shareLink({ id: "new", sessionId: "s1", code: CODE }) });
+		renderDialog();
+		await createLink();
+		expect(await screen.findByRole("textbox", { name: "Share link" })).toHaveValue(`https://cp.example.test/s/${CODE}`);
+		const rows = () => within(screen.getAllByRole("list")[0]!).getAllByRole("listitem");
+		fireEvent.click(within(rows()[1]!).getByRole("button", { name: "Revoke" }));
+		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", "whole-project"));
+		expect(screen.getByRole("textbox", { name: "Share link" })).toBeInTheDocument();
+		fireEvent.click(within(rows()[0]!).getByRole("button", { name: "Revoke" }));
+		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", "new"));
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: "Share link" })).toBeNull());
+	});
+
 	it("lists this session's and the project's live links, and revokes one", async () => {
 		renderDialog();
 		const list = await screen.findByRole("list");

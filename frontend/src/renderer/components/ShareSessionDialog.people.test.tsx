@@ -82,6 +82,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: { user: { email: "asha@northwind.dev" } } }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org", displayName: "Northwind" } }) }));
 
 const member = (id: string, name: string, access: CloudCpTeamMemberAccess["access"], extra: Partial<CloudCpTeamMemberAccess["member"]> = {}): CloudCpTeamMemberAccess => ({
 	member: { id, teamId: "t-platform", name, email: `${name.toLowerCase().split(" ")[0]}@northwind.dev`, role: "member", invited: false, you: false, workspaceMember: false, addedAt: "2026-10-30T00:00:00Z", ...extra },
@@ -176,6 +177,48 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(rows[2]!.textContent).toContain("from the whole project");
 		expect(rows[2]!.querySelector("[data-access-menu]")).toBeNull();
 		expect(rows[3]!.textContent).toContain("Added by email · gets access when they sign in");
+	});
+
+	it("keeps 'from the whole project' whole, so it can be clicked however long the email", async () => {
+		mocks.access.entries[2] = entry("g-long", { kind: "user", userId: "u-long", name: "Someone With A Long Name", email: `${"a".repeat(80)}@northwind.dev` }, { scope: "project", sessionId: undefined });
+		renderDialog();
+		const list = await accessList();
+		const button = await within(list).findByRole("button", { name: "from the whole project" });
+		// The email shortens; the link never sits in the part that is cut off.
+		expect(button.closest(".truncate")).toBeNull();
+		expect(within(row(list, "Someone With A Long Name")).getByText(/a{80}@northwind\.dev/).closest(".truncate")).not.toBeNull();
+		await userEvent.click(button);
+		await waitFor(() => expect(screen.getByRole("radio", { name: "The whole project" })).toHaveAttribute("aria-checked", "true"));
+	});
+
+	it("puts the workspace on top of a project's list, as a session's owner is on top of its own", async () => {
+		mocks.projectAccess = { entries: [entry("g-data", { kind: "team", teamId: "t-data", teamName: "Data infra", memberCount: 4 }, { scope: "project", sessionId: undefined, source: "team" })] };
+		renderDialog();
+		await screen.findByText("Platform");
+		await userEvent.click(screen.getByRole("radio", { name: "The whole project" }));
+		const workspace = await screen.findByText("People in Northwind");
+		const first = workspace.closest("li")!;
+		expect(first.hasAttribute("data-share-workspace-row")).toBe(true);
+		expect(first.textContent).toContain("Owner");
+		expect(first.parentElement!.firstElementChild).toBe(first);
+	});
+
+	it("shows a team's people its new access at once, before the change is saved", async () => {
+		const saved = gate();
+		mocks.gates.updateShareEntry = [saved];
+		renderDialog();
+		await userEvent.click(await screen.findByRole("button", { name: "Show the people in Platform" }));
+		const line = async (name: string) => (await screen.findAllByText((_text, element) => element?.hasAttribute("data-share-member") ?? false))
+			.find((element) => element.textContent?.includes(name))!.textContent;
+		expect(await line("Ben Ortiz")).toContain("Write to the agent");
+		const list = await accessList();
+		await userEvent.click(menuOf(row(list, "Platform")));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /Watch/ }));
+		// Still saving: Ben had his access through Platform, so he now watches;
+		// Chen has more through a link and keeps it.
+		await waitFor(async () => expect(await line("Ben Ortiz")).toContain("Watch"));
+		expect(await line("Chen Wei")).toContain("Trusted");
+		await act(async () => saved.open());
 	});
 
 	it("opens with focus in the people field", async () => {

@@ -21,6 +21,10 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	}),
 }));
 
+vi.mock("../../lib/cloud-session", () => ({
+	useCloudSession: () => ({ session: { authProvider: "workos", user: { id: "u-me", email: "Me@Acme.co", displayName: "Me" } }, status: "authenticated" }),
+}));
+
 function Harness({ onNewTeam, onSubmit, unavailable, workspaceHasAccess }: { onNewTeam?: (people: Recipient[], typed: string) => void; onSubmit?: () => void; unavailable?: Set<string>; workspaceHasAccess?: boolean }) {
 	const [value, setValue] = useState<Recipient[]>([]);
 	return (
@@ -149,6 +153,46 @@ describe("PeopleField", () => {
 		expect(screen.queryByText("Dana Kim")).toBeNull();
 		expect(screen.queryByText("Platform")).toBeNull();
 		expect(screen.getByText("Riya Sen")).toBeTruthy();
+	});
+
+	it("takes a whole email as that address, never someone whose email only contains it", async () => {
+		mocks.candidates.push({ kind: "user", name: "Vaibhaav Tiwari", email: "vaibhaavtiwari@gmail.com" });
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "tiwari@gmail.com");
+		const options = await screen.findAllByRole("option");
+		// The look-alike is offered, but it isn't what Enter picks.
+		expect(options.some((option) => option.textContent?.includes("Vaibhaav Tiwari"))).toBe(true);
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(value()).toEqual([{ kind: "person", email: "tiwari@gmail.com" }]);
+	});
+
+	it("never adds your own email, and says it's you", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "me@acme.co");
+		const you = (await screen.findAllByRole("option")).find((option) => option.textContent?.includes("me@acme.co"))!;
+		expect(you.getAttribute("aria-disabled")).toBe("true");
+		expect(you.textContent).toContain("That's you");
+		for (const key of ["Enter", "Tab", ","]) fireEvent.keyDown(input, { key });
+		expect(value()).toEqual([]);
+	});
+
+	it("closes the suggestions when Tab adds a typed email, so they don't cover what follows", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		fireEvent.click(input);
+		await type(input, "new.person@northwind.dev");
+		await screen.findAllByRole("option");
+		fireEvent.keyDown(input, { key: "Tab" });
+		expect(value()).toEqual([{ kind: "person", email: "new.person@northwind.dev" }]);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		expect(screen.queryAllByRole("option")).toEqual([]);
 	});
 
 	it("adds a pasted email on Enter instead of a match for the text before it", async () => {

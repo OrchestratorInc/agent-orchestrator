@@ -530,9 +530,19 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 										</DropdownMenuItem>
 									) : null}
 									{data.team.yourRole ? (
-										<DropdownMenuItem onSelect={() => setConfirming({ kind: "leave" })}>
+										// The last owner can't leave (a team needs an owner), so it says why instead of asking.
+										<DropdownMenuItem
+											disabled={data.team.yourRole === "owner" && owners <= 1}
+											onSelect={() => setConfirming({ kind: "leave" })}
+											data-team-leave=""
+										>
 											<LogOut aria-hidden="true" />
-											{t("teams.leave")}
+											<span className="flex min-w-0 flex-col">
+												<span>{t("teams.leave")}</span>
+												{data.team.yourRole === "owner" && owners <= 1 ? (
+													<span className="text-xs text-muted-foreground" data-leave-reason="">{t("teams.leaveLastOwner")}</span>
+												) : null}
+											</span>
 										</DropdownMenuItem>
 									) : null}
 									{manage ? (
@@ -703,6 +713,9 @@ function MemberRow({ member, manage, lastOwner, onRole, onRemove }: {
 		{ value: "owner" as const, label: t("teams.roleOwner"), disabled: !member.workspaceMember && member.role !== "owner" },
 		{ value: "member" as const, label: t("teams.roleMember"), disabled: lastOwner },
 	], [lastOwner, member.role, member.workspaceMember, t]);
+	// Why a role can't be chosen, under it in the menu.
+	const roleReason = (role: "owner" | "member") =>
+		role === "owner" ? t("teams.ownerNeedsWorkspace") : t("teams.lastOwnerStays");
 	const name = member.name || member.email || t("teams.invitedPerson");
 	const description = member.invited
 		? t("teams.addedByEmail")
@@ -721,6 +734,14 @@ function MemberRow({ member, manage, lastOwner, onRole, onRemove }: {
 						options={roleOptions}
 						onChange={(role) => role !== member.role && onRole(role)}
 						aria-label={t("teams.roleFor", { name })}
+						renderMenuItem={(option) => (
+							<span className="flex min-w-0 flex-col">
+								<span>{option.label}</span>
+								{option.disabled ? (
+									<span className="text-xs text-muted-foreground" data-role-reason={option.value}>{roleReason(option.value)}</span>
+								) : null}
+							</span>
+						)}
 					/>
 				) : (
 					<span className="text-control text-settings-muted">{member.role === "owner" ? t("teams.roleOwner") : t("teams.roleMember")}</span>

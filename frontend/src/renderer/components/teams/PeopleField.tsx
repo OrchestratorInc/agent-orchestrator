@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareCandidate } from "../../lib/cloud-cp";
 import { looksLikeEmail, useShareCandidates } from "../../hooks/useTeams";
+import { useCloudSession } from "../../lib/cloud-session";
 import { PersonAvatar, TeamTile } from "./TeamVisuals";
 import { Button } from "../ui/button";
 
@@ -19,8 +20,8 @@ export function recipientKey(recipient: Recipient): string {
 
 type Option =
 	| { id: string; kind: "team"; candidate: CloudCpShareCandidate; disabled: boolean }
-	| { id: string; kind: "person"; candidate: CloudCpShareCandidate; disabled: boolean; inWorkspace?: boolean }
-	| { id: string; kind: "email"; email: string; disabled: false }
+	| { id: string; kind: "person"; candidate: CloudCpShareCandidate; disabled: boolean; inWorkspace?: boolean; self?: boolean }
+	| { id: string; kind: "email"; email: string; disabled: boolean; self?: boolean }
 	| { id: string; kind: "newTeam"; disabled: false };
 
 /**
@@ -105,6 +106,8 @@ export function PeopleField({
 	// Loads from the start, so the suggestions are there when the list opens
 	// instead of the list growing under the pointer.
 	const candidates = useShareCandidates(orgId, query, true);
+	// The person using the app: their own email is never someone to add.
+	const me = useCloudSession().session?.user.email?.toLowerCase() ?? "";
 	const picked = useMemo(() => new Set(value.map(recipientKey)), [value]);
 	const typed = text.trim();
 	// The suggestions answer what is typed, not text from before the last keystrokes.
@@ -128,24 +131,32 @@ export function PeopleField({
 			} else if (candidate.email) {
 				const key = `email:${candidate.email.toLowerCase()}`;
 				if (picked.has(key)) continue;
+				const self = Boolean(me) && candidate.email.toLowerCase() === me;
 				const inWorkspace = workspaceHasAccess && candidate.workspaceMember === true;
-				list.push({ id: key, kind: "person", candidate, disabled: inWorkspace || (unavailable?.has(key) ?? false), inWorkspace });
+				list.push({ id: key, kind: "person", candidate, disabled: self || inWorkspace || (unavailable?.has(key) ?? false), inWorkspace, self });
 			}
 		}
 		const email = text.trim().toLowerCase();
 		if (looksLikeEmail(email) && !picked.has(`email:${email}`) && !list.some((option) => option.id === `email:${email}`)) {
-			list.push({ id: `email:${email}`, kind: "email", email, disabled: false });
+			const self = email === me;
+			list.push({ id: `email:${email}`, kind: "email", email, disabled: self || (unavailable?.has(`email:${email}`) ?? false), self });
 		}
 		if (onNewTeam && allowTeams) list.push({ id: "new-team", kind: "newTeam", disabled: false });
 		return list;
-	}, [allowTeams, candidates.data, fresh, onNewTeam, picked, text, typed, unavailable, workspaceHasAccess]);
+	}, [allowTeams, candidates.data, fresh, me, onNewTeam, picked, text, typed, unavailable, workspaceHasAccess]);
 
 	// With something typed, the first suggestion that answers it is
 	// highlighted: a match once the results are current, else the typed email.
-	// With nothing typed nothing is, so Enter shares what is picked.
-	const defaultOption = typed
-		? options.find((option) => !option.disabled && (option.kind === "email" || ((option.kind === "team" || option.kind === "person") && fresh)))
-		: undefined;
+	// A whole email typed means that address and no other: suggestions whose
+	// email only contains it (tiwari@ in vaibhaavtiwari@) are never the default,
+	// or Enter would share with someone else. With nothing typed nothing is
+	// highlighted, so Enter shares what is picked.
+	const exactId = looksLikeEmail(typed.toLowerCase()) ? `email:${typed.toLowerCase()}` : "";
+	const defaultOption = !typed
+		? undefined
+		: exactId
+			? options.find((option) => option.id === exactId && !option.disabled)
+			: options.find((option) => !option.disabled && (option.kind === "email" || ((option.kind === "team" || option.kind === "person") && fresh)));
 	const movedOption = moved ? options.find((option) => option.id === moved && !option.disabled) : undefined;
 	const highlighted = movedOption ?? defaultOption;
 	const highlight = highlighted ? options.indexOf(highlighted) : -1;
@@ -184,9 +195,17 @@ export function PeopleField({
 	const commitTyped = (): boolean => {
 		const typed = text.trim().replace(/,$/, "").toLowerCase();
 		if (!looksLikeEmail(typed)) return false;
+		// Not you, nor anyone the list says can't be added (in the workspace,
+		// already has access): the list shows why.
+		if (typed === me || options.some((option) => option.id === `email:${typed}` && option.disabled)) {
+			setOpen(true);
+			return false;
+		}
 		if (!picked.has(`email:${typed}`)) onChange([...value, { kind: "person", email: typed }]);
 		setText("");
 		setMoved(null);
+		// Closed, so the suggestions don't open over what comes after the field.
+		setOpen(false);
 		return true;
 	};
 
@@ -369,6 +388,11 @@ export function PeopleField({
 												{option.candidate.name ? <span className="block truncate text-xs text-muted-foreground">{option.candidate.email}</span> : null}
 											</span>
 										</>
+									) : option.kind === "email" && option.self ? (
+										<>
+											<PersonAvatar email={option.email} />
+											<span className="min-w-0 flex-1 truncate">{option.email}</span>
+										</>
 									) : option.kind === "email" ? (
 										<>
 											<PersonAvatar email={option.email} invited />
@@ -385,7 +409,9 @@ export function PeopleField({
 									)}
 									{option.disabled ? (
 									<span className="ml-auto shrink-0 text-caption text-passive">
-										{option.kind === "person" && option.inWorkspace ? t("teams.field.inWorkspace") : unavailableLabel ?? t("teams.field.hasAccess")}
+										{(option.kind === "person" || option.kind === "email") && option.self
+											? t("teams.field.you")
+											: option.kind === "person" && option.inWorkspace ? t("teams.field.inWorkspace") : unavailableLabel ?? t("teams.field.hasAccess")}
 									</span>
 								) : null}
 								</div>

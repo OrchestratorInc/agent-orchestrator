@@ -1,4 +1,4 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Info } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSession } from "../lib/cloud-session";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import {
 	invalidateTeamsAndShares,
@@ -74,6 +75,36 @@ type ShareRequest = {
 type Subject = { teamId: string } | { email: string };
 
 /** The name to show for a grant's subject. */
+const CAP_RANK: Record<string, number> = { "read-only": 1, standard: 2, trusted: 3 };
+
+/**
+ * Gives a team's people, in every cached list of them under prefix, the
+ * access the team now gives: those who had their access through this team,
+ * and those it now gives more. Returns what it replaced, to put back.
+ */
+export function withTeamAccess(
+	queryClient: QueryClient,
+	prefix: readonly unknown[],
+	teamId: string,
+	role: CloudCpShareRole,
+	modeCap: ShareModeCap,
+): [readonly unknown[], CloudCpTeamMemberAccess[] | undefined][] {
+	const replaced: [readonly unknown[], CloudCpTeamMemberAccess[] | undefined][] = [];
+	for (const [key, data] of queryClient.getQueriesData<CloudCpTeamMemberAccess[]>({ queryKey: prefix })) {
+		if (key[key.length - 1] !== teamId || !data) continue;
+		replaced.push([key, data]);
+		queryClient.setQueryData<CloudCpTeamMemberAccess[]>(key, data.map((member) => {
+			const access = member.access;
+			const viaTeam = access.source === "team" && access.teamId === teamId;
+			const rank = (ROLE_RANK[access.role ?? ""] ?? 0) * 10 + (CAP_RANK[access.modeCap ?? ""] ?? 0);
+			const gains = (ROLE_RANK[role] ?? 0) * 10 + (CAP_RANK[modeCap] ?? 0) > rank;
+			if (access.source === "workspace" || (!viaTeam && !gains)) return member;
+			return { ...member, access: { ...access, role, modeCap, source: "team", teamId } };
+		}));
+	}
+	return replaced;
+}
+
 function subjectName(entry: Pick<CloudCpShareEntry, "subject">): string {
 	const subject = entry.subject;
 	return subject.kind === "team" ? subject.teamName ?? "" : subject.name || subject.email || "";
@@ -158,6 +189,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
 	const myEmail = useCloudSession().session?.user.email?.toLowerCase() ?? "";
+	// A project belongs to its workspace: the access list names it on top.
+	const { org } = useCloudOrg(open);
+	const workspaceName = org?.id === orgId ? org.displayName : undefined;
 	const queryClient = useQueryClient();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const [scope, setScope] = useState<ShareScope>("session");
@@ -254,9 +288,15 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 			queryClient.setQueryData<AccessData>(key, (data) =>
 				data ? { ...data, entries: data.entries.map((other) => (other.grantId === entry.grantId ? { ...other, role, modeCap } : other)) } : data,
 			);
-			return { key, previous };
+			// An expanded team's people show the change at once too; the refetch
+			// when it is saved settles anyone with access another way.
+			const members = entry.subject.kind === "team" && entry.subject.teamId
+				? withTeamAccess(queryClient, ["cloud-team-share-access", baseUrl, orgId, projectId], entry.subject.teamId, role, modeCap)
+				: [];
+			return { key, previous, members };
 		},
 		onError: (_error, { entry }, context) => {
+			for (const [membersKey, data] of context?.members ?? []) queryClient.setQueryData(membersKey, data);
 			// Put back only what this change replaced, in the list it changed.
 			const before = context?.previous?.entries.find((other) => other.grantId === entry.grantId);
 			if (!context || !before) return;
@@ -504,6 +544,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 									loading={access.isLoading}
 									hasLink={(links.data?.length ?? 0) > 0}
 									me={myEmail}
+									workspaceName={workspaceName}
 									onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
 									onStop={stopEntry}
 									onShowProject={() => switchScope("project")}
@@ -558,7 +599,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	);
 }
 
-function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLink, me, onChange, onStop, onShowProject }: {
+function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLink, me, workspaceName, onChange, onStop, onShowProject }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string | undefined;
@@ -568,6 +609,8 @@ function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLi
 	/** A live link opens it too, so "only people in this workspace" would be wrong. */
 	hasLink: boolean;
 	me: string | undefined;
+	/** The workspace that owns the project, shown on top of a project's list. */
+	workspaceName?: string;
 	onChange: (entry: CloudCpShareEntry, next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
 	onStop: (entry: CloudCpShareEntry) => void;
 	onShowProject: () => void;
@@ -607,6 +650,16 @@ function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLi
 		<div className="flex flex-col gap-1.5">
 			<p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p>
 			<ul className="flex flex-col divide-y divide-border rounded-md bg-muted/40 py-0.5" data-share-access-list="">
+				{/* A session's top row is its owner; a project has none of its own, it is the workspace's. */}
+				{!owner && scope === "project" ? (
+					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-workspace-row="">
+						<TeamTile name={workspaceName || "W"} />
+						<span className="min-w-0 flex-1 truncate text-control text-foreground">
+							{workspaceName ? t("share.workspacePeople", { name: workspaceName }) : t("share.workspacePeopleUnnamed")}
+						</span>
+						<span className="pr-1 text-control text-passive">{t("share.owner")}</span>
+					</li>
+				) : null}
 				{owner ? (
 					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5">
 						<PersonAvatar name={owner.name} email={owner.email} />
@@ -670,16 +723,17 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 				{team ? <TeamTile name={name} /> : <PersonAvatar name={entry.subject.name} email={entry.subject.email} invited={!entry.subject.name} />}
 				<div className="min-w-0 flex-1">
 					<p className="truncate text-control text-foreground">{name}</p>
-					<p className="truncate text-xs text-muted-foreground">
-						{sub}
+					{/* Only the email shortens: "from the whole project" stays whole, so it can be clicked. */}
+					<p className="flex min-w-0 items-baseline text-xs whitespace-nowrap text-muted-foreground">
+						<span className="min-w-0 truncate">{sub}</span>
 						{fromProject ? (
 							<>
-								{" · "}
-								<Button type="button" variant="link" className="no-underline hover:underline" onClick={onShowProject}>
+								<span className="shrink-0">{"\u00a0·\u00a0"}</span>
+								<Button type="button" variant="link" className="shrink-0 no-underline hover:underline" onClick={onShowProject} data-share-from-project="">
 									{t("share.fromProject")}
 								</Button>
 							</>
-						) : entry.source === "link" ? ` · ${t("share.fromLink")}` : null}
+						) : entry.source === "link" ? <span className="shrink-0">{`\u00a0·\u00a0${t("share.fromLink")}`}</span> : null}
 					</p>
 				</div>
 				{fromProject ? (
