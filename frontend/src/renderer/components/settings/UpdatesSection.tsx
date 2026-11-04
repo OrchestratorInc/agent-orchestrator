@@ -32,7 +32,6 @@ const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
 // serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
 
-/** Row actions are quiet: ghost, muted until hovered. */
 let updateRequestSequence = 0;
 
 function nextUpdateRequestId(prefix = "feature-update"): string {

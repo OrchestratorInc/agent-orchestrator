@@ -2318,7 +2318,7 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 /* Keep keyboard focus visible without adding a ring to the sidebar chrome.
    Opt out elements that own their own fill (icon actions, brand, folder toggle,
    NavRowHighlight hosts) so each new control does not need another !important. */
-.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not([data-sidebar-brand]):not([data-project-folder]) {
+.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not(.group\/button):not([data-sidebar-brand]):not([data-project-folder]) {
 	background-color: var(--color-interactive-hover) !important;
 	outline: none !important;
 	box-shadow: none !important;
@@ -2854,10 +2854,6 @@ html.sidebar-reordering * {
 .queue-dock-actions svg {
 	display: block;
 	flex: none;
-}
-
-.cursor-chat-surface .queue-dock-toggle:not(:disabled):active {
-	transform: none;
 }
 
 .cursor-chat-surface .queue-dock-toggle:hover .queue-dock-label {
@@ -5739,13 +5735,6 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.browser-panel__tab-new,
 	.browser-panel__tab-close {
 		transition: none;
-	}
-
-	.browser-panel__toolbar button:not(:disabled):hover,
-	.browser-panel__toolbar button:not(:disabled):active,
-	.browser-panel__tab-new:active,
-	.browser-panel__tab-close:not(:disabled):active {
-		transform: none;
 	}
 }
 

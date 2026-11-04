@@ -253,7 +253,7 @@ function DesktopSessionCard({
 								className={cn(
 									"rounded-sm",
 									keepTerminateVisible || termination.isPending
-										? "opacity-100"
+										? "opacity-100 disabled:opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 								)}
 								onClick={(event) => {

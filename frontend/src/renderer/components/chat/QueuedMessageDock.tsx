@@ -178,7 +178,7 @@ function QueuedMessageRowContent({
 						title="Steer into running turn"
 					>
 						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
-							<CornerDownLeft aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
 						</span>
 						Steer
 					</Button>
@@ -193,7 +193,7 @@ function QueuedMessageRowContent({
 						aria-label="Edit queued message"
 						title="Edit"
 					>
-						<Pencil aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+						<Pencil aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
 					</Button>
 				) : null}
 				{onCancelQueuedTurn ? (
@@ -208,7 +208,7 @@ function QueuedMessageRowContent({
 						aria-label="Delete queued message"
 						title="Delete"
 					>
-						<Trash2 aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
 					</Button>
 				) : null}
 				{reorderEnabled ? (
@@ -220,7 +220,7 @@ function QueuedMessageRowContent({
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
-						<GripVertical aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+						<GripVertical aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
 					</Pressable>
 				) : null}
 			</div>

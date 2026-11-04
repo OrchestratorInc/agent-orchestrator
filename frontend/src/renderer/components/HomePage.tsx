@@ -279,7 +279,7 @@ function HomePageContent() {
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
 							<Button
-								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-muted-foreground no-underline hover:border-current"
+								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}
 								type="button"
 								variant="link"

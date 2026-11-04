@@ -26,9 +26,9 @@ describe("CloudFileContentPane", () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
 		renderPane(client);
 		expect(await screen.findByTestId("cloud-diff")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "File" }));
+		await userEvent.click(screen.getByRole("tab", { name: "File" }));
 		expect(screen.getByText("# Hello")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Rich preview" }));
+		await userEvent.click(screen.getByRole("tab", { name: "Rich preview" }));
 		expect(screen.getByRole("article")).toHaveTextContent("# Hello");
 	});
 

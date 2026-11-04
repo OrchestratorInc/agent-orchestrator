@@ -164,7 +164,7 @@ describe("CloudWorkspaceExplorer", () => {
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Files" }));
+		await userEvent.click(screen.getByRole("tab", { name: "Files" }));
 		expect(await screen.findByRole("treeitem", { name: /README\.md/ })).toBeInTheDocument();
 	});
 
@@ -221,12 +221,12 @@ describe("CloudWorkspaceExplorer", () => {
 		getWorkspaceReview.mockResolvedValue(summary);
 		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
 		renderExplorer();
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
-		expect(screen.getByRole("button", { name: "11x" })).toBeDisabled();
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("tab", { name: "11x" })).toBeDisabled();
 		expect(useUiStore.getState().inspectorSessions[session.id].cloudReviewRepository).toBe("");
 		expect(getWorkspaceReview.mock.calls.some((call) => call[2]?.repository === "11x")).toBe(false);
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 	});
 
 	it("keeps All files, the filter and the selected path through maximize and minimize", async () => {
@@ -234,12 +234,12 @@ describe("CloudWorkspaceExplorer", () => {
 		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
 		getWorkspaceReviewTree.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "notes.txt", path: "notes.txt", type: "file", status: "untracked", size: 5 }] });
 		renderExplorer();
-		await userEvent.click(await screen.findByRole("button", { name: "Files" }));
+		await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
 		await userEvent.click(await screen.findByRole("treeitem", { name: /notes.txt/ }));
 		await userEvent.type(screen.getByRole("textbox", { name: "Filter files" }), "notes");
 		for (const label of ["Maximize", "Return to panel"]) {
 			await userEvent.click(screen.getByRole("button", { name: label }));
-			expect(await screen.findByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "true");
+			expect(await screen.findByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
 			expect(screen.getByRole("textbox", { name: "Filter files" })).toHaveValue("notes");
 			await userEvent.clear(screen.getByRole("textbox", { name: "Filter files" }));
 			expect(await screen.findByRole("treeitem", { name: /notes.txt/ })).toHaveAttribute("aria-selected", "true");
@@ -379,29 +379,29 @@ describe("CloudWorkspaceExplorer", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "11x" }));
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
 		expect(await screen.findByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("0 of 1 viewed")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "alice" }));
+		await userEvent.click(screen.getByRole("tab", { name: "alice" }));
 		expect(await screen.findByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("1 of 2 viewed")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "11x" }));
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
 		await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 	});
@@ -411,23 +411,23 @@ describe("CloudWorkspaceExplorer", () => {
 		renderExplorer();
 		await userEvent.click(await screen.findByRole("button", { name: /^Commits/ }));
 		await userEvent.click(screen.getByRole("button", { name: /Previous work/ }));
-		await userEvent.click(screen.getByRole("button", { name: "11x" }));
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
 		expect(await screen.findByRole("button", { name: /^Untracked/ })).toHaveAttribute("aria-pressed", "true");
 		await userEvent.click(screen.getByRole("button", { name: /^Commits/ }));
 		await userEvent.click(screen.getByRole("button", { name: /Sibling work/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("9876543")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "alice" }));
+		await userEvent.click(screen.getByRole("tab", { name: "alice" }));
 		await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("abcdef1")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "11x" }));
+		await userEvent.click(screen.getByRole("tab", { name: "11x" }));
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByText("9876543")).toBeInTheDocument();
 		expect(useUiStore.getState().inspectorSessions[session.id].cloudReviewSelection).toEqual({
 			"": { scope: "committed", commitSha: "abcdef123" },
@@ -440,31 +440,31 @@ describe("CloudWorkspaceExplorer", () => {
 		const otherSession = { ...session, id: "session-2" };
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const view = renderExplorer(session, queryClient);
-		await userEvent.click(await screen.findByRole("button", { name: "11x" }));
+		await userEvent.click(await screen.findByRole("tab", { name: "11x" }));
 		await userEvent.click(await screen.findByRole("button", { name: /^Commits/ }));
 		await userEvent.click(screen.getByRole("button", { name: /Sibling work/ }));
 		const switchSession = (activeSession: WorkspaceSession) => view.rerender(
 			<QueryClientProvider client={queryClient}><TooltipProvider><RemountingExplorer activeSession={activeSession} /></TooltipProvider></QueryClientProvider>,
 		);
 		switchSession(otherSession);
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Unstaged/ })).toHaveAttribute("aria-pressed", "true");
 		await userEvent.click(screen.getByRole("button", { name: /^Staged/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
 
 		switchSession(session);
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(await screen.findByText("9876543")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
-		expect(await screen.findByRole("button", { name: "11x" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "11x" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("9876543")).toBeInTheDocument();
 
 		switchSession(otherSession);
 		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
-		expect(await screen.findByRole("button", { name: "alice" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
 	});
 
@@ -517,11 +517,11 @@ describe("CloudWorkspaceExplorer", () => {
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
-		const tabs = screen.getByRole("group", { name: "Repositories" });
+		const tabs = screen.getByRole("tablist", { name: "Repositories" });
 		// The main repository comes first; a missing checkout cannot be picked.
-		expect(within(tabs).getAllByRole("button").map((tab) => tab.textContent)).toEqual(["alice", "11x", "voice-calling-ai"]);
-		expect(within(tabs).getByRole("button", { name: "voice-calling-ai" })).toBeDisabled();
-		await userEvent.click(within(tabs).getByRole("button", { name: "11x" }));
+		expect(within(tabs).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["alice", "11x", "voice-calling-ai"]);
+		expect(within(tabs).getByRole("tab", { name: "voice-calling-ai" })).toBeDisabled();
+		await userEvent.click(within(tabs).getByRole("tab", { name: "11x" }));
 		expect(await screen.findByText("server/main.go")).toBeInTheDocument();
 		expect(getWorkspaceReview).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ repository: "11x" }));
 		expect(getWorkspaceReviewDiffs).toHaveBeenCalledWith("org-1", "session-1", expect.anything(), expect.objectContaining({ repository: "11x" }));

@@ -6,7 +6,7 @@ import { cn } from "../../lib/utils";
  * Unstyled clickable surface for things that are not action buttons: list and
  * nav rows, cards, tabs, disclosure toggles, table headers. The caller owns
  * layout and color; this only fixes the shared behaviour (button type, no
- * press motion, left-aligned text, disabled handling).
+ * press motion, left-aligned text).
  *
  * Use `Button` for actions. Use `NavRowHighlight` inside a Pressable row when
  * it needs the sidebar's growing hover pill.
@@ -20,7 +20,7 @@ export const Pressable = React.forwardRef<HTMLButtonElement, PressableProps>(
 		const Comp = asChild ? Slot : "button";
 		return (
 			<Comp
-				className={cn("select-none text-left outline-none disabled:pointer-events-none", className)}
+				className={cn("text-left outline-none", className)}
 				ref={ref}
 				type={asChild ? type : (type ?? "button")}
 				{...props}

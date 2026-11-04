@@ -64,9 +64,6 @@ function hasReviewableChanges(manifest: WorkspaceFilesResponse): boolean {
 		|| [sections.uncommitted, sections.staged, sections.unstaged, sections.untracked, sections.committed].some((section) => (section?.length ?? 0) > 0);
 }
 
-// Mirrors the browser panel's tab strip (.browser-panel__tab): no container
-// box, 28px rounded tabs, filled only when active.
-
 type SessionFileExplorerProps = {
 	sessionId: string;
 	hostId?: string;
@@ -387,12 +384,12 @@ export function SessionFileExplorer({
 		<>
 			{viewMenu}
 			{hasViewTabs ? (
-				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="group">
+				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={t("files.reviewChanges")}
-								aria-pressed={showChanges}
+								aria-selected={showChanges} data-active={showChanges} role="tab"
 								onClick={() => handleViewChange(true)}
 								size="icon-sm"
 								type="button"
@@ -407,7 +404,7 @@ export function SessionFileExplorer({
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={allFilesTabLabel}
-								aria-pressed={!showChanges}
+								aria-selected={!showChanges} data-active={!showChanges} role="tab"
 								onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
 								size="icon-sm"
 								type="button"

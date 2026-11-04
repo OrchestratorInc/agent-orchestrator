@@ -55,6 +55,7 @@ export function ConnectMobileGetApp() {
 						size="none"
 						aria-label={showQR ? t("mobile.hideQR") : t("mobile.showQR")}
 						aria-expanded={showQR}
+						data-active={showQR}
 						onClick={() => setShowQR((v) => !v)}
 						className="size-(--size-settings-action-height)"
 					>

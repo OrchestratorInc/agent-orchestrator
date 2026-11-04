@@ -5826,10 +5826,10 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 							<li key={prompt}>
 								<Button
 									type="button"
-									variant="secondary"
+									variant="quiet"
 									shape="pill"
 									title={t(prompt)}
-									className="welcome-prompt-suggestion"
+									className="welcome-prompt-suggestion border-border"
 									onClick={() => onPick(t(prompt))}
 								>
 									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />

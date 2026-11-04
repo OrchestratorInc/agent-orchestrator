@@ -186,7 +186,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			<Button
 				aria-label={t("terminal.searchCaseSensitive")}
 				aria-pressed={caseSensitive}
-								onClick={() => setCaseSensitive((current) => !current)}
+				onClick={() => setCaseSensitive((current) => !current)}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
@@ -197,7 +197,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			<Button
 				aria-label={t("terminal.searchRegex")}
 				aria-pressed={regex}
-								onClick={() => setRegex((current) => !current)}
+				onClick={() => setRegex((current) => !current)}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
@@ -208,7 +208,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			<div className="mx-0.5 h-4 w-px bg-border" />
 			<Button
 				aria-label={t("terminal.searchPrevious")}
-								disabled={!query || !queryIsValid}
+				disabled={!query || !queryIsValid}
 				onClick={() => find("previous")}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
@@ -219,7 +219,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			</Button>
 			<Button
 				aria-label={t("terminal.searchNext")}
-								disabled={!query || !queryIsValid}
+				disabled={!query || !queryIsValid}
 				onClick={() => find("next")}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
@@ -230,7 +230,7 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			</Button>
 			<Button
 				aria-label={t("files.closeSearch")}
-								onClick={close}
+				onClick={close}
 				size="icon-sm"
 				type="button"
 				variant="quiet"

@@ -317,7 +317,6 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 	);
 }
 
-/** Muted ghost row action, the settings default for every non-primary action. */
 /** A theme token as a hex string, resolved from the live document so every theme style is followed. */
 function tokenHex(name: string): string | null {
 	try {

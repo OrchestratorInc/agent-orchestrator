@@ -439,7 +439,7 @@ export function KeyboardShortcutsContent({
 													</TooltipTrigger>
 													<TooltipContent>{t("shortcut.changeAria", { name: label })}</TooltipContent>
 												</Tooltip>
-												<Button type="button" variant="quiet" size="icon" id={`${contentId}-${shortcut.id}-options`} aria-label={t("shortcut.manageAria", { name: label })} aria-expanded={isExpanded} aria-controls={`${contentId}-${shortcut.id}-manage`} disabled={saving || Boolean(recording)} onClick={() => setExpanded(isExpanded ? null : shortcut.id)}><MoreHorizontal className="size-4" aria-hidden="true" /></Button>
+												<Button type="button" variant="quiet" size="icon" id={`${contentId}-${shortcut.id}-options`} aria-label={t("shortcut.manageAria", { name: label })} aria-expanded={isExpanded} data-active={isExpanded} aria-controls={`${contentId}-${shortcut.id}-manage`} disabled={saving || Boolean(recording)} onClick={() => setExpanded(isExpanded ? null : shortcut.id)}><MoreHorizontal className="size-4" aria-hidden="true" /></Button>
 											</>}
 										</div>
 										</div>

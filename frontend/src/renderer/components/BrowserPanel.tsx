@@ -1162,7 +1162,7 @@ export function BrowserPanelView({
 					<TooltipTrigger asChild>
 						<Button
 							aria-label={t("browser.annotationDiscardAllComments")}
-							className="browser-panel__annotation-discard"
+							className="browser-panel__annotation-discard hover:before:opacity-0"
 							disabled={annotationIdle && annotationState.screenshotCount === 0}
 							onClick={() => void annotationAction("discard-all")}
 							size="icon-sm"
@@ -1406,7 +1406,7 @@ export function BrowserPanelView({
 											: t("browser.annotate")
 								}
 								aria-pressed={annotationMode || status === "picking"}
-								className="browser-panel__annotate-btn relative"
+								className="browser-panel__annotate-btn relative aria-pressed:before:opacity-0"
 								disabled={!canAnnotate || status === "sending"}
 								onClick={() => void toggleAnnotationMode()}
 								size="icon-sm"

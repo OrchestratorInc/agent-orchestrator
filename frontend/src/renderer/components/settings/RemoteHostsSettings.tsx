@@ -20,7 +20,6 @@ import { ThisComputerAccess } from "./ThisComputerAccess";
 
 type SavedHost = { hostId: string; label: string; url: string };
 
-/** Row actions are quiet: ghost, muted until hovered. */
 export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);

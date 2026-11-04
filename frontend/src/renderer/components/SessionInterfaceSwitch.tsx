@@ -158,7 +158,7 @@ export function SessionInterfaceSwitchButton({
 						}}
 						className={cn(
 							"absolute inset-0 opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
-							cancelling && "opacity-100",
+							cancelling && "opacity-100 disabled:opacity-100",
 						)}
 					>
 						{cancelling ? (

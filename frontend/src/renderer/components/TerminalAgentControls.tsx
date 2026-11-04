@@ -69,6 +69,7 @@ export function SessionTabMenu({
 					disabled={blocked || providerSwitch.isPending}
 					title={blocked ? t("agentSwitch.busy") : t("agentSwitch.switchTerminalTo", { target })}
 					onClick={switchNow}
+					className="disabled:pointer-events-auto disabled:cursor-not-allowed"
 					size="xs"
 					variant="primary"
 				>

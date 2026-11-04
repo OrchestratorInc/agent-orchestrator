@@ -45,7 +45,7 @@ export function TopbarButton({
 		props["aria-expanded"] === true || props["aria-expanded"] === "true";
 	return (
 		<Pressable
-			className={cn(topbarButtonVariants({ variant }), useHighlight && NAV_ROW_HIGHLIGHT_HOST_CLASS, useHighlight && "isolate", className)}
+			className={cn(topbarButtonVariants({ variant }), useHighlight && NAV_ROW_HIGHLIGHT_HOST_CLASS, useHighlight && "isolate", "disabled:pointer-events-auto", className)}
 			type={type}
 			{...props}
 		>

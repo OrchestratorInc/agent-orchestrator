@@ -55,9 +55,6 @@ import { isDelimitedTextPath } from "../lib/delimited-text";
 import { VscodeGoToFileIcon } from "./icons/VscodeGoToFileIcon";
 import { isMermaidPath, isSvgPath } from "../lib/image-files";
 
-// Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
-// height with small text and icons so they do not dwarf the toolbar.
-
 export type FileViewMode = FileDisplayMode;
 export type FileOpenOptions = { annotationRange?: FileAnnotationRange; source?: FilesSource; previousPath?: string; center?: boolean; commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
 
@@ -441,7 +438,7 @@ export function FileContentPane({
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={label}
-					aria-pressed={effectiveMode === mode}
+					aria-selected={effectiveMode === mode} data-active={effectiveMode === mode} role="tab"
 					disabled={editing}
 					onClick={() => selectMode(mode)}
 					size="icon-sm"
@@ -459,7 +456,7 @@ export function FileContentPane({
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
 			{hasDisplayModeChoice ? (
-				<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="group">
+				<div aria-label={t("files.fileDisplayMode")} className="flex shrink-0 items-center gap-0.5" role="tablist">
 					{detail.status !== "unmodified" ? compactModeButton("diff", t("files.diff"), <GitCompareArrows aria-hidden="true" className="size-icon-sm" />) : null}
 					{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
 					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}

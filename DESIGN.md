@@ -254,7 +254,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Disabled states explain why when the missing prerequisite is not obvious.
 - Every action is a `Button` (`components/ui/button.tsx`); never a raw `<button>` outside `components/ui/`. Rows, cards, tabs and disclosure toggles use `Pressable` (`components/ui/pressable.tsx`); a dialog ✕ uses `CloseButton`.
 - Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `footer*` (settings and modal footers), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
-- Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active`, not from swapping variants.
+- Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active="true"`, not from swapping variants. Tabs keep `role="tab"` + `aria-selected` and add `data-active` for the look.
 - No press motion: buttons, rows and controls never scale or shift when clicked.
 
 ### Tooltips and iconography
