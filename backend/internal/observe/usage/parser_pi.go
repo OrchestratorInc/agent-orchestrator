@@ -148,19 +148,8 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			// for it, and there is nothing to bill.
 			continue
 		}
-		providerID := domain.UsageProviderOpenAI
-		var tokens domain.UsageTokenMetrics
-		if strings.EqualFold(provider, "anthropic") {
-			providerID = domain.UsageProviderAnthropic
-			tokens, ok = normalizeAnthropicUsage(
-				usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, nil, nil,
-			)
-		} else {
-			// Pi has already normalized every other provider (z.ai,
-			// OpenRouter, Google, ...) to the same counters, so the OpenAI
-			// vocabulary holds them; BillingProviderID keeps who billed it.
-			tokens, ok = normalizeOpenAIUsage(input, usage.CacheRead, usage.CacheWrite, usage.Output)
-		}
+		providerID := routedUsageProvider(provider)
+		tokens, ok := normalizeRoutedUsage(providerID, usage.Input, usage.CacheRead, usage.CacheWrite, usage.Output)
 		if !ok {
 			recordMalformed(result)
 			continue
@@ -186,15 +175,7 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			Costs: piReportedCosts(usage.Cost, dialect.pricingVersion,
 				slices.Contains(dialect.gatewayProviders, billingProvider)),
 		}
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
-			}
-			continue
-		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		result.addEvent(eventsByKey, event)
 	}
 }
 

@@ -76,15 +76,7 @@ func parseQwen(source domain.UsageSourceContext, records []jsonlRecord, result *
 				"qwen", source.NativeRootID, identity, model,
 			),
 		}
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
-			}
-			continue
-		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		result.addEvent(eventsByKey, event)
 	}
 }
 

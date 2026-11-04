@@ -155,18 +155,8 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 			continue
 		}
 		provider := strings.TrimSpace(row.ProviderID)
-		providerID := domain.UsageProviderOpenAI
-		var tokens domain.UsageTokenMetrics
-		var ok bool
-		if strings.EqualFold(provider, "anthropic") {
-			providerID = domain.UsageProviderAnthropic
-			tokens, ok = normalizeAnthropicUsage(usage.Input, usage.Cache.Write, usage.Cache.Read, output, nil, nil)
-		} else {
-			// OpenCode has already normalized every other provider to the same
-			// counters, so the OpenAI vocabulary holds them; BillingProviderID
-			// keeps who billed it.
-			tokens, ok = normalizeOpenAIUsage(input, usage.Cache.Read, usage.Cache.Write, output)
-		}
+		providerID := routedUsageProvider(provider)
+		tokens, ok := normalizeRoutedUsage(providerID, usage.Input, usage.Cache.Read, usage.Cache.Write, output)
 		if !ok {
 			recordMalformed(result)
 			continue
@@ -187,15 +177,7 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 		if row.TimeCreated > 0 {
 			event.CreatedAt = time.UnixMilli(row.TimeCreated).UTC()
 		}
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
-			}
-			continue
-		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		result.addEvent(eventsByKey, event)
 	}
 }
 

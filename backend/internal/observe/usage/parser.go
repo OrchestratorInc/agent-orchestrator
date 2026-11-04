@@ -437,15 +437,7 @@ func emitClaudeEvent(
 			keyID,
 		),
 	}
-	if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-		if !usageEventsEqual(existing, event) {
-			result.Cursor.AnomalyCount++
-			result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
-		}
-		return
-	}
-	eventsByKey[event.SourceEventKey] = event
-	result.Events = append(result.Events, event)
+	result.addEvent(eventsByKey, event)
 }
 
 // canonicalBillingProvider normalizes one observed routing fact into a catalog
@@ -856,6 +848,30 @@ func normalizeOpenAIUsage(input, cachedInput, cacheWriteInput, output int64) (do
 	}, true
 }
 
+// routedUsageProvider is the token vocabulary for an agent that has already
+// normalized every provider's usage to one set of counters (Pi, OpenCode,
+// Goose): Anthropic keeps its own, and the OpenAI one holds every other
+// provider. BillingProviderID still records who billed the call.
+func routedUsageProvider(provider string) domain.UsageProviderID {
+	if strings.EqualFold(strings.TrimSpace(provider), "anthropic") {
+		return domain.UsageProviderAnthropic
+	}
+	return domain.UsageProviderOpenAI
+}
+
+// normalizeRoutedUsage maps those counters, where input excludes both caches,
+// into providerID's vocabulary.
+func normalizeRoutedUsage(providerID domain.UsageProviderID, input, cacheRead, cacheWrite, output int64) (domain.UsageTokenMetrics, bool) {
+	if providerID == domain.UsageProviderAnthropic {
+		return normalizeAnthropicUsage(input, cacheWrite, cacheRead, output, nil, nil)
+	}
+	total, ok := sumNonNegative(input, cacheRead, cacheWrite)
+	if !ok {
+		return domain.UsageTokenMetrics{}, false
+	}
+	return normalizeOpenAIUsage(total, cacheRead, cacheWrite, output)
+}
+
 func normalizeAnthropicUsage(directInput, cacheCreationInput, cachedInput, output int64, creation5m, creation1h *int64) (domain.UsageTokenMetrics, bool) {
 	uncachedInput, ok := sumNonNegative(directInput, cacheCreationInput)
 	if !ok {
@@ -994,6 +1010,20 @@ func parseUsageTimestamp(raw string) time.Time {
 		return time.Time{}
 	}
 	return parsed.UTC()
+}
+
+// addEvent appends event unless its source key was already emitted. A repeated
+// key with different content is a source conflict, counted as an anomaly.
+func (r *parseResult) addEvent(seen map[string]domain.ModelUsageEvent, event domain.ModelUsageEvent) {
+	if existing, duplicate := seen[event.SourceEventKey]; duplicate {
+		if !usageEventsEqual(existing, event) {
+			r.Cursor.AnomalyCount++
+			r.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+		}
+		return
+	}
+	seen[event.SourceEventKey] = event
+	r.Events = append(r.Events, event)
 }
 
 func usageEventsEqual(a, b domain.ModelUsageEvent) bool {

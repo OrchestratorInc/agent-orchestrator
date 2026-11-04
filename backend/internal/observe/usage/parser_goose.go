@@ -126,15 +126,7 @@ func parseGoose(source domain.UsageSourceContext, records []jsonlRecord, result 
 			continue
 		}
 		event.ProviderUsageJSON = boundedProviderUsage(record.Data)
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
-			}
-			continue
-		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		result.addEvent(eventsByKey, event)
 	}
 }
 
@@ -149,24 +141,15 @@ func gooseUsageEvent(source domain.UsageSourceContext, row gooseLedgerRow, model
 		return domain.ModelUsageEvent{}, false
 	}
 	provider := strings.TrimSpace(row.ProviderName)
-	providerID := domain.UsageProviderOpenAI
-	if strings.EqualFold(provider, "anthropic") {
-		providerID = domain.UsageProviderAnthropic
-	}
+	providerID := routedUsageProvider(provider)
 	tokens := domain.UsageTokenMetrics{OutputTokens: row.OutputTokens}
 	if row.InputTokens != nil {
 		input := *row.InputTokens
-		output := valueOrZero(row.OutputTokens)
-		var ok bool
-		if providerID == domain.UsageProviderAnthropic {
-			cached, sumOK := sumNonNegative(cacheRead, cacheWrite)
-			if !sumOK || cached > input {
-				return domain.ModelUsageEvent{}, false
-			}
-			tokens, ok = normalizeAnthropicUsage(input-cached, cacheWrite, cacheRead, output, nil, nil)
-		} else {
-			tokens, ok = normalizeOpenAIUsage(input, cacheRead, cacheWrite, output)
+		cached, ok := sumNonNegative(cacheRead, cacheWrite)
+		if !ok || cached > input {
+			return domain.ModelUsageEvent{}, false
 		}
+		tokens, ok = normalizeRoutedUsage(providerID, input-cached, cacheRead, cacheWrite, valueOrZero(row.OutputTokens))
 		if !ok {
 			return domain.ModelUsageEvent{}, false
 		}
