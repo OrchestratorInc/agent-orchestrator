@@ -33,6 +33,10 @@ type harnessImporter struct {
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessAider: {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 
+	domain.HarnessDevin:  {root: devinRoot, discover: discoverDevin, read: readDevinTranscript},
+	domain.HarnessCline:  {root: clineRoot, discover: discoverCline, read: readClineTranscript},
+	domain.HarnessCursor: {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessGrok:   {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
 	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
 }
 
