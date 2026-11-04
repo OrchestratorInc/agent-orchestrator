@@ -17,23 +17,17 @@ const cookie = (domain: string, name: string, value: string, extra: Partial<Repa
 	...extra,
 });
 
-// Removes the way Electron does: every cookie the URL can see with that name.
+// An expired set deletes exactly that name, domain and path, as Chromium does.
 function fakeSession(initial: RepairCookie[]) {
 	let jar = [...initial];
 	return {
 		jar: () => jar,
 		cookies: {
 			get: vi.fn(async () => [...jar]),
-			remove: vi.fn(async (url: string, name: string) => {
-				const host = new URL(url).hostname;
-				jar = jar.filter(
-					(item) => item.name !== name || !(item.domain?.startsWith(".") ? `.${host}`.endsWith(item.domain) : item.domain === host),
-				);
-			}),
-			set: vi.fn(async (details: { url: string; name: string; value: string; domain?: string; path?: string }) => {
+			set: vi.fn(async (details: { url: string; name: string; value: string; domain?: string; path?: string; expirationDate?: number }) => {
 				const domain = details.domain ?? new URL(details.url).hostname;
-				jar = jar.filter((item) => !(item.name === details.name && item.domain === domain && item.path === (details.path ?? "/")));
-				jar.push(cookie(domain, details.name, details.value, { path: details.path ?? "/" }));
+				const others = jar.filter((item) => !(item.name === details.name && item.domain === domain && item.path === (details.path ?? "/")));
+				jar = (details.expirationDate ?? 0) < 1000 ? others : [...others, cookie(domain, details.name, details.value, { path: details.path ?? "/" })];
 			}),
 		},
 	};
@@ -48,7 +42,7 @@ describe("repairCookies", () => {
 		expect(names(session.jar())).toEqual(["accounts.google.com|LSID=real"]);
 	});
 
-	it("restores a parent-domain cookie of the same name that removal also hits", async () => {
+	it("leaves a parent-domain cookie of the same name alone", async () => {
 		const session = fakeSession([
 			cookie(".accounts.google.com", "NID", "imported"),
 			cookie("accounts.google.com", "NID", "real"),
@@ -56,6 +50,32 @@ describe("repairCookies", () => {
 		]);
 		await repairCookies(session);
 		expect(names(session.jar())).toEqual([".google.com|NID=parent", "accounts.google.com|NID=real"]);
+	});
+
+	it("never writes to a cookie it keeps", async () => {
+		const session = fakeSession([
+			cookie(".accounts.google.com", "LSID", "imported"),
+			cookie("accounts.google.com", "LSID", "real"),
+			cookie(".google.com", "LSID", "parent"),
+		]);
+		await repairCookies(session);
+		expect(session.cookies.set).toHaveBeenCalledOnce();
+		expect(session.cookies.set).toHaveBeenCalledWith(expect.objectContaining({ domain: ".accounts.google.com", expirationDate: 1 }));
+	});
+
+	it("keeps every valid cookie when deleting fails, and repairs on the next run", async () => {
+		const session = fakeSession([cookie(".example.com", "sid", "imported"), cookie("example.com", "sid", "real")]);
+		session.cookies.set.mockRejectedValueOnce(new Error("nope"));
+		expect(await repairCookies(session)).toMatchObject({ duplicates: 0, failed: 1 });
+		expect(names(session.jar())).toEqual([".example.com|sid=imported", "example.com|sid=real"]);
+		expect(await repairCookies(session)).toMatchObject({ duplicates: 1, failed: 0 });
+		expect(names(session.jar())).toEqual(["example.com|sid=real"]);
+	});
+
+	it("does not count a cookie that is still there after deleting it", async () => {
+		const session = fakeSession([cookie(".example.com", "cf_clearance", "stale")]);
+		session.cookies.set.mockResolvedValueOnce(undefined);
+		expect(await repairCookies(session)).toMatchObject({ antiBot: 0, failed: 1 });
 	});
 
 	it("removes anti-bot cookies wherever they are", async () => {
@@ -71,13 +91,13 @@ describe("repairCookies", () => {
 	it("leaves a domain cookie alone when no host-only copy exists", async () => {
 		const session = fakeSession([cookie(".example.com", "session", "keep"), cookie("other.example.com", "session", "other")]);
 		expect(await repairCookies(session)).toMatchObject({ duplicates: 0 });
-		expect(session.cookies.remove).not.toHaveBeenCalled();
+		expect(session.cookies.set).not.toHaveBeenCalled();
 	});
 
 	it("does not treat different paths as duplicates", async () => {
 		const session = fakeSession([cookie(".example.com", "a", "1", { path: "/x" }), cookie("example.com", "a", "2", { path: "/y" })]);
 		expect(await repairCookies(session)).toMatchObject({ duplicates: 0 });
-		expect(session.cookies.remove).not.toHaveBeenCalled();
+		expect(session.cookies.set).not.toHaveBeenCalled();
 	});
 
 	it("does not restore one duplicate while repairing another on an overlapping domain", async () => {
@@ -118,21 +138,9 @@ describe("repairCookies", () => {
 		]);
 	});
 
-	it("still restores the other cookies when one restore fails, and reports it", async () => {
-		const session = fakeSession([
-			cookie(".example.com", "sid", "imported"),
-			cookie("example.com", "sid", "real"),
-			cookie(".com", "sid", "parent"),
-		]);
-		session.cookies.set.mockRejectedValueOnce(new Error("nope"));
-		const result = await repairCookies(session);
-		expect(result.failed).toBe(1);
-		expect(session.cookies.set).toHaveBeenCalledTimes(2);
-	});
-
 	it("counts failures and keeps going", async () => {
 		const session = fakeSession([cookie(".a.com", "cf_clearance", "x"), cookie(".b.com", "cf_clearance", "y")]);
-		session.cookies.remove.mockRejectedValueOnce(new Error("nope"));
+		session.cookies.set.mockRejectedValueOnce(new Error("nope"));
 		expect(await repairCookies(session)).toMatchObject({ antiBot: 1, failed: 1 });
 	});
 });
@@ -181,7 +189,7 @@ describe("repairBrowserProfileCookies", () => {
 			await writeFile(path.join(stateDir, "browser-cookie-repair.json"), "not json");
 			const session = fakeSession([]);
 			await expect(repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile: () => session })).resolves.toBeUndefined();
-			expect(session.cookies.get).toHaveBeenCalledOnce();
+			expect(session.cookies.get).toHaveBeenCalled();
 		} finally {
 			await cleanup();
 		}

@@ -26,7 +26,6 @@ export type RepairCookie = {
 export type RepairSession = {
 	cookies: {
 		get(filter: Record<string, never>): Promise<RepairCookie[]>;
-		remove(url: string, name: string): Promise<void>;
 		set(details: {
 			url: string;
 			name: string;
@@ -51,63 +50,44 @@ function urlOf(cookie: RepairCookie): string {
 	return `${cookie.secure ? "https" : "http"}://${hostOf(cookie)}${cookie.path || "/"}`;
 }
 
-function appliesTo(cookie: RepairCookie, host: string): boolean {
-	const domain = cookie.domain ?? "";
-	return domain.startsWith(".") ? `.${host}`.endsWith(domain) : domain === host;
+function sameCookie(a: RepairCookie, b: RepairCookie): boolean {
+	return a.name === b.name && a.domain === b.domain && (a.path ?? "/") === (b.path ?? "/");
+}
+
+/**
+ * Setting an expired cookie deletes exactly that name, domain and path. It never
+ * touches the site's real cookie, so a failure or crash here cannot sign anyone
+ * out. cookies.remove would also take every other cookie the URL can see.
+ */
+function expire(session: RepairSession, cookie: RepairCookie): Promise<void> {
+	return session.cookies.set({
+		url: urlOf(cookie),
+		name: cookie.name,
+		value: "",
+		...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+		path: cookie.path || "/",
+		secure: cookie.secure === true,
+		httpOnly: cookie.httpOnly === true,
+		expirationDate: 1,
+	});
 }
 
 export async function repairCookies(session: RepairSession): Promise<RepairResult> {
 	const cookies = await session.cookies.get({});
-	const result: RepairResult = { antiBot: 0, duplicates: 0, failed: 0 };
-
-	for (const cookie of cookies.filter((item) => isAntiBotCookie(item.name))) {
-		try {
-			await session.cookies.remove(urlOf(cookie), cookie.name);
-			result.antiBot += 1;
-		} catch {
-			result.failed += 1;
-		}
-	}
-
+	const antiBot = cookies.filter((item) => isAntiBotCookie(item.name));
 	const widened = cookies.filter(
 		(item) =>
 			!isAntiBotCookie(item.name) &&
 			item.domain?.startsWith(".") &&
 			cookies.some((other) => other.hostOnly && other.name === item.name && other.domain === hostOf(item) && (other.path ?? "/") === (item.path ?? "/")),
 	);
-	// Restore only from the final jar: a removed duplicate must not come back
-	// while another one on an overlapping domain is being repaired.
-	const remaining = cookies.filter((item) => !isAntiBotCookie(item.name) && !widened.includes(item));
-	for (const cookie of widened) {
-		try {
-			// Removal takes every cookie this URL can see with that name, so put
-			// the others back: the site's real one and any parent-domain cookie.
-			const host = hostOf(cookie);
-			const keep = remaining.filter((other) => other.name === cookie.name && appliesTo(other, host));
-			await session.cookies.remove(urlOf(cookie), cookie.name);
-			result.duplicates += 1;
-			for (const other of keep) {
-				try {
-					await session.cookies.set({
-						url: urlOf(other),
-						name: other.name,
-						value: other.value,
-						...(other.hostOnly ? {} : { domain: other.domain }),
-						path: other.path || "/",
-						secure: other.secure === true,
-						httpOnly: other.httpOnly === true,
-						...(other.sameSite ? { sameSite: other.sameSite } : {}),
-						...(other.expirationDate !== undefined ? { expirationDate: other.expirationDate } : {}),
-					});
-				} catch {
-					result.failed += 1;
-				}
-			}
-		} catch {
-			result.failed += 1;
-		}
-	}
-	return result;
+	for (const cookie of [...antiBot, ...widened]) await expire(session, cookie).catch(() => undefined);
+
+	// Only what is really gone counts, so a profile is never marked repaired early.
+	const after = await session.cookies.get({});
+	const gone = (cookie: RepairCookie) => !after.some((other) => sameCookie(other, cookie));
+	const repaired = { antiBot: antiBot.filter(gone).length, duplicates: widened.filter(gone).length };
+	return { ...repaired, failed: antiBot.length + widened.length - repaired.antiBot - repaired.duplicates };
 }
 
 async function readRepaired(file: string): Promise<string[]> {
