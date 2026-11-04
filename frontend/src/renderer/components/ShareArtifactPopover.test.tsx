@@ -114,6 +114,59 @@ describe("ShareArtifactButton", () => {
 		await openPopover();
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toBeTruthy();
 		expect(screen.queryByText(/changed since you published/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
+	});
+
+	it("offers Republish beside Unpublish when the file changed, and it updates the same link", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
+		await openPopover();
+		const republish = await screen.findByRole("button", { name: "Republish" });
+		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
+		// The link stays copyable, and Republish is the row's one primary action, at its right.
+		const copy = screen.getByRole("button", { name: "Copy link" });
+		expect(copy.compareDocumentPosition(republish) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		await userEvent.click(republish);
+		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID });
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
+		expect(screen.queryByText(/changed since you published/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
+	});
+
+	it("warns about a credential in the newer version before it is republished", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0", secretFindings: ["AWS access key"] }, { ...links, shares: [share] });
+		await openPopover();
+		await screen.findByRole("button", { name: "Republish" });
+		expect(screen.getByRole("alert").textContent).toContain("AWS access key");
+	});
+
+	it("stays on the link, with the newest version to republish, when the file changes during a republish", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, {
+			status: "changed",
+			inspection: { ...inspection, shareId: SHARE_ID, secretFindings: ["GitHub token"], fingerprint: "fp-2" },
+		});
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Republish" }));
+		expect(await screen.findByText("This file changed since you opened Share. Check it and publish again.")).toBeTruthy();
+		expect(screen.getByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
+		expect(screen.getByRole("alert").textContent).toContain("GitHub token");
+		publishSpy.mockResolvedValue({ status: "published", replaced: true, share });
+		await userEvent.click(screen.getByRole("button", { name: "Republish" }));
+		expect(publishSpy).toHaveBeenLastCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-2", shareId: SHARE_ID });
+	});
+
+	it("keeps offering Republish after a cancelled republish", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "cancelled" });
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Republish" }));
+		expect(await screen.findByRole("button", { name: "Republish" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
+	});
+
+	it("never offers Republish on a link that was unpublished", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		await openPopover();
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
 	});
 
 	it("says Publishing while the file uploads", async () => {
