@@ -574,6 +574,11 @@ func TestParseRepoNativeGitHubKeepsLastTwo(t *testing.T) {
 			remote: "https://ghe.corp.ghe.io/acme/demo.git",
 			want:   "acme/demo",
 		},
+		{
+			name:   "ghe.com tenant",
+			remote: "https://acme.ghe.com/acme/demo.git",
+			want:   "acme/demo",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

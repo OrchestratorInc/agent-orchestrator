@@ -122,7 +122,7 @@ func (c TrackerIntakeConfig) WithDefaults() TrackerIntakeConfig {
 }
 
 // InferTrackerProvider guesses the tracker provider from a repo origin URL.
-// GitHub hosts (github.com, *.github.com, *.ghe.io) map to github; any other
+// GitHub hosts (see IsGitHubHost) map to github; any other
 // host maps to gitlab (self-managed GitLab uses arbitrary hostnames). The
 // empty-string fallback is github for backward compatibility.
 func InferTrackerProvider(repoURL string) TrackerProvider {
@@ -142,8 +142,7 @@ func InferTrackerProvider(repoURL string) TrackerProvider {
 	if err != nil || parsed.Host == "" {
 		return TrackerProviderGitHub
 	}
-	host := strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www.")
-	if host == "github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io") {
+	if IsGitHubHost(parsed.Hostname()) {
 		return TrackerProviderGitHub
 	}
 	return TrackerProviderGitLab

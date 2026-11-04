@@ -15,6 +15,7 @@ func TestCLIParsePRURL(t *testing.T) {
 		wantErr   bool
 	}{
 		{"github", "https://github.com/owner/repo/pull/42", "github.com", "owner", "repo", 42, false},
+		{"ghe.com tenant", "https://acme.ghe.com/team/app/pull/7", "acme.ghe.com", "team", "app", 7, false},
 		{"gitlab", "https://gitlab.com/castai/ctxd/-/merge_requests/9", "gitlab.com", "castai", "ctxd", 9, false},
 		{"gitlab nested namespace", "https://gitlab.com/group/subgroup/repo/-/merge_requests/5", "gitlab.com", "group/subgroup", "repo", 5, false},
 		{"gitlab deep nested namespace", "https://gitlab.com/group/sub1/sub2/repo/-/merge_requests/3", "gitlab.com", "group/sub1/sub2", "repo", 3, false},

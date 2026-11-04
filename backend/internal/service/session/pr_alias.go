@@ -172,7 +172,7 @@ func githubPRURLIdentity(raw string) (host, owner, repoName string, number int, 
 		return "", "", "", 0, false
 	}
 	host = strings.ToLower(u.Host)
-	if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
+	if !domain.IsGitHubHost(host) {
 		return "", "", "", 0, false
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")

@@ -22,14 +22,39 @@ type RepositoryIdentity struct {
 // RepositoryProvider follows the SCM dispatcher: recognized GitHub hosts use
 // GitHub; other hosts use GitLab, including self-managed installations.
 func RepositoryProvider(host string) string {
-	if hostname, _, err := net.SplitHostPort(host); err == nil {
-		host = hostname
-	}
-	host = strings.ToLower(host)
-	if host == "github.com" || host == "www.github.com" || host == "api.github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io") {
+	if IsGitHubHost(host) {
 		return "github"
 	}
 	return "gitlab"
+}
+
+// IsGitHubHost reports whether host (any case, optional port) is operated by
+// GitHub: github.com, *.github.com, *.ghe.io, or a GHE.com tenant.
+func IsGitHubHost(host string) bool {
+	host = normalizeHost(host)
+	if host == "github.com" || host == "www.github.com" || host == "api.github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io") {
+		return true
+	}
+	_, tenant := GHECloudAPIBase(host)
+	return tenant
+}
+
+// GHECloudAPIBase returns the REST base of a GitHub Enterprise Cloud tenant
+// host (<tenant>.ghe.com, exactly one label); GraphQL is the base + "/graphql".
+func GHECloudAPIBase(host string) (string, bool) {
+	host = normalizeHost(host)
+	tenant, ok := strings.CutSuffix(host, ".ghe.com")
+	if !ok || tenant == "" || strings.Contains(tenant, ".") {
+		return "", false
+	}
+	return "https://api." + host, true
+}
+
+func normalizeHost(host string) string {
+	if hostname, _, err := net.SplitHostPort(host); err == nil {
+		host = hostname
+	}
+	return strings.ToLower(host)
 }
 
 // ParseRepositoryIdentity accepts repository URLs and Git SSH remotes, never PR URLs.

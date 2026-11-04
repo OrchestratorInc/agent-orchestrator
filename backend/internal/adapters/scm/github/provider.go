@@ -646,19 +646,10 @@ func parsePRURL(prURL string) (string, string, int, error) {
 		return "", "", 0, fmt.Errorf("%w: parse url: %w", ErrNotFound, err)
 	}
 	host := strings.ToLower(u.Host)
-	// Accept github.com (web) and api.github.com (REST/GraphQL). GitHub
-	// Enterprise hosts must end in .github.com or .ghe.io (GitHub's own
-	// dedicated TLDs); anything else looks like a bad URL or a different
-	// SCM and is rejected.
-	switch {
-	case host == "":
-		// Allow path-only URLs (parsePRURL is also exercised via API
-		// paths without a host in some tests).
-	case host == "github.com", host == "www.github.com", host == "api.github.com":
-		// canonical
-	case strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io"):
-		// enterprise
-	default:
+	// Accept GitHub-operated hosts only (domain.IsGitHubHost); anything else
+	// looks like a bad URL or a different SCM and is rejected. Path-only
+	// URLs are allowed (API paths without a host in some tests).
+	if host != "" && !domain.IsGitHubHost(host) {
 		return "", "", 0, fmt.Errorf("%w: host %q is not a github host", ErrNotFound, host)
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")

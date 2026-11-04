@@ -814,7 +814,7 @@ func parseGitHubRepo(remote string) (ports.SCMRepo, bool) {
 		}
 		host := strings.ToLower(parts[0])
 		owner, name, ok := splitOwnerRepo(parts[1])
-		return makeGitHubRepo(host, owner, name), ok && isGitHubHost(host)
+		return makeGitHubRepo(host, owner, name), ok && domain.IsGitHubHost(host)
 	}
 	if !strings.Contains(raw, "://") && strings.Count(strings.Trim(raw, "/"), "/") == 1 {
 		owner, name, ok := splitOwnerRepo(raw)
@@ -826,7 +826,7 @@ func parseGitHubRepo(remote string) (ports.SCMRepo, bool) {
 	}
 	host := strings.ToLower(u.Host)
 	owner, name, ok := splitOwnerRepo(u.Path)
-	return makeGitHubRepo(host, owner, name), ok && isGitHubHost(host)
+	return makeGitHubRepo(host, owner, name), ok && domain.IsGitHubHost(host)
 }
 
 func splitOwnerRepo(p string) (string, string, bool) {
@@ -841,10 +841,6 @@ func splitOwnerRepo(p string) (string, string, bool) {
 
 func makeGitHubRepo(host, owner, name string) ports.SCMRepo {
 	return ports.SCMRepo{Provider: "github", Host: host, Owner: owner, Name: name, Repo: owner + "/" + name}
-}
-
-func isGitHubHost(host string) bool {
-	return host == "github.com" || host == "www.github.com" || host == "api.github.com" || strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io")
 }
 
 func graphQLString(s string) string {
