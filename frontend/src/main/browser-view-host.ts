@@ -316,6 +316,8 @@ export function shouldHandleAppShortcutInBrowserContext(
 ): boolean {
   if (id === "new-shell-terminal" || id === "close-shell-terminal")
     return false;
+  // Dictation types into the chat composer, never a page; ⌘D belongs to the page.
+  if (id === "dictate") return false;
   return (
     browserShortcutAction(
       {

@@ -26,7 +26,6 @@ const {
 	postMock,
 	patchMock,
 	workspaceQueryMock,
-	boardActionsInPanelMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
 } = vi.hoisted(() => ({
@@ -37,7 +36,6 @@ const {
 	postMock: vi.fn(),
 	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	boardActionsInPanelMock: vi.fn(() => false),
 	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 	spawnCloudOrchestratorMock: vi.fn(),
 }));
@@ -46,7 +44,6 @@ vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloud
 
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
 
-vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -69,6 +66,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 }));
 
+vi.mock("./SessionTopbarActions", async (importOriginal) => ({ ...(await importOriginal<typeof import("./SessionTopbarActions")>()), SessionTopbarActions: () => null }));
 
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 	const { pressureState } = await import("@aoagents/product-ui");
@@ -95,6 +93,7 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onShortcut: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
@@ -122,7 +121,6 @@ vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
 	return {
 		...actual,
-		usesBoardActionsInPanel: () => boardActionsInPanelMock(),
 		isLinuxPlatform: () => false,
 	};
 });
@@ -166,7 +164,6 @@ beforeEach(() => {
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
-	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
 
 describe("SessionsBoard", () => {
@@ -321,7 +318,7 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
+	it("shows AO memory pressure before the Task button, and no archive bar with nothing archived", async () => {
 		const GIB = 1024 ** 3;
 		appMemoryMock.mockReturnValue({
 			isError: false,
@@ -338,6 +335,10 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
+		// In the board's action row, ahead of the Task button.
+		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
+		const task = screen.getByRole("button", { name: "New task" });
+		expect(indicator.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
 		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
@@ -346,7 +347,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [{ ...workspaceWithSessions([]), kind }],
 			isError: false,
@@ -416,7 +416,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it("shows the Board identity and compact actions in the in-panel board chrome", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -458,10 +457,9 @@ describe("SessionsBoard", () => {
 	});
 
 	it.each([
-		["active", "Working", "bg-status-working", true],
-		["idle", "Idle", "bg-status-idle", false],
-	] as const)("shows %s orchestrator activity in the in-panel board toolbar", (state, label, tone, pulses) => {
-		boardActionsInPanelMock.mockReturnValue(true);
+		["active", "Working"],
+		["idle", "Idle"],
+	] as const)("shows %s orchestrator activity in the in-panel board toolbar", (state, label) => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -492,16 +490,12 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
-		const indicator = button.querySelector("span.size-dot-sm") as HTMLElement;
+		const indicator = button.querySelector("span.size-dot-sm");
 		expect(within(button).getByText("Orchestrator").hasAttribute("data-compact-label")).toBe(true);
-		expect(indicator).toHaveAttribute("aria-hidden", "true");
-		expect(indicator).toHaveClass(tone);
-		expect(indicator).toHaveClass(pulses ? "animate-status-pulse" : "size-dot-sm");
-		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
+		expect(indicator).toBeNull();
 	});
 
 	it("shows the Board crumb on the root board when actions live in the panel", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -1689,7 +1683,8 @@ describe("SessionsBoard", () => {
 
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-		expect(await screen.findByRole("alert")).toHaveTextContent("Failed to terminate session (500)");
+		const alerts = await screen.findAllByRole("alert");
+		expect(alerts.some((alert) => alert.textContent?.includes("Failed to terminate session (500)"))).toBe(true);
 		expect(screen.getByRole("button", { name: "Archive merged worker" })).toBeEnabled();
 	});
 

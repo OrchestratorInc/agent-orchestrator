@@ -7,7 +7,7 @@ import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
@@ -27,6 +27,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
+import { useUiStore } from "../../stores/ui-store";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -87,6 +88,7 @@ export function SideComposer({
 }) {
 	const { t } = useTranslation();
 	const editor = useRef<ComposerEditorHandle>(null);
+	const enterSends = useUiStore((state) => state.chatSendKeyMode === "enter");
 	const [concealExpired, setConcealExpired] = useState(false);
 	useEffect(() => {
 		if (!sending) {
@@ -211,6 +213,7 @@ export function SideComposer({
 					) : null}
 					<ComposerEditor
 						ref={editor}
+						enterSends={enterSends}
 						concealed={sending && !concealExpired}
 						label="Side chat question"
 						placeholder={
@@ -534,7 +537,7 @@ export function useIndependentSideChats(
 		let stream: EventSource | undefined;
 		if (baseUrl && typeof EventSource !== "undefined") {
 			stream = new EventSource(
-				`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
 			);
 			stream.addEventListener("changed", refreshSafely);
 			stream.addEventListener("snapshot", refreshSafely);
@@ -1071,6 +1074,9 @@ export function useIndependentSideChats(
 				}
 
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
+				// The first accepted question may have named this tab. A list refresh
+				// failure must not turn an accepted delivery into a failed send.
+				void refreshList().catch(() => undefined);
 			} catch (cause) {
 				if (sessionRef.current === sessionId && !closedSidesRef.current.has(sideId)) setError(apiErrorMessage(cause));
 				if (propagateError) throw cause;
@@ -1079,7 +1085,7 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList],
 	);
 
 	const close = useCallback(
@@ -1309,7 +1315,7 @@ export function useIndependentSideChats(
 	};
 
 	const tabBar = enabled ? (
-		<header className="browser-panel__tab-row">
+		<header className="browser-panel__tab-row side-chat__tab-row">
 			<div className="browser-panel__tab-region">
 				<div
 					ref={tabStripRef}
@@ -1529,7 +1535,7 @@ export function useIndependentSideChats(
 									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
-										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
+										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.emptyDescription")}</p>
 									</div>
 								) : null}
 								<Timeline
@@ -1767,7 +1773,6 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{enabled ? <p className="max-w-sm leading-relaxed">{t("sideChat.isolationPolicy")}</p> : null}
 					{error ? <p role="alert">{error}</p> : null}
 				</div>
 			</div>

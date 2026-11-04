@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
-import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -24,6 +24,8 @@ import {
 
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
+
+export type ChatSendKeyMode = "enter" | "mod-enter";
 
 export type GlobalSettingsSection =
 	| "general"
@@ -179,6 +181,8 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
+	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
@@ -207,6 +211,9 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
+	/** True while the first-run project prompt is pending, so shell notices wait for it. */
+	firstRunPromptActive: boolean;
+	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -238,6 +245,7 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
@@ -307,6 +315,7 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
@@ -336,12 +345,12 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialWindowTranslucency() {
-	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
-}
-
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialChatSendKeyMode(): ChatSendKeyMode {
+	return getLocalStorage()?.getItem(chatSendKeyModeStorageKey) === "mod-enter" ? "mod-enter" : "enter";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -400,8 +409,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	windowTranslucency: initialWindowTranslucency(),
+	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
@@ -414,6 +424,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	firstRunPromptActive: false,
+	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
@@ -479,6 +491,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setChatSendKeyMode: (chatSendKeyMode) => {
+		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
+		set({ chatSendKeyMode });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),

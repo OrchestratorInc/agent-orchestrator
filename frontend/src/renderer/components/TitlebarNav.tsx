@@ -7,6 +7,7 @@ import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
+import type { AppShortcutId } from "../../shared/shortcuts";
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -127,11 +128,7 @@ export function TitlebarNav({
           isSidebarOpen ? t("shell.collapseSidebar") : t("shell.expandSidebar")
         }
         onClick={toggleSidebar}
-        title={
-          isSidebarOpen
-            ? t("titlebar.collapseSidebarShortcut")
-            : t("titlebar.expandSidebarShortcut")
-        }
+        shortcut="toggle-sidebar"
       >
         <PanelLeft className="size-icon-lg" aria-hidden="true" />
       </TitlebarButton>
@@ -179,7 +176,7 @@ export function TitlebarNav({
               disabled={historyLocked || !canGoBack}
               label={t("titlebar.goBack")}
               onClick={() => router.history.back()}
-              title={t("titlebar.goBack")}
+              shortcut="history-back"
             >
               <ArrowLeft className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -187,7 +184,7 @@ export function TitlebarNav({
               disabled={historyLocked || !canGoForward}
               label={t("titlebar.goForward")}
               onClick={() => router.history.forward()}
-              title={t("titlebar.goForward")}
+              shortcut="history-forward"
             >
               <ArrowRight className="size-icon-lg" aria-hidden="true" />
             </TitlebarButton>
@@ -200,14 +197,14 @@ export function TitlebarNav({
 
 function TitlebarButton({
   label,
-  title,
+  shortcut,
   disabled,
   tabIndex,
   onClick,
   children,
 }: {
   label: string;
-  title: string;
+  shortcut: AppShortcutId;
   disabled?: boolean;
   tabIndex?: number;
   onClick: () => void;
@@ -231,7 +228,7 @@ function TitlebarButton({
           </button>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{title}</TooltipContent>
+      <TooltipContent shortcut={shortcut} side="bottom">{label}</TooltipContent>
     </Tooltip>
   );
 }

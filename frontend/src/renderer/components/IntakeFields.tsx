@@ -112,6 +112,7 @@ export function IntakeFields({
 	controlClassName,
 	labelClassName,
 	variant = "default",
+	description,
 }: {
 	form: IntakeForm;
 	onChange: (patch: Partial<IntakeForm>) => void;
@@ -122,12 +123,14 @@ export function IntakeFields({
 	controlClassName?: string;
 	labelClassName?: string;
 	variant?: "default" | "settings";
+	/** Replaces the settings row's description, for an intake with rules of its own (a Cloud project's). */
+	description?: string;
 }) {
 	const { t } = useTranslation();
 	const needsRule = intakeNeedsRule(form);
 	if (variant === "settings") {
 		return (
-			<IntakeSettingsFields form={form} onChange={onChange} repoPreview={repoPreview} />
+			<IntakeSettingsFields form={form} onChange={onChange} repoPreview={repoPreview} description={description} />
 		);
 	}
 	return (
@@ -205,10 +208,12 @@ function IntakeSettingsFields({
 	form,
 	onChange,
 	repoPreview,
+	description,
 }: {
 	form: IntakeForm;
 	onChange: (patch: Partial<IntakeForm>) => void;
 	repoPreview?: { value?: string; host?: string };
+	description?: string;
 }) {
 	const { t } = useTranslation();
 	const [assigneeEditing, setAssigneeEditing] = useState(false);
@@ -244,7 +249,7 @@ function IntakeSettingsFields({
 	return (
 		<div className="flex flex-col gap-1.5">
 			<SettingsRow
-				description={t("settings.project.intakeDescription")}
+				description={description ?? t("settings.project.intakeDescription")}
 				label={t("settings.project.enableIssueIntake")}
 			>
 				<Switch

@@ -6,6 +6,8 @@ import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { cn } from "../lib/utils";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
@@ -163,10 +165,11 @@ export function TopbarOpenEditorButton({
 				</TopbarActionError>
 			) : null}
 			<div
-				className="inline-flex items-center gap-0 rounded-md transition-colors hover:bg-interactive-hover data-[state=open]:bg-interactive-hover"
+				className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
 				data-state={menuOpen ? "open" : "closed"}
 				style={style}
 			>
+				<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
@@ -176,7 +179,8 @@ export function TopbarOpenEditorButton({
 										?? (preferred
 											? t("editor.openInAria", { name: preferred.name })
 											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
-								className="hover:bg-transparent"
+								className="bg-transparent hover:bg-transparent"
+								highlight={false}
 								disabled={mainDisabled}
 								onClick={() => launch()}
 								variant="icon"
@@ -185,29 +189,26 @@ export function TopbarOpenEditorButton({
 							</TopbarButton>
 						</span>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{mainTitle}</TooltipContent>
+					<TooltipContent shortcut="open-in-editor" side="bottom">{mainTitle}</TooltipContent>
 				</Tooltip>
 				<DropdownMenu onOpenChange={(isOpen) => {
 					setMenuOpen(isOpen);
 					if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 				}}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<span className="inline-flex">
-								<DropdownMenuTrigger asChild>
-									<TopbarButton
-										aria-label={t("editor.openOptionsAria")}
-										className="hover:bg-transparent"
-										disabled={menuDisabled}
-										variant="icon"
-									>
-										<ChevronDown className="size-icon-sm" aria-hidden="true" />
-									</TopbarButton>
-								</DropdownMenuTrigger>
-							</span>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("editor.openOptionsAria")}</TooltipContent>
-					</Tooltip>
+					<span className="inline-flex">
+						<DropdownMenuTrigger asChild>
+							<TopbarButton
+								aria-label={t("editor.openOptionsAria")}
+								className="bg-transparent hover:bg-transparent"
+								highlight={false}
+								disabled={menuDisabled}
+								variant="icon"
+							>
+								<ChevronDown className="size-icon-sm" aria-hidden="true" />
+							</TopbarButton>
+						</DropdownMenuTrigger>
+					</span>
+				
 					<DropdownMenuContent align="end" className="min-w-52">
 						{[...openInTargets, ...editors].map((target) => (
 							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>

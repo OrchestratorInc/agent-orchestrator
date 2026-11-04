@@ -1023,7 +1023,7 @@ export function Sidebar({
 							<PanelLeft aria-hidden="true" />
 						</button>
 					</TooltipTrigger>
-					<TooltipContent side="right">
+					<TooltipContent shortcut="toggle-sidebar" side="right">
 						{isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
 					</TooltipContent>
 				</Tooltip>
@@ -1377,7 +1377,7 @@ export function Sidebar({
 								</span>
 							</button>
 						</TooltipTrigger>
-						<TooltipContent side="right">{t("shell.settings")}</TooltipContent>
+						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
 					</Tooltip>
 				</div>
 				</>
@@ -1588,7 +1588,7 @@ const ProjectItem = memo(function ProjectItem({
 		onToggle(workspace.id);
 	};
 
-	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
+	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
 	// Expand a collapsed project so opening the orchestrator also reveals its
 	// session list — otherwise the tree stays shut while you're inside it.
@@ -2501,9 +2501,11 @@ const SessionRow = memo(function SessionRow({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
+	// A session shared from another organization is the sharer's to name.
+	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		rename.begin();
-	}, [rename.begin]);
+		if (renamable) rename.begin();
+	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
 
@@ -2736,9 +2738,7 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
+				{session.cloud?.shared ? null : <button
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 							className={cn(
 								SESSION_ACTION_CLASS,
@@ -2752,12 +2752,7 @@ const SessionActions = memo(function SessionActions({
 							type="button"
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent side="top">
-						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-					</TooltipContent>
-				</Tooltip>
+						</button>}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">

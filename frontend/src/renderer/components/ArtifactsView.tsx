@@ -15,7 +15,6 @@ import {
 } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { useNavigateToSession } from "../lib/navigate-to-session";
-import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
@@ -23,7 +22,8 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -47,7 +47,6 @@ const MAX_LIVE_PREVIEWS = 4;
  */
 export function ArtifactsView() {
 	const { t } = useTranslation();
-	const showPageTitle = hidesShellTopbar();
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
@@ -108,77 +107,74 @@ export function ArtifactsView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			{/* The controls sit the same distance from the top, the right edge, and
-			    each other: half the gap between the toolbar and a control. */}
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <File className="size-icon-md" aria-hidden="true" /> : null}
-					{t("artifacts.title")}
-				</h1>
-				<div className="workspace-topbar-actions flex min-w-0 flex-1 items-center justify-end gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-					{hasArtifacts ? (
-						<>
-						{/* Same field as the inspector's Files filter and browser address bar. */}
-						<label className="relative block w-56 min-w-0 shrink">
-							<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
-							<Input
-								aria-label={t("artifacts.search")}
-								className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-								onChange={(event) => setQuery(event.target.value)}
-								placeholder={t("artifacts.search")}
-								type="search"
-								value={query}
-							/>
-						</label>
-						<DropdownMenu>
-							<DropdownMenuTrigger asChild>
-								<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
-									<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
-									<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
-									<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
-								</TopbarButton>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
-								<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
-									<DropdownMenuRadioItem value="">{t("artifacts.allProjects")}</DropdownMenuRadioItem>
-									<DropdownMenuSeparator />
-									{groups.map((group) => <DropdownMenuRadioItem key={group.id} value={group.id}>{group.isScratchpad ? scratchpadName : group.name}</DropdownMenuRadioItem>)}
-								</DropdownMenuRadioGroup>
-							</DropdownMenuContent>
-						</DropdownMenu>
-						<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
-							{([
-								{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
-								{ value: "list", label: t("artifacts.listView"), icon: List },
-							] as const).map(({ value, label, icon: Icon }) => (
-								<Tooltip key={value}>
-									<TooltipTrigger asChild>
-										<TopbarButton
-											variant="icon"
-											aria-label={label}
-											aria-pressed={view === value}
-											onClick={() => setView(value)}
-											className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
-										>
-											<Icon aria-hidden="true" className="size-icon-sm" />
-										</TopbarButton>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{label}</TooltipContent>
-								</Tooltip>
-							))}
-						</div>
-						</>
-					) : null}
-					<CreateArtifactMenu
-						workspaces={workspaces ?? []}
-						create={createArtifact.create}
-						pending={createArtifact.pending}
-						label="new"
-						align="end"
-						localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
-					/>
-				</div>
-			</header>
+			<PageTopbar
+				lead={<PageTopbarTitle as="h1" icon={<File className="size-icon-md" aria-hidden="true" />}>{t("artifacts.title")}</PageTopbarTitle>}
+				actions={
+					<>
+						{hasArtifacts ? (
+							<>
+							{/* Same field as the inspector's Files filter and browser address bar. */}
+							<label className="relative block w-56 min-w-0 shrink">
+								<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
+								<Input
+									aria-label={t("artifacts.search")}
+									className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
+									onChange={(event) => setQuery(event.target.value)}
+									placeholder={t("artifacts.search")}
+									type="search"
+									value={query}
+								/>
+							</label>
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
+										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
+										<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
+										<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
+									</TopbarButton>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
+									<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+										<DropdownMenuRadioItem value="">{t("artifacts.allProjects")}</DropdownMenuRadioItem>
+										<DropdownMenuSeparator />
+										{groups.map((group) => <DropdownMenuRadioItem key={group.id} value={group.id}>{group.isScratchpad ? scratchpadName : group.name}</DropdownMenuRadioItem>)}
+									</DropdownMenuRadioGroup>
+								</DropdownMenuContent>
+							</DropdownMenu>
+							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
+								{([
+									{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
+									{ value: "list", label: t("artifacts.listView"), icon: List },
+								] as const).map(({ value, label, icon: Icon }) => (
+									<Tooltip key={value}>
+										<TooltipTrigger asChild>
+											<TopbarButton
+												variant="icon"
+												aria-label={label}
+												aria-pressed={view === value}
+												onClick={() => setView(value)}
+												className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
+											>
+												<Icon aria-hidden="true" className="size-icon-sm" />
+											</TopbarButton>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">{label}</TooltipContent>
+									</Tooltip>
+								))}
+							</div>
+							</>
+						) : null}
+						<CreateArtifactMenu
+							workspaces={workspaces ?? []}
+							create={createArtifact.create}
+							pending={createArtifact.pending}
+							label="new"
+							align="end"
+							localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+						/>
+					</>
+				}
+			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
@@ -254,7 +250,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
 	const headerContent = <>
-		<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
+		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
 			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
 			<span className="truncate">{name}</span>
 		</span>
