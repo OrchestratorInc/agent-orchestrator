@@ -76,6 +76,17 @@ it("ignores a report React Native has already contradicted", async () => {
 
 // The composer rides keyboard-controller's own progress on the UI thread, and
 // stands at the reconciled height only when that progress missed the open.
+// Backgrounding the app with the keyboard up hides it without running the
+// animation the composer rides, which then held the composer at the open height.
+it("rests the composer at the bottom whenever the keyboard is closed", async () => {
+	await mount();
+	expect(latest?.composerLift).toBe(0);
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.composerLift).toBeUndefined();
+	await fire("controller", "keyboardDidHide");
+	expect(latest?.composerLift).toBe(0);
+});
+
 it("lets the composer ride the keyboard, and lifts it by hand only for an open keyboard-controller missed", async () => {
 	await mount();
 	await fire("controller", "keyboardWillShow", { height: 336 });

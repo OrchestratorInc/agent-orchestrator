@@ -81,6 +81,9 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
 		// How far the composer stands above the screen's bottom when the keyboard's
 		// own progress cannot be trusted; `undefined` rides it (see KeyboardFollower).
-		composerLift: platform === "android" && !state.progressTrusted ? (state.visible ? state.height : 0) : undefined,
+		// A closed keyboard always rests it at the bottom: put away while the app
+		// was in the background, the keyboard never ran the animation the follower
+		// rides, which stayed at the open height and held the composer up there.
+		composerLift: platform === "android" ? (state.visible ? (state.progressTrusted ? undefined : state.height) : 0) : undefined,
 	};
 }
