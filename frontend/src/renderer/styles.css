@@ -3437,6 +3437,14 @@ html.sidebar-reordering * {
 	font-weight: var(--font-weight-semibold);
 }
 
+/* The editor control's menu chevron belongs to its labeled button: narrow,
+   tucked against the label rather than a second full-width control. */
+.workspace-topbar-actions .topbar-control--chevron {
+	width: var(--space-5);
+	min-width: var(--space-5);
+	margin-inline-start: calc(-1 * var(--space-1));
+}
+
 .workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
 }

@@ -204,7 +204,7 @@ export function TopbarOpenEditorButton({
 					<DropdownMenuTrigger asChild>
 						<TopbarButton
 							aria-label={t("editor.openOptionsAria")}
-							className="bg-transparent hover:bg-transparent"
+							className="topbar-control--chevron bg-transparent hover:bg-transparent"
 							highlight={false}
 							disabled={menuDisabled}
 							variant="icon"
