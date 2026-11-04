@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
+import { Button } from "../ui/button";
 
 /** How long "Stopped sharing · Undo" stays up. Access is gone at once, not when it goes. */
 export const UNDO_NOTICE_MS = 8_000;
@@ -125,14 +126,9 @@ export function UndoNotice({ notice, onUndo, onDismiss, className }: {
 		>
 			<p className="min-w-0 flex-1 wrap-break-word font-medium text-(--color-text-import-title)">{notice.message}</p>
 			{notice.undo ? (
-				<button
-					type="button"
-					onClick={onUndo}
-					className="-my-1 shrink-0 rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none hover:bg-interactive-hover focus-visible:ring-2 focus-visible:ring-ring"
-					data-undo-action=""
-				>
+				<Button type="button" variant="ghost" size="xs" onClick={onUndo} className="-my-1 font-medium" data-undo-action="">
 					{t("share.undo")}
-				</button>
+				</Button>
 			) : null}
 		</div>
 	);

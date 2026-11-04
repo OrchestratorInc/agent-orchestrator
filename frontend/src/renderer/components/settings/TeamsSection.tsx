@@ -33,6 +33,7 @@ import { Skeleton } from "../ui/skeleton";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { Pressable } from "../ui/pressable";
 
 type OpenTeam = { orgId: string; teamId: string; external: boolean };
 
@@ -232,9 +233,8 @@ function TeamsList({ orgId, manage, titleHidden, focusTeamId, onOpen }: {
 function TeamListRow({ team, subtitle, onOpen }: { team: CloudCpTeam; subtitle: string; onOpen: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<button
-			type="button"
-			className="settings-row-bar flex w-full items-center gap-3 text-left transition-colors duration-(--duration-fast) hover:bg-(--color-bg-settings-row-hover) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+		<Pressable
+			className="settings-row-bar flex w-full items-center gap-3 transition-colors duration-(--duration-fast) hover:bg-(--color-bg-settings-row-hover) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
 			onClick={onOpen}
 			data-team-row={team.id}
 		>
@@ -245,7 +245,7 @@ function TeamListRow({ team, subtitle, onOpen }: { team: CloudCpTeam; subtitle: 
 			</span>
 			{team.yourRole ? <span className="shrink-0 text-control text-settings-muted">{team.yourRole === "owner" ? t("teams.roleOwner") : t("teams.roleMember")}</span> : null}
 			<ChevronRight className="size-icon-md shrink-0 text-passive" aria-hidden="true" />
-		</button>
+		</Pressable>
 	);
 }
 
@@ -447,16 +447,18 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 	});
 
 	const back = (
-		<button
+		<Button
 			ref={backRef}
 			type="button"
-			className="-ml-1 inline-flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-control text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+			variant="quiet"
+			size="none"
+			className="-ml-1 h-6 gap-1 self-start px-1 text-control [&_svg]:size-3.5"
 			onClick={onBack}
 			data-team-back=""
 		>
-			<ChevronLeft className="size-3.5" aria-hidden="true" />
+			<ChevronLeft aria-hidden="true" />
 			{t("teams.title")}
-		</button>
+		</Button>
 	);
 	const data = detail.data;
 	if (!data) {
@@ -586,9 +588,9 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 					/>
 				))}
 				{hidden > 0 ? (
-					<button type="button" className="settings-row-bar w-full text-left text-control text-(--color-text-markdown-link) hover:underline" onClick={() => setShowAll(true)}>
+					<Pressable className="settings-row-bar w-full text-control text-(--color-text-markdown-link) hover:underline" onClick={() => setShowAll(true)}>
 						{t("teams.showAll", { count: hidden })}
-					</button>
+					</Pressable>
 				) : null}
 			</SettingsSection>
 			{changeRole.error ? <p role="alert" className="-mt-4 px-(--settings-row-inset) text-caption text-error">{teamErrorMessage(changeRole.error, t("teams.saveFailed"))}</p> : null}
@@ -726,14 +728,9 @@ function MemberRow({ member, manage, lastOwner, onRole, onRemove }: {
 				{manage && !member.you ? (
 					<DropdownMenu modal={false}>
 						<DropdownMenuTrigger asChild>
-							<button
-								type="button"
-								className={cn("grid size-7 place-items-center rounded-md text-passive hover:bg-interactive-hover hover:text-foreground")}
-								aria-label={t("teams.memberActions", { name })}
-								data-member-actions=""
-							>
+							<Button type="button" variant="quiet" size="icon-sm" aria-label={t("teams.memberActions", { name })} data-member-actions="">
 								<MoreHorizontal className="size-4" aria-hidden="true" />
-							</button>
+							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="w-44">
 							<DropdownMenuItem onSelect={onRemove} disabled={lastOwner} className="text-destructive focus:text-destructive [&_svg]:text-destructive!">

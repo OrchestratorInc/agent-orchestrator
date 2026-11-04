@@ -42,6 +42,7 @@ import {
 } from "./ui/dialog";
 import { Skeleton } from "./ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { Pressable } from "./ui/pressable";
 
 export type { ShareScope, ShareModeCap } from "./share/accessLabels";
 export type { ShareAccess, ShareExpiry } from "./share/ShareLinksSection";
@@ -674,9 +675,9 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 						{fromProject ? (
 							<>
 								{" · "}
-								<button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={onShowProject}>
+								<Button type="button" variant="link" className="no-underline hover:underline" onClick={onShowProject}>
 									{t("share.fromProject")}
-								</button>
+								</Button>
 							</>
 						) : entry.source === "link" ? ` · ${t("share.fromLink")}` : null}
 					</p>
@@ -702,16 +703,15 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 					/>
 				)}
 				{team ? (
-					<button
-						type="button"
-						className="grid size-6 shrink-0 place-items-center rounded-sm text-passive hover:bg-interactive-hover hover:text-foreground"
+					<Pressable
+						className="grid size-6 shrink-0 place-items-center rounded-sm text-passive hover:bg-interactive-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
 						aria-expanded={expanded}
 						aria-label={expanded ? t("share.hideMembers", { name }) : t("share.showMembers", { name })}
 						onClick={() => setExpanded((value) => !value)}
 						data-share-expand=""
 					>
 						<ChevronRight className={cn("size-3.5 transition-transform duration-(--duration-normal)", expanded && "rotate-90")} aria-hidden="true" />
-					</button>
+					</Pressable>
 				) : (
 					<span className="w-6 shrink-0" />
 				)}

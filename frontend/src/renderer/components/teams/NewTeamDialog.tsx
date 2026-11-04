@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -21,6 +20,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { listNames } from "../share/accessLabels";
 import { PeopleField, type Recipient } from "./PeopleField";
+import { CloseButton } from "../ui/close-button";
 
 /** A readable message for a failed team request. */
 export function teamErrorMessage(error: unknown, fallback: string): string {
@@ -81,9 +81,7 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 				data-new-team-dialog=""
 			>
 				<DialogClose asChild>
-					<button type="button" className="settings-dialog-close-button settings-close-button" aria-label={t("confirm.close")}>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("confirm.close")} />
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12 pb-0")}>
 					<DialogTitle className="settings-dialog-title text-subtitle">{t("teams.newTeam")}</DialogTitle>
@@ -130,7 +128,7 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 					{create.error ? (
 						<p role="alert" className="-mt-2 text-caption leading-4 text-error">{teamErrorMessage(create.error, t("teams.createFailed"))}</p>
 					) : null}
-					<button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
+					<Button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
 				</form>
 				<div className={cn(settingsDialogFooterClass, "px-5 py-3.5")}>
 					<Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{t("confirm.cancel")}</Button>

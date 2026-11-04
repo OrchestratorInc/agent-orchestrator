@@ -382,6 +382,17 @@ describe("TeamsSection", () => {
 		expect(screen.queryByText("Platform")).toBeNull();
 	});
 
+	it("pins the New team dialog's close button to its corner, and it closes the dialog", async () => {
+		renderSection();
+		await userEvent.click(await screen.findByRole("button", { name: "New team" }));
+		const dialog = document.querySelector<HTMLElement>("[data-new-team-dialog]")!;
+		const close = within(dialog).getByRole("button", { name: "Close dialog" });
+		// The settings close-button utilities it used are gone from the stylesheet.
+		expect(close).toHaveClass("absolute", "top-3", "right-3");
+		await userEvent.click(close);
+		await waitFor(() => expect(document.querySelector("[data-new-team-dialog]")).toBeNull());
+	});
+
 	it("opens a new team's page at once from what creating it returned", async () => {
 		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "New team" }));

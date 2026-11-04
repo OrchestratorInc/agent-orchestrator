@@ -11,6 +11,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { capLabel, roleLabel, type ShareModeCap, type ShareScope } from "./accessLabels";
+import { Button } from "../ui/button";
 
 /**
  * One row's access, as a borderless trigger like the Settings selects: the
@@ -52,20 +53,18 @@ export function AccessMenu({
 	return (
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<button
+				<Button
 					type="button"
-					className={cn(
-						"inline-flex h-7 max-w-full shrink-0 items-center gap-1 rounded-md px-2 text-control whitespace-nowrap text-muted-foreground outline-none transition-colors duration-(--duration-fast)",
-						"hover:bg-interactive-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-interactive-active data-[state=open]:text-foreground",
-						disabled && "pointer-events-none opacity-60",
-					)}
+					variant="quiet"
+					size="none"
+					className="h-7 max-w-full gap-1 px-2 text-control"
 					aria-label={t("share.changeAccess", { access: label })}
 					data-access-menu=""
 				>
 					<span className="truncate">{label}</span>
 					{showCap && role === "editor" ? <span className="text-passive">· {capLabel(t, modeCap)}</span> : null}
 					<ChevronDown className="size-3 shrink-0" aria-hidden="true" />
-				</button>
+				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align={align} className="w-68">
 				<AccessOption
@@ -133,15 +132,10 @@ export function CapMenu({ value, onChange }: { value: ShareModeCap; onChange: (c
 	return (
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
-				<button
-					type="button"
-					className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-control text-foreground/80 outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-interactive-active"
-					aria-label={t("share.modeCap")}
-					data-cap-menu=""
-				>
+				<Button type="button" variant="ghost" size="none" className="h-7 gap-1 px-2 text-control text-foreground/80 hover:text-foreground" aria-label={t("share.modeCap")} data-cap-menu="">
 					{capLabel(t, value)}
 					<ChevronDown className="size-3" aria-hidden="true" />
-				</button>
+				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-48">
 				{(["read-only", "standard", "trusted"] as const).map((cap) => (

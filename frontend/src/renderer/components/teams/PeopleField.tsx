@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils";
 import type { CloudCpShareCandidate } from "../../lib/cloud-cp";
 import { looksLikeEmail, useShareCandidates } from "../../hooks/useTeams";
 import { PersonAvatar, TeamTile } from "./TeamVisuals";
+import { Button } from "../ui/button";
 
 /** Someone picked in a people field: a team, or a person by email. */
 export type Recipient =
@@ -265,14 +266,16 @@ export function PeopleField({
 							>
 								{recipient.kind === "team" ? <TeamTile name={recipient.name} size="sm" /> : <PersonAvatar name={recipient.name} email={recipient.email} size="xs" />}
 								<span className="min-w-0 truncate">{recipient.kind === "team" ? recipient.name : recipient.name || recipient.email}</span>
-								<button
+								<Button
 									type="button"
-									className="grid size-4 shrink-0 place-items-center rounded-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+									variant="quiet"
+									size="none"
+									className="size-4 rounded-xs [&_svg]:size-2.5"
 									aria-label={t("teams.field.remove", { name: recipient.kind === "team" ? recipient.name : recipient.name || recipient.email })}
 									onClick={() => onChange(value.filter((other) => recipientKey(other) !== recipientKey(recipient)))}
 								>
-									<X className="size-2.5" aria-hidden="true" />
-								</button>
+									<X aria-hidden="true" />
+								</Button>
 							</span>
 						))}
 						<input
