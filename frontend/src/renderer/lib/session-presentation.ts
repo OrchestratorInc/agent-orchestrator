@@ -105,7 +105,7 @@ export function getSessionStatusDotView(
 	const working = isAgentActivityWorking(session.activity);
 	const closedWithoutMerge = session.displayStatus === "Closed without merge";
 	const sectionStatus: SessionStatus =
-		(session.displayStatus && pullRequestToneByDisplayStatus[session.displayStatus]) ??
+		pullRequestToneByDisplayStatus[session.displayStatus ?? ""] ??
 		session.scmStatus ??
 		session.status;
 	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;

@@ -162,11 +162,11 @@ describe("session presentation", () => {
 		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
 	});
 
-	it("falls back to SCM state when the phrase describes the worker, not a PR", () => {
+	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {
 		const session = sessionWith({
 			status: "working",
 			scmStatus: "mergeable",
-			displayStatus: "Working",
+			displayStatus,
 			activity: { state: "active", lastActivityAt: "" },
 		});
 
