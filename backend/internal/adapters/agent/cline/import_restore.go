@@ -53,6 +53,115 @@ func readImportedClineJSON(ctx context.Context, root *os.Root, path string, valu
 	return ctx.Err()
 }
 
+// maxImportedClineHistoryBytes matches the importer's transcript budget, so
+// every message document AO offers and imports can also be restored.
+const maxImportedClineHistoryBytes = 1 << 30
+
+// scanImportedClineHistory streams a message document and reports its
+// session id and whether it holds at least one message. Message bodies,
+// including oversized tool payloads, are skipped token by token rather than
+// buffered.
+func scanImportedClineHistory(ctx context.Context, root *os.Root, path string) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	info, err := root.Lstat(path)
+	if err != nil {
+		return "", false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxImportedClineHistoryBytes {
+		return "", false, errors.New("cline imported history is not a bounded regular file")
+	}
+	f, err := root.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = f.Close() }()
+	dec := json.NewDecoder(io.LimitReader(f, maxImportedClineHistoryBytes))
+	if err := expectClineDelim(dec, '{'); err != nil {
+		return "", false, err
+	}
+	var id string
+	nonEmpty := false
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false, err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return "", false, errors.New("cline imported history has a non-string key")
+		}
+		switch key {
+		case "sessionId":
+			id = ""
+			if err := dec.Decode(&id); err != nil {
+				return "", false, err
+			}
+		case "messages":
+			if err := expectClineDelim(dec, '['); err != nil {
+				return "", false, err
+			}
+			nonEmpty = false
+			for dec.More() {
+				nonEmpty = true
+				if err := skipClineJSONValue(ctx, dec); err != nil {
+					return "", false, err
+				}
+			}
+			if err := expectClineDelim(dec, ']'); err != nil {
+				return "", false, err
+			}
+		default:
+			if err := skipClineJSONValue(ctx, dec); err != nil {
+				return "", false, err
+			}
+		}
+	}
+	if err := expectClineDelim(dec, '}'); err != nil {
+		return "", false, err
+	}
+	return id, nonEmpty, ctx.Err()
+}
+
+func expectClineDelim(dec *json.Decoder, want json.Delim) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if got, ok := tok.(json.Delim); !ok || got != want {
+		return errors.New("cline imported history has an unexpected structure")
+	}
+	return nil
+}
+
+// skipClineJSONValue consumes one complete JSON value without retaining it.
+func skipClineJSONValue(ctx context.Context, dec *json.Decoder) error {
+	depth := 0
+	for n := 0; ; n++ {
+		if n%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			switch d {
+			case '{', '[':
+				depth++
+			default:
+				depth--
+			}
+		}
+		if depth == 0 {
+			return nil
+		}
+	}
+}
+
 func importedClineConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -96,14 +205,11 @@ func importedClineConversationExists(ctx context.Context, ref ports.SessionRef, 
 	if manifest.ID != id || !filepath.IsAbs(manifest.CWD) {
 		return false, ports.ErrNativeHistoryUnavailable
 	}
-	var history struct {
-		ID       string            `json:"sessionId"`
-		Messages []json.RawMessage `json:"messages"`
-	}
-	if err := readImportedClineJSON(ctx, root, filepath.Join(dir, id+".messages.json"), &history); err != nil {
+	historyID, nonEmpty, err := scanImportedClineHistory(ctx, root, filepath.Join(dir, id+".messages.json"))
+	if err != nil {
 		return false, errors.Join(ports.ErrNativeHistoryUnavailable, err)
 	}
-	if history.ID != id || len(history.Messages) == 0 {
+	if historyID != id || !nonEmpty {
 		return false, ports.ErrNativeHistoryUnavailable
 	}
 	// The saved cwd is provenance. Cline's interactive loader reads by id,

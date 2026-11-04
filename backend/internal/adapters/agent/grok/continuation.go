@@ -63,10 +63,19 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 			return ctx.Err()
 		}
 		if walkErr != nil {
+			// As in discovery, an unreadable sibling is ineligible; errors
+			// on the sessions root still prevent an authoritative lookup.
+			if name != "sessions" && errors.Is(walkErr, fs.ErrPermission) {
+				if d != nil && d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			return walkErr
 		}
 		if d.Name() == "updates.jsonl" && filepath.Base(filepath.Dir(name)) == ref.NativeSessionID && d.Type().IsRegular() {
 			path = filepath.Join(ref.ConfigDir, name)
+			return fs.SkipAll
 		}
 		return nil
 	})
