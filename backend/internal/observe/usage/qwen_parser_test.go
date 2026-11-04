@@ -14,7 +14,7 @@ func TestParseQwenUsageForBoundSession(t *testing.T) {
 	source.NativeRootID = "qwen-session"
 	records := []jsonlRecord{
 		{Data: []byte(`{"schemaVersion":1,"id":"other","sessionId":"another","model":"qwen3","inputTokens":999,"outputTokens":999,"cachedTokens":0,"thoughtsTokens":0,"totalTokens":1998}`)},
-		{Offset: 100, Data: []byte(`{"schemaVersion":1,"id":"turn-1","timestamp":"2026-08-09T10:00:00Z","sessionId":"qwen-session","model":"qwen3-coder","inputTokens":30,"outputTokens":12,"cachedTokens":9,"thoughtsTokens":4,"totalTokens":46}`)},
+		{Offset: 100, Data: []byte(`{"schemaVersion":1,"id":"turn-1","timestamp":"2026-08-09T10:00:00Z","sessionId":"qwen-session","model":"qwen3-coder","authType":"gemini","inputTokens":30,"outputTokens":12,"cachedTokens":9,"thoughtsTokens":4,"totalTokens":46}`)},
 	}
 
 	result := parseRecords(source, records, 300, time.Unix(1700000000, 0).UTC())
@@ -75,5 +75,64 @@ func TestParseQwenAllowsOmittedTotalTokens(t *testing.T) {
 	result := parseRecords(source, []jsonlRecord{record}, 100, time.Now())
 	if result.err != nil || len(result.Events) != 1 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+// TestParseQwenCountsThoughtsOnceByAuthType catches adding thoughtsTokens to
+// output for backends whose output already contains them. The openai record is
+// a live z.ai reply: Qwen's own total (5951 = 5697 + 254) shows its 191
+// thoughts are inside the 254.
+func TestParseQwenCountsThoughtsOnceByAuthType(t *testing.T) {
+	source := usageSource(domain.UsageSourceQwenMonthly)
+	source.NativeRootID = "qwen-session"
+	cases := []struct {
+		name, record string
+		output       int64
+	}{
+		{"openai", `{"schemaVersion":1,"id":"a","sessionId":"qwen-session","model":"glm-5.3","authType":"openai","source":"managed-auto-memory-extractor","inputTokens":5697,"outputTokens":254,"cachedTokens":0,"thoughtsTokens":191,"totalTokens":5951}`, 254},
+		{"openai-responses", `{"schemaVersion":1,"id":"b","sessionId":"qwen-session","model":"gpt-test","authType":"openai-responses","inputTokens":100,"outputTokens":40,"cachedTokens":10,"thoughtsTokens":15,"totalTokens":140}`, 40},
+		{"qwen-oauth", `{"schemaVersion":1,"id":"c","sessionId":"qwen-session","model":"coder-model","authType":"qwen-oauth","inputTokens":100,"outputTokens":40,"cachedTokens":0,"thoughtsTokens":15,"totalTokens":140}`, 40},
+		{"anthropic", `{"schemaVersion":1,"id":"d","sessionId":"qwen-session","model":"claude-test","authType":"anthropic","inputTokens":100,"outputTokens":40,"cachedTokens":20,"thoughtsTokens":0,"totalTokens":140}`, 40},
+		{"vertex-ai", `{"schemaVersion":1,"id":"e","sessionId":"qwen-session","model":"gemini-test","authType":"vertex-ai","inputTokens":100,"outputTokens":40,"cachedTokens":0,"thoughtsTokens":15,"totalTokens":155}`, 55},
+		{"unknown, total counts thoughts apart", `{"schemaVersion":1,"id":"f","sessionId":"qwen-session","model":"m","authType":"unknown","inputTokens":100,"outputTokens":40,"cachedTokens":0,"thoughtsTokens":15,"totalTokens":155}`, 55},
+		{"unknown, total counts thoughts inside", `{"schemaVersion":1,"id":"g","sessionId":"qwen-session","model":"m","authType":"unknown","inputTokens":100,"outputTokens":40,"cachedTokens":0,"thoughtsTokens":15,"totalTokens":140}`, 40},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := parseRecords(source, []jsonlRecord{{Data: []byte(tc.record)}}, 100, time.Now())
+			if result.err != nil || len(result.Events) != 1 || result.Cursor.AnomalyCount != 0 {
+				t.Fatalf("result = %+v", result)
+			}
+			if got := tokenValue(result.Events[0].Tokens.OutputTokens); got != tc.output {
+				t.Fatalf("output = %d, want %d", got, tc.output)
+			}
+		})
+	}
+}
+
+// TestParseQwenBillsTheResolvedRoute catches leaving Qwen events unpriced: the
+// log names only the auth type, so the billing provider comes from the route
+// the collector resolved from Qwen's settings, and stays empty without one.
+func TestParseQwenBillsTheResolvedRoute(t *testing.T) {
+	record := jsonlRecord{Data: []byte(`{"schemaVersion":1,"id":"turn-1","sessionId":"qwen-session","model":"glm-5.3","authType":"openai","inputTokens":18472,"outputTokens":3,"cachedTokens":0,"thoughtsTokens":0,"totalTokens":18475}`)}
+	for _, tc := range []struct{ hint, want string }{
+		{"zai", "zai"}, {"Z.ai", "zai"}, {"", ""}, {"unidentified", ""},
+	} {
+		source := usageSource(domain.UsageSourceQwenMonthly)
+		source.NativeRootID = "qwen-session"
+		source.ProviderHint = tc.hint
+		result := parseRecords(source, []jsonlRecord{record}, 100, time.Now())
+		if result.err != nil || len(result.Events) != 1 {
+			t.Fatalf("hint %q: result = %+v", tc.hint, result)
+		}
+		event := result.Events[0]
+		if providerUsageTokens(t, event.ProviderUsageJSON, derivedCacheWriteKey) != 0 {
+			t.Fatalf("hint %q: provider usage = %s, want a derived zero cache write", tc.hint, event.ProviderUsageJSON)
+		}
+		wantSource := domain.ObservedBillingProviderSource(tc.want)
+		if event.BillingProviderID != tc.want || event.BillingProviderSource != wantSource {
+			t.Fatalf("hint %q: billing = %q/%q, want %q/%q",
+				tc.hint, event.BillingProviderID, event.BillingProviderSource, tc.want, wantSource)
+		}
 	}
 }

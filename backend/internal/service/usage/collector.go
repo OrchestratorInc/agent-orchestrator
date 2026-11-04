@@ -442,6 +442,12 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	}
 	signal.Harness = session.Harness
 	signal.ProviderHint = trustedClaudeProviderHint(session.Harness, signal.ProviderHint)
+	if session.Harness == domain.HarnessQwen {
+		signal.ProviderHint, err = c.stickyQwenProviderHint(ctx, session)
+		if err != nil {
+			return err
+		}
+	}
 	signal.NativeSessionID = boundedUsageMetadata(signal.NativeSessionID)
 	if signal.NativeSessionID == "" {
 		signal.NativeSessionID = usageNativeSessionID(session)
