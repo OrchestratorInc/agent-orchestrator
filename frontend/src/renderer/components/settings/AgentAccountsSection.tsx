@@ -1,10 +1,10 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderFor, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
-import { useResolvedTheme } from "../../stores/ui-store";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
@@ -84,6 +84,14 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
+			if (result.status === "complete") {
+				// A chat turn that sent the user here to log in gets them back.
+				const ui = useUiStore.getState();
+				const waiting = ui.loginReturn;
+				if (waiting && !waiting.hostId && agentAccountProviderFor(waiting.agentId) === provider) {
+					ui.completeLoginReturn(waiting.agentId);
+				}
+			}
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {

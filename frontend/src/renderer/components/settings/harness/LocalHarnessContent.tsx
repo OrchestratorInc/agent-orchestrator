@@ -41,7 +41,7 @@ import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
-import type { HarnessDiagnosticsRequest } from "../../../stores/ui-store";
+import { useUiStore, type HarnessDiagnosticsRequest } from "../../../stores/ui-store";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
@@ -657,6 +657,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			authWorkflowRef.current = null;
 			setAuthWorkflow(null);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
+			// A chat turn that sent the user here to log in gets them back.
+			if (signingIn) useUiStore.getState().completeLoginReturn(workflow.agentId, hostId);
 			return;
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {

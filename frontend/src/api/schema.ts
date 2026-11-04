@@ -5849,7 +5849,7 @@ export interface components {
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
             /** @enum {string} */
-            failureCode?: "provider_key_missing";
+            failureCode?: "provider_key_missing" | "auth_required";
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;

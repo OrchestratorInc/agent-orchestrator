@@ -8,6 +8,7 @@ import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
+import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
@@ -1861,6 +1862,23 @@ describe("HarnessSettingsSection", () => {
 
 		const withAction = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY, "/login\r");
 		expect(within(withAction.row).getByText("Complete login in the terminal.")).toBeInTheDocument();
+	});
+
+	// A chat turn refused for its login opened this page: the login that takes
+	// sends the user back to that chat.
+	it("returns to the chat turn waiting on this agent's login once it takes", async () => {
+		act(() => useUiStore.setState({
+			settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+			loginReturn: { sessionId: "s1", turnId: "turn-1", agentId: "claude-code", autoRetry: true },
+		}));
+		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
+		expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+		exit();
+
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined();
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		act(() => useUiStore.setState({ loginReturn: null }));
 	});
 
 	it("re-checks a login whose first post-login check fails transiently", async () => {

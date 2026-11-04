@@ -1,4 +1,4 @@
-import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -108,6 +108,32 @@ describe("TurnOutcome", () => {
 		expect(onRetry).toHaveBeenCalledOnce();
 		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
 		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
+	});
+
+	it("offers a refused login as one box with its action, and never the CLI's advice", () => {
+		const onLogin = vi.fn();
+		const onRetry = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry }}
+			login={{ agent: "Claude Code", onLogin }} />);
+
+		const box = screen.getByTestId("login-notice");
+		expect(within(box).getByText("You’re not logged in to Claude Code")).toBeInTheDocument();
+		expect(within(box).getByText("Retry this turn once you’re in.")).toBeInTheDocument();
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
+		expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
+		// "Log in" is said once: on the button.
+		expect(screen.getAllByText(/log in/i)).toHaveLength(1);
+		fireEvent.click(within(box).getByRole("button", { name: "Log in" }));
+		expect(onLogin).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+	});
+
+	it("shows a refused login with no way to log in as the plain failure", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" />);
+		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Log in" })).not.toBeInTheDocument();
 	});
 
 	it("leaves generic ACP failures without configuration guidance", () => {

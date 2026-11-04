@@ -154,6 +154,23 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/**
+ * A chat turn that failed because the agent's login was refused, waiting while
+ * the user logs in from the Agents page. A login that takes there closes the
+ * page and, when the turn did no work, runs it again.
+ */
+export type LoginReturn = {
+	sessionId: string;
+	turnId: string;
+	agentId: string;
+	/** The remote host whose login is being fixed; omitted for this computer. */
+	hostId?: string;
+	/** The turn did no work, so running it again cannot repeat any. */
+	autoRetry: boolean;
+	/** When the login took. */
+	loggedInAt?: number;
+};
+
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
 // ephemeral UI: theme, sidebar collapse, command palette, per-session inspector
@@ -268,6 +285,13 @@ export type UiState = {
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
+	loginReturn: LoginReturn | null;
+	/** Remember a failed chat turn while its agent's login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt">) => void;
+	/** A login on the Agents page took: return to the waiting chat turn, if this agent's. */
+	completeLoginReturn: (agentId: string, hostId?: string) => void;
+	/** Drop the waiting turn, or only when it is this one. */
+	clearLoginReturn: (turnId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -557,6 +581,22 @@ export const useUiStore = create<UiState>((set, get) => ({
 	closeSettings: () => set((state) => ({
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
+	loginReturn: null,
+	startLoginReturn: (intent) => set({ loginReturn: intent }),
+	completeLoginReturn: (agentId, hostId) => set((state) => {
+		const waiting = state.loginReturn;
+		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
+		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		const modal = state.settingsModal;
+		// A login only finishes while the Agents page shows it, so closing global
+		// settings here returns the user to the chat they came from.
+		return {
+			loginReturn: { ...waiting, loggedInAt: Date.now() },
+			...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+		};
+	}),
+	clearLoginReturn: (turnId) => set((state) =>
+		!state.loginReturn || (turnId !== undefined && state.loginReturn.turnId !== turnId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;

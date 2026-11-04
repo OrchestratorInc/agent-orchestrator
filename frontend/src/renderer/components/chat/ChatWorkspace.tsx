@@ -97,6 +97,7 @@ import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
+import { labelForHost } from "../../lib/host-clients";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
@@ -133,6 +134,7 @@ import {
 	LiveResponseStatus,
 	liveTaskLabel,
 	reconnectCopy,
+	type TurnOutcomeLogin,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
@@ -193,6 +195,7 @@ import {
 	type ChatSkill,
 	type ChatSteerOutcome,
 	type ChatEditOutcome,
+	type ActivityKind,
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationItem,
@@ -849,6 +852,10 @@ function ChatWorkspaceContent({
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
+	// The failed turn's own card offers the login, right above the composer, so the
+	// banner would only say it twice.
+	const loginCardShowing = latestSettledTurn?.state === "failed" && latestSettledTurn.failureCode === "auth_required" &&
+		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id);
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
@@ -1873,7 +1880,7 @@ function ChatWorkspaceContent({
 					role="tabpanel"
 				>
 				<HoldWhileHidden hidden={reviewerActive || shellActive}>
-					{snapshot.account ? (
+					{snapshot.account && !loginCardShowing ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
 							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
@@ -1929,6 +1936,7 @@ function ChatWorkspaceContent({
 									snapshot={snapshot}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
+									cloud={Boolean(session?.cloud)}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2705,6 +2713,7 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	cloud = false,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2750,6 +2759,8 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** The session runs in the cloud, so its login is the cloud connection's. */
+	cloud?: boolean;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3253,6 +3264,44 @@ export function Timeline({
 				.map((turn) => [turn.id, turn]),
 		);
 	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
+	const loginHostId = useContext(ChatHostId);
+	// A turn that ran no tool and changed nothing can run again on its own once the
+	// login takes: there is nothing it could do twice. The cloud connection's login
+	// is not watched from here, so a cloud turn keeps its Retry for the user.
+	const retriesAfterLogin = useCallback((turnId: string) => !cloud && Boolean(retryControl) && retryableTurns.has(turnId) &&
+		!snapshot.turns.find((entry) => entry.id === turnId)?.diff?.files.length &&
+		!snapshot.items.some((item) => item.turnId === turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)),
+	[cloud, retryControl, retryableTurns, snapshot.items, snapshot.turns]);
+	const logIn = useStableCallback((turnId: string) => {
+		const ui = useUiStore.getState();
+		ui.startLoginReturn({
+			sessionId: snapshot.sessionId,
+			turnId,
+			agentId: snapshot.harness,
+			...(loginHostId ? { hostId: loginHostId } : {}),
+			autoRetry: retriesAfterLogin(turnId),
+		});
+		ui.openGlobalSettings("harness", {
+			focusAgentId: snapshot.harness,
+			...(loginHostId ? { hostId: loginHostId } : {}),
+			harnessView: cloud ? "cloud" : "local",
+			startLogin: true,
+			preserveProject: true,
+		});
+	});
+	const loginReturn = useUiStore((state) => state.loginReturn);
+	useEffect(() => {
+		if (!loginReturn?.loggedInAt || loginReturn.sessionId !== snapshot.sessionId) return;
+		const { turnId, autoRetry, loggedInAt } = loginReturn;
+		// Another conversation of this session (a side chat) leaves it to its own.
+		if (!snapshot.turns.some((entry) => entry.id === turnId)) return;
+		useUiStore.getState().clearLoginReturn(turnId);
+		// A login that took long ago, or a turn something else has moved past, is
+		// left for the user's own Retry.
+		if (!autoRetry || Date.now() - loggedInAt > LOGIN_RETRY_WINDOW_MS) return;
+		if (!retryableTurns.has(turnId) || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) return;
+		void Promise.resolve(retryTurn(turnId)).catch(() => undefined);
+	}, [loginReturn, newWorkDisabled, retryControl?.pending, retryTurn, retryableTurns, snapshot]);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -4463,6 +4512,14 @@ export function Timeline({
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
+									login={group.turnId && group.outcome?.state === "failed" && group.outcome.failureCode === "auth_required"
+										? {
+												agent: agentLabel(snapshot.harness),
+												...(loginHostId ? { host: labelForHost(loginHostId) ?? loginHostId } : {}),
+												onLogin: () => logIn(group.turnId as string),
+												retriesItself: retriesAfterLogin(group.turnId),
+											}
+										: undefined}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
@@ -4711,6 +4768,7 @@ const TurnGroup = memo(function TurnGroup({
 	canRollback,
 	rollbackDisabled,
 	retry,
+	login,
 	busy,
 	queued,
 	newHumanMessageIds,
@@ -4752,6 +4810,8 @@ const TurnGroup = memo(function TurnGroup({
 	rollbackDisabled: boolean;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
+	/** This failed turn's login was refused: how its card offers the login. */
+	login?: TurnOutcomeLogin;
 	busy?: boolean;
 	/** This turn was recorded but not sent, so its message can say so. */
 	queued: boolean;
@@ -5055,6 +5115,7 @@ const TurnGroup = memo(function TurnGroup({
 					onConfigure={harness === "deepseek-harness" && group.outcome.failureCode === "provider_key_missing"
 						? () => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: harness, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true, startLogin: true })
 						: undefined}
+					login={login}
 					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 					copyText={copyableMessage?.text}
@@ -5433,6 +5494,11 @@ function useStableValue<T>(value: T): T {
 /** A settling turn's rows from just before the fold, and the one at the top of the view. */
 type SettleAnchor = { turn: HTMLElement; rows: HTMLElement[]; index: number; offset: number };
 
+/** Activities that act on the workspace: a turn with any of them may not be run twice unasked. */
+const TURN_WORK_ACTIVITY_KINDS: ReadonlySet<ActivityKind> = new Set(["command", "file_change", "mcp_tool", "ao_action"]);
+/** How long after a login a waiting turn still runs again by itself. */
+const LOGIN_RETRY_WINDOW_MS = 60_000;
+
 type TimelineGroup = {
 	key: string;
 	turnId?: string;
@@ -5444,7 +5510,7 @@ type TimelineGroup = {
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
-		failureCode?: "provider_key_missing";
+		failureCode?: ConversationTurn["failureCode"];
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;

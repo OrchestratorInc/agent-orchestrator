@@ -133,7 +133,8 @@ export interface ConversationTurn {
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
 	errorMessage?: string;
-	failureCode?: "provider_key_missing";
+	/** A provider failure with a known way out: a missing API key, or a refused login. */
+	failureCode?: "provider_key_missing" | "auth_required";
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;

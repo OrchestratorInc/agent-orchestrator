@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
+import { useUiStore } from "../../stores/ui-store";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
 const { getMock, postMock, terminalState } = vi.hoisted(() => ({
@@ -95,6 +96,28 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	await waitFor(() => expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument());
 	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/login/{operationId}/verify")).toHaveLength(1);
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+// A chat turn refused for its login sent the user here: the account that signs
+// in takes them back to it.
+it("returns to the chat turn waiting on a Claude login once an account signs in", async () => {
+	const user = userEvent.setup();
+	useUiStore.setState({
+		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+		loginReturn: { sessionId: "s1", turnId: "turn-1", agentId: "claude-code", autoRetry: true },
+	});
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+
+	await waitFor(() => expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined());
+	expect(useUiStore.getState().settingsModal).toBeNull();
+	useUiStore.setState({ loginReturn: null });
 });
 
 // The CLI's own login has no card of its own: its row signs it in again and

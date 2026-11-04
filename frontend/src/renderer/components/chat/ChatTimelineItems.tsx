@@ -109,6 +109,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationTurn,
 	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
@@ -557,6 +558,7 @@ export function TurnOutcome({
 	error,
 	failureCode,
 	onConfigure,
+	login,
 	retry,
 	usageLimit,
 	copyText,
@@ -567,8 +569,10 @@ export function TurnOutcome({
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
-	failureCode?: "provider_key_missing";
+	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
+	/** The provider refused the agent's login: offer the login in place of its CLI advice. */
+	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -586,6 +590,24 @@ export function TurnOutcome({
 				/>
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
 				<TurnActions
+					copyText={copyText}
+					onRollback={onRollback}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={timestamp}
+					durationMs={durationMs}
+				/>
+			</div>
+		);
+	}
+	// A refused login is routine and has one way out, so it reads as a step to take
+	// rather than an alarm. The provider's own advice ("run /login") is for its CLI
+	// and never reaches the reader.
+	if (state === "failed" && failureCode === "auth_required" && login) {
+		return (
+			<div className="group/message flex min-w-0 flex-col gap-2" data-turn-outcome={state}>
+				<LoginNotice login={login} />
+				<TurnActions
+					retry={retry}
 					copyText={copyText}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
@@ -641,6 +663,41 @@ export function TurnOutcome({
 			/>
 		</div>
 	);
+}
+
+/**
+ * The login a refused turn needs, as one box: what is wrong, what happens next,
+ * and the one action. "Log in" is said once, on the button.
+ */
+function LoginNotice({ login }: { login: TurnOutcomeLogin }) {
+	const { t } = useTranslation();
+	return (
+		<div data-testid="login-notice" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-surface px-3 py-2.5">
+			<div className="flex min-w-0 flex-1 basis-64 items-start gap-2.5">
+				<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<div className="min-w-0 flex-1">
+					<p className="text-pretty text-sm font-medium leading-5 text-foreground">
+						{login.host ? t("chat.login.titleOnHost", { agent: login.agent, host: login.host }) : t("chat.login.title", { agent: login.agent })}
+					</p>
+					<p className="mt-0.5 text-pretty text-xs leading-5 text-muted-foreground">
+						{login.retriesItself ? t("chat.login.retriesItself") : t("chat.login.thenRetry")}
+					</p>
+				</div>
+			</div>
+			<Button type="button" variant="primary" size="sm" onClick={login.onLogin} className="ml-auto shrink-0">{t("chat.login.action")}</Button>
+		</div>
+	);
+}
+
+/** How a turn whose login was refused offers the login. */
+export interface TurnOutcomeLogin {
+	/** The agent's display name. */
+	agent: string;
+	/** The remote host whose login it is; omitted for this computer. */
+	host?: string;
+	onLogin: () => void;
+	/** Logging in from the chat runs the turn again by itself. */
+	retriesItself?: boolean;
 }
 
 interface TurnActionsProps {
