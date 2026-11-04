@@ -9,7 +9,7 @@ Evidence-only branch: no shared history, never merged.
 
 | File | Before | After |
 |---|---|---|
-| `*-settings.png` | two rows, same login | one row, with a note |
+| `*-settings.png` | two rows, same login | one row |
 | `*-accounts.json` | no `sameLoginAs` | CLI login `sameLoginAs` = the saved account |
 | `*-go-tests.txt` | 9 bug scenarios fail, 5 guard cases pass | all pass |
 | `*-vitest.txt` | 2 new panel tests fail, 5 existing pass | all 11 pass |
