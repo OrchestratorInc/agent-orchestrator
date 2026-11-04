@@ -1189,6 +1189,30 @@ paths:
                 $ref: "#/components/schemas/SessionArtifactList"
         default:
           $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Deletes one of the session's artifact files: its row, its stored
+        object version, and, through a request to a connected worker, the file
+        on the worker's disk (a worker that is not connected removes it when
+        it next starts). An invalid path answers 400 invalid_path. Only the
+        person who started the session (Session.createdByUserId) deletes a
+        file; anyone else gets 403 artifact_not_owner, as for
+        saveSessionArtifact. Present only when the deployment reports
+        offering.artifacts; otherwise 404.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "204":
+          description: The file was deleted.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -6946,9 +6970,9 @@ components:
             The person who started the session (for a spawned worker, its
             orchestrator's). Only they share its files as public links
             (shareSessionArtifact) and change them (saveSessionArtifact,
-            restoreSessionArtifactVersion, deleting one); every other member
-            of the organization sees them read-only. Omitted when none is on
-            record.
+            restoreSessionArtifactVersion, deleteSessionArtifact); every other
+            member of the organization sees them read-only. Omitted when none
+            is on record.
         requestedBy:
           type: object
           additionalProperties: false
