@@ -3124,6 +3124,7 @@
 	"artifacts.share.secrets": "このファイルには {{kinds}} が含まれているようです。公開するとその内容も公開されます。",
 	"artifacts.share.publish": "公開",
 	"artifacts.share.publishing": "公開中…",
+	"artifacts.share.republish": "再公開",
 	"artifacts.share.uploaded": "{{percent}}% アップロード済み",
 	"artifacts.share.publicStatus": "公開 · リンクを知っている人なら誰でも閲覧できます",
 	"artifacts.share.changed": "「共有」を開いた後にこのファイルが変更されました。内容を確認して、もう一度公開してください。",

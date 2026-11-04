@@ -3108,6 +3108,7 @@
 	"artifacts.share.secrets": "This file looks like it contains a {{kinds}}. Publishing it makes that public.",
 	"artifacts.share.publish": "Publish",
 	"artifacts.share.publishing": "Publishing…",
+	"artifacts.share.republish": "Republish",
 	"artifacts.share.uploaded": "{{percent}}% uploaded",
 	"artifacts.share.publicStatus": "Public · anyone with the link can view",
 	"artifacts.share.changed": "This file changed since you opened Share. Check it and publish again.",

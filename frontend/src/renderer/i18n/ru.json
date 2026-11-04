@@ -3236,6 +3236,7 @@
 	"artifacts.share.secrets": "Похоже, этот файл содержит {{kinds}}. При публикации эти данные станут общедоступными.",
 	"artifacts.share.publish": "Опубликовать",
 	"artifacts.share.publishing": "Публикация…",
+	"artifacts.share.republish": "Обновить",
 	"artifacts.share.uploaded": "Загружено {{percent}}%",
 	"artifacts.share.publicStatus": "Публично · все, у кого есть ссылка, могут просматривать",
 	"artifacts.share.changed": "Файл изменился после того, как вы открыли «Поделиться». Проверьте его и опубликуйте снова.",

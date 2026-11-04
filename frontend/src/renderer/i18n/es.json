@@ -3182,6 +3182,7 @@
 	"artifacts.share.secrets": "Parece que este archivo contiene un {{kinds}}. Al publicarlo, será público.",
 	"artifacts.share.publish": "Publicar",
 	"artifacts.share.publishing": "Publicando…",
+	"artifacts.share.republish": "Volver a publicar",
 	"artifacts.share.uploaded": "{{percent}} % subido",
 	"artifacts.share.publicStatus": "Público · cualquiera con el enlace puede verlo",
 	"artifacts.share.changed": "Este archivo cambió desde que abriste Compartir. Revísalo y vuelve a publicarlo.",

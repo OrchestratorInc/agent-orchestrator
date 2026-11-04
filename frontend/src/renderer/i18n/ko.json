@@ -3124,6 +3124,7 @@
 	"artifacts.share.secrets": "이 파일에 {{kinds}}이(가) 포함된 것 같습니다. 게시하면 공개됩니다.",
 	"artifacts.share.publish": "게시",
 	"artifacts.share.publishing": "게시 중…",
+	"artifacts.share.republish": "다시 게시",
 	"artifacts.share.uploaded": "{{percent}}% 업로드됨",
 	"artifacts.share.publicStatus": "공개 · 링크가 있는 누구나 볼 수 있음",
 	"artifacts.share.changed": "공유를 연 뒤 이 파일이 변경되었습니다. 확인한 후 다시 게시하세요.",

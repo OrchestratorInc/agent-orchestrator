@@ -3124,6 +3124,7 @@
 	"artifacts.share.secrets": "Diese Datei scheint einen {{kinds}} zu enthalten. Beim Veröffentlichen wird er öffentlich.",
 	"artifacts.share.publish": "Veröffentlichen",
 	"artifacts.share.publishing": "Wird veröffentlicht…",
+	"artifacts.share.republish": "Erneut veröffentlichen",
 	"artifacts.share.uploaded": "{{percent}} % hochgeladen",
 	"artifacts.share.publicStatus": "Öffentlich · jeder mit dem Link kann es ansehen",
 	"artifacts.share.changed": "Diese Datei hat sich geändert, seit du „Teilen“ geöffnet hast. Prüfe sie und veröffentliche sie erneut.",
