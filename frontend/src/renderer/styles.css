@@ -595,6 +595,26 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * start below it. ::before paints the fill under the content, ::after paints
  * the frame over it so content never covers the edge, and the mask clips the
  * content to the frame's rounded corners while leaving the bar's band open. */
+/* The bar takes over the panel's old top inset: it runs from the window's top
+ * edge to the panel's frame, with equal space above and below its controls.
+ * Its center stays on the sidebar header and titlebar controls' line. */
+.center-panel-shell.center-panel-shell--floating-topbar {
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * var(--size-center-panel-inset-mac));
+	--size-toolbar: var(--floating-topbar-height);
+	--spacing-toolbar: var(--floating-topbar-height);
+	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
+	--size-inspector-tabs: var(--floating-topbar-height);
+	--spacing-inspector-tabs: var(--floating-topbar-height);
+	/* Larger controls fill the band the panel inset used to take. */
+	--size-topbar-control: calc(var(--size-topbar-primary) - 2px);
+	padding-top: 0;
+}
+
+.center-panel-shell--floating-topbar .session-inspector__tab-button {
+	width: var(--size-topbar-control);
+	height: var(--size-topbar-control);
+}
+
 .center-panel-shell--floating-topbar > .center-panel-surface {
 	--floating-panel-top: calc(var(--size-toolbar) - 1px);
 	--floating-panel-radius: var(--radius-center-panel);
@@ -649,9 +669,11 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* The session view fills the whole surface, band included; the panel fill comes
- * from the surface's ::before instead. */
-.center-panel-shell--floating-topbar [data-testid="session-detail"] {
+/* Page roots (board, session, automations, …) fill the whole surface, band
+ * included; the panel fill comes from the surface's ::before instead. */
+.center-panel-shell--floating-topbar > .center-panel-surface > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > * > .bg-background {
 	background: transparent;
 }
 
@@ -3549,7 +3571,7 @@ html.sidebar-reordering * {
 /* Ends the session's own actions, before the inspector/global controls. */
 .workspace-topbar-actions .topbar-divider {
 	width: 1px;
-	height: var(--space-4);
+	height: var(--space-5);
 	flex: 0 0 auto;
 	margin-inline: var(--space-1);
 	background: var(--color-border);
