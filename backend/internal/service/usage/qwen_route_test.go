@@ -79,6 +79,7 @@ func TestQwenRouteProviderLeavesUnknownEndpointsEmpty(t *testing.T) {
 		{`{"security":{"auth":{"selectedType":"anthropic"}},"model":{"baseUrl":"https://api.z.ai/api/anthropic"}}`, "zai"},
 		{`{"security":{"auth":{"selectedType":"openai"}},"env":{"OPENAI_BASE_URL":"https://dashscope-intl.aliyuncs.com/compatible-mode/v1"}}`, "dashscope"},
 		{`{"security":{"auth":{"selectedType":"openai"}},"model":{"name":"MiniMax-M3"},"modelProviders":{"openai":[{"id":"MiniMax-M3","baseUrl":"https://api.minimax.io/v1"}]}}`, "minimax"},
+		{`{"security":{"auth":{"selectedType":"openai"}},"model":{"baseUrl":"https://open.bigmodel.cn/api/paas/v4"}}`, "bigmodel"},
 	} {
 		t.Setenv("OPENAI_BASE_URL", "")
 		var route qwenRoute

@@ -164,8 +164,11 @@ func qwenEndpointProvider(baseURL string) string {
 	switch {
 	case host == "":
 		return ""
-	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai") || host == "open.bigmodel.cn":
+	case host == "api.z.ai" || strings.HasSuffix(host, ".z.ai"):
 		return "zai"
+	case host == "open.bigmodel.cn":
+		// Zhipu's mainland platform, which LiteLLM prices apart from z.ai.
+		return "bigmodel"
 	case host == "api.openai.com":
 		return "openai"
 	case host == "api.anthropic.com":
