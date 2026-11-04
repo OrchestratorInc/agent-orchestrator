@@ -212,10 +212,10 @@ export function WindowTitlebar() {
             />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">
+        <TooltipContent shortcut="toggle-sidebar" side="bottom">
           {isSidebarOpen
-            ? t("shell.collapseSidebarTitle")
-            : t("shell.expandSidebarTitle")}
+            ? t("shell.collapseSidebar")
+            : t("shell.expandSidebar")}
         </TooltipContent>
       </Tooltip>
       <Tooltip>
@@ -235,7 +235,7 @@ export function WindowTitlebar() {
             </button>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{t("titlebar.goBack")}</TooltipContent>
+        <TooltipContent shortcut="history-back" side="bottom">{t("titlebar.goBack")}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -254,7 +254,7 @@ export function WindowTitlebar() {
             </button>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{t("titlebar.goForward")}</TooltipContent>
+        <TooltipContent shortcut="history-forward" side="bottom">{t("titlebar.goForward")}</TooltipContent>
       </Tooltip>
       <nav className="window-titlebar__menus">
         <TopMenu

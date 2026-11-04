@@ -850,33 +850,29 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
 			<span className="min-w-0 text-sm text-settings-label">{t("inspector.archiveShort")}</span>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<SessionArchiveDialog
-							onConfirm={confirmTermination}
-							onOpenChange={setConfirmOpen}
-							open={confirmOpen}
-							session={session}
-							trigger={
-								<button
-									aria-label={t("inspector.archive")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-									onClick={() => {
-										clearTerminateSessionState(queryClient, session.id, hostId);
-										// Always open the confirm; the modal owns its own dismissal.
-										setConfirmOpen(true);
-									}}
-									type="button"
-								>
-									<Archive className="size-icon-sm" aria-hidden="true" />
-								</button>
-							}
-						/>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
-			</Tooltip>
+			<span className="inline-flex">
+				<SessionArchiveDialog
+					onConfirm={confirmTermination}
+					onOpenChange={setConfirmOpen}
+					open={confirmOpen}
+					session={session}
+					trigger={
+						<button
+							aria-label={t("inspector.archive")}
+							className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							onClick={() => {
+								clearTerminateSessionState(queryClient, session.id, hostId);
+								// Always open the confirm; the modal owns its own dismissal.
+								setConfirmOpen(true);
+							}}
+							type="button"
+						>
+							<Archive className="size-icon-sm" aria-hidden="true" />
+						</button>
+					}
+				/>
+			</span>
+		
 		</div>
 	);
 

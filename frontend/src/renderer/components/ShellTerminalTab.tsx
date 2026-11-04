@@ -6,7 +6,6 @@ import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type ShellTerminalTabProps = {
 	shell: ShellTerminal;
@@ -128,14 +127,10 @@ export function ShellTerminalTab({
 	};
 	if (appearance === "connected") {
 		const closeAction = isEditing || shell.optimistic ? undefined : (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button {...closeControl} className={terminalTabActionClassName}>
-						<X aria-hidden="true" className="size-icon-sm" />
-					</button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
-			</Tooltip>
+			<button {...closeControl} className={terminalTabActionClassName}>
+				<X aria-hidden="true" className="size-icon-sm" />
+			</button>
+		
 		);
 		const editingContent = isEditing ? (
 			<input
@@ -234,17 +229,13 @@ export function ShellTerminalTab({
 					</span>
 				</button>
 			)}
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button
-						{...closeControl}
-						className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
-					>
-						<X aria-hidden="true" className="size-icon-sm" />
-					</button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
-			</Tooltip>
+			<button
+				{...closeControl}
+				className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
+			>
+				<X aria-hidden="true" className="size-icon-sm" />
+			</button>
+		
 		</span>
 	);
 }

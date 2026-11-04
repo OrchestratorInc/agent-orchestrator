@@ -126,24 +126,20 @@ export function HumanMessageEditor({
 					{t("chat.edit.abandonRecovery")}
 				</Button>
 			) : null}
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<Button
-							type="button"
-							size="icon-sm"
-							variant="ghost"
-							onClick={onCancel}
-							disabled={pending || locked}
-							aria-label={t("chat.edit.cancel")}
-							className="size-7"
-						>
-							<X aria-hidden="true" className="size-3.5" />
-						</Button>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("chat.edit.cancel")}</TooltipContent>
-			</Tooltip>
+			<span className="inline-flex">
+				<Button
+					type="button"
+					size="icon-sm"
+					variant="ghost"
+					onClick={onCancel}
+					disabled={pending || locked}
+					aria-label={t("chat.edit.cancel")}
+					className="size-7"
+				>
+					<X aria-hidden="true" className="size-3.5" />
+				</Button>
+			</span>
+		
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">

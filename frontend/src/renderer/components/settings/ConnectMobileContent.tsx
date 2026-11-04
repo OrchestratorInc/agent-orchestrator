@@ -818,21 +818,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="flex min-w-0 items-center">
 							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-											className={ICON_ACTION_CLASS}
-											onClick={() => void copyPassword()}
-										>
-											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									</TooltipContent>
-								</Tooltip>
+								<button
+									type="button"
+									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+									className={ICON_ACTION_CLASS}
+									onClick={() => void copyPassword()}
+								>
+									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+								</button>
+							
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}
@@ -1010,7 +1004,7 @@ function KeepAwakeRow({
 							<button
 								type="button"
 								aria-label={t("mobile.keepAwake.details")}
-								className="ml-1 inline-flex align-middle text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
 								<Info className="size-3.5" aria-hidden="true" />
 							</button>
