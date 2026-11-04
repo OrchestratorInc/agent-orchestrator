@@ -2161,6 +2161,7 @@
 	"artifacts.deleteTitle": "Delete artifact?",
 	"artifacts.deleteDescription": "This permanently deletes {{name}} from this session's artifacts folder.",
 	"artifacts.deleteCloudDescription": "This permanently deletes {{name}} from the session's cloud storage and from its sandbox.",
+	"artifacts.viewOnly": "View only. Only the person who started this session can change, download or copy its files.",
 	"artifacts.fullscreen": "Full screen",
 	"artifacts.exitFullscreen": "Exit full screen",
 	"artifacts.history": "Version history",
