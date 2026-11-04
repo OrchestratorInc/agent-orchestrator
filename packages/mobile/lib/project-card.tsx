@@ -196,8 +196,10 @@ function TrailingActionRow({
 const PLAY_PATH = "M7.5 5.9v12.2a1.6 1.6 0 0 0 2.45 1.36l9.6-6.1a1.6 1.6 0 0 0 0-2.72l-9.6-6.1A1.6 1.6 0 0 0 7.5 5.9Z";
 
 /**
- * The orchestrator's round button at a card's end: a play button in the
- * accent to start or resume it, a quiet chevron once it runs and opens.
+ * The orchestrator's round button at a card's end: a play button to start or
+ * resume it, and the orchestrator's own mark once it runs and opens. Not a
+ * chevron: at a row's end a chevron reads as "open this row", and the row
+ * opens the project.
  */
 function OrchestratorPill({
 	row,
@@ -235,17 +237,14 @@ function OrchestratorPill({
 
 /**
  * The button's glyph, drawn rather than taken from the symbol font: Material's
- * play and chevron came out thin and sharp at this size. A solid play with
- * rounded corners, and a chevron with a heavy, rounded stroke.
+ * play came out thin and sharp at this size, so it is a solid play with rounded
+ * corners. A running orchestrator shows the mark it has on the desktop.
  */
 function OrchestratorGlyph({ live, color }: { live: boolean; color: string }) {
+	if (live) return <OrchestratorIcon size={GLYPH_SIZE} color={color} />;
 	return (
 		<Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
-			{live ? (
-				<Path d="M9.5 5.5 16 12l-6.5 6.5" fill="none" stroke={color} strokeWidth={2.75} strokeLinecap="round" strokeLinejoin="round" />
-			) : (
-				<Path d={PLAY_PATH} fill={color} />
-			)}
+			<Path d={PLAY_PATH} fill={color} />
 		</Svg>
 	);
 }
