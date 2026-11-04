@@ -44,9 +44,16 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	if inventoryTable != 0 {
 		t.Fatalf("agent_inventory_cache exists after canonical drop")
 	}
+	// Break caught: reading the open schema's missing Kimi literals as a
+	// collided 0117. Each reopen re-ran 0117 and put back a CHECK naming only
+	// claude-code, codex and kimi, which fails on any other harness's row
+	// (and silently narrows an empty table, as here).
 	if err := migrate(db); err != nil {
 		t.Fatalf("second migration pass: %v", err)
 	}
+	assertAppliedMigrations(t, db, 117)
+	assertTableSQLContains(t, db, "usage_bindings", "trim(harness)")
+	assertTableSQLContains(t, db, "usage_sources", "trim(kind)")
 }
 
 type legacyCodexProfileMigration struct {

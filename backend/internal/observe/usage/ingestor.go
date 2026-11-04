@@ -42,6 +42,9 @@ type IngestorConfig struct {
 	Clock            func() time.Time
 	Pricing          *pricing.Manager
 	OnPricingError   func(error)
+	// SQLiteChunkRows and SQLitePollInterval bound SQLite-backed sources.
+	SQLiteChunkRows    int
+	SQLitePollInterval time.Duration
 	// RequestAttributionRepair asks for a legacy repair pass. See
 	// notifyLateRouteEvidence for the one window it closes.
 	RequestAttributionRepair func()
@@ -66,6 +69,8 @@ type Ingestor struct {
 	chunkBytes       int64
 	recordBytes      int
 	finalizationWait time.Duration
+	sqliteChunkRows  int
+	sqlitePoll       time.Duration
 	now              func() time.Time
 	pricing          *pricing.Manager
 	onPricingError   func(error)
@@ -85,6 +90,12 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 	if cfg.FinalizationWait <= 0 {
 		cfg.FinalizationWait = defaultFinalizationWait
 	}
+	if cfg.SQLiteChunkRows <= 0 {
+		cfg.SQLiteChunkRows = defaultSQLiteChunkRows
+	}
+	if cfg.SQLitePollInterval <= 0 {
+		cfg.SQLitePollInterval = defaultSQLitePollInterval
+	}
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
@@ -96,6 +107,8 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 		chunkBytes:       cfg.ChunkBytes,
 		recordBytes:      cfg.RecordBytes,
 		finalizationWait: cfg.FinalizationWait,
+		sqliteChunkRows:  cfg.SQLiteChunkRows,
+		sqlitePoll:       cfg.SQLitePollInterval,
 		now:              cfg.Clock,
 		pricing:          cfg.Pricing,
 		onPricingError:   cfg.OnPricingError,
@@ -129,6 +142,9 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			now,
 			fmt.Errorf("decode parser state: %w", err),
 		)
+	}
+	if sqliteUsageSource(source.Source.Kind) {
+		return i.ingestSQLite(ctx, source, parserState, now)
 	}
 	file, err := i.openTranscript(source.Source.ArtifactPath) //nolint:gosec // path was validated at registration.
 	if err != nil {
@@ -303,6 +319,27 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			errors.New("transcript changed during ingestion"),
 		)
 	}
+	if done, err := i.applyParsedChunk(ctx, source, &parsed, now); err != nil || done {
+		return result, err
+	}
+	i.notifyLateRouteEvidence(ctx, source.Source.ID)
+	result.Reconcile = parsed.newCodexChild
+	if parsed.Cursor.State == domain.UsageSourceComplete {
+		return result, i.completeBinding(ctx, source.Source.BindingID, now)
+	}
+	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
+	return result, nil
+}
+
+// applyParsedChunk prices and stores one parsed chunk. done reports that the
+// caller must return immediately: the chunk failed, or an event conflict
+// settled the source instead.
+func (i *Ingestor) applyParsedChunk(
+	ctx context.Context,
+	source domain.UsageSourceContext,
+	parsed *parseResult,
+	now time.Time,
+) (done bool, err error) {
 	apply := func() error {
 		return i.store.ApplyUsageChunk(
 			ctx,
@@ -317,6 +354,11 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 		apply = func() error {
 			return i.pricing.WithSnapshot(ctx, func(snapshot *pricing.Snapshot) error {
 				for index := range parsed.Events {
+					// A cost the agent itself reported (its provider's billed
+					// amount) is kept as stored; the catalog prices the rest.
+					if parsed.Events[index].Costs.EstimatedCostNanos != nil {
+						continue
+					}
 					// Live ingestion prices only what the transcript or the
 					// binding's route hint named outright. Resolving the model
 					// against the catalog would turn "one catalog lists this
@@ -359,22 +401,16 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 				nil,
 				now,
 			); markErr != nil {
-				return result, errors.Join(err, markErr)
+				return true, errors.Join(err, markErr)
 			}
 			if source.BindingState == domain.UsageBindingFinalizing {
-				return result, i.completeBinding(ctx, source.Source.BindingID, now)
+				return true, i.completeBinding(ctx, source.Source.BindingID, now)
 			}
-			return result, nil
+			return true, nil
 		}
-		return result, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
+		return true, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
 	}
-	i.notifyLateRouteEvidence(ctx, source.Source.ID)
-	result.Reconcile = parsed.newCodexChild
-	if parsed.Cursor.State == domain.UsageSourceComplete {
-		return result, i.completeBinding(ctx, source.Source.BindingID, now)
-	}
-	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
-	return result, nil
+	return false, nil
 }
 
 // notifyLateRouteEvidence asks for a repair pass when a chunk landed

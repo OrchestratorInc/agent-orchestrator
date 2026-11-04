@@ -57,6 +57,31 @@ func TestCollectorDiscoversPiSessionByHeaderID(t *testing.T) {
 	}
 }
 
+// Break caught: discovery searching only Pi's nested default layout. AO starts
+// Pi with --session-dir, so the transcript sits directly in the root, and the
+// binding stayed discovering with source_discovery_pending.
+func TestCollectorDiscoversPiSessionInSessionDirRoot(t *testing.T) {
+	const nativeID = "pi-flat-session"
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessPi, nativeID, false)
+	root := t.TempDir()
+	path := filepath.Join(root, "2026-11-04T02-54-10-307Z_"+nativeID+".jsonl")
+	writeUsageFixture(t, path, `{"type":"session","id":"`+nativeID+`","cwd":"/repo","version":3}`+"\n")
+	collector := NewCollector(store, SourceRoots{PiSessions: root}, nil)
+
+	mustNoError(t, collector.RecordHook(context.Background(), session.ID, HookSignal{
+		Harness: domain.HarnessPi, Event: "session-start", NativeSessionID: nativeID,
+	}))
+	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
+	if err != nil || len(bindings) != 1 || bindings[0].State != domain.UsageBindingActive {
+		t.Fatalf("bindings=%+v err=%v", bindings, err)
+	}
+	sources, err := store.ListUsageSourcesForBinding(context.Background(), bindings[0].ID)
+	if err != nil || len(sources) != 1 || sources[0].ArtifactPath != canonicalUsagePath(t, path) {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+}
+
 func TestCollectorReconcilesPiTranscriptCreatedAfterHook(t *testing.T) {
 	const nativeID = "pi-late-session"
 	store := collectorTestStore(t)

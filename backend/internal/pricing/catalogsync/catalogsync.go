@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -235,11 +236,13 @@ func decodeNumber(raw json.RawMessage) (*json.Number, error) {
 	return &number, nil
 }
 
-// Sync generates a catalog under root. Existing, hash-addressed provider blobs
+// Sync generates a catalog under root, with only the required providers: the
+// repository copy is read by releases that accept exactly those. Existing,
+// hash-addressed provider blobs
 // are never modified or removed. A source revision change with identical
 // provider payload hashes is a semantic no-op and leaves the manifest intact.
 func Sync(root string, upstream []byte, source Source) (Result, error) {
-	generated, err := build(upstream, source)
+	generated, err := build(upstream, source, false)
 	if err != nil {
 		return Result{}, err
 	}
@@ -313,7 +316,11 @@ type generatedCatalog struct {
 	blobs    map[string][]byte
 }
 
-func build(upstream []byte, source Source) (generatedCatalog, error) {
+// build generates a catalog from the upstream table. With every set it keeps
+// each provider the table prices; otherwise it keeps only the required ones,
+// which is the copy committed to the repository for releases that accept no
+// other.
+func build(upstream []byte, source Source, every bool) (generatedCatalog, error) {
 	if source.Repository != "BerriAI/litellm" || source.Path != "model_prices_and_context_window.json" || !isSHA(source.Revision) {
 		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
 	}
@@ -325,12 +332,10 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return generatedCatalog{}, errors.New("upstream catalog must contain one JSON object")
 	}
-	modelsByProvider := map[string]map[string]rates{
-		"anthropic": {}, "openai": {}, "zai": {},
-	}
+	modelsByProvider := map[string]map[string]rates{}
 	// conflicted holds rows two entries price differently. Neither ships: AO
 	// cannot tell which one is right, and an unpriced model beats a guess.
-	conflicted := map[string]map[string]bool{"anthropic": {}, "openai": {}, "zai": {}}
+	conflicted := map[string]map[string]bool{}
 	for name, data := range records {
 		// The table is live and nobody reviews it first, so an entry AO cannot
 		// read leaves that one model unpriced instead of every model.
@@ -339,7 +344,7 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 			continue
 		}
 		providerID, ok := canonicalProvider(record.Provider)
-		if !ok || !supportedMode(record.Mode) {
+		if !ok || !supportedMode(record.Mode) || (!every && !slices.Contains(pricing.RequiredProviderIDs, providerID)) {
 			continue
 		}
 		// LiteLLM also carries metadata-only model entries in chat/responses
@@ -363,6 +368,10 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 		if err := addLongContextRows(rows, modelID, record); err != nil {
 			continue
 		}
+		if modelsByProvider[providerID] == nil {
+			modelsByProvider[providerID] = map[string]rates{}
+			conflicted[providerID] = map[string]bool{}
+		}
 		for rowID, rowRates := range rows {
 			if previous, exists := modelsByProvider[providerID][rowID]; exists && !equalRates(previous, rowRates) {
 				conflicted[providerID][rowID] = true
@@ -376,14 +385,23 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 		}
 	}
 
-	providers := []string{"anthropic", "openai", "zai"}
+	for _, providerID := range pricing.RequiredProviderIDs {
+		if len(modelsByProvider[providerID]) == 0 {
+			return generatedCatalog{}, fmt.Errorf("provider %q produced zero supported models", providerID)
+		}
+	}
+	providers := make([]string, 0, len(modelsByProvider))
+	for providerID, models := range modelsByProvider {
+		// A provider whose every row conflicted has nothing left to price.
+		if len(models) > 0 {
+			providers = append(providers, providerID)
+		}
+	}
+	sort.Strings(providers)
 	generated := generatedCatalog{blobs: make(map[string][]byte)}
 	generated.manifest = manifest{SchemaVersion: schemaVersion, Source: manifestSource(source), Providers: make([]providerRef, 0, len(providers))}
 	for _, providerID := range providers {
 		models := modelsByProvider[providerID]
-		if len(models) == 0 {
-			return generatedCatalog{}, fmt.Errorf("provider %q produced zero supported models", providerID)
-		}
 		ids := make([]string, 0, len(models))
 		for modelID := range models {
 			ids = append(ids, modelID)
@@ -655,17 +673,20 @@ func normalizeDecimal(input string) (string, error) {
 	return strings.TrimSuffix(result, "."), nil
 }
 
+// canonicalProvider names the catalog provider of one LiteLLM entry. LiteLLM
+// files Vertex's partner models under one provider per publisher
+// (vertex_ai-anthropic_models), all billed by the one Vertex account, so they
+// are priced as vertex_ai, which is what a harness reports.
 func canonicalProvider(value string) (string, bool) {
 	provider := strings.ToLower(strings.TrimSpace(value))
-	if provider == "z.ai" {
-		provider = "zai"
+	if strings.HasPrefix(provider, "vertex_ai-") {
+		provider = "vertex_ai"
 	}
-	switch provider {
-	case "anthropic", "openai", "zai":
-		return provider, true
-	default:
+	provider = pricing.CanonicalProviderID(provider)
+	if !pricing.ValidProviderID(provider) {
 		return "", false
 	}
+	return provider, true
 }
 
 func canonicalModel(providerID, value string) (string, error) {
@@ -673,6 +694,12 @@ func canonicalModel(providerID, value string) (string, error) {
 	modelID = strings.TrimPrefix(modelID, providerID+"/")
 	if modelID == "" {
 		return "", fmt.Errorf("%s: empty model identifier", providerID)
+	}
+	// The runtime strips one prefix from a stored row too, so a key that
+	// still carries one (perplexity/perplexity/...) is a row no lookup can
+	// reach, and one the runtime rejects along with the whole catalog.
+	if pricing.CanonicalModelID(providerID, modelID) != modelID {
+		return "", fmt.Errorf("%s: model identifier %q is not canonical", providerID, modelID)
 	}
 	return modelID, nil
 }
@@ -805,10 +832,10 @@ func validateManifest(m manifest) error {
 	if m.SchemaVersion != schemaVersion || m.Source.Repository != "BerriAI/litellm" || m.Source.Path != "model_prices_and_context_window.json" || !isSHA(m.Source.Revision) {
 		return errors.New("invalid manifest schema or source")
 	}
-	if len(m.Providers) != 3 {
-		return errors.New("manifest must contain exactly three providers")
+	if len(m.Providers) != len(pricing.RequiredProviderIDs) {
+		return errors.New("manifest must contain exactly the required providers")
 	}
-	for index, providerID := range []string{"anthropic", "openai", "zai"} {
+	for index, providerID := range pricing.RequiredProviderIDs {
 		ref := m.Providers[index]
 		if ref.ProviderID != providerID || ref.ModelCount < 1 || ref.Version != "ao-catalog:"+providerID+":sha256:"+ref.SHA256 || !isProviderPath(providerID, ref.SHA256, ref.Path) {
 			return fmt.Errorf("invalid manifest provider %q", providerID)
