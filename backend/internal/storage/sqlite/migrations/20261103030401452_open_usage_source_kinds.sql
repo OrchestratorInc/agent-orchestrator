@@ -106,23 +106,23 @@ DROP TRIGGER IF EXISTS usage_bindings_cdc_insert;
 DROP TRIGGER IF EXISTS usage_bindings_cdc_update;
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
 
--- Restore the enumerated constraints from the Qwen schema. Usage owned by any
--- harness or source kind outside that list is removed first; Claude, Codex,
--- Kimi, Pi, and Qwen events retain their IDs and facts.
+-- Restore the enumerated constraints. Usage owned by any harness or source
+-- kind outside that list is removed first; Claude, Codex, and Kimi events
+-- retain their IDs and facts.
 DELETE FROM model_usage_events
 WHERE binding_id IN (
     SELECT id FROM usage_bindings
-    WHERE harness NOT IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen')
+    WHERE harness NOT IN ('claude-code', 'codex', 'kimi')
 )
    OR usage_source_id IN (
     SELECT id FROM usage_sources
-    WHERE kind NOT IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly')
+    WHERE kind NOT IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire')
 );
 
 CREATE TABLE usage_bindings_previous (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id         TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
-    harness            TEXT NOT NULL CHECK (harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen')),
+    harness            TEXT NOT NULL CHECK (harness IN ('claude-code', 'codex', 'kimi')),
     native_root_id     TEXT NOT NULL CHECK (trim(native_root_id) <> ''),
     initial_model_id   TEXT NOT NULL DEFAULT '',
     state              TEXT NOT NULL CHECK (state IN ('discovering', 'active', 'finalizing', 'complete', 'partial')),
@@ -135,7 +135,7 @@ CREATE TABLE usage_bindings_previous (
 CREATE TABLE usage_sources_previous (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     binding_id          INTEGER NOT NULL REFERENCES usage_bindings (id) ON DELETE CASCADE,
-    kind                TEXT NOT NULL CHECK (kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly')),
+    kind                TEXT NOT NULL CHECK (kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire')),
     native_session_id   TEXT NOT NULL DEFAULT '',
     subagent_id         TEXT NOT NULL DEFAULT '',
     artifact_path       TEXT NOT NULL CHECK (trim(artifact_path) <> ''),
@@ -156,7 +156,7 @@ INSERT INTO usage_bindings_previous
 SELECT id, session_id, harness, native_root_id, initial_model_id,
        state, last_error_code, updated_at, provider_hint
 FROM usage_bindings
-WHERE harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen');
+WHERE harness IN ('claude-code', 'codex', 'kimi');
 
 INSERT INTO usage_sources_previous
 SELECT source.id, source.binding_id, source.kind, source.native_session_id,
@@ -166,7 +166,7 @@ SELECT source.id, source.binding_id, source.kind, source.native_session_id,
        source.next_retry_at, source.last_error_code, source.updated_at
 FROM usage_sources source
 JOIN usage_bindings_previous binding ON binding.id = source.binding_id
-WHERE source.kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire', 'pi_session', 'qwen_monthly');
+WHERE source.kind IN ('claude_main', 'claude_subagent', 'codex_rollout', 'kimi_wire');
 
 DROP TABLE usage_sources;
 DROP TABLE usage_bindings;

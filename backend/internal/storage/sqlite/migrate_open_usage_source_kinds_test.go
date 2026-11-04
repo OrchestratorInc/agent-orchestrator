@@ -6,16 +6,18 @@ import (
 )
 
 // TestMigrationOpenUsageSourceKinds verifies the schema stops enumerating usage
-// harnesses and source kinds, and that rollback restores the Qwen constraints
-// while removing only usage the narrower schema cannot hold.
+// harnesses and source kinds, and that rollback restores the Claude, Codex,
+// and Kimi constraints while removing only usage the narrower schema cannot
+// hold.
 func TestMigrationOpenUsageSourceKinds(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261102174702749)
+	db := openMigratedDatabaseCopy(t, 20261102164353715)
 	upTo(t, db, 20261103030401452)
 	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	if _, err := db.Exec(`INSERT INTO projects (id, path, display_name, registered_at) VALUES ('usage-migration', '/tmp/usage-migration', 'usage', ?)`, now); err != nil {
 		t.Fatal(err)
 	}
-	// goose is not in the Qwen-era lists, so it stands for any later harness.
+	// qwen and goose are not in the enumerated lists, so they stand for any
+	// later harness.
 	seeds := []struct{ harness, kind string }{
 		{"qwen", "qwen_monthly"},
 		{"kimi", "kimi_wire"},
@@ -49,7 +51,7 @@ func TestMigrationOpenUsageSourceKinds(t *testing.T) {
 		t.Fatal("open schema admitted a blank harness")
 	}
 
-	downTo(t, db, 20261102174702749)
+	downTo(t, db, 20261102164353715)
 	counts := map[string]int{}
 	for _, seed := range seeds {
 		var count int
@@ -58,13 +60,13 @@ func TestMigrationOpenUsageSourceKinds(t *testing.T) {
 		}
 		counts[seed.harness] = count
 	}
-	if counts["qwen"] != 1 || counts["kimi"] != 1 || counts["goose"] != 0 {
-		t.Fatalf("events after rollback = %+v, want qwen:1 kimi:1 goose:0", counts)
+	if counts["qwen"] != 0 || counts["kimi"] != 1 || counts["goose"] != 0 {
+		t.Fatalf("events after rollback = %+v, want qwen:0 kimi:1 goose:0", counts)
 	}
 	if _, err := db.Exec(`INSERT INTO usage_bindings (session_id, harness, native_root_id, state, updated_at) VALUES ('session-goose', 'goose', 'again', 'active', ?)`, now); err == nil {
-		t.Fatal("rollback still admits harnesses outside the Qwen schema")
+		t.Fatal("rollback still admits harnesses outside the predecessor schema")
 	}
-	if _, err := db.Exec(`INSERT INTO usage_bindings (session_id, harness, native_root_id, state, updated_at) VALUES ('session-qwen', 'qwen', 'again', 'active', ?)`, now); err != nil {
-		t.Fatalf("rollback rejects Qwen usage allowed by the predecessor schema: %v", err)
+	if _, err := db.Exec(`INSERT INTO usage_bindings (session_id, harness, native_root_id, state, updated_at) VALUES ('session-kimi', 'kimi', 'again', 'active', ?)`, now); err != nil {
+		t.Fatalf("rollback rejects Kimi usage allowed by the predecessor schema: %v", err)
 	}
 }
