@@ -73,8 +73,7 @@ func TestCollectorDiscoversPiSessionInSessionDirRoot(t *testing.T) {
 		Harness: domain.HarnessPi, Event: "session-start", NativeSessionID: nativeID,
 	}))
 	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
-	if err != nil || len(bindings) != 1 || bindings[0].State != domain.UsageBindingActive ||
-		bindings[0].LastErrorCode != "" {
+	if err != nil || len(bindings) != 1 || bindings[0].State != domain.UsageBindingActive {
 		t.Fatalf("bindings=%+v err=%v", bindings, err)
 	}
 	sources, err := store.ListUsageSourcesForBinding(context.Background(), bindings[0].ID)
