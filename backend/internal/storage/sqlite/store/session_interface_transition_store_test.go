@@ -344,6 +344,84 @@ func TestCommitSessionControllerEpochFreshTerminalRefusesTouchedConversation(t *
 	}
 }
 
+// A degraded Chat -> TUI switch that cannot resume its native conversation
+// promises a fresh terminal with the Chat archived, so history on the Chat must
+// not refuse the epoch. The refusal stays for any transition without that exact
+// admission, and the Chat's rows and provider binding survive the commit.
+func TestCommitSessionControllerEpochFreshTerminalTouchedConversationNeedsDegradedAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		degraded string
+		nativeID string
+		want     bool
+	}{
+		{name: "degraded with no native conversation", degraded: domain.SessionInterfaceTransitionDegradedIdentityReset, want: true},
+		{name: "strict transition"},
+		{name: "degraded but a native conversation was recorded", degraded: domain.SessionInterfaceTransitionDegradedIdentityReset, nativeID: "native-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, st, "touched")
+			rec := sampleRecord("touched")
+			rec.Mode = domain.SessionModeChat
+			rec.Metadata.ControllerGeneration = "chat-generation"
+			created, err := st.CreateSession(ctx, rec)
+			if err != nil {
+				t.Fatalf("create Chat session: %v", err)
+			}
+			conversation, err := st.CreateConversation(ctx, "touched-conversation",
+				domain.ConversationScopeSession, created.ProjectID, created.ID, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation",
+				"turn-1", "provider-turn-1", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			if _, inserted, err := st.CreateSessionInterfaceTransition(ctx, domain.SessionInterfaceTransition{
+				ID: "switch", SessionID: created.ID,
+				SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeTUI,
+				Policy:               domain.SessionInterfaceTransitionDrain,
+				HistoryPolicy:        domain.SessionInterfaceTransitionHistoryStrict,
+				Phase:                domain.SessionInterfaceTransitionRequested,
+				NativeConversationID: tc.nativeID, DegradedKind: tc.degraded, CreatedAt: now, UpdatedAt: now,
+			}); err != nil || !inserted {
+				t.Fatalf("create transition: inserted=%v err=%v", inserted, err)
+			}
+
+			changed, err := st.CommitSessionControllerEpoch(
+				ctx, created.ID, domain.SessionModeChat, domain.SessionModeTUI, "", time.Now(),
+			)
+			if tc.want && (err != nil || !changed) {
+				t.Fatalf("degraded commit: changed=%v err=%v", changed, err)
+			}
+			if !tc.want && (err == nil || changed) {
+				t.Fatalf("commit without degraded admission: changed=%v err=%v", changed, err)
+			}
+			after, _, err := st.GetSession(ctx, created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMode := domain.SessionModeChat
+			if tc.want {
+				wantMode = domain.SessionModeTUI
+			}
+			if got := domain.NormalizeSessionMode(after.Mode); got != wantMode {
+				t.Fatalf("mode = %s, want %s", got, wantMode)
+			}
+			kept, err := st.ConversationForSession(ctx, created.ID)
+			if err != nil {
+				t.Fatalf("conversation after commit: %v", err)
+			}
+			if kept.ID != conversation.ID {
+				t.Fatalf("conversation = %s, want %s kept", kept.ID, conversation.ID)
+			}
+		})
+	}
+}
+
 func TestLatestSessionInterfaceTransitionBreaksCreatedAtTiesByInsertion(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()

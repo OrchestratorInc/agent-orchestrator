@@ -1435,11 +1435,36 @@ func (m *Manager) startTransitionTarget(
 	// A genuinely fresh target has nothing to replay. Every resumed TUI -> Chat
 	// handoff must import native history before activation; rollback and ordinary
 	// daemon restore deliberately use the normal context-resume policy.
-	_, err = m.relaunchSessionWithPolicy(
+	var promptOverride *string
+	if fresh && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && m.chatAcceptedWork(ctx, id) {
+		// The Chat already ran the session's prompt, so replaying it into a fresh
+		// terminal would start the task again. The prompt stays on the session.
+		noPrompt := ""
+		promptOverride = &noPrompt
+	}
+	_, err = m.relaunchSessionWithPolicyAndGeneration(
 		ctx, "switch interface", rec, project, ws, nil,
-		fresh, requireNativeHistory && !fresh, historyPolicy,
+		fresh, requireNativeHistory && !fresh, "", historyPolicy, promptOverride,
 	)
 	return err
+}
+
+// chatAcceptedWork reports whether the session's Chat conversation ever accepted
+// a message or activity. The sequence is monotonic, so rolled-back or hidden
+// turns still count. A failed read also counts: a terminal that opens without
+// the prompt is recoverable, and repeating a finished task is not.
+func (m *Manager) chatAcceptedWork(ctx context.Context, id domain.SessionID) bool {
+	store, ok := m.store.(interface {
+		ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
+	})
+	if !ok {
+		return false
+	}
+	conversation, err := store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return false
+	}
+	return err != nil || conversation.LatestSequence != 0
 }
 
 func (m *Manager) rollbackInterfaceTransition(
