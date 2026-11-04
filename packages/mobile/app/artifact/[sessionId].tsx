@@ -1,9 +1,11 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
+import { artifactVisual } from "../../lib/artifactVisual";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
@@ -97,6 +99,14 @@ function ArtifactViewerContent() {
 		setActionError(undefined);
 		setCurrentPath(next.path);
 	}, [closeAsk]);
+	const pagerRef = useRef<PagerHandle>(null);
+	// A tap on the strip moves the pager there with an animation, then shows that page.
+	const pageTo = useCallback((target: number) => {
+		const next = artifacts?.[target];
+		if (!next) return;
+		pagerRef.current?.scrollToPage(target);
+		showPage(next);
+	}, [artifacts, showPage]);
 	const askedOnOpen = useRef(false);
 	useEffect(() => {
 		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
@@ -169,10 +179,13 @@ function ArtifactViewerContent() {
 		const url = artifactFileUrl(config, sessionId, currentPath);
 		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
+	// The strip shows the session's artifacts when there is more than one. It leaves while a comment is open.
+	const filmstrip = !ask && artifacts.length > 1;
 	return (
 		<View style={styles.screen}>
 			{headerItems}
 			<ArtifactPager
+				ref={pagerRef}
 				pages={artifacts}
 				index={pageIndex}
 				// A comment belongs to the file it was opened on; paging waits until it is sent or closed.
@@ -180,6 +193,7 @@ function ArtifactViewerContent() {
 				onPage={showPage}
 				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
 			/>
+			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={artifacts} index={pageIndex} onSelect={pageTo} /> : null}
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
@@ -192,7 +206,7 @@ function ArtifactViewerContent() {
 					onClose={() => { closeAsk(); setActionError(undefined); }}
 				/>
 			) : (
-				<ReviewButton count={review.comments.length} onPress={openReview} />
+				<ReviewButton count={review.comments.length} bottomOffset={filmstrip ? STRIP_HEIGHT + space.sm : 0} onPress={openReview} />
 			)}
 			{menu}
 		</View>
@@ -204,15 +218,20 @@ function ArtifactViewerContent() {
  * gallery. Only the page on screen and its neighbours are mounted, so a long
  * list does not load every web page at once.
  */
-function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }: {
+type PagerHandle = { scrollToPage(index: number): void };
+
+const ArtifactPager = forwardRef<PagerHandle, {
 	pages: readonly SessionArtifact[];
 	index: number;
 	scrollEnabled: boolean;
 	onPage(artifact: SessionArtifact): void;
 	renderPage(artifact: SessionArtifact): ReactNode;
-}) {
+}>(function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }, handle) {
 	const styles = useThemedStyles(makeStyles);
 	const list = useRef<FlatList<SessionArtifact>>(null);
+	// The page the list is on. A move the list made itself (a swipe, a tap on the
+	// strip) already has it here, so the effects below do not scroll again.
+	const shownIndex = useRef(index);
 	// Pages are as wide as the viewer, which on an iPad in split view is not the screen.
 	const [size, setSize] = useState<{ width: number; height: number }>();
 	const onLayout = useCallback((event: LayoutChangeEvent) => {
@@ -220,14 +239,28 @@ function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }: {
 		setSize((current) => current?.width === width && current.height === height ? current : { width, height });
 	}, []);
 	const width = size?.width ?? 0;
-	// A file written while this is open lands at the front of the list, and a
-	// resize changes the page width: either way the page on screen stays put.
+	useImperativeHandle(handle, () => ({
+		scrollToPage(target) {
+			shownIndex.current = target;
+			list.current?.scrollToIndex({ index: target, animated: true });
+		},
+	}), []);
+	// A file written while this is open lands at the front of the list, so the
+	// page on screen moves to its new index and stays put.
 	useEffect(() => {
-		if (width > 0 && index >= 0) list.current?.scrollToOffset({ offset: index * width, animated: false });
+		if (width <= 0 || index < 0 || index === shownIndex.current) return;
+		shownIndex.current = index;
+		list.current?.scrollToOffset({ offset: index * width, animated: false });
 	}, [index, width]);
+	// A resize changes the page width, so the page on screen is put back at its width.
+	useEffect(() => {
+		if (width > 0) list.current?.scrollToOffset({ offset: shownIndex.current * width, animated: false });
+	}, [width]);
 	const onSettled = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
 		const next = artifactPageAt(pages, event.nativeEvent.contentOffset.x, width);
-		if (next && next !== pages[index]) onPage(next);
+		if (!next || next === pages[index]) return;
+		shownIndex.current = pages.indexOf(next);
+		onPage(next);
 	}, [index, onPage, pages, width]);
 	return (
 		<View style={styles.screen} onLayout={onLayout}>
@@ -249,6 +282,75 @@ function ArtifactPager({ pages, index, scrollEnabled, onPage, renderPage }: {
 					renderItem={({ item }) => <View style={{ width: size.width, height: size.height }}>{renderPage(item)}</View>}
 				/>
 			) : null}
+		</View>
+	);
+});
+
+const STRIP_TILE = 48;
+const STRIP_GAP = space.xs;
+const STRIP_PAD = space.sm;
+/** The strip's height without the home indicator's inset. */
+const STRIP_HEIGHT = STRIP_TILE + STRIP_PAD * 2;
+
+/**
+ * Every artifact of the session as a row of small tiles, like a photo app's
+ * strip: the page on screen is outlined and kept in the middle of the row as
+ * the pages change. Tapping a tile goes to that page.
+ */
+function ArtifactFilmstrip({ config, sessionId, artifacts, index, onSelect }: {
+	config: ServerConfig;
+	sessionId: string;
+	artifacts: readonly SessionArtifact[];
+	index: number;
+	onSelect(index: number): void;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
+	const list = useRef<FlatList<SessionArtifact>>(null);
+	// The first placement happens at once; later ones glide.
+	const placed = useRef(false);
+	useEffect(() => {
+		if (index < 0) return;
+		list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: placed.current });
+		placed.current = true;
+	}, [index]);
+	return (
+		<View style={[styles.strip, { paddingBottom: insets.bottom }]}>
+			<FlatList
+				ref={list}
+				style={styles.stripList}
+				contentContainerStyle={styles.stripContent}
+				data={artifacts}
+				horizontal
+				showsHorizontalScrollIndicator={false}
+				keyExtractor={(artifact) => artifact.path}
+				// Fixed-size tiles let the list jump to any of them without measuring.
+				getItemLayout={(_, item) => ({ length: STRIP_TILE + STRIP_GAP, offset: (STRIP_TILE + STRIP_GAP) * item, index: item })}
+				initialScrollIndex={Math.max(0, index)}
+				renderItem={({ item, index: position }) => {
+					const selected = position === index;
+					const visual = artifactVisual(item, t);
+					const picture = artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined;
+					return (
+						<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
+							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel={`${item.name}, ${position + 1} of ${artifacts.length}`}
+								accessibilityState={{ selected }}
+								onPress={() => { haptics.tap(); onSelect(position); }}
+								style={[styles.tile, { backgroundColor: visual.tint }, selected ? styles.tileSelected : { opacity: 0.6 }]}
+							>
+								{picture ? (
+									<Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" style={StyleSheet.absoluteFill} />
+								) : (
+									<Feather name={visual.icon} size={18} color={visual.color} />
+								)}
+							</Pressable>
+						</View>
+					);
+				}}
+			/>
 		</View>
 	);
 }
@@ -431,6 +533,11 @@ function Unavailable({ title, message, action }: { title: string; message?: stri
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	strip: { backgroundColor: t.bgBase, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
+	stripList: { flexGrow: 0, height: STRIP_HEIGHT },
+	stripContent: { paddingHorizontal: space.md, paddingVertical: STRIP_PAD },
+	tile: { width: STRIP_TILE, height: STRIP_TILE, borderRadius: radius.sm, borderCurve: "continuous", borderWidth: 2, borderColor: "transparent", overflow: "hidden", alignItems: "center", justifyContent: "center" },
+	tileSelected: { borderColor: t.accent },
 	pagerTitle: { maxWidth: 240, alignItems: "center", justifyContent: "center" },
 	pagerTitleText: { fontFamily: font.semibold, maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	pagerPosition: { fontFamily: font.regular, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

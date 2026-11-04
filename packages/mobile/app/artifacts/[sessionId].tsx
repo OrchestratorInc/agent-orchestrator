@@ -4,10 +4,11 @@ import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleShe
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
+import { artifactVisual } from "../../lib/artifactVisual";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
-import { Feather, type FeatherIconName } from "../../lib/icons";
+import { Feather } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import type { ServerConfig } from "../../lib/config";
@@ -141,7 +142,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
 	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
 	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
-	const visual = cardVisual(artifact, t);
+	const visual = artifactVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
 	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
 	return (
@@ -183,17 +184,6 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 			</>)}
 		</Pressable>
 	);
-}
-
-/** Each kind of file gets its own glyph and hue, so a grid of them scans at a glance. */
-function cardVisual(artifact: SessionArtifact, t: Theme): { icon: FeatherIconName; color: string; tint: string } {
-	switch (artifactViewKind(artifact)) {
-		case "html": return { icon: "globe", color: t.blue, tint: t.tintBlue };
-		case "markdown": return { icon: "file-text", color: t.purple, tint: t.tintPurple };
-		case "image": return { icon: "image", color: t.green, tint: t.tintGreen };
-		case "web-media": return { icon: /\.svg$/i.test(artifact.path) ? "image" : "play", color: t.amber, tint: t.tintAmber };
-		case "text": return { icon: "code", color: t.orange, tint: t.tintOrange };
-	}
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
