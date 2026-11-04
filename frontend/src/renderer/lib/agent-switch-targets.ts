@@ -1,7 +1,7 @@
 // Agents a Chat session can switch to: the ones with a structured Chat driver.
 export const CHAT_SWITCH_TARGETS = [
 	"claude-code", "codex", "cursor", "opencode", "opencode-v2", "droid", "kimi",
-	"kimchi", "pi", "omp", "qwen", "deepseek-harness", "unreal-agent", "coder-agents",
+	"kimchi", "pi", "omp", "qwen", "deepseek-harness", "unreal-agent",
 ] as const;
 // Agents with no terminal interface at all: they always open in Chat.
 export const CHAT_ONLY_AGENTS: ReadonlySet<string> = new Set(["unreal-agent", "coder-agents"]);

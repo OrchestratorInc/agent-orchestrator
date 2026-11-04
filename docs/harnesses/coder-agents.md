@@ -2,8 +2,10 @@
 
 ## Current availability
 
-Install, login and native model discovery are available. **Chat start and resume
-are currently blocked** with a compatibility error, before any provider request.
+Install, login and native model discovery are available. **Chat is not registered**:
+Coder Agents is excluded from the advertised Chat harnesses, New Task choices
+and agent-switch targets. Connected account status remains setup evidence only.
+The public adapter also rejects start and resume before any provider request.
 Coder v2.37.9 adds client-executed dynamic tools alongside built-in server-side
 workspace tools; it offers no server-enforced local-only tool policy. An
 asynchronous interrupt cannot guarantee that those tools have not already acted.

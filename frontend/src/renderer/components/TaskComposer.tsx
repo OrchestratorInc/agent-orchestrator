@@ -394,6 +394,11 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	}, [hostId, projectQuery.data?.id]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
+	// Chat-only agents have no terminal fallback. A connected account alone
+	// cannot make one offerable while its Chat driver is unavailable.
+	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
+	const supportsSessionInterface = useCallback((id: string) =>
+		!CHAT_ONLY_AGENTS.has(id) || Boolean(chatHarnesses?.includes(id)), [chatHarnesses]);
 	// The composer preselects the agent and model a spawn would actually use
 	// instead of parking the controls on a "default" label the user has to
 	// remember. Both resolved values remain directly editable.
@@ -420,16 +425,17 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		agents: agentCatalog.agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents: [],
+		filter: (candidate) => supportsSessionInterface(candidate.id),
 	}).find(isReadyAgent)?.id ?? "" : "";
 	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
-		: configuredProjectAgent || (isCloudProject ? "" : readyFallbackAgent);
+		: (supportsSessionInterface(configuredProjectAgent) ? configuredProjectAgent : "") || (isCloudProject ? "" : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
-		availableAgents?.some((candidate) => candidate.id === rememberedAgent && (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate))),
+		supportsSessionInterface(rememberedAgent) && availableAgents?.some((candidate) => candidate.id === rememberedAgent && (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate))),
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
-	const selectedAgent = agent || defaultWorkerAgent;
+	const selectedAgent = supportsSessionInterface(agent || defaultWorkerAgent) ? agent || defaultWorkerAgent : "";
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -711,9 +717,6 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
-	// A cloud project's Chat-capable harnesses come from the control plane, as a
-	// local project's come from the daemon.
-	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
@@ -1043,9 +1046,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			agents,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
+			filter: (candidate) => supportsSessionInterface(candidate.id),
 		});
 		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, supportsSessionInterface]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
