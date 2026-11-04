@@ -243,7 +243,10 @@ function Shell() {
 				{/* Pull Requests opens from the board's header on iOS (a tab on
 				    Android), a page pushed over the board like Settings. */}
 				<Stack.Screen name="prs" options={{ headerShown: false, title: "Pull Requests", contentStyle: { backgroundColor: t.bgBase } }} />
-				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
+				{/* Titled though its header is hidden: the pair page pushed over it
+				    takes this as its back button's name, which was the route's
+				    "onboarding" without one. */}
+				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false, title: "Welcome" }} />
 				{/* Pairing is two pages pushed over whatever opened it, each with the
 				    stack's back: the scanner, then the manual form over it. */}
 				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />

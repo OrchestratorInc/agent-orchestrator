@@ -73,6 +73,8 @@ describe("root stack", () => {
 			expect(options("(tabs)", board(0)).title).toBe("Workers");
 			expect(options("(tabs)", board(1)).title).toBe("Projects");
 			expect(options("(tabs)").headerShown).toBe(false);
+			// The pair page's back button, pushed from onboarding.
+			expect(options("onboarding")).toMatchObject({ title: "Welcome", headerShown: false });
 		} finally {
 			act(() => renderer.unmount());
 		}
