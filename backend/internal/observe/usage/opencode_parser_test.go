@@ -262,6 +262,37 @@ func TestParseKiloStepsKeepKiloCost(t *testing.T) {
 	}
 }
 
+// Break caught: a free model on the agent's own gateway (OpenCode Zen's
+// big-pickle, Kilo's kilo-auto/free) shown as not priced. The agent's zero
+// cost is what its gateway charged, and no catalog lists the gateway, so it is
+// kept as $0; a zero through any other provider is still left to the catalog.
+func TestParseOpenCodeKeepsZeroCostOnOwnGateway(t *testing.T) {
+	step := `"step":{"type":"step-finish","tokens":{"input":100,"output":2,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}`
+	for _, tt := range []struct {
+		kind     domain.UsageSourceKind
+		provider string
+		version  string
+	}{
+		{domain.UsageSourceOpenCodeDB, "opencode", openCodePricingVersion},
+		{domain.UsageSourceKiloDB, "kilo", kiloPricingVersion},
+	} {
+		record := jsonlRecord{Offset: 1, Data: []byte(`{"part_id":"prt_1","session_id":"ses_root","time_created":1793465755757,"provider_id":"` + tt.provider + `","model_id":"free-model",` + step + `}`)}
+		result := parseRecords(openCodeTestSource(tt.kind), []jsonlRecord{record}, 1, time.Now())
+		if result.err != nil || len(result.Events) != 1 {
+			t.Fatalf("%s result = %+v", tt.provider, result)
+		}
+		costs := result.Events[0].Costs
+		if costs.EstimatedCostNanos == nil || *costs.EstimatedCostNanos != 0 || costs.PricingVersion != tt.version {
+			t.Fatalf("%s costs = %+v, want a reported $0", tt.provider, costs)
+		}
+	}
+	record := jsonlRecord{Offset: 1, Data: []byte(`{"part_id":"prt_1","session_id":"ses_root","time_created":1793465755757,"provider_id":"zai","model_id":"glm-4.5",` + step + `}`)}
+	result := parseRecords(openCodeTestSource(domain.UsageSourceOpenCodeDB), []jsonlRecord{record}, 1, time.Now())
+	if result.err != nil || len(result.Events) != 1 || result.Events[0].Costs.EstimatedCostNanos != nil {
+		t.Fatalf("zai zero cost = %+v, want it left to the catalog", result)
+	}
+}
+
 // TestIngestorReadsOpenCodeStepsIncrementally catches re-reading steps already
 // stored, counting the message row OpenCode rewrites as a call streams, and
 // stalling on steps the agent commits after the first pass.

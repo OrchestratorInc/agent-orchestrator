@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,12 @@ const (
 	openCodePricingVersion = "opencode:reported"
 	kiloPricingVersion     = "kilocode:reported"
 )
+
+// openCodeGatewayProviders are OpenCode's and Kilo Code's own billing
+// gateways (OpenCode Zen, the Kilo gateway). A zero cost reported for a call
+// through one is the price charged, often a free model, not a missing price,
+// and no catalog lists the gateway to price it otherwise.
+var openCodeGatewayProviders = []string{"opencode", "kilo", "kilocode"}
 
 // openCodeStepRow is one step-finish part joined to its assistant message's
 // provider and model. Kilo Code is an OpenCode fork and keeps the same schema.
@@ -174,7 +181,8 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 			Tokens:                tokens,
 			ProviderUsageJSON:     openCodeProviderUsage(row.Step, usage.Cache.Write),
 			SourceEventKey:        stableSourceEventKey(keyPrefix, source.NativeRootID, row.PartID),
-			Costs:                 openCodeReportedCosts(step.Cost, pricingVersion),
+			Costs: openCodeReportedCosts(step.Cost, pricingVersion,
+				slices.Contains(openCodeGatewayProviders, billingProvider)),
 		}
 		if row.TimeCreated > 0 {
 			event.CreatedAt = time.UnixMilli(row.TimeCreated).UTC()
@@ -209,15 +217,16 @@ func openCodeProviderUsage(step json.RawMessage, cacheWrite int64) string {
 }
 
 // openCodeReportedCosts keeps the USD cost OpenCode computed for the call from
-// its own model catalog, which prices providers AO's catalog does not list. A
-// zero cost means a free or plan-billed model, or one OpenCode has no price
-// for, so the catalog is left to try.
-func openCodeReportedCosts(cost *float64, pricingVersion string) domain.UsageEventCosts {
+// its own model catalog, which prices providers AO's catalog does not list.
+// Through another provider a zero cost means a plan-billed model or one
+// OpenCode has no price for, so the catalog is left to try. Through the
+// agent's own gateway a zero cost is what the gateway charged, so it is kept.
+func openCodeReportedCosts(cost *float64, pricingVersion string, ownGateway bool) domain.UsageEventCosts {
 	if cost == nil {
 		return domain.UsageEventCosts{}
 	}
 	nanos, ok := usdToNanos(*cost)
-	if !ok || nanos == 0 {
+	if !ok || nanos == 0 && !ownGateway {
 		return domain.UsageEventCosts{}
 	}
 	return domain.UsageEventCosts{EstimatedCostNanos: &nanos, PricingVersion: pricingVersion}

@@ -105,9 +105,10 @@ func TestParseOMPAnthropicReplyUsesAnthropicCounters(t *testing.T) {
 
 // Break caught: dropping usage from Kimchi's own gateway, or counting its
 // reasoning twice. Kimchi reports a reasoning subset already inside output
-// (83 output holds 66 reasoning) and a zero cost for its gateway, which must
-// stay unpriced for the catalog rather than store a $0 figure; a reply it
-// did price (openai-codex) keeps Kimchi's cost as kimchi:reported.
+// (83 output holds 66 reasoning) and a zero cost for its own gateway, which is
+// what the gateway charged: no catalog lists kimchi-dev, so leaving it to the
+// catalog showed every gateway call as not priced. A reply it did price
+// (openai-codex) keeps Kimchi's cost as kimchi:reported.
 func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 	source := usageSource(domain.UsageSourceKimchiSession)
 	source.NativeRootID = "019ffc6e-fcb3-7f68-a162-85693427d059"
@@ -130,8 +131,9 @@ func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 		t.Fatalf("gateway event = %+v", gateway)
 	}
 	assertPiTokens(t, gateway.Tokens, 25118, 5120, 19998, 83)
-	if gateway.Costs.EstimatedCostNanos != nil || gateway.Costs.PricingVersion != "" {
-		t.Fatalf("gateway zero cost must be left for the catalog: %+v", gateway.Costs)
+	if gateway.Costs.EstimatedCostNanos == nil || *gateway.Costs.EstimatedCostNanos != 0 ||
+		gateway.Costs.PricingVersion != kimchiPricingVersion {
+		t.Fatalf("gateway zero cost must be kept as kimchi:reported $0: %+v", gateway.Costs)
 	}
 	if providerUsageTokens(t, gateway.ProviderUsageJSON, "reasoning") != 66 {
 		t.Fatalf("gateway provider usage = %s", gateway.ProviderUsageJSON)

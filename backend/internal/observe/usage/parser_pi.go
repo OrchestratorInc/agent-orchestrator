@@ -3,6 +3,7 @@ package usage
 import (
 	"encoding/json"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,10 @@ type piDialect struct {
 	// provider, model and usage block) that the fork writes for a model call
 	// outside the conversation; empty when the fork writes none.
 	sideUsageType string
+	// gatewayProviders are the fork's own billing gateways. A zero cost the
+	// fork reports for a call through one is the price it charged, not a
+	// missing one, and no catalog lists the gateway to price it otherwise.
+	gatewayProviders []string
 }
 
 var (
@@ -36,7 +41,10 @@ var (
 	// OMP records each auxiliary model call (its auto-thinking judge, for
 	// one) as a model_usage entry beside the conversation.
 	ompSessionDialect    = piDialect{eventKeyPrefix: "omp", pricingVersion: ompPricingVersion, sideUsageType: "model_usage"}
-	kimchiSessionDialect = piDialect{eventKeyPrefix: "kimchi", pricingVersion: kimchiPricingVersion}
+	kimchiSessionDialect = piDialect{
+		eventKeyPrefix: "kimchi", pricingVersion: kimchiPricingVersion,
+		gatewayProviders: []string{"kimchi", "kimchi-dev"},
+	}
 )
 
 type piSessionRecord struct {
@@ -172,7 +180,8 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			SourceEventKey: stableSourceEventKey(
 				dialect.eventKeyPrefix, source.NativeRootID, native.Type, identity,
 			),
-			Costs: piReportedCosts(usage.Cost, dialect.pricingVersion),
+			Costs: piReportedCosts(usage.Cost, dialect.pricingVersion,
+				slices.Contains(dialect.gatewayProviders, billingProvider)),
 		}
 		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
 			if !usageEventsEqual(existing, event) {
@@ -189,8 +198,10 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 // piReportedCosts converts the cost Pi computed into AO's cost columns, under
 // the dialect's pricingVersion. Pi prices providers AO's catalog does not list
 // (a z.ai coding plan, OpenRouter), so its figure is kept as stored. A missing
-// or zero cost means Pi had no price either, and the catalog is left to try.
-func piReportedCosts(cost *piNativeCost, pricingVersion string) domain.UsageEventCosts {
+// cost, or a zero one through another provider, means Pi had no price either,
+// and the catalog is left to try. Through the agent's own gateway a zero cost
+// is what the gateway charged, so it is kept.
+func piReportedCosts(cost *piNativeCost, pricingVersion string, ownGateway bool) domain.UsageEventCosts {
 	if cost == nil {
 		return domain.UsageEventCosts{}
 	}
@@ -201,7 +212,7 @@ func piReportedCosts(cost *piNativeCost, pricingVersion string) domain.UsageEven
 		return domain.UsageEventCosts{}
 	}
 	total, ok := sumNonNegative(input, cached, output)
-	if !ok || total == 0 {
+	if !ok || total == 0 && !ownGateway {
 		return domain.UsageEventCosts{}
 	}
 	return domain.UsageEventCosts{
