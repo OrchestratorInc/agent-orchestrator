@@ -55,9 +55,6 @@ export function agentAccountName(account: Pick<AgentAccount, "email" | "provider
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
 }
 
-/** The accounts to list, one per login: the CLI's own login is left out when a
- * saved account is signed in as the same login. keepId, the account a session
- * runs on, stays listed, and its saved twin is left out in its place. */
 export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
 	const ids = new Set(accounts.map((account) => account.id));
 	const twinOf = (account: T) => account.sameLoginAs && ids.has(account.sameLoginAs) ? account.sameLoginAs : undefined;

@@ -23,8 +23,6 @@ func (s listOnlyAgentAccounts) List(context.Context, bool) ([]agentaccounts.Acco
 	return s.views, nil
 }
 
-// The computer's login signed in as a saved account's login names that account,
-// so the app can show the two as one.
 func TestAgentAccountsListNamesTheSameLogin(t *testing.T) {
 	device := domain.AgentAccount{ID: domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude), Provider: domain.AgentAccountProviderClaude, Email: "a@example.com"}
 	saved := domain.AgentAccount{ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/acct-a", Email: "a@example.com"}

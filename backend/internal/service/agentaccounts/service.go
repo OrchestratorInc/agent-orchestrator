@@ -131,8 +131,6 @@ type AccountView struct {
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
-	// SameLoginAs is, on the computer's own login, the saved account signed in
-	// as the same login; the app shows the two as one account.
 	SameLoginAs string
 }
 
@@ -171,9 +169,6 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 	return views, nil
 }
 
-// markSameLogin names, on the computer's own login, the saved account signed in
-// as the same login. The CLI can be signed in to it outside AO after it was
-// added, and a saved account signed out or holding another login is not one.
 func markSameLogin(views []AccountView) {
 	for i := range views {
 		device := &views[i]
@@ -592,8 +587,6 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	if !identity.SignedIn {
 		return LoginWaiting, nil, nil
 	}
-	// The computer's login changes outside AO: a cached reading may predate a
-	// sign-in in the terminal moments ago.
 	s.read(ctx, domain.AgentAccount{ID: domain.DeviceAgentAccountID(op.provider), Provider: op.provider})
 	views, err := s.List(ctx, false)
 	if err != nil {
@@ -609,8 +602,6 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		if op.account != nil && view.Account.ID == op.account.ID {
 			continue
 		}
-		// A saved account keeps its login while signed out: it signs in again in
-		// its own folder. The computer's login is only whoever is signed in now.
 		heldBy := view.SignedIn || (!view.Account.Device() && view.Account.Email != "")
 		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) {
 			s.endLogin(ctx, op, true)
