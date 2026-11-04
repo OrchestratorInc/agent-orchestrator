@@ -4,6 +4,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, notFou
 import { afterEach, expect, it, vi } from "vitest";
 import { queryClient } from "./query-client";
 import { apiClient, setApiBaseUrl } from "./api-client";
+import { clientForHost } from "./host-clients";
 import { apiErrorException } from "./api-error-exception";
 import { RouteErrorCapture, reportRouteError } from "../components/RouteErrorCapture";
 import { captureRendererException } from "./telemetry";
@@ -86,5 +87,25 @@ it("deduplicates a non-JSON API error body while preserving its UI message", asy
 it("does not report intentional router redirects or not-found results", async () => {
 	reportRouteError(notFound()); reportRouteError(redirect({ href: "/" }));
 	await Promise.resolve();
+	expect(capture).not.toHaveBeenCalled();
+});
+
+
+it.each(["Sign in to AO Cloud to use this feature", "Unexpected handler failure"])("keeps IPC rejection owned by main: %s", async (detail) => {
+	const error = new Error(`Error invoking remote method 'remotes:previewUrl': Error: ${detail}`);
+	await expect(queryClient.fetchQuery({ queryKey: ["ipc"], retry: false, queryFn: () => { throw error; } })).rejects.toBe(error);
+	const wrapped = apiErrorException(error);
+	const mutation = queryClient.getMutationCache().build(queryClient, { retry: false, mutationFn: async () => { throw wrapped; } });
+	await expect(mutation.execute(undefined)).rejects.toBe(wrapped);
+	reportRouteError(wrapped);
+	await Promise.resolve();
+	expect(capture).not.toHaveBeenCalled();
+});
+
+it("does not report expected disconnected-host query or mutation failures", async () => {
+	const queryFn = () => clientForHost("disconnected-private-host");
+	await expect(queryClient.fetchQuery({ queryKey: ["disconnected-host"], retry: false, queryFn })).rejects.toThrow("is not connected");
+	const mutation = queryClient.getMutationCache().build(queryClient, { retry: false, mutationFn: async () => queryFn() });
+	await expect(mutation.execute(undefined)).rejects.toThrow("is not connected");
 	expect(capture).not.toHaveBeenCalled();
 });

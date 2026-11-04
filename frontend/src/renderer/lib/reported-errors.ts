@@ -11,6 +11,9 @@ export function isApiError(error: unknown): boolean {
 	for (let depth = 0; depth < 8 && error !== null && typeof error === "object"; depth++) {
 		if (apiErrors.has(error)) return true;
 		if (!(error instanceof Error)) break;
+		// Electron serializes IPC rejections as plain Errors. Main owns both
+		// expected-state filtering and unexpected handler fault reporting.
+		if (error.message.startsWith("Error invoking remote method '")) return true;
 		try { error = error.cause; } catch { break; }
 	}
 	return false;
