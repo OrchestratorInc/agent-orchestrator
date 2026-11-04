@@ -6,6 +6,9 @@ import { useBackgroundTasks, type BackgroundTask, type BackgroundTaskReading } f
 import { formatMemory, useDiagnosticsEnabled, useSessionMemory } from "../hooks/useSessionMemory";
 import type { WorkspaceSession } from "../types/workspace";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
 function taskSummary(tasks: BackgroundTask[], t: TFunction): string | null {
 	const live = tasks.filter((task) => task.state === "running");
@@ -33,9 +36,11 @@ export function BackgroundTasksButton({ session, reading, stale = false }: {
 	if (!summary && !open) return null;
 	return (
 		<>
-			{summary ? <button
+			{summary ? <Button
 				type="button"
-				className="inline-flex max-w-full items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+				variant="quiet"
+				size="xs"
+				className="max-w-full"
 				onClick={(event) => {
 					event.stopPropagation();
 					// If the badge disappears after completion, return to the card's
@@ -46,7 +51,7 @@ export function BackgroundTasksButton({ session, reading, stale = false }: {
 			>
 				<ListTodo aria-hidden="true" className="size-3" />
 				<span>{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
-			</button> : null}
+			</Button> : null}
 			{open ? <BackgroundTasksDialog key={session.id} session={session} onOpenChange={setOpen} onReturnFocus={() => {
  if (returnFocus.current?.isConnected) returnFocus.current.focus();
  else document.querySelector<HTMLElement>('[aria-label="Message the agent"]')?.focus();
@@ -81,9 +86,9 @@ function BackgroundTasksDialog({ session, onOpenChange, onReturnFocus }: { sessi
 				<DialogDescription>{session.title}</DialogDescription>
 				<div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
 					<span>{query.data?.observedAt ? t("backgroundTasks.observed", { time: new Date(query.data.observedAt).toLocaleTimeString() }) : ""}</span>
-					<button type="button" className="inline-flex items-center gap-1 rounded px-2 py-1 hover:bg-interactive-hover" onClick={() => void query.refetch()} disabled={query.isFetching}>
+					<Button type="button" variant="quiet" size="xs" onClick={() => void query.refetch()} disabled={query.isFetching}>
 						<RefreshCw aria-hidden="true" className="size-3" />{t("backgroundTasks.refresh")}
-					</button>
+					</Button>
 				</div>
 				{query.isError ? <p role="status" className="text-xs text-warning">{t("backgroundTasks.staleReading")}</p> : null}
 				{query.isPending ? <p className="text-sm text-muted-foreground">{t("backgroundTasks.loading")}</p> : !ready ? (
@@ -117,10 +122,11 @@ function BackgroundTasksDialog({ session, onOpenChange, onReturnFocus }: { sessi
 
 function TaskRow({ task, onSelect }: { task: BackgroundTask; onSelect: (task: BackgroundTask) => void }) {
 	const { t } = useTranslation();
-	return <button type="button" aria-label={`${task.description || task.id} · ${t(`backgroundTasks.kind.${task.kind}`)} · ${t(`backgroundTasks.state.${task.state}`)}`} className="flex w-full items-start justify-between gap-3 rounded border border-border p-3 text-left text-xs hover:bg-interactive-hover" onClick={() => onSelect(task)}>
-		<span className="min-w-0"><span className="block break-words">{task.description || task.id}</span><span className="mt-1 block text-muted-foreground">{t(`backgroundTasks.kind.${task.kind}`)}</span></span>
-		<span className="shrink-0 text-muted-foreground">{t(`backgroundTasks.state.${task.state}`)}</span>
-	</button>;
+	return <Pressable aria-label={`${task.description || task.id} · ${t(`backgroundTasks.kind.${task.kind}`)} · ${t(`backgroundTasks.state.${task.state}`)}`} className={`${NAV_ROW_HIGHLIGHT_HOST_CLASS} flex w-full items-start justify-between gap-3 rounded p-3 text-xs`} onClick={() => onSelect(task)}>
+		<NavRowHighlight />
+		<span className="relative z-[1] min-w-0"><span className="block break-words">{task.description || task.id}</span><span className="mt-1 block text-muted-foreground">{t(`backgroundTasks.kind.${task.kind}`)}</span></span>
+		<span className="relative z-[1] shrink-0 text-muted-foreground">{t(`backgroundTasks.state.${task.state}`)}</span>
+	</Pressable>;
 }
 
 function SessionProcessDetails({ sessionId }: { sessionId: string }) {

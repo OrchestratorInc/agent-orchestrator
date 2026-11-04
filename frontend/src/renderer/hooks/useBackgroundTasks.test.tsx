@@ -6,8 +6,8 @@ import { useBackgroundTaskReadings, useBackgroundTasks } from "./useBackgroundTa
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock } }));
 
-function BoardConsumer() {
-	const query = useBackgroundTaskReadings(true);
+function BoardConsumer({ projectId }: { projectId?: string }) {
+	const query = useBackgroundTaskReadings(true, projectId);
 	return <span>{query.data?.get("s")?.availability ?? "loading"}</span>;
 }
 
@@ -19,7 +19,25 @@ describe("background task queries", () => {
 		const view = render(<QueryClientProvider client={client}><BoardConsumer /><BoardConsumer /></QueryClientProvider>);
 		await waitFor(() => expect(screen.getAllByText("ready")).toHaveLength(2));
 		expect(getMock).toHaveBeenCalledTimes(1);
-		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/background-tasks", { signal: expect.any(AbortSignal) });
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/background-tasks", { params: { query: {} }, signal: expect.any(AbortSignal) });
+		view.unmount();
+		client.clear();
+	});
+
+	it("filters board reads by project and keeps their caches separate", async () => {
+		getMock.mockImplementation((_path, options) => Promise.resolve({ data: { sessions: [{
+			sessionId: "s", availability: options.params.query.projectId === "one" ? "ready" : "partial", tasks: [],
+		}] } }));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><BoardConsumer projectId="one" /><BoardConsumer projectId="two" /></QueryClientProvider>);
+		await waitFor(() => {
+			expect(screen.getByText("ready")).toBeVisible();
+			expect(screen.getByText("partial")).toBeVisible();
+		});
+		expect(getMock).toHaveBeenCalledTimes(2);
+		for (const projectId of ["one", "two"]) {
+			expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/background-tasks", { params: { query: { projectId } }, signal: expect.any(AbortSignal) });
+		}
 		view.unmount();
 		client.clear();
 	});

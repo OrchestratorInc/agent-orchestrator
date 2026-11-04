@@ -186,11 +186,23 @@ func TestBackgroundTasksPausedAsyncTaskDefersACPHibernation(t *testing.T) {
 }
 
 func TestBackgroundTasksCopilotAsyncShell(t *testing.T) {
-	c := &conversation{}
-	c.observeBackgroundTool(&toolState{id: "tool", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"command": "sleep 1800", "mode": "async"}, rawOutput: map[string]any{"shellId": "native-shell"}})
-	tasks, _ := c.BackgroundTasks(context.Background())
-	if len(tasks) != 1 || tasks[0].ID != "native-shell" || tasks[0].State != "running" || tasks[0].Kind != "shell" {
-		t.Fatal(tasks)
+	for _, key := range []string{"task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id"} {
+		t.Run(key, func(t *testing.T) {
+			c := &conversation{}
+			c.observeBackgroundTool(&toolState{id: "tool", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"command": "sleep 1800", "mode": "async"}, rawOutput: map[string]any{key: "native-shell"}})
+			tasks, _ := c.BackgroundTasks(context.Background())
+			if len(tasks) != 1 || tasks[0].ID != "native-shell" || tasks[0].State != "running" || tasks[0].Kind != "shell" {
+				t.Fatal(tasks)
+			}
+			c.observeBackgroundTool(&toolState{id: "stop", status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{key: "native-shell"}, rawOutput: map[string]any{"status": "stopped"}})
+			tasks, _ = c.BackgroundTasks(context.Background())
+			if len(tasks) != 1 || tasks[0].ID != "native-shell" || tasks[0].State != "stopped" || tasks[0].EndedAt == nil {
+				t.Fatal(tasks)
+			}
+			if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+				t.Fatalf("hibernate after shell stopped=%v %v", ready, err)
+			}
+		})
 	}
 }
 

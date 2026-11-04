@@ -61,12 +61,9 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		if response.NextCursor == nil || *response.NextCursor == "" {
 			c.backgroundObserved.ReconcileShells(out, time.Now())
 			tasks := c.backgroundObserved.Snapshot(time.Now())
-			for _, task := range tasks {
-				if task.Kind == "agent" {
-					return tasks, ports.ErrBackgroundTasksPartial
-				}
-			}
-			return tasks, nil
+			// Shell inventory is complete, but event-derived agents may predate
+			// this controller attachment even when none have been observed yet.
+			return tasks, ports.ErrBackgroundTasksPartial
 		}
 		cursor = *response.NextCursor
 		if cursors[cursor] {
