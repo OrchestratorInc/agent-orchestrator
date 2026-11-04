@@ -3593,8 +3593,9 @@ export function TurnDuration({ durationMs, inline = false }: { durationMs: numbe
 	return (
 		<span
 			className={cn(
-				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline ? "group-hover/row:text-foreground" : "pl-1.5 pr-0.5",
+				"shrink-0 font-sans text-sm leading-none tabular-nums",
+				// Inline, the fold's own hover color carries the number with the words.
+				inline ? null : "pl-1.5 pr-0.5 text-muted-foreground",
 			)}
 			data-turn-duration={inline ? undefined : ""}
 		>
