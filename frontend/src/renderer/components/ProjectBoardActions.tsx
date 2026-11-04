@@ -63,7 +63,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 					</TopbarButton>
 				</span>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{t("shell.newTask")}</TooltipContent>
+			<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
 		</Tooltip>
 	);
 	const feedback = spawnError && !quiet ? (

@@ -38,7 +38,7 @@ import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
 import { droppedPathsText } from "../lib/terminal-drop";
-import { LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { LoaderCircle, TriangleAlert } from "lucide-react";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import {
@@ -57,7 +57,9 @@ import { useUiStore, type Theme, type ThemeStyle } from "../stores/ui-store";
 import { TerminalSearch } from "./TerminalSearch";
 import { useLinkPreview } from "../hooks/useLinkPreview";
 import { LinkPreviewCard, LinkPreviewCardLoading } from "./LinkPreviewCard";
+import { CloseButton } from "./ui/close-button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { Pressable } from "./ui/pressable";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -2107,18 +2109,15 @@ export function XtermTerminal(props: XtermTerminalProps) {
 									</li>
 								))}
 							</ul>
-							<button
+							<CloseButton
 								aria-label={t("terminal.drop.dismiss")}
-								className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring"
 								onClick={() => {
 									if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
 									dropNoticeTimerRef.current = undefined;
 									setDropNotice(null);
 								}}
-								type="button"
-							>
-								<X aria-hidden="true" className="size-3" />
-							</button>
+								size="icon-xs"
+							/>
 						</div>
 					)
 				) : null}
@@ -2134,8 +2133,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			</div>
 			<DropdownMenu modal={false} open={contextMenu.open} onOpenChange={setContextMenuOpen}>
 				<DropdownMenuTrigger asChild>
-					<button
-						type="button"
+					<Pressable
 						aria-hidden="true"
 						tabIndex={-1}
 						style={{
@@ -2221,8 +2219,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				}}
 			>
 				<HoverCardTrigger asChild>
-					<button
-						type="button"
+					<Pressable
 						aria-hidden="true"
 						tabIndex={-1}
 						style={{

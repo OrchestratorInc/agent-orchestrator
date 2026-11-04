@@ -37,6 +37,19 @@ the repository's existing dev command and explicitly adopt its known URL.
 Do not create `.ao/launch.json` unless the user asks for reusable launch
 configuration.
 
+## Artifact files
+
+Deliverables in this session's artifact directory live outside the workspace.
+Open one by its absolute path; AO serves it from the artifact directory's own
+confined preview origin:
+
+```bash
+ao preview /path/to/artifacts/<session-id>/report.html
+```
+
+Any other path outside the workspace and the artifact directory is rejected
+with `PREVIEW_FILE_OUTSIDE_WORKSPACE`.
+
 ## Automatic artifact handoff
 
 When a browser-displayable file is itself the artifact the user requested,

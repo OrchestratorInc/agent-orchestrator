@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useTranslation } from "react-i18next";
-import { Loader2, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -9,6 +9,7 @@ import { migrationOfferQueryKey, useMigrationOffer } from "../hooks/useMigration
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogBodyClass,
 	settingsDialogContentClass,
@@ -80,15 +81,7 @@ export function MigrationPopup() {
 					onCloseAutoFocus={restoreFocusOnClose}
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-lg -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
-					<button
-						type="button"
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("common.close")}
-						disabled={busy}
-						onClick={() => setSkipped(true)}
-					>
-						<X className="size-5" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("common.close")} disabled={busy} onClick={() => setSkipped(true)} />
 					<div className={settingsDialogHeaderClass}>
 						<Dialog.Title className="settings-dialog-title">{t("migration.title")}</Dialog.Title>
 						<Dialog.Description className="text-control leading-body text-settings-muted">

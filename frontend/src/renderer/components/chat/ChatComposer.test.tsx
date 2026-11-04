@@ -447,7 +447,7 @@ describe("send keys", () => {
 		expect(field).toHaveClass("min-h-[4.5rem]");
 	});
 
-	it("uses a muted circular send control that lights up when armed", async () => {
+	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
 		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
@@ -455,7 +455,7 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("bg-foreground", "text-on-foreground");
+		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {

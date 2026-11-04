@@ -38,6 +38,11 @@ export function cloudCpStreamChannel(streamId: string): string {
 /** Only CP API paths may be proxied; anything else is rejected before fetch. */
 const API_PREFIX = "/api/cloud/v1";
 
+/** The share link routes, read-only through this proxy. */
+const SHARE_LINKS_ROUTE = "/me/artifact-shares";
+/** A cloud session's file is shared through POST .../sessions/{id}/artifacts/share. */
+const SESSION_FILE_SHARE_ROUTE = /\/sessions\/[^/]+\/artifacts\/share\/?$/;
+
 /** Upper bound on live SSE streams per renderer WebContents. */
 export const MAX_STREAMS_PER_WEBCONTENTS = 8;
 
@@ -232,7 +237,7 @@ function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCp
  * resolves dot segments (including percent-encoded ones) and backslashes, so
  * a raw-string prefix check alone would let "/api/cloud/v1/../../x" escape.
  */
-function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">): string {
+function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">): string {
 	const base = new URL(init.baseUrl);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const target = new URL(base.origin + basePath + init.path);
@@ -242,6 +247,16 @@ function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path"
 		(target.pathname === expectedPrefix || target.pathname.startsWith(`${expectedPrefix}/`));
 	if (!inBounds) {
 		throw invalid(`path must stay under ${API_PREFIX} after URL normalization.`);
+	}
+	// Share links are published, updated and revoked only through the main
+	// process's cloudShare flow, which reads files only inside a session's
+	// artifacts folder and publishes only what its inspection showed; through
+	// this proxy the renderer may only read them.
+	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
+	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`) ||
+		SESSION_FILE_SHARE_ROUTE.test(decodeURIComponent(target.pathname));
+	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {
+		throw invalid("share links can only be changed from the desktop's share flow.");
 	}
 	return target.toString();
 }
@@ -295,7 +310,7 @@ interface ActiveStream {
  * baseUrl, but only the configured one is ever dialed: any other is refused.
  */
 export async function pinnedTargetUrl(
-	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">,
+	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">,
 	controlPlaneUrl: ControlPlaneUrlResolver,
 ): Promise<string> {
 	const configured = await controlPlaneUrl();
@@ -304,7 +319,7 @@ export async function pinnedTargetUrl(
 	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
 		throw invalid("baseUrl is not the configured Orchestrator Cloud control plane.");
 	}
-	return resolveTargetUrl({ baseUrl: configured, path: init.path });
+	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
 }
 
 export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions): CloudCpProxy {

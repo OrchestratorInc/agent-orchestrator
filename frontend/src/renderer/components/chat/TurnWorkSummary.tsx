@@ -30,7 +30,7 @@ export function TurnWorkSummary({
 		>
 			<AccordionItem value="worked" className="border-0">
 				<AccordionTrigger
-					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
+					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground"
 					headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
 					trailing={null}
 				>

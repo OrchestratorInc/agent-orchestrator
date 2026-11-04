@@ -218,9 +218,9 @@ function CopyVariableButton({ text, label }: { text: string; label: string }) {
 		const timer = setTimeout(() => setCopied(false), 1400);
 		return () => clearTimeout(timer);
 	}, [copied]);
-	return <button aria-label={label} className="flex size-5 items-center justify-center rounded text-settings-muted hover:bg-interactive-hover hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { void aoBridge.clipboard.writeText(text).then(() => setCopied(true), () => {}); }} title={label} type="button">
+	return <Button aria-label={label} onClick={() => { void aoBridge.clipboard.writeText(text).then(() => setCopied(true), () => {}); }} title={label} type="button" size="icon-xs" variant="quiet">
 		{copied ? <Check aria-hidden="true" className="size-3 text-success" /> : <Copy aria-hidden="true" className="size-3" />}
-	</button>;
+	</Button>;
 }
 
 function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
@@ -368,18 +368,18 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 											triggerClassName="w-fit max-w-64"
 											onChange={(folder) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, folder } : item))}
 										/> : null}
-										<button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} className="rounded p-1 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" disabled={locked} onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [emptyStep()] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></button>
+										<Button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} disabled={locked} size="icon-xs" variant="destructive-ghost" onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [emptyStep()] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></Button>
 									</div>
 								</div>
 								<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={locked} id={`${kind}-step-${index}`} spellCheck={false} value={step.command} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, command: event.target.value } : item))} />
 							</div>)}
 							{cloud && showRepositoryMenu ? <p className="text-xs text-settings-muted">{t("settings.project.stepRepositoryHint", { defaultValue: "Each step runs in the repository chosen for it, after every repository is checked out." })}</p> : null}
-							<Button className="gap-1.5 self-start text-settings-muted hover:text-settings-label" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], emptyStep()])} size="sm" type="button" variant="ghost"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
+							<Button className="gap-1.5 self-start" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], emptyStep()])} size="sm" type="button" variant="quiet"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 						</div></TooltipProvider>
 					</div>
 					{kind === "cleanup" && !cloud && <div className="settings-content-row space-y-2">
 						<p className="text-xs text-settings-muted">{t("settings.project.cleanupRetryHint")}</p>
-						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label">{t("settings.project.retryCleanup")}</Button>
+						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="quiet" size="sm">{t("settings.project.retryCleanup")}</Button>
 						{retry.isError && <p role="alert" className="text-sm text-error">{retry.error instanceof Error ? retry.error.message : t("settings.project.cleanupRetryFailed")}</p>}
 						{retry.data && <div role="status" className="space-y-1 text-sm text-settings-muted">
 							<p>{t("settings.project.cleanupRetryResult", { cleaned: retry.data.cleaned.length, skipped: retry.data.skipped.length })}</p>

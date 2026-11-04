@@ -7,6 +7,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { ShortcutCaps } from "./kbd";
 
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
 	return (
@@ -183,18 +184,7 @@ function CommandShortcut({ keys, variant = "glyphs", className }: { keys: readon
 			</span>
 		);
 	}
-	return (
-		<span data-slot="command-shortcut" className={cn("inline-flex shrink-0 items-center gap-1", className)} aria-hidden="true">
-			{keys.map((key, index) => (
-				<kbd
-					key={`${key}-${index}`}
-					className="inline-flex h-control-xs min-w-control-xs items-center justify-center rounded-sm bg-interactive-active px-1.5 font-sans text-caption leading-none text-foreground"
-				>
-					{key}
-				</kbd>
-			))}
-		</span>
-	);
+	return <ShortcutCaps keys={keys} className={className} />;
 }
 
 function CommandFooter({ className, ...props }: React.ComponentProps<"div">) {

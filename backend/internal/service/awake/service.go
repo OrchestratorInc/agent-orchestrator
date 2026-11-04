@@ -76,6 +76,9 @@ type Service struct {
 	// Reconciliation keeps failed document changes in memory; retry until durable.
 	reconcileSavePending   bool
 	powerAuthorizationBusy bool
+	// Only resume rules that this daemon paused for a battery stop. A restart
+	// keeps persisted rules paused rather than guessing their previous intent.
+	resumeBatteryRules bool
 }
 
 // ErrValidation identifies invalid wake requests.
@@ -381,6 +384,7 @@ func (s *Service) StopAll(ctx context.Context) error {
 		}
 	}
 	s.doc.Paused = true
+	s.doc.StopReason = ""
 	if err := s.save(ctx); err != nil {
 		s.doc = previous
 		return err
@@ -597,9 +601,27 @@ func (s *Service) safety() string {
 	}
 	return ""
 }
+
+// batteryRecovered requires a current reading above the stop threshold, with
+// one percent of hysteresis to avoid repeatedly restarting at the boundary.
+func (s *Service) batteryRecovered() bool {
+	o := s.observation
+	return !o.ObservedAt.IsZero() && s.now().Sub(o.ObservedAt) < 15*time.Second &&
+		o.OnBattery != nil && (!*o.OnBattery || (o.BatteryPercent != nil && *o.BatteryPercent > s.doc.Settings.StopBatteryPercent)) &&
+		(o.Thermal == "nominal" || o.Thermal == "fair" || o.Thermal == "serious")
+}
+
 func (s *Service) reconcile(ctx context.Context) error {
 	now := s.now()
 	changed := s.reconcileSavePending
+	// Battery stops are temporary. Only fresh, complete observations may
+	// restore the existing owners; expiry and binding checks still run below.
+	recoveredBattery := s.doc.StopReason == "low_battery" && s.batteryRecovered()
+	if recoveredBattery {
+		s.doc.StopReason = ""
+		s.doc.Paused = !s.resumeBatteryRules
+		changed = true
+	}
 	count := 0
 	unknownBinding := false
 	lid := false
@@ -685,10 +707,15 @@ func (s *Service) reconcile(ctx context.Context) error {
 	}
 	_, _, nativeReason := s.host.LidStatus()
 	reason := s.safety()
-	if reason == "" && (nativeReason == "critical_heat" || nativeReason == "low_battery" || nativeReason == "battery_unknown") {
+	// A recovered battery stop creates a new lease; the helper may still
+	// report the old lease's latch until its next scan.
+	if reason == "" && (nativeReason != "low_battery" || !recoveredBattery) && (nativeReason == "critical_heat" || nativeReason == "low_battery" || nativeReason == "battery_unknown") {
 		reason = nativeReason
 	}
-	if reason != "" {
+	if reason != "" && (count > 0 || s.doc.StopReason != "") {
+		if reason == "low_battery" && s.doc.StopReason != "low_battery" {
+			s.resumeBatteryRules = !s.doc.Paused
+		}
 		changed = changed || s.doc.StopReason != reason || !s.doc.Paused
 		s.doc.Paused = true
 		s.doc.StopReason = reason
@@ -1093,7 +1120,7 @@ func (s *Service) runAgent(ctx context.Context, task agentTask) {
 // policy. An unused feature must not spawn a native process every five seconds.
 func (s *Service) needsObservations() bool {
 	if s.doc.StopReason != "" {
-		return false
+		return s.doc.StopReason == "low_battery"
 	}
 	for _, source := range s.doc.Sessions {
 		if source.EndedAt == nil {

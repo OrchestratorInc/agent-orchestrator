@@ -223,9 +223,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				>
 					<Button
 						type="button"
-						variant="ghost"
+						variant="quiet"
 						size="sm"
-						className="shrink-0 text-settings-muted hover:text-settings-label"
+						className="shrink-0"
 						disabled={baseUrl.trim() === ""}
 						onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/settings/tokens/new`)}
 					>
@@ -260,9 +260,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						<div className="flex shrink-0 items-center gap-1">
 							<Button
 								type="button"
-								variant="ghost"
+								variant="quiet"
 								size="icon-sm"
-								className="shrink-0 text-settings-muted hover:text-settings-label"
+								className="shrink-0"
 								aria-label={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
 								title={t("settings.coder.templatesRefresh", { defaultValue: "Refresh templates" })}
 								disabled={templatesLoading}
@@ -272,9 +272,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							</Button>
 							<Button
 								type="button"
-								variant="ghost"
+								variant="quiet"
 								size="sm"
-								className="shrink-0 text-settings-muted hover:text-settings-label"
+								className="shrink-0"
 								disabled={baseUrl.trim() === ""}
 								onClick={() => void aoBridge.app.openExternal(`${baseUrl.trim().replace(/\/+$/, "")}/templates/new`)}
 							>
@@ -302,9 +302,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							>
 								<Button
 									type="button"
-									variant="ghost"
+									variant="quiet"
 									size="icon-sm"
-									className="shrink-0 text-settings-muted hover:text-settings-label"
+									className="shrink-0"
 									aria-label={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
 									title={t("settings.coder.templateDocs", { defaultValue: "Open template docs in Coder" })}
 									disabled={baseUrl.trim() === ""}
@@ -321,16 +321,15 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				{error ? <p className={cn(onboardingFieldErrorClass, "self-stretch")} role="alert">{error}</p> : null}
 				<div className="flex items-center gap-2">
 					{hasConnection ? (
-						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={!canRemove} onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
+						<Button type="button" variant="quiet" size="sm" disabled={!canRemove} onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
 							{t("settings.coder.removeConnection")}
 						</Button>
 					) : null}
 					{saveAllowed ? (
 						<Button
 							type="button"
-							variant="ghost"
+							variant="quiet"
 							size="sm"
-							className="text-settings-muted hover:text-settings-label"
 							disabled={!canSave}
 							onClick={() => void save()}
 						>

@@ -60,6 +60,7 @@ export function preloadXtermTerminal(): void {
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type TerminalPaneProps = {
@@ -1535,15 +1536,17 @@ function CloudConnectError({ onRetry }: { onRetry: () => void }) {
 			<div className="flex max-w-sm flex-col items-center gap-4 rounded-lg border border-border bg-surface p-6 text-center shadow-lg">
 				<div className="font-mono text-sm font-medium text-foreground">{t("terminal.cloudConnectTitle")}</div>
 				<div className="text-xs leading-relaxed text-muted-foreground">{t("terminal.cloudConnectDescription")}</div>
-				<button
+				<Button
 					type="button"
 					id="cloud-terminal-retry"
-					className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-raised px-3 py-1.5 font-mono text-xs text-foreground transition hover:bg-interactive-hover"
+					className="font-mono"
 					onClick={onRetry}
+					size="sm"
+					variant="secondary"
 				>
 					<RotateCcw className="size-3" aria-hidden="true" />
 					{t("terminal.cloudConnectRetry")}
-				</button>
+				</Button>
 			</div>
 		</div>
 	);
@@ -1621,16 +1624,16 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">
-								<button
+								<Button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
+									variant="secondary"
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
 									{t("terminal.restoreSession")}
-								</button>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("terminal.restoreSession")}</TooltipContent>

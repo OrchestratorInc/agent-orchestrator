@@ -8,6 +8,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
 import { requirementDetailText, requirementDisplayLabel, type SystemRequirement } from "./SystemRequirementsChecklist";
 import {
 	Dialog,
@@ -287,21 +288,21 @@ export function InstallDependencyDialog({
 							{checkAgainError}
 						</p>
 					) : null}
-					<button
+					<Button
 						type="button"
-						className="settings-footer-button"
+						variant="footer"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
-					</button>
-					<button
+					</Button>
+					<Button
 						type="button"
-						className="settings-footer-button settings-footer-button-primary"
+						variant="footer-primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
 						{isCheckingAgain ? t("startup.checkingAgain") : t("startup.checkAgain")}
-					</button>
+					</Button>
 				</div>
 			</DialogContent>
 		</Dialog>
@@ -380,14 +381,15 @@ export function InstallAction({
 
 	return (
 		<div className="flex flex-col gap-1.5">
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button settings-footer-button-primary self-start"
+				variant="footer-primary"
+				className="self-start"
 				disabled={disabled}
 				onClick={onInstall}
 			>
 				{failed ? t("startup.retryPrefix", { label: primaryLabel }) : primaryLabel}
-			</button>
+			</Button>
 			{error ? <p className="text-caption text-error">{error}</p> : null}
 			{failed ? (
 				<>
@@ -425,15 +427,16 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 			<code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-caption text-settings-title">
 				{command}
 			</code>
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button shrink-0"
+				variant="footer"
+				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}
 			>
 				{copied ? <Check className="size-icon-sm" aria-hidden="true" /> : <Copy className="size-icon-sm" aria-hidden="true" />}
 				{copied ? t("startup.commandCopied") : t("startup.copyCommand")}
-			</button>
+			</Button>
 		</div>
 	);
 }
