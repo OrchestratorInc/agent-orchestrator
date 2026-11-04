@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -65,7 +66,7 @@ func TestCollectorRegistersOpenCodeFamilyDatabaseForNativeSession(t *testing.T) 
 			session := collectorTestSession(t, store, tt.harness, nativeID, false)
 			root := t.TempDir()
 			path := filepath.Join(root, tt.dbName)
-			writeUsageFixture(t, path, "SQLite format 3\x00")
+			writeOpenCodeSessionDB(t, path, nativeID)
 			collector := NewCollector(store, tt.roots(root), nil)
 
 			mustNoError(t, collector.RecordHook(context.Background(), session.ID, HookSignal{
@@ -116,5 +117,49 @@ func TestValidateOpenCodeFamilySourceRejectsOtherDatabases(t *testing.T) {
 		context.Background(), domain.HarnessOpenCode, "", filepath.Join(root, "opencode.jsonl"),
 	); err == nil {
 		t.Fatal("accepted a non-database OpenCode source")
+	}
+}
+
+// writeOpenCodeSessionDB creates a database with a session table listing ids,
+// the part of OpenCode's schema discovery reads.
+func writeOpenCodeSessionDB(t *testing.T, path string, ids ...string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
+	mustNoError(t, err)
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+	mustNoError(t, err)
+	for _, id := range ids {
+		_, err = db.Exec(`INSERT INTO session (id) VALUES (?)`, id)
+		mustNoError(t, err)
+	}
+}
+
+// Break caught: reading only kilo.db. A release-candidate Kilo build writes
+// kilo-rc.db beside it and keeps every session there, so live sessions on
+// that build bound to no database and recorded nothing.
+func TestCollectorFindsTheReleaseChannelDatabaseHoldingTheSession(t *testing.T) {
+	const nativeID = "ses_e5ae49e2cffewYM3wbJnh0EEBm"
+	root := t.TempDir()
+	writeOpenCodeSessionDB(t, filepath.Join(root, "kilo.db"), "ses_older")
+	rc := filepath.Join(root, "kilo-rc.db")
+	writeOpenCodeSessionDB(t, rc, nativeID)
+	writeOpenCodeSessionDB(t, filepath.Join(root, "session-export.db"), nativeID)
+
+	got, err := discoverOpenCodeFamilyDB(context.Background(), root, kiloApp, nativeID)
+	if err != nil || got != rc {
+		t.Fatalf("discovered %q, %v; want %q", got, err, rc)
+	}
+	if got, err := discoverOpenCodeFamilyDB(context.Background(), root, kiloApp, "ses_missing"); err != nil || got != "" {
+		t.Fatalf("session no database lists = %q, %v; want none yet", got, err)
+	}
+	for name, want := range map[string]bool{
+		"kilo.db": true, "kilo-rc.db": true, "kilo-dev.db": true, "kilo-1.2.db": true,
+		"kilo.db-wal": false, "kilo-rc.db-shm": false, "kilo-.db": false, "session-export.db": false,
+		"kilo-RC.db": false, "opencode.db": false,
+	} {
+		if got := openCodeFamilyDBName(name, kiloApp); got != want {
+			t.Errorf("openCodeFamilyDBName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

@@ -151,12 +151,12 @@ func openCodeFamilyDataDir(home, dataDirEnv, app string) string {
 	return filepath.Join(home, ".local", "share", app)
 }
 
-// openCodeDBName and kiloDBName are the one SQLite database each keeps for
-// every session on its default release channel; step-finish parts carry the
-// per-call usage.
+// openCodeApp and kiloApp name each agent's session databases: <app>.db on
+// the default release channel, <app>-<channel>.db on another. Step-finish
+// parts carry the per-call usage.
 const (
-	openCodeDBName = "opencode.db"
-	kiloDBName     = "kilo.db"
+	openCodeApp = "opencode"
+	kiloApp     = "kilo"
 )
 
 // sqliteUsageHarness reports whether the harness stores usage in a SQLite
@@ -2541,12 +2541,12 @@ func validateSourceAttribution(
 		}
 	case domain.UsageSourceOpenCodeDB:
 		if binding.Harness != domain.HarnessOpenCode || nativeSessionID != binding.NativeRootID ||
-			subagentID != "" || filepath.Base(resolved) != openCodeDBName {
+			subagentID != "" || !openCodeFamilyDBName(filepath.Base(resolved), openCodeApp) {
 			return rejected()
 		}
 	case domain.UsageSourceKiloDB:
 		if binding.Harness != domain.HarnessKilocode || nativeSessionID != binding.NativeRootID ||
-			subagentID != "" || filepath.Base(resolved) != kiloDBName {
+			subagentID != "" || !openCodeFamilyDBName(filepath.Base(resolved), kiloApp) {
 			return rejected()
 		}
 	default:
@@ -2687,9 +2687,9 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 	case domain.HarnessGoose:
 		return discoverDatabasePath(ctx, c.roots.GooseSessions, gooseSessionsDBName)
 	case domain.HarnessOpenCode:
-		return discoverDatabasePath(ctx, c.roots.OpenCodeData, openCodeDBName)
+		return discoverOpenCodeFamilyDB(ctx, c.roots.OpenCodeData, openCodeApp, nativeID)
 	case domain.HarnessKilocode:
-		return discoverDatabasePath(ctx, c.roots.KiloData, kiloDBName)
+		return discoverOpenCodeFamilyDB(ctx, c.roots.KiloData, kiloApp, nativeID)
 	}
 	type candidate struct {
 		path string
