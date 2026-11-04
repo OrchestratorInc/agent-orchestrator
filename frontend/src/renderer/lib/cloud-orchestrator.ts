@@ -6,6 +6,7 @@ import { selectActiveOrganization } from "./cloud-offering";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { seedCreatedFreestyleSession } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "./telemetry";
+import { failureTelemetry } from "./error-origin";
 import { cloudDefaultInterfaceMode, createCloudSession } from "./cloud-session-create";
 
 // A cloud project has no locally-configured orchestrator agent (that config
@@ -111,7 +112,7 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;
 	} catch (error) {
-		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_failed", { project_id: projectId });
+		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_failed", { project_id: projectId, ...failureTelemetry(error, "cloud") });
 		throw error;
 	}
 }

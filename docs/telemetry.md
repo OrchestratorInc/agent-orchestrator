@@ -433,10 +433,11 @@ also records these events when you start an artifact session from that page:
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
 | `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
-| `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
+| `ao.renderer.artifact_create_failed` | Starting the session fails | `scope`, `source`, `error_code` |
 
 `scope` is `standalone` for the Scratchpad and `project` otherwise. No project
-identifier, file name, or artifact content is sent.
+identifier, file name, or artifact content is sent. `source` and `error_code`
+are described under "AO Cloud and daemon failures" below.
 
 The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
@@ -447,6 +448,51 @@ people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
+
+## AO Cloud and daemon failures
+
+Some actions can fail in AO Cloud or in the local daemon. Their failure events
+say which, so a failure in one is not mistaken for the other:
+`ao.renderer.task_create_failed`, `ao.renderer.artifact_create_failed`,
+`ao.renderer.session_kill_failed` and
+`ao.renderer.cloud_orchestrator_spawn_failed` carry `source`, one of `cloud`
+(AO Cloud answered with an error), `network` (AO Cloud could not be reached:
+no connection, DNS, TLS or a timeout) or `daemon`, and `error_code`, the
+service's machine error code (an identifier such as `WORKER_UNAVAILABLE` or
+`CLOUD_UNREACHABLE`, never a message). A Cloud action the app refused before
+sending anything has neither property. These events carry no request ID, error
+message, URL, or body, and Share usage analytics controls them.
+
+Each request the desktop interface makes to AO Cloud carries a random
+`X-Request-ID` (a UUID generated per request) so a failure can be matched to
+AO Cloud's own logs, including a request that never reached AO Cloud. The
+desktop's main process logs each failed one locally with its method, its path
+under `/api/cloud/v1` with identifiers replaced by `:id`, its status, error
+code, request ID and duration. It never logs the access token, a query string,
+or a request or response body.
+
+With Share error events on, Electron Sentry receives an AO Cloud failure only
+when it is unexpected: an AO Cloud 5xx response (a typed 503 stays a
+breadcrumb, as for the daemon), AO Cloud unreachable while this computer is
+online, or a response the app could not read (`CLOUD_MALFORMED_RESPONSE`).
+Expected refusals (any 4xx, such as a plan or usage limit, an expired sign-in,
+or a validation error), failures while the computer is offline, and a live
+stream dropping are not sent. One report per category, status and code is sent
+each 30 seconds at most. The event's title is fixed ("Renderer AO Cloud error"
+or "Renderer AO Cloud unreachable", with the code or category), and its tags
+are `origin` (`cloud` or `network`), `category` (`http_5xx`, `network_error` or
+`malformed_response`), `code` (from a fixed allowlist of AO Cloud and AO error
+codes, otherwise `unknown`), `http_status` (`0` when AO Cloud was not reached),
+and `request_id`, the request's random UUID. `request_id` is sent only for AO
+Cloud requests and only when it is a UUID. Renderer daemon API errors are
+tagged `origin: daemon` with their `http_status`; their request ID is not sent.
+No error message, URL, path, or body is sent.
+
+Report a problem drafts list the configured AO Cloud address, the AO Cloud
+release named by its last response, and up to three recent failed AO Cloud
+requests with their time, origin, status, error code and request ID. They do
+not include an error message, path, or body. These drafts are only sent if you
+choose to send them.
 
 ## What Orchestrator.inc does not intentionally send
 
@@ -628,7 +674,8 @@ The **Share error events** control on the same page covers error diagnostics
 only: the daemon's Sentry capture of reportable 5xx errors, failed agent
 relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
 goroutine panics; and Electron main capture of process crashes, uncaught
-exceptions, unhandled rejections, and reportable renderer errors. Sentry
+exceptions, unhandled rejections, and reportable renderer errors, including
+unexpected AO Cloud failures (see "AO Cloud and daemon failures"). Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN, ELECTRON_SENTRY_ERROR_SAMPLE_RATE, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
+import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE, EXPECTED_NETWORK_NOISE, isOpaqueRequestId } from "../shared/cloud-cp-errors";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 
 export function electronMainSentryDsn(isDev: boolean): string {
@@ -20,8 +21,10 @@ const TAG_KEYS = new Set([
 	"domain",
 	"http_status",
 	"operation",
+	"origin",
 	"owner",
 	"platform",
+	"request_id",
 	"severity",
 	"surface",
 ]);
@@ -30,14 +33,26 @@ const CAPTURE_LEVELS = new Set<NonNullable<RendererTelemetryCapture["level"]>>([
 const LOCAL_URL = /(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const HOME_PATH = /\/(?:Users|home)\/[^\s"']+/g;
 const WIN_PATH = /[A-Za-z]:\\[^\s"']+|\\\\[^\s"']+/g;
-const SAFE_CATEGORIES = new Set(["agent_runtime", "http_5xx", "integration", "native_crash", "render_crash", "update"]);
+const SAFE_CATEGORIES = new Set(["agent_runtime", "http_5xx", "integration", "malformed_response", "native_crash", "network_error", "render_crash", "update"]);
 const SAFE_CODES = new Set([
 	"AGENT_RESUME_FAILED", "CHAT_DELIVERY_FAILED", "CONVERSATION_READ_FAILED",
 	"INTERNAL_ERROR", "ORCHESTRATOR_SPAWN_FAILED", "REPORT_CREATE_FAILED",
 	"REPORT_LIST_FAILED", "REVIEW_OPERATION_FAILED", "WORKSPACE_GIT_READ_FAILED",
+	// AO Cloud's stable machine codes (contracts/cloud/openapi.yaml and the
+	// cloud client), plus the two the desktop names itself.
+	CLOUD_UNREACHABLE, CLOUD_MALFORMED_RESPONSE,
+	"CHAT_ADAPTER_UNAVAILABLE", "CHAT_DRIVER_UNAVAILABLE", "CHAT_START_UNSUPPORTED", "COMPOSER_LOCKED",
+	"IDEMPOTENCY_CONFLICT", "INVALID_EVENT_TYPE", "MERGE_NEEDS_APPROVAL", "MODEL_CATALOG_UNAVAILABLE",
+	"SESSION_MODE_UNSUPPORTED", "SESSION_TERMINATED", "STALE_WORKER_TOKEN", "TERMINAL_SESSION_EXITED",
+	"TRANSPORT_TIMEOUT", "UPSTREAM_UNAVAILABLE", "WORKER_OPERATION_FAILED", "WORKER_TIMEOUT", "WORKER_UNAVAILABLE",
+	"internal_error", "invalid_request", "rate_limited", "request_timeout", "validation_error",
 ]);
+// Where a renderer API error came from: AO Cloud answering, AO Cloud not
+// reached, or the local daemon.
+const SAFE_ORIGINS = new Set(["cloud", "network", "daemon"]);
+const HTTP_STATUS = /^(?:0|[1-5]\d\d)$/;
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
-const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
+const EXPECTED_NOISE = EXPECTED_NETWORK_NOISE;
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
@@ -81,6 +96,11 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: "main_error";
 	const category = event.tags?.["ao.category"];
 	const code = event.tags?.["ao.code"];
+	const errorOrigin = event.tags?.["ao.error_origin"];
+	const httpStatus = event.tags?.["ao.http_status"];
+	const requestId = event.tags?.["ao.request_id"];
+	const safeOrigin = renderer && typeof errorOrigin === "string" && SAFE_ORIGINS.has(errorOrigin) ? errorOrigin : undefined;
+	const cloudOrigin = safeOrigin === "cloud" || safeOrigin === "network" ? safeOrigin : undefined;
 	const safeCategory = typeof category === "string" && SAFE_CATEGORIES.has(category) ? category : "unknown";
 	const safeCode = typeof code === "string" && SAFE_CODES.has(code) ? code : "unknown";
 	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
@@ -101,8 +121,9 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const topFunction = topFrame?.function === "renderer_frame" ? rendererLocation ?? "renderer_frame"
 		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
+	const apiTitle = cloudOrigin === "network" ? "Renderer AO Cloud unreachable" : cloudOrigin === "cloud" ? "Renderer AO Cloud error" : "Renderer API error";
 	const title = renderer
-		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
+		? kind === "message" ? `${apiTitle} (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
@@ -110,8 +131,19 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
-		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
+		// An AO Cloud failure never groups with a daemon one that shares its code.
+		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(cloudOrigin ? [cloudOrigin] : [])],
+		tags: {
+			surface: renderer ? "renderer" : "electron-main",
+			kind,
+			...(renderer ? { category: safeCategory, code: safeCode } : {}),
+			...(safeOrigin ? { origin: safeOrigin } : {}),
+			...(renderer && typeof httpStatus === "string" && HTTP_STATUS.test(httpStatus) ? { http_status: httpStatus } : {}),
+			// Only an AO Cloud request's id, and only an opaque UUID: it matches the
+			// control plane's logs and says nothing about this computer.
+			...(cloudOrigin && isOpaqueRequestId(requestId) ? { request_id: requestId } : {}),
+			...(processReason ? { reason: processReason } : {}),
+		},
 		user: { id: installId },
 		release: version,
 		environment,
@@ -188,6 +220,9 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					"ao.kind": safe.kind,
 					"ao.category": category && SAFE_CATEGORIES.has(category) ? category : "unknown",
 					"ao.code": code && SAFE_CODES.has(code) ? code : "unknown",
+					...(safe.tags?.origin && SAFE_ORIGINS.has(safe.tags.origin) ? { "ao.error_origin": safe.tags.origin } : {}),
+					...(safe.tags?.http_status && HTTP_STATUS.test(safe.tags.http_status) ? { "ao.http_status": safe.tags.http_status } : {}),
+					...(isOpaqueRequestId(safe.tags?.request_id) ? { "ao.request_id": safe.tags.request_id } : {}),
 				},
 			});
 		},
@@ -248,6 +283,9 @@ export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapt
 		tags = {};
 		for (const [key, value] of entries) {
 			if (!TAG_KEYS.has(key) || typeof value !== "string" || value.length > 128) return null;
+			// A request id crosses only as an opaque UUID, and an origin only from its vocabulary.
+			if (key === "request_id" && !isOpaqueRequestId(value)) return null;
+			if (key === "origin" && !SAFE_ORIGINS.has(value)) return null;
 			tags[key] = scrubTelemetryText(value);
 		}
 	}

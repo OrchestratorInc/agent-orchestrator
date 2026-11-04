@@ -5,6 +5,8 @@ import { cachedCloudBillingMode, cloudMeQueryKey } from "../cloud-offering";
 import { appI18n } from "../../i18n";
 import { instrumentCloudClient, reportPlanRefusal } from "../cloud-telemetry";
 import { raceAbort } from "./transport";
+import { cloudCpUnreachableError } from "./errors";
+import { noteCloudFailure } from "../cloud-error-report";
 
 type CloudCpBridgeRequest = (init: {
 	baseUrl: string;
@@ -42,6 +44,8 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	// The main process finishes the request regardless; the caller stops
 	// waiting when its signal fires, as with fetch.
 	const result = init?.signal ? await raceAbort(pending, init.signal) : await pending;
+	// Main answers status 0 when the control plane was not reached.
+	if (result.status === 0) throw cloudCpUnreachableError(result);
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };
@@ -58,6 +62,7 @@ export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 			void queryClient.invalidateQueries({ queryKey: cloudMeQueryKey });
 		},
 		onPlanRefused: (code) => reportPlanRefusal(code, openUpgradeAfterPlanRefusal()),
+		onFailure: noteCloudFailure,
 	}));
 }
 

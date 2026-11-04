@@ -6,15 +6,17 @@
 // payloads — and the same resolve/onError contract — as the typed client's
 // subscribeSessionEvents.
 
-import type { CloudCpProxyRequestInit, CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
+import type { CloudCpOpenStreamResult, CloudCpProxyRequestInit, CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
+import { CLOUD_MALFORMED_RESPONSE } from "../../../shared/cloud-cp-errors";
 import { aoBridge } from "../bridge";
-import { CloudCpAuthError, CloudCpError } from "./errors";
+import { noteCloudFailure } from "../cloud-error-report";
+import { CloudCpError, cloudCpErrorFromFailure } from "./errors";
 import { createSseFrameParser, type CloudCpSseFrame } from "./sse";
 import type { CloudCpClientEvent, CloudCpNotificationEvent, CloudCpSessionLive } from "./types";
 
 /** The slice of the preload cloudCp bridge this adapter needs. */
 export interface CloudCpStreamBridge {
-	openStream(init: CloudCpProxyRequestInit): Promise<{ streamId: string }>;
+	openStream(init: CloudCpProxyRequestInit): Promise<CloudCpOpenStreamResult>;
 	closeStream(streamId: string): void;
 	onStreamEvent(streamId: string, listener: (event: CloudCpStreamEvent) => void): () => void;
 }
@@ -57,28 +59,52 @@ export interface SubscribeSessionEventsBridgedOptions {
 	bridge?: CloudCpStreamBridge;
 }
 
-// openStream failures cross IPC as flattened message strings; main tags them
-// with this marker (see main/cloud-cp-proxy.ts) so the status survives.
-const STREAM_ERROR_MARKER = /CLOUD_CP_STREAM_ERROR (\d+) ([\s\S]*)/;
-
 // Through a helper so TS does not narrow `signal.aborted` to `false` after an
 // early-return check — the flag flips concurrently across awaits.
 function isAborted(signal: AbortSignal | undefined): boolean {
 	return signal?.aborted === true;
 }
 
+/** A rejected openStream: main refused the request itself, or the bridge is missing. */
 function errorFromOpenFailure(error: unknown): CloudCpError {
 	if (error instanceof CloudCpError) return error;
 	const message = error instanceof Error ? error.message : String(error);
-	const match = STREAM_ERROR_MARKER.exec(message);
-	if (match !== null) {
-		const status = Number(match[1]);
-		const detail = match[2].trim() || `Cloud control plane stream failed with status ${status}.`;
-		return status === 401
-			? new CloudCpAuthError(detail, { status, cause: error })
-			: new CloudCpError(detail, { status, cause: error });
-	}
 	return new CloudCpError(message, { status: 0, cause: error });
+}
+
+/**
+ * Opens a stream through main. A control plane that refused it, or was not
+ * reached, comes back as fields (status, code, requestId), never a message to
+ * parse; the failure is noted for diagnostics before it is returned.
+ */
+async function openBridgedStream(bridge: CloudCpStreamBridge, init: CloudCpProxyRequestInit): Promise<{ streamId: string } | { error: CloudCpError }> {
+	let result: CloudCpOpenStreamResult;
+	try {
+		result = await bridge.openStream(init);
+	} catch (error) {
+		return { error: errorFromOpenFailure(error) };
+	}
+	if ("error" in result) {
+		const error = cloudCpErrorFromFailure(result.error);
+		noteCloudFailure(error);
+		return { error };
+	}
+	return result;
+}
+
+/** A stream main ended with an error event: the connection to the control plane dropped. */
+function errorFromStreamEvent(event: Extract<CloudCpStreamEvent, { type: "error" }>): CloudCpError {
+	const error = cloudCpErrorFromFailure({ status: event.status ?? 0, message: event.message, code: event.code, requestId: event.requestId, cause: event.cause });
+	// A live stream dropping (sleep, a network change) is routine and reconnects;
+	// it is kept for diagnostics but is not a Sentry issue.
+	noteCloudFailure(error, { report: false });
+	return error;
+}
+
+function malformedFrame(message: string): CloudCpError {
+	const error = new CloudCpError(message, { status: 200, code: CLOUD_MALFORMED_RESPONSE });
+	noteCloudFailure(error);
+	return error;
 }
 
 /**
@@ -105,18 +131,17 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 	const query = params.length ? `?${params.join("&")}` : "";
 	const path = `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/events${query}`;
 
-	let streamId: string;
-	try {
-		({ streamId } = await bridge.openStream({
-			baseUrl: baseUrl.replace(/\/+$/, ""),
-			path,
-			method: "GET",
-			headers: { Accept: "text/event-stream" },
-		}));
-	} catch (error) {
-		fail(errorFromOpenFailure(error));
+	const opened = await openBridgedStream(bridge, {
+		baseUrl: baseUrl.replace(/\/+$/, ""),
+		path,
+		method: "GET",
+		headers: { Accept: "text/event-stream" },
+	});
+	if ("error" in opened) {
+		fail(opened.error);
 		return;
 	}
+	const { streamId } = opened;
 
 	// Aborted while the stream was being opened: main already holds it open,
 	// so close it instead of leaking a slot from the per-window stream cap.
@@ -145,7 +170,7 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 				finish();
 				return;
 			}
-			fail(new CloudCpError(event.message, { status: 0 }));
+			fail(errorFromStreamEvent(event));
 			finish();
 		});
 		onOpen?.();
@@ -164,7 +189,7 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 					const state = JSON.parse(frame.data) as CloudCpSessionLive;
 					if (state?.type === "session.live") onLive?.(state);
 				} catch {
-					fail(new CloudCpError("The live stream sent a frame with malformed JSON.", { status: 200 }));
+					fail(malformedFrame("The live stream sent a frame with malformed JSON."));
 				}
 				return;
 			}
@@ -172,7 +197,7 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 			try {
 				event = JSON.parse(frame.data) as CloudCpClientEvent;
 			} catch {
-				fail(new CloudCpError("The event stream sent a frame with malformed JSON.", { status: 200 }));
+				fail(malformedFrame("The event stream sent a frame with malformed JSON."));
 				return;
 			}
 			onEvent(event);
@@ -201,10 +226,9 @@ export async function subscribeNotificationEventsBridged(options: SubscribeNotif
 	if (isAborted(signal)) return;
 	const fail = (error: CloudCpError): void => { if (!isAborted(signal)) onError?.(error); };
 	const query = after === undefined ? "" : `?after=${encodeURIComponent(String(after))}`;
-	let streamId: string;
-	try {
-		({ streamId } = await bridge.openStream({ baseUrl: baseUrl.replace(/\/+$/, ""), path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/notification-events${query}`, method: "GET", headers: { Accept: "text/event-stream" } }));
-	} catch (error) { fail(errorFromOpenFailure(error)); return; }
+	const opened = await openBridgedStream(bridge, { baseUrl: baseUrl.replace(/\/+$/, ""), path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/notification-events${query}`, method: "GET", headers: { Accept: "text/event-stream" } });
+	if ("error" in opened) { fail(opened.error); return; }
+	const { streamId } = opened;
 	if (isAborted(signal)) { bridge.closeStream(streamId); return; }
 	const parser = createSseFrameParser();
 	await new Promise<void>((resolve) => {
@@ -213,13 +237,13 @@ export async function subscribeNotificationEventsBridged(options: SubscribeNotif
 		const finish = () => { if (settled) return; settled = true; unsubscribe(); signal?.removeEventListener("abort", abort); resolve(); };
 		const abort = () => { bridge.closeStream(streamId); finish(); };
 		function deliver(data: string): void {
-			try { onEvent(JSON.parse(data) as CloudCpNotificationEvent); } catch { fail(new CloudCpError("The notification stream sent a frame with malformed JSON.", { status: 200 })); }
+			try { onEvent(JSON.parse(data) as CloudCpNotificationEvent); } catch { fail(malformedFrame("The notification stream sent a frame with malformed JSON.")); }
 		}
 		unsubscribe = bridge.onStreamEvent(streamId, (event) => {
 			if (settled) return;
 			if (event.type === "chunk") { for (const frame of parser.push(event.data)) deliver(frame.data); return; }
 			if (event.type === "end") { for (const frame of parser.flush()) deliver(frame.data); finish(); return; }
-			fail(new CloudCpError(event.message, { status: 0 })); finish();
+			fail(errorFromStreamEvent(event)); finish();
 		});
 		if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
 	});
@@ -248,10 +272,9 @@ export async function subscribeSessionLiveBridged(options: SubscribeSessionLiveB
 	if (isAborted(signal)) return;
 	const fail = (error: CloudCpError): void => { if (!isAborted(signal)) onError?.(error); };
 	const path = `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/events?live=1&types=session.live`;
-	let streamId: string;
-	try {
-		({ streamId } = await bridge.openStream({ baseUrl: baseUrl.replace(/\/+$/, ""), path, method: "GET", headers: { Accept: "text/event-stream" } }));
-	} catch (error) { fail(errorFromOpenFailure(error)); return; }
+	const opened = await openBridgedStream(bridge, { baseUrl: baseUrl.replace(/\/+$/, ""), path, method: "GET", headers: { Accept: "text/event-stream" } });
+	if ("error" in opened) { fail(opened.error); return; }
+	const { streamId } = opened;
 	if (isAborted(signal)) { bridge.closeStream(streamId); return; }
 	const parser = createSseFrameParser();
 	await new Promise<void>((resolve) => {
@@ -265,14 +288,14 @@ export async function subscribeSessionLiveBridged(options: SubscribeSessionLiveB
 				const live = JSON.parse(frame.data) as CloudCpSessionLive;
 				if (live?.type === "session.live") onLive(live);
 			} catch {
-				fail(new CloudCpError("The live stream sent a frame with malformed JSON.", { status: 200 }));
+				fail(malformedFrame("The live stream sent a frame with malformed JSON."));
 			}
 		}
 		unsubscribe = bridge.onStreamEvent(streamId, (event) => {
 			if (settled) return;
 			if (event.type === "chunk") { for (const frame of parser.push(event.data)) deliver(frame); return; }
 			if (event.type === "end") { for (const frame of parser.flush()) deliver(frame); finish(); return; }
-			fail(new CloudCpError(event.message, { status: 0 })); finish();
+			fail(errorFromStreamEvent(event)); finish();
 		});
 		if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
 	});

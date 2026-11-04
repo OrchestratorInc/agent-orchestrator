@@ -5,8 +5,11 @@
 // APIs. Every call attaches `Authorization: Bearer <token>`; a 401 (or a
 // missing token) surfaces as `CloudCpAuthError`, any other non-2xx as
 // `CloudCpError` carrying the status and the control plane's envelope fields.
-// No retries in v0: callers own retry policy.
+// A control plane that could not be reached is a `CloudCpError` with status 0
+// and code CLOUD_UNREACHABLE; a body that cannot be read is
+// CLOUD_MALFORMED_RESPONSE. No retries in v0: callers own retry policy.
 
+import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE, REQUEST_ID_HEADER, isOpaqueRequestId } from "../../../shared/cloud-cp-errors";
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
@@ -133,6 +136,8 @@ export interface CloudCpClientOptions {
 	onForbidden?: () => void;
 	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
 	onPlanRefused?: (code: string) => void;
+	/** Called with every failed request's error (never an abort), before it is thrown. */
+	onFailure?: (error: CloudCpError) => void;
 }
 
 export interface CloudCpRequestOptions {
@@ -632,14 +637,36 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
+	// A proxy or load balancer in front of the control plane answers without its
+	// envelope; the request id still rides on the response header.
+	requestId ??= responseRequestId(response);
 	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
+function responseRequestId(response: Response): string | undefined {
+	const header = response.headers.get(REQUEST_ID_HEADER);
+	return isOpaqueRequestId(header) ? header : undefined;
+}
+
+/**
+ * A failure with no response from the control plane. fetch rejects with a
+ * TypeError when it was not reached or the connection dropped; anything else
+ * is the app refusing the request before it was sent, and carries no code.
+ */
 function toCloudCpError(error: unknown): CloudCpError {
 	if (error instanceof CloudCpError) return error;
 	const message = error instanceof Error ? error.message : String(error);
-	return new CloudCpError(message, { status: 0, cause: error });
+	return new CloudCpError(message, { status: 0, ...(error instanceof TypeError ? { code: CLOUD_UNREACHABLE } : {}), cause: error });
+}
+
+function malformedResponse(response: Response, cause: unknown): CloudCpError {
+	return new CloudCpError("AO Cloud sent a response the app could not read.", {
+		status: response.status,
+		code: CLOUD_MALFORMED_RESPONSE,
+		requestId: responseRequestId(response),
+		cause,
+	});
 }
 
 function isAbortError(error: unknown): boolean {
@@ -651,7 +678,7 @@ function newIdempotencyKey(): string {
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
-	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
+	const { baseUrl, getToken, onForbidden, onPlanRefused, onFailure } = options;
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -670,12 +697,20 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		});
 		if (init.body !== undefined) headers.set("Content-Type", "application/json");
 		if (init.idempotencyKey !== undefined) headers.set("Idempotency-Key", init.idempotencyKey);
-		const response = await doFetch(buildUrl(baseUrl, path, init.query), {
-			method,
-			headers,
-			body: init.body === undefined ? undefined : JSON.stringify(init.body),
-			signal: init.signal,
-		});
+		let response: Response;
+		try {
+			response = await doFetch(buildUrl(baseUrl, path, init.query), {
+				method,
+				headers,
+				body: init.body === undefined ? undefined : JSON.stringify(init.body),
+				signal: init.signal,
+			});
+		} catch (error) {
+			// An abort stays the caller's own AbortError; anything else never got an
+			// answer from the control plane.
+			if (isAbortError(error) || init.signal?.aborted === true) throw error;
+			throw failed(toCloudCpError(error));
+		}
 		if (!response.ok) {
 			// A 403 means the selected org is stale (membership changed) — notify so
 			// the renderer re-resolves the current org instead of stranding every
@@ -683,14 +718,31 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			if (response.status === 403) onForbidden?.();
 			const error = await errorFromResponse(response);
 			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
-			throw error;
+			throw failed(error);
 		}
 		return response;
 	}
 
+	function failed(error: CloudCpError): CloudCpError {
+		try {
+			onFailure?.(error);
+		} catch {
+			// Diagnostics never change what the caller sees.
+		}
+		return error;
+	}
+
 	async function requestJson<T>(method: string, path: string, init: SendOptions = {}): Promise<T> {
 		const response = await send(method, path, init);
-		return (await response.json()) as T;
+		const text = await response.text().catch((error: unknown) => {
+			if (isAbortError(error) || init.signal?.aborted === true) throw error;
+			throw failed(toCloudCpError(error));
+		});
+		try {
+			return JSON.parse(text) as T;
+		} catch (error) {
+			throw failed(malformedResponse(response, error));
+		}
 	}
 
 	async function requestVoid(method: string, path: string, init: SendOptions = {}): Promise<void> {
@@ -736,7 +788,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			try {
 				event = JSON.parse(data) as CloudCpClientEvent;
 			} catch {
-				fail(new CloudCpError("The event stream sent a frame with malformed JSON.", { status: 200 }));
+				fail(new CloudCpError("The event stream sent a frame with malformed JSON.", { status: 200, code: CLOUD_MALFORMED_RESPONSE }));
 				return;
 			}
 			onEvent(event);
@@ -776,7 +828,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (value !== undefined) for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
-					try { onEvent(JSON.parse(frame.data)); } catch { fail(new CloudCpError("The notification stream sent a frame with malformed JSON.", { status: 200 })); }
+					try { onEvent(JSON.parse(frame.data)); } catch { fail(new CloudCpError("The notification stream sent a frame with malformed JSON.", { status: 200, code: CLOUD_MALFORMED_RESPONSE })); }
 				}
 				if (done) break;
 			}

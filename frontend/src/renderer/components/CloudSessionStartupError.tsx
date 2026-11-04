@@ -9,6 +9,8 @@ import { CloudCpError, type CloudCpClient } from "../lib/cloud-cp";
 import { isWorkspaceStartupError, type CloudStartupProblem } from "../lib/cloud-lifecycle";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
+import { cloudErrorReference } from "../lib/error-origin";
+import { CloudErrorReference } from "./CloudErrorReference";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { Button } from "./ui/button";
@@ -187,6 +189,7 @@ export function CloudSessionStartupError({
 			? t("cloud.startupError.retryUnavailable")
 			: t("cloud.startupError.retryFailed", { message: retry.error instanceof Error ? retry.error.message : String(retry.error) })
 		: undefined;
+	const retryReference = retry.isError ? cloudErrorReference(retry.error) : undefined;
 	return (
 		<div
 			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background p-4", setupRun && "overflow-y-auto")}
@@ -217,6 +220,7 @@ export function CloudSessionStartupError({
 						</Button>
 					) : null}
 					{retryError ? <p className="text-xs text-error">{retryError}</p> : null}
+					{retryReference ? <CloudErrorReference reference={retryReference} className="text-error" /> : null}
 					{detail || coderWorkspaceUrl ? (
 						<div className="flex w-full flex-col items-center gap-2">
 							<div className="flex items-center gap-1">

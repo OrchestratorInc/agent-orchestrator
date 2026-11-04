@@ -428,6 +428,7 @@ export const aoBridge: AoBridge =
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			diagnostics: async () => ({ baseUrl: null, recentErrors: [] }),
 			agentBrowserUrl: async () => "",
 		},
 	} satisfies AoBridge);

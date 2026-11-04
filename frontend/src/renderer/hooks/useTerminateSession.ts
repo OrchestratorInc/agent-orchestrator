@@ -9,6 +9,7 @@ import {
 } from "./optimistic-session-kills";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
+import { failureTelemetry } from "../lib/error-origin";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
@@ -181,8 +182,8 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			if (session.cloud) await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 			options.onSuccess?.(session);
 		},
-		onError: (_error, session, context) => {
-			void captureRendererEvent("ao.renderer.session_kill_failed", { project_id: session.workspaceId });
+		onError: (error, session, context) => {
+			void captureRendererEvent("ao.renderer.session_kill_failed", { project_id: session.workspaceId, ...failureTelemetry(error, session.cloud ? "cloud" : "daemon") });
 			// Restore the pre-mutation snapshots so a failed kill un-archives the card
 			// rather than leaving it wrongly terminated.
 			clearOptimisticSessionKill(session.id, session.hostId);

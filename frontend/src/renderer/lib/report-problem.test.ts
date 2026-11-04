@@ -218,4 +218,47 @@ describe("report problem drafts", () => {
 
 		expect(nextDiagnostics.routeSurface).toBe("session_detail");
 	});
+
+	it("includes AO Cloud's address, release and its last three failures, with no message, path or body", async () => {
+		const before = window.ao!.cloudCp.diagnostics;
+		const failure = (minute: number, status: number, code?: string) => ({
+			at: `2026-07-02T00:0${minute}:00.000Z`, origin: status === 0 ? "network" as const : "cloud" as const, status,
+			...(code ? { code } : {}), requestId: `0f8fad5b-d9cb-469f-a165-7086772895${minute}0`,
+		});
+		window.ao!.cloudCp.diagnostics = vi.fn().mockResolvedValue({
+			baseUrl: "https://api.aoagents.dev",
+			release: "cp-2026.11.01",
+			recentErrors: [failure(1, 500), failure(2, 503, "WORKER_UNAVAILABLE"), failure(3, 0, "CLOUD_UNREACHABLE"), failure(4, 429, "WEEKLY_LIMIT_REACHED")],
+		});
+		try {
+			const collected = await collectReportProblemDiagnostics(new Date("2026-07-02T00:00:00.000Z"));
+			expect(collected.cloud?.recentErrors).toHaveLength(3);
+			const draft = formatReportProblemDraft(completeInput, collected, "github");
+			expect(draft).toContain("- AO Cloud: https://api.aoagents.dev");
+			expect(draft).toContain("- AO Cloud release: cp-2026.11.01");
+			expect(draft).not.toContain("0f8fad5b-d9cb-469f-a165-708677289510");
+			expect(draft).toContain("- AO Cloud error: 2026-07-02T00:02:00.000Z origin=cloud status=503 code=WORKER_UNAVAILABLE requestId=0f8fad5b-d9cb-469f-a165-708677289520");
+			expect(draft).toContain("- AO Cloud error: 2026-07-02T00:03:00.000Z origin=network (not reached) status=0 code=CLOUD_UNREACHABLE requestId=0f8fad5b-d9cb-469f-a165-708677289530");
+			expect(draft).toContain("status=429 code=WEEKLY_LIMIT_REACHED");
+		} finally {
+			window.ao!.cloudCp.diagnostics = before;
+		}
+	});
+
+	it("drops anything in AO Cloud diagnostics that is not a bounded field", () => {
+		const draft = formatReportProblemDraft(completeInput, {
+			...diagnostics,
+			cloud: {
+				baseUrl: "https://user:secret@cp.example.com/mount/?token=abc#x",
+				release: "release with spaces",
+				recentErrors: [{ at: "nope", origin: "cloud", status: 9999, code: "not a code", requestId: "laptop.local/abc" }],
+			},
+		}, "github");
+		expect(draft).toContain("- AO Cloud: https://cp.example.com/mount");
+		expect(draft).toContain("- AO Cloud release: unknown");
+		expect(draft).toContain("- AO Cloud error: unknown time origin=cloud status=unknown code=none requestId=none");
+		expect(draft).not.toMatch(/secret|token=abc|laptop\.local|release with spaces/);
+		// No AO Cloud section when it was never configured or used.
+		expect(formatReportProblemDraft(completeInput, diagnostics, "github")).not.toContain("AO Cloud");
+	});
 });

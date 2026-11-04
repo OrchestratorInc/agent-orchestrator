@@ -73,6 +73,8 @@ import {
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
+import { cloudErrorReference } from "../lib/error-origin";
+import { CloudErrorReference } from "./CloudErrorReference";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
 import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
@@ -2008,11 +2010,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
+		// A Cloud session AO Cloud failed to return (not one it said is gone) says
+		// whether AO Cloud answered and the request id to quote.
+		const cloudLoadReference = !hostId && cloudRouteSession.isError && (cloudRouteSession.error as { status?: unknown } | null)?.status !== 404
+			? cloudErrorReference(cloudRouteSession.error) : undefined;
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
 				<PageTopbar />
-				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-					{remoteError ?? t("session.notFound")}
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError || cloudLoadReference ? "alert" : undefined}>
+					<div className="flex flex-col items-center gap-1">
+						{remoteError ?? t("session.notFound")}
+						{cloudLoadReference ? <CloudErrorReference reference={cloudLoadReference} className="justify-center font-sans" /> : null}
+					</div>
 				</div>
 			</div>
 		);

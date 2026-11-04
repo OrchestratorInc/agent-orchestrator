@@ -484,6 +484,7 @@ if (typeof window !== "undefined") {
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			diagnostics: async () => ({ baseUrl: null, recentErrors: [] }),
 			agentBrowserUrl: async () => "",
 		},
 	};

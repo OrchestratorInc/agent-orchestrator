@@ -78,7 +78,7 @@ beforeEach(() => {
 	cloudMocks.listSessionPullRequests.mockReset().mockResolvedValue({ sessionId: session.id, pullRequests: [] });
 	cloudMocks.resumeSession.mockReset().mockResolvedValue({});
 	vi.spyOn(aoBridge.cloudCp, "openStream").mockImplementation(async (init) => {
-		if (openFails) throw new Error("CLOUD_CP_STREAM_ERROR 503 unavailable");
+		if (openFails) return { error: { status: 503, message: "unavailable" } };
 		const stream = { path: init.path, streamId: `stream-${streams.length + 1}`, closed: false };
 		streams.push(stream);
 		return { streamId: stream.streamId };

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 import { CloseButton } from "./ui/close-button";
+import { CloudErrorReference } from "./CloudErrorReference";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
@@ -68,6 +69,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 			<div className="min-w-0 flex-1">
 				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>
 				{toast.body ? <p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p> : null}
+				{toast.reference ? <CloudErrorReference reference={toast.reference} className="mt-0.5 text-[var(--color-text-import-muted)]" /> : null}
 			</div>
 			{toast.dismissible ? (
 				<CloseButton

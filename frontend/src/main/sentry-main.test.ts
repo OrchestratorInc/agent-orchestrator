@@ -334,6 +334,31 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("private session");
 	});
 
+	it("keeps an AO Cloud failure's origin, status, code and request id, apart from a daemon failure with the same code", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const requestId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud http_5xx", level: "error", tags: { surface: "cloud", category: "http_5xx", code: "WORKER_UNAVAILABLE", http_status: "503", origin: "cloud", request_id: requestId } });
+		const cloud = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(cloud.message).toBe("Renderer AO Cloud error (WORKER_UNAVAILABLE)");
+		expect(cloud.tags).toEqual({ surface: "renderer", kind: "message", category: "http_5xx", code: "WORKER_UNAVAILABLE", origin: "cloud", http_status: "503", request_id: requestId });
+
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud network_error", level: "warning", tags: { category: "network_error", code: "CLOUD_UNREACHABLE", http_status: "0", origin: "network", request_id: requestId } });
+		const network = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(network.message).toBe("Renderer AO Cloud unreachable (CLOUD_UNREACHABLE)");
+		expect(network.tags).toMatchObject({ origin: "network", http_status: "0", code: "CLOUD_UNREACHABLE", category: "network_error", request_id: requestId });
+
+		// A daemon failure keeps its title and grouping, and its request id never leaves.
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "GET /api/v1/x http_5xx", tags: { category: "http_5xx", code: "INTERNAL_ERROR", http_status: "500", origin: "daemon" } });
+		const daemon = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(daemon.message).toBe("Renderer API error (INTERNAL_ERROR)");
+		expect(daemon.tags).toMatchObject({ origin: "daemon", http_status: "500" });
+		expect(daemon.tags).not.toHaveProperty("request_id");
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud http_5xx", tags: { category: "http_5xx", code: "INTERNAL_ERROR", http_status: "500", origin: "cloud" } });
+		const cloudInternal = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(cloudInternal.fingerprint).not.toEqual(daemon.fingerprint);
+	});
+
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
 		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
@@ -431,6 +456,10 @@ describe("sanitizeRendererCapture", () => {
 		const base = { consentGeneration: "generation-1", kind: "message", message: "safe" };
 		expect(sanitizeRendererCapture({ ...base, rawError: "secret" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, tags: { request_id: "identifier" } })).toBeNull();
+		// A request id crosses only as a UUID (a daemon id names the host), and an origin only from its vocabulary.
+		expect(sanitizeRendererCapture({ ...base, tags: { request_id: "laptop.local/AbCd-000001" } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, tags: { origin: "elsewhere" } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, tags: { origin: "network", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" } })?.tags).toEqual({ origin: "network", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" });
 		expect(sanitizeRendererCapture({ ...base, kind: "trace" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, level: "debug" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "ProjectError", frames: [] } })).toBeNull();

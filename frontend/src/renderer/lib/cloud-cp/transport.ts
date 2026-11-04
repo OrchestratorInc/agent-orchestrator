@@ -11,6 +11,7 @@
 
 import type { CloudCpProxyRequestInit, CloudCpProxyResponse } from "../../../main/cloud-cp-proxy";
 import { aoBridge } from "../bridge";
+import { cloudCpUnreachableError } from "./errors";
 
 /** The slice of the preload cloudCp bridge this adapter needs. */
 export interface CloudCpRequestBridge {
@@ -92,6 +93,8 @@ export function createBridgedFetch(bridge?: CloudCpRequestBridge): typeof fetch 
 			body: rawBody ?? undefined,
 		});
 		const result = signal != null ? await raceAbort(pending, signal) : await pending;
+		// Main answers status 0 when the control plane was not reached.
+		if (result.status === 0) throw cloudCpUnreachableError(result);
 
 		const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 		return new Response(body, { status: result.status, headers: result.headers });
