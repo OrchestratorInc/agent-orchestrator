@@ -78,7 +78,6 @@ func TestScanImportedClineHistorySkipsHugeStringWithoutBuffering(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "h.messages.json"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	doc = ""
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)
