@@ -54,6 +54,7 @@ import { readEditorSettings, writeEditorPreference } from "./main/editor-setting
 import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
+import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
@@ -1398,7 +1399,7 @@ function telemetryOverrides(): Record<string, string> {
 // reads input hits EOF instead of hanging; stderr is ignored to drop banner
 // noise. Never rejects: resolves null on spawn error, non-zero exit, or timeout
 // (SIGKILLed), so the caller degrades to the static PATH floor.
-const runLoginShell: ShellRunner = (shellPath, args) =>
+const loginShellRunner = (timeoutMs: number): ShellRunner => (shellPath, args) =>
 	new Promise((resolve) => {
 		let settled = false;
 		const finish = (value: string | null) => {
@@ -1416,7 +1417,7 @@ const runLoginShell: ShellRunner = (shellPath, args) =>
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
 			finish(null);
-		}, SHELL_ENV_TIMEOUT_MS);
+		}, timeoutMs);
 		let stdout = "";
 		// stdout may be typed Readable | null under this stdio config; guard it.
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -1431,6 +1432,8 @@ const runLoginShell: ShellRunner = (shellPath, args) =>
 			finish(code === 0 ? stdout : null);
 		});
 	});
+
+const runLoginShell = loginShellRunner(SHELL_ENV_TIMEOUT_MS);
 
 function lookupWindowsExecutable(candidate: string): string | null {
 	const trimmed = candidate.trim().replace(/^"|"$/g, "");
@@ -1478,6 +1481,17 @@ function ensureShellEnv(): Promise<void> {
 		});
 	}
 	return shellEnvPromise;
+}
+
+// The early probe runs while Electron itself is starting, the busiest moment
+// of launch. If it failed there, probe once more before settling for a bare
+// PATH. Every caller resolves after that one retry, whichever of them starts it.
+function retryFailedEarlyShellEnvProbe(): Promise<void> {
+	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
+		earlyShellEnvProbe = null;
+		shellEnvPromise = null;
+	}
+	return ensureShellEnv();
 }
 
 // The daemon spawn waits on this probe (0.2-2s), so start it with the process
@@ -2170,16 +2184,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	if (startCancelled()) {
 		return daemonStatus;
 	}
-	// The early probe runs while Electron itself is starting, the busiest moment
-	// of launch. If it failed there, probe once more before settling for a bare
-	// PATH for the daemon's whole run.
-	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
-		earlyShellEnvProbe = null;
-		shellEnvPromise = null;
-		await ensureShellEnv();
-		if (startCancelled()) {
-			return daemonStatus;
-		}
+	await retryFailedEarlyShellEnvProbe();
+	if (startCancelled()) {
+		return daemonStatus;
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
@@ -2692,6 +2699,42 @@ registerCliLinkIpc({
 	dataDir: desktopDataDir,
 	appVersion: app.getVersion(),
 	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
+});
+
+// The startup probe's limit exists because the daemon spawn waits on it, and a
+// shell near that limit fails it under launch load. Nothing waits on this
+// advisory check, so it can give the shell longer, without touching the env the
+// daemon uses. Takes no fallback: a Finder launch's process PATH is not the
+// user's shell PATH, so a shell that never answers means "unknown".
+const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
+let cliShadowShellPathPromise: Promise<string | undefined> | null = null;
+
+function cliShadowShellPath(): Promise<string | undefined> {
+	cliShadowShellPathPromise ??= (async () => {
+		await ensureShellEnv();
+		await retryFailedEarlyShellEnvProbe();
+		if (cachedShellEnv?.PATH || process.platform === "win32") return cachedShellEnv?.PATH;
+		const resolved = await resolveShellEnv(process.env, loginShellRunner(CLI_SHADOW_SHELL_TIMEOUT_MS), configuredLoginShell);
+		// Keep only an answer, so opening Settings can try again after a failure.
+		if (!resolved?.PATH) cliShadowShellPathPromise = null;
+		return resolved?.PATH;
+	})();
+	return cliShadowShellPathPromise;
+}
+
+registerCliShadowIpc({
+	shellPath: cliShadowShellPath,
+	bundledPath: () => {
+		const launch = resolveDaemonLaunch(
+			process.env,
+			app.isPackaged,
+			process.resourcesPath,
+			app.getAppPath(),
+			os.homedir(),
+			process.platform,
+		);
+		return launch && launch.source !== "configured" ? launch.command : undefined;
+	},
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
