@@ -38,6 +38,10 @@ const PENDING_LIMIT = 20;
 
 type Sink = (capture: MainErrorCapture) => void;
 
+// User validation, connectivity and authentication states still reject over
+// IPC, but are not application faults. Unexpected throws remain reportable.
+export class ExpectedIpcError extends Error {}
+
 let sink: Sink | null = null;
 let pending: MainErrorCapture[] = [];
 
@@ -95,7 +99,7 @@ export function installIpcErrorCapture(ipcMain: Pick<IpcMain, "handle">): void {
 			try {
 				return await listener(event, ...args);
 			} catch (error) {
-				captureMainError({ category: "ipc", reason: "handler", error, detail: `channel:${channel}` });
+				if (!(error instanceof ExpectedIpcError)) captureMainError({ category: "ipc", reason: "handler", error, detail: `channel:${channel}` });
 				throw error;
 			}
 		};
