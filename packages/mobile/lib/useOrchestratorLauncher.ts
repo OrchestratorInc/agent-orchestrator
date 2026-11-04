@@ -5,7 +5,7 @@ import { ApiError } from "./api";
 import { chatErrorCopy, isChatPreflightError } from "./chatError";
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
 import { haptics } from "./haptics";
-import type { OrchestratorProjectRow } from "./orchestratorView";
+import { orchestratorLaunchRefusal, type OrchestratorProjectRow } from "./orchestratorView";
 import { hostedRowKey } from "./hostedRows";
 import { useApp } from "./store";
 
@@ -59,6 +59,13 @@ export function useOrchestratorLauncher() {
 					{ text: "Cancel", style: "cancel" },
 					{ text: "Start Terminal UI", onPress: () => void runLaunch(row, "tui") },
 				]);
+				return;
+			}
+			// The machine answered and said why (no orchestrator agent set, say):
+			// that, not advice about the connection.
+			const refusal = orchestratorLaunchRefusal(cause);
+			if (refusal) {
+				Alert.alert(refusal.title, refusal.message);
 				return;
 			}
 			const httpStatus = cause instanceof ApiError ? cause.status : undefined;

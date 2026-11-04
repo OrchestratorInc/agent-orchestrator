@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession, OrchestratorLink, ProjectInfo } from "./api";
 import {
+	ORCHESTRATOR_AGENT_REQUIRED,
+	orchestratorLaunchRefusal,
 	launchIntent,
 	orchestratorProjectSections,
 	orchestratorRowAccessibilityLabel,
@@ -544,5 +546,27 @@ describe("projectPageStats", () => {
 		const sessions = [session({ id: "a", status: "needs_input" })];
 		expect(projectPageStats(sessions, link({ status: "needs_input" })).needsYou).toBe(2);
 		expect(projectPageStats(sessions, link({ status: "working" })).needsYou).toBe(1);
+	});
+});
+
+describe("orchestratorLaunchRefusal", () => {
+	const answered = (status: number, code?: string, detail?: string) => Object.assign(new Error(`${status} - ${detail ?? ""}`), { status, code, detail });
+
+	// The daemon said exactly what's missing; "check the logs" sent people the wrong way.
+	it("says to choose an orchestrator agent when the project has none", () => {
+		expect(orchestratorLaunchRefusal(answered(400, "AGENT_REQUIRED", "spawn: session: agent harness required: configure project orchestrator.agent or pass --harness"))).toBe(ORCHESTRATOR_AGENT_REQUIRED);
+	});
+
+	it("passes on the machine's own reason for any other refusal", () => {
+		expect(orchestratorLaunchRefusal(answered(400, "BAD_REQUEST", "project is archived"))).toEqual({ title: "Couldn't start the orchestrator", message: "Project is archived." });
+	});
+
+	it.each([401, 403, 429, 500, 503])("leaves %s to the connection copy", (status) => {
+		expect(orchestratorLaunchRefusal(answered(status, "X", "nope"))).toBeUndefined();
+	});
+
+	it("leaves failures the machine never answered to the connection copy", () => {
+		expect(orchestratorLaunchRefusal(new TypeError("Network request failed"))).toBeUndefined();
+		expect(orchestratorLaunchRefusal(undefined)).toBeUndefined();
 	});
 });

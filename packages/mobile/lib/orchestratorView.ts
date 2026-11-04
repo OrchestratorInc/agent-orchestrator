@@ -2,6 +2,7 @@
 // imports — so the lifecycle mapping is unit-testable, the same split as
 // prView.ts / pushStatus.ts.
 import { agentBlocked, boardZoneOf, isArchived } from "./agentsView";
+import { userFacingError } from "./connectionError";
 import type { DashboardSession, OrchestratorLink, ProjectInfo } from "./api";
 import { relativeTime } from "./notificationView";
 import { collectPRs, prLifecycle } from "./prView";
@@ -518,4 +519,24 @@ export function projectPageStats(
 		if (zone === "ready") stats.ready += 1;
 	}
 	return stats;
+}
+
+/** No orchestrator agent is set for the project, so the machine can't pick one. */
+export const ORCHESTRATOR_AGENT_REQUIRED = {
+	title: "No orchestrator agent",
+	message: "Choose an Orchestrator agent in this project's settings in Orchestrator on your computer, then start it again.",
+} as const;
+
+/**
+ * What a failed orchestrator start says when the machine answered and said
+ * why: the reason, in place of connection advice that sends the person to the
+ * logs. `undefined` leaves the failure to the connection copy (unreachable, a
+ * rejected password, a lockout, a server error).
+ */
+export function orchestratorLaunchRefusal(cause: unknown): { title: string; message: string } | undefined {
+	if (!cause || typeof cause !== "object") return undefined;
+	const { status, code } = cause as { status?: unknown; code?: unknown };
+	if (typeof status !== "number" || status < 400 || status >= 500 || status === 401 || status === 403 || status === 429) return undefined;
+	if (code === "AGENT_REQUIRED") return ORCHESTRATOR_AGENT_REQUIRED;
+	return { title: "Couldn't start the orchestrator", message: userFacingError(cause) };
 }
