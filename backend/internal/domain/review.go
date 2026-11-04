@@ -147,6 +147,9 @@ type CurrentHeadReviewRun struct {
 	CreatedAt time.Time
 	// FailedAutoRuns counts every failed auto review pass on this PR head.
 	FailedAutoRuns int
+	// FeedbackDelivered reports the persisted nudge receipt for this pass's
+	// provider review, rather than whether injection was merely enabled.
+	FeedbackDelivered bool
 }
 
 // AutoReviewFailedRetryLimit is how many failed auto review passes one PR head

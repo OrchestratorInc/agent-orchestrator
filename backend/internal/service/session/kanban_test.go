@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,6 +161,19 @@ func TestSessionListDerivesDisplayStatus(t *testing.T) {
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: 1}},
 			want:   contract.DisplayRetryingReview,
+		},
+		{
+			name: "an approval receipt cannot deliver another harness changes request",
+			record: domain.SessionRecord{
+				ID: "mer-1", ProjectID: "mer", AutoInjectReview: true,
+				Activity: domain.Activity{State: domain.ActivityIdle},
+			},
+			pr: &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
+			runs: []domain.CurrentHeadReviewRun{
+				{PRURL: "pr1", Harness: "claude-code", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested},
+				{PRURL: "pr1", Harness: "codex", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, FeedbackDelivered: true},
+			},
+			want: contract.DisplayChangesRequested,
 		},
 		{
 			name:   "a failed pass at the retry limit has failed",
@@ -421,6 +435,113 @@ func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
 	}
 	if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != contract.DisplayReviewFailed {
 		t.Fatalf("at the retry limit = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, contract.DisplayReviewFailed)
+	}
+}
+
+func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
+	st := newSQLiteKanbanTestStore(t)
+	ctx := context.Background()
+	seedKanbanTestProject(t, st, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityIdle}, AutoInjectReview: true,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
+		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, run := range []struct{ id, sha, reviewID string }{
+		{"stale-head", "head0", "gh-old"},
+		{"superseded", "head1", "gh-superseded"},
+		{"current", "head1", "gh-current"},
+	} {
+		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
+			ID: run.id, ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
+			PRURL: "pr/1", TargetSHA: run.sha, GithubReviewID: run.reviewID,
+			Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+			AutoInjectReview: true, CreatedAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := &Service{store: st}
+	previousReceipt := ""
+	for _, tc := range []struct {
+		name, receipt string
+		want          contract.DisplayStatus
+	}{
+		{"before delivery", "", contract.DisplayChangesRequested},
+		{"attempt is not delivery", `{"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayChangesRequested},
+		{"another PR receipt", `{"seen":{"review:pr/2:gh-current":"changes_requested"}}`, contract.DisplayChangesRequested},
+		{"another review receipt", `{"seen":{"review:pr/1:gh-other":"changes_requested"}}`, contract.DisplayChangesRequested},
+		{"older head receipt", `{"seen":{"review:pr/1:gh-old":"changes_requested"}}`, contract.DisplayChangesRequested},
+		{"superseded pass receipt", `{"seen":{"review:pr/1:gh-superseded":"changes_requested"}}`, contract.DisplayChangesRequested},
+		{"wrong signature", `{"seen":{"review:pr/1:gh-current":"approved"}}`, contract.DisplayChangesRequested},
+		{"after delivery", `{"seen":{"review:pr/1:gh-current":"changes_requested"},"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayAddressingComments},
+		{"same delivery again", `{"seen":{"review:pr/1:gh-current":"changes_requested"},"attempts":{"review:pr/1:gh-current":1}}`, contract.DisplayAddressingComments},
+		{"malformed receipt", `{invalid`, contract.DisplayChangesRequested},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seq, err := st.LatestSeq(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.UpdatePRLastNudgeSignature(ctx, "pr/1", tc.receipt); err != nil {
+				t.Fatal(err)
+			}
+			events, err := st.EventsAfter(ctx, seq, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEvents := 0
+			if tc.receipt != previousReceipt {
+				wantEvents = 1
+			}
+			if len(events) != wantEvents {
+				t.Fatalf("receipt update emitted %d events, want %d", len(events), wantEvents)
+			}
+			for _, event := range events {
+				if string(event.Type) != "pr_updated" || event.ProjectID != "mer" || event.SessionID != string(rec.ID) {
+					t.Fatalf("receipt event = %+v, want pr_updated for %s", event, rec.ID)
+				}
+				var payload map[string]any
+				if err := json.Unmarshal(event.Payload, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if len(payload) != 6 || payload["url"] != "pr/1" || payload["session"] != string(rec.ID) {
+					t.Fatalf("receipt event payload = %#v, want the existing PR envelope without receipt contents", payload)
+				}
+			}
+			previousReceipt = tc.receipt
+			detail, err := svc.Get(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			list, err := svc.List(ctx, ListFilter{ProjectID: "mer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(list) != 1 {
+				t.Fatalf("list returned %d sessions, want 1", len(list))
+			}
+			for read, got := range map[string]domain.Session{"get": detail, "list": list[0]} {
+				if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != tc.want {
+					t.Fatalf("%s presentation = %s/%s, want %s/%s", read, got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, tc.want)
+				}
+			}
+		})
 	}
 }
 

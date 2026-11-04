@@ -452,7 +452,14 @@ SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, 
              AND failed.target_sha = review_run.target_sha
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
-       ) AS failed_auto_runs
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+           WHERE review_run.github_review_id != ''
+             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
+             AND nudge.value = 'changes_requested'
+       ) AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
@@ -473,13 +480,14 @@ WHERE review_run.session_id = ?
 `
 
 type ListCurrentHeadReviewRunsBySessionRow struct {
-	ID             string
-	Harness        domain.ReviewerHarness
-	PRURL          string
-	Status         domain.ReviewRunStatus
-	Verdict        domain.ReviewVerdict
-	CreatedAt      time.Time
-	FailedAutoRuns int64
+	ID                string
+	Harness           domain.ReviewerHarness
+	PRURL             string
+	Status            domain.ReviewRunStatus
+	Verdict           domain.ReviewVerdict
+	CreatedAt         time.Time
+	FailedAutoRuns    int64
+	FeedbackDelivered int64
 }
 
 // AO review passes recorded against each PR's CURRENT head commit. Passes for
@@ -505,6 +513,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessio
 			&i.Verdict,
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
+			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err
 		}
@@ -533,7 +542,14 @@ SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_u
              AND failed.target_sha = review_run.target_sha
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
-       ) AS failed_auto_runs
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+           WHERE review_run.github_review_id != ''
+             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
+             AND nudge.value = 'changes_requested'
+       ) AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id
@@ -554,14 +570,15 @@ WHERE pr.head_sha != ''
 `
 
 type ListCurrentHeadReviewRunsBySessionsRow struct {
-	SessionID      domain.SessionID
-	ID             string
-	Harness        domain.ReviewerHarness
-	PRURL          string
-	Status         domain.ReviewRunStatus
-	Verdict        domain.ReviewVerdict
-	CreatedAt      time.Time
-	FailedAutoRuns int64
+	SessionID         domain.SessionID
+	ID                string
+	Harness           domain.ReviewerHarness
+	PRURL             string
+	Status            domain.ReviewRunStatus
+	Verdict           domain.ReviewVerdict
+	CreatedAt         time.Time
+	FailedAutoRuns    int64
+	FeedbackDelivered int64
 }
 
 // Batch form of ListCurrentHeadReviewRunsBySession for session-list reads.
@@ -585,6 +602,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 			&i.Verdict,
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
+			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err
 		}

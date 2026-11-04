@@ -455,6 +455,50 @@ func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 	}
 }
 
+func TestDeriveKanbanPresentationReviewDeliveryWhileIdle(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name      string
+		activity  contract.ActivityState
+		autoFix   bool
+		delivered bool
+		running   bool
+		ci        contract.CIState
+		noSignal  bool
+		want      contract.DisplayStatus
+	}{
+		{name: "undelivered feedback still requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
+		{name: "delivered feedback is being addressed while activity is idle", activity: contract.ActivityIdle, autoFix: true, delivered: true, want: contract.DisplayAddressingComments},
+		{name: "auto fix disabled does not claim delivered work", activity: contract.ActivityIdle, delivered: true, want: contract.DisplayChangesRequested},
+		{name: "a running reviewer outranks delivered feedback", activity: contract.ActivityIdle, autoFix: true, delivered: true, running: true, want: contract.DisplayReviewing},
+		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, delivered: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
+		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, delivered: true, want: contract.DisplayBlocked},
+		{name: "waiting worker still needs input", activity: contract.ActivityWaitingInput, autoFix: true, delivered: true, want: contract.DisplayNeedsInput},
+		{name: "exited worker is still exited", activity: contract.ActivityExited, autoFix: true, delivered: true, want: contract.DisplayExited},
+		{name: "silent worker still has no signal", activity: contract.ActivityIdle, autoFix: true, delivered: true, noSignal: true, want: contract.DisplayNoSignal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := contract.DeriveKanbanPresentation(contract.KanbanSessionFacts{
+				SessionFacts: contract.SessionFacts{
+					Activity: tc.activity, HasSignal: !tc.noSignal, SignalExpected: tc.noSignal,
+					LastActivityAt: now.Add(-time.Hour),
+				},
+				AutoInjectReview: tc.autoFix,
+			}, []contract.KanbanPRFacts{{
+				URL: "pr/1", CI: tc.ci,
+				ReviewRun: contract.KanbanReviewRunFacts{
+					Present: true, ChangesRequested: true, Outcome: true,
+					FeedbackDelivered: tc.delivered, Running: tc.running,
+				},
+			}}, now, time.Minute)
+			if got.Column != contract.KanbanValidating || got.DisplayStatus != tc.want {
+				t.Fatalf("presentation = %+v, want %s/%s", got, contract.KanbanValidating, tc.want)
+			}
+		})
+	}
+}
+
 func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

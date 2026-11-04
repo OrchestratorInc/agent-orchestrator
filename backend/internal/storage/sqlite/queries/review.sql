@@ -139,7 +139,14 @@ SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, 
              AND failed.target_sha = review_run.target_sha
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
-       ) AS failed_auto_runs
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+           WHERE review_run.github_review_id != ''
+             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
+             AND nudge.value = 'changes_requested'
+       ) AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
@@ -175,7 +182,14 @@ SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_u
              AND failed.target_sha = review_run.target_sha
              AND failed.status = 'failed'
              AND failed.trigger_source = 'auto'
-       ) AS failed_auto_runs
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
+           WHERE review_run.github_review_id != ''
+             AND nudge.key = 'review:' || review_run.pr_url || ':' || review_run.github_review_id
+             AND nudge.value = 'changes_requested'
+       ) AS INTEGER) AS feedback_delivered
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id
