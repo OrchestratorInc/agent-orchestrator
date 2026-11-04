@@ -75,8 +75,11 @@ test("renderer: hidden model-menu scrollbar keeps wheel scrolling functional @T0
 	const trigger = page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" });
 	await expect(trigger).toContainText("model-30");
 	await page.getByRole("menuitem", { name: /^Model/ }).click();
-	await page.getByRole("searchbox", { name: "Search models" }).last().fill("model-29");
-	await page.keyboard.press("Enter");
-	await expect(page.getByRole("menu")).toHaveCount(1);
+	const search = page.getByRole("searchbox", { name: "Search models" }).last();
+	await search.fill("model-29");
+	await expect(page.getByRole("menuitemradio", { name: /model-29/ })).toHaveAttribute("data-search-active", "true");
+	await expect(search).toBeFocused();
+	await search.press("Enter");
 	await expect(trigger).toContainText("model-29");
+	await expect(page.getByRole("menu")).toHaveCount(1);
 });
