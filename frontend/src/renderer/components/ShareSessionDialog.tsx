@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Info, X } from "lucide-react";
+import { ChevronRight, Info } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -29,6 +29,7 @@ import { NewTeamDialog } from "./teams/NewTeamDialog";
 import { PeopleField, recipientKey, type Recipient } from "./teams/PeopleField";
 import { PersonAvatar, TeamTile } from "./teams/TeamVisuals";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -406,9 +407,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				data-share-session-dialog
 			>
 				<DialogClose asChild>
-					<button type="button" className="settings-dialog-close-button settings-close-button" aria-label={t("confirm.close")}>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("confirm.close")} />
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12 pb-0")}>
 					<DialogTitle className="settings-dialog-title text-subtitle">{scope === "project" ? t("share.projectTitle") : t("share.title")}</DialogTitle>

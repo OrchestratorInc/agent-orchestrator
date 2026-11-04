@@ -169,10 +169,10 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 				? { enabled: families.filter((family) => idsOf(family.id).some(isModelEnabled)).length, total: families.length }
 				: { enabled: enabledCount, total: allModelIds.length })}</span> : null}
 			{bulkModelIds.length > 1 ? <span className="ml-auto flex items-center gap-1">
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+				<Button type="button" size="xs" variant="ghost"
 					disabled={bulkModelIds.every(isModelEnabled)}
 					onClick={() => setModelsEnabled(bulkModelIds, true)}>{t("settings.harness.models.enableAll")}</Button>
-				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-caption"
+				<Button type="button" size="xs" variant="ghost"
 					disabled={!bulkModelIds.some((id) => id !== keptOnId && isModelEnabled(id))}
 					onClick={() => setModelsEnabled(bulkModelIds, false, keptOnId)}>{t("settings.harness.models.disableAll")}</Button>
 			</span> : null}

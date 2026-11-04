@@ -1,4 +1,4 @@
-import { ArrowUpRight, X } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -18,8 +18,8 @@ import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	artifact: ArtifactRow | null;
@@ -85,20 +85,13 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 								className="transition-none"
 							/>
 						</div>
-						<Button className="shrink-0 transition-none" onClick={openInSession} size="sm" variant="secondary">
+						<Button className="shrink-0" onClick={openInSession} size="sm" variant="secondary">
 							{t("artifacts.openInSession")}
 							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
 						</Button>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<DialogClose asChild>
-									<Button aria-label={t("common.close")} className="shrink-0 transition-none" size="icon-sm" variant="ghost">
-										<X aria-hidden="true" className="size-icon-sm" />
-									</Button>
-								</DialogClose>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("common.close")}</TooltipContent>
-						</Tooltip>
+						<DialogClose asChild>
+							<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+						</DialogClose>
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden bg-background">
 						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />

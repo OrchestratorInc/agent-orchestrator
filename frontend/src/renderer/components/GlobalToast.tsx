@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
+import { CloseButton } from "./ui/close-button";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
@@ -84,14 +84,11 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				</button>
 			) : null}
 			{toast.dismissible ? (
-				<button
-					type="button"
+				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}
 					onClick={() => dismissGlobalToast(toast.nonce)}
-					className="shrink-0 rounded p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3" />
-				</button>
+					size="icon-xs"
+				/>
 			) : null}
 		</section>
 	);

@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode, Ref } from "react";
 import { cn } from "../lib/utils";
+import { Pressable } from "./ui/pressable";
 
 type TerminalTabFrameProps = {
 	active: boolean;
@@ -53,9 +54,9 @@ export function TerminalTabFrame({
 					{editingContent}
 				</span>
 			) : (
-				<button
+				<Pressable
 					ref={buttonRef}
-					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-control leading-none in-data-dragging:cursor-grabbing!"
+					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!"
 					{...buttonProps}
 				>
 					{/* The open-menu rule reaches the icon through child combinators. The
@@ -70,7 +71,7 @@ export function TerminalTabFrame({
 						{icon}
 					</span>
 					<span className="truncate">{label}</span>
-				</button>
+				</Pressable>
 			)}
 			{action ? (
 				<span

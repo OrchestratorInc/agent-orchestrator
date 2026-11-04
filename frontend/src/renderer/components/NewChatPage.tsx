@@ -355,7 +355,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => void task.refreshModels().catch(() => undefined)}>
+			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
 				{t("newTask.modelNotice.retry")}
 			</Button>
 		</div>
@@ -364,8 +364,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{/* No session yet: the shared session frame with no tabs holds the header's
-			    place and surface, so nothing moves or changes colour at handoff. */}
-			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+			    place and surface, so nothing moves or changes colour at handoff. The
+			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
+			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
 			<ChatWorkspace
@@ -630,14 +631,16 @@ function MobileConnected() {
 	const live = data?.filter((device) => device.live) ?? [];
 	if (live.length === 0) return null;
 	return (
-		<button
+		<Button
 			type="button"
-			className={cn(TRIGGER_CLASS, "ml-auto inline-flex w-fit shrink-0 items-center gap-1.5")}
+			variant="quiet"
+			size="sm"
+			className="ml-auto w-fit"
 			title={live.map((device) => device.deviceName).filter(Boolean).join(", ") || undefined}
 			onClick={() => openGlobalSettings("mobile")}
 		>
 			<Smartphone aria-hidden="true" className="size-3.5 shrink-0" />
 			{t("newTask.phoneConnected", { count: live.length })}
-		</button>
+		</Button>
 	);
 }

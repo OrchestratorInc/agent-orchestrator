@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -435,6 +436,17 @@ describe("SessionArtifactsView", () => {
 		expect(document.querySelector("iframe")).toBeNull();
 		await userEvent.click(screen.getByRole("button", { name: "Rich preview" }));
 		expect(document.querySelector("iframe")).not.toBeNull();
+	});
+
+	it("opens an HTML artifact in the session Browser from its header", async () => {
+		const openInBrowser = vi.fn();
+		renderView(<AppBrowserLinkContext.Provider value={openInBrowser}><SessionArtifactsView session={session()} /></AppBrowserLinkContext.Provider>);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.queryByRole("button", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("http://artifact.localhost/report.html");
 	});
 
 	it("never frames an HTML artifact from the daemon's own origin", () => {

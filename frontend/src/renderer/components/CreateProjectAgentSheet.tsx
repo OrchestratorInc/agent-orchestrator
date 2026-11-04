@@ -395,14 +395,9 @@ function ProjectSheetCloseButton({
 }) {
 	return (
 		<Dialog.Close asChild>
-			<button
-				type="button"
-				className="settings-close-button"
-				aria-label={ariaLabel}
-				disabled={disabled}
-			>
+			<Button type="button" variant="quiet" size="icon" aria-label={ariaLabel} disabled={disabled}>
 				{children}
-			</button>
+			</Button>
 		</Dialog.Close>
 	);
 }
