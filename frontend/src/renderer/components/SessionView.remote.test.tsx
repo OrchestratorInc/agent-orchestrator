@@ -624,8 +624,8 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry", exact: true })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
@@ -719,8 +719,8 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	await act(async () => { await disconnectHost("box-b"); });
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry", exact: true })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
