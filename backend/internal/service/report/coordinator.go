@@ -60,11 +60,11 @@ type Coordinator struct {
 	retryDelay time.Duration
 	wake       chan struct{}
 	mu         sync.Mutex
-	// earlyHold pauses early flush for a project whose last early attempt left
-	// its batch pending (busy orchestrator, failed submit, or coalesced stuck
-	// deferral). Those
-	// deferrals cannot move a done row's later settlement deadline, so without
-	// the hold every wake would retry at once. Guarded by mu.
+	// earlyHold pauses early flush for a project whose last attempt, early or
+	// due, left its batch pending (busy orchestrator, failed submit, or coalesced
+	// stuck deferral). Those deferrals cannot move a done row's later settlement
+	// deadline, and early flush does not wait for a retry time, so without the
+	// hold every wake would retry at once. Guarded by mu.
 	earlyHold map[domain.ProjectID]time.Time
 }
 
@@ -176,10 +176,10 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 				}
 				return delay, nil
 			}
-			// Held until the project's pending done reports are delivered.
-			c.earlyHold[early] = now.Add(OrchestratorBusyRetry)
 			projectID = early
 		}
+		// Held until the project's pending done reports are delivered.
+		c.earlyHold[projectID] = now.Add(OrchestratorBusyRetry)
 		if err := c.deliverProject(ctx, projectID); err != nil {
 			return c.retryDelay, err
 		}

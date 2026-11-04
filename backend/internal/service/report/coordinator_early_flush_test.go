@@ -285,3 +285,27 @@ func TestCoordinatorEarlyFlushBacksOffBusyOrchestrator(t *testing.T) {
 		t.Fatalf("next batch delay = %v, want plain debounce", delay)
 	}
 }
+
+func TestCoordinatorExpiredDoneBusyOrchestratorAttemptsOnce(t *testing.T) {
+	start := time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	h.delivery.submitErrFor = map[domain.SessionID]error{"orch": ErrOrchestratorBusy}
+	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)))
+	h.store.add(doneAt("done-a", "a", start, "a finished"))
+
+	h.now = start.Add(domain.ReportSettlementWindow + time.Second)
+	if delay := h.run(t); delay != OrchestratorBusyRetry || h.delivery.attempts != 1 {
+		t.Fatalf("expired delay = %v, attempts = %d; want one attempt and the busy backoff", delay, h.delivery.attempts)
+	}
+	h.c.SessionActivityChanged(domain.ActivityIdle, false)
+	h.now = h.now.Add(time.Second)
+	if delay := h.run(t); delay != OrchestratorBusyRetry-time.Second || h.delivery.attempts != 1 {
+		t.Fatalf("wake inside backoff delay = %v, attempts = %d; want no retry", delay, h.delivery.attempts)
+	}
+	h.delivery.submitErrFor = nil
+	h.now = h.now.Add(OrchestratorBusyRetry - time.Second)
+	h.run(t)
+	if got := h.delivery.submitted(); len(got) != 1 || h.delivery.attempts != 2 {
+		t.Fatalf("after backoff submissions = %#v, attempts = %d", got, h.delivery.attempts)
+	}
+}
