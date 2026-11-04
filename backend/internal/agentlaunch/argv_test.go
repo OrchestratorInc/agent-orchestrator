@@ -34,10 +34,10 @@ func TestSplitEnvAssignments(t *testing.T) {
 			wantOK:          true,
 		},
 		{
-			name:            "env with no command reports invalid argv",
-			argv:            []string{"env", "A=1", "B=2"},
-			wantAssignments: []string{"A=1", "B=2"},
-			wantOK:          false,
+			name:        "env with no command reports invalid argv",
+			argv:        []string{"env", "A=1", "B=2"},
+			wantCommand: []string{"env", "A=1", "B=2"},
+			wantOK:      false,
 		},
 		{
 			name:   "empty argv reports invalid argv",

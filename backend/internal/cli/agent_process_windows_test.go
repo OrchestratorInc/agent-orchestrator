@@ -7,9 +7,23 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func setPathWithGoWithoutEnv(t *testing.T) {
+	t.Helper()
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("find go for helper TestMain: %v", err)
+	}
+	t.Setenv("PATH", filepath.Dir(goBin))
+	if envBin, err := exec.LookPath("env"); err == nil {
+		t.Fatalf("test PATH unexpectedly resolves env: %s", envBin)
+	}
+}
 
 func TestAgentProcessSuperviseAppliesEnvPrefixOnWindows(t *testing.T) {
 	if os.Getenv("AO_AGENT_PROCESS_ENV_HELPER") == "1" {
@@ -21,8 +35,9 @@ func TestAgentProcessSuperviseAppliesEnvPrefixOnWindows(t *testing.T) {
 	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
 	t.Setenv("AO_AGENT_PROCESS_ENV_HELPER", "1")
-	// Reproduce a GUI-launched AO process whose PATH has no Unix env utility.
-	t.Setenv("PATH", t.TempDir())
+	// Keep go available to the e2e TestMain while reproducing a GUI-launched AO
+	// process whose PATH has no Unix env utility.
+	setPathWithGoWithoutEnv(t)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +62,7 @@ func TestSupervisedProcessCommandOnWindows(t *testing.T) {
 	}
 
 	t.Setenv("AO_AGENT_PROCESS_ENV_HELPER", "1")
-	t.Setenv("PATH", t.TempDir())
+	setPathWithGoWithoutEnv(t)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

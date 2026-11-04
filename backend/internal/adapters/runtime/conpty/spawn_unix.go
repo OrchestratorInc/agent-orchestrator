@@ -32,8 +32,6 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	envAssignments, command, ok := agentlaunch.SplitEnvAssignments(argv)
 	if ok {
 		argv = command
-	} else {
-		envAssignments = nil
 	}
 	args := ptyHostArgs(sessionID, cwd, argv, opts)
 	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
