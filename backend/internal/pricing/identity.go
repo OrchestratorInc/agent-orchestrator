@@ -52,6 +52,9 @@ var providerAliases = map[string]string{
 	"opencode-go":            "opencode_go",
 	"xiaomi":                 "xiaomi_mimo",
 	"cloudflare-workers-ai":  "cloudflare",
+	"cohere":                 "cohere_chat",
+	"friendli":               "friendliai",
+	"lambda":                 "lambda_ai",
 }
 
 // RequiredProviderIDs are the providers every catalog must price. A catalog
