@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -390,6 +391,9 @@ func Run(buildVersion string) error {
 			}()
 		}
 	}
+	// Bound once usage pricing has started, so turns are priced as they are
+	// stored; a turn reported earlier in startup is not recorded.
+	var chatUsage atomic.Pointer[usagesvc.ChatUsageRecorder]
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -459,6 +463,16 @@ func Run(buildVersion string) error {
 			}
 		},
 		RecheckAccount: recheckSessionAccount,
+		OnTurnUsage: func(turnCtx context.Context, report ports.ChatTurnUsageReport) {
+			recorder := chatUsage.Load()
+			if recorder == nil {
+				return
+			}
+			if err := recorder.Record(turnCtx, report); err != nil {
+				log.Warn("record chat-reported turn usage failed",
+					"sessionID", report.SessionID, "turn", report.ProviderTurnID, "err", err)
+			}
+		},
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
@@ -866,6 +880,11 @@ func Run(buildVersion string) error {
 			stop()
 			usagePricing.Wait()
 		}()
+	}
+	if usagePricing != nil {
+		chatUsage.Store(usagesvc.NewChatUsageRecorder(store, usagePricing.Manager()))
+	} else {
+		chatUsage.Store(usagesvc.NewChatUsageRecorder(store, nil))
 	}
 	if roots, rootsErr := usagesvc.DefaultSourceRoots(ctx, cfg.DataDir); rootsErr != nil {
 		log.Warn("usage collection disabled", "err", rootsErr)

@@ -355,12 +355,22 @@ func (c *Collector) FinalizeSession(
 	if err != nil {
 		return err
 	}
+	finalizing := 0
 	for _, binding := range bindings {
+		if ChatReportedHarness(binding.Harness) {
+			// A chat-reported binding has no artifact left to drain: every turn
+			// was stored as it was reported. It settles at once.
+			if _, err := c.store.UpdateUsageBindingState(ctx, binding.ID, domain.UsageBindingComplete, "", now); err != nil {
+				return err
+			}
+			continue
+		}
+		finalizing++
 		if _, err := c.reactivateLatestSources(ctx, binding.ID, now); err != nil {
 			return err
 		}
 	}
-	if len(bindings) > 0 {
+	if finalizing > 0 {
 		c.notifySourceInventory(false)
 	}
 	return nil

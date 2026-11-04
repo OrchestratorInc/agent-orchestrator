@@ -171,6 +171,12 @@ type conversation struct {
 	// rejection, the model that answered) are attributed to this value instead.
 	turnModel   string
 	turnModelID string
+	// sessionCost is the cumulative cost the provider last reported, and
+	// turnCostStart what it was when turn turnCostTurnID started; a turn's own
+	// cost is the difference. Nil means no reading.
+	sessionCost    *acpCost
+	turnCostStart  *acpCost
+	turnCostTurnID string
 
 	contextTokens     int64
 	contextWindow     int64
@@ -746,6 +752,8 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.activeTurn = turn.id
 	c.turnModelID = turn.id
 	c.turnModel = c.configOptionCurrentLocked("model")
+	c.turnCostTurnID = turn.id
+	c.turnCostStart = c.sessionCost
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -851,6 +859,10 @@ func (c *conversation) finishPrompt(
 	if c.turnModelID == turnID {
 		turnModel = c.turnModel
 	}
+	var turnCost *acpCost
+	if c.turnCostTurnID == turnID {
+		turnCost = costSince(c.turnCostStart, c.sessionCost)
+	}
 	c.mu.Unlock()
 	c.settleOpenItems(turnID)
 	interruptedLocally := false
@@ -892,6 +904,8 @@ func (c *conversation) finishPrompt(
 			}
 		}
 		if resp.Usage != nil {
+			// The conversation meter keeps showing reads and writes together; the
+			// turn record keeps them apart, because they are priced apart.
 			cached := 0
 			if resp.Usage.CachedReadTokens != nil {
 				cached += *resp.Usage.CachedReadTokens
@@ -899,10 +913,11 @@ func (c *conversation) finishPrompt(
 			if resp.Usage.CachedWriteTokens != nil {
 				cached += *resp.Usage.CachedWriteTokens
 			}
-			c.emit(ports.ChatEvent{Kind: ports.ChatEventUsage, Usage: &ports.ChatUsage{
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventUsage, ProviderTurnID: turnID, Usage: &ports.ChatUsage{
 				InputTokens: int64(resp.Usage.InputTokens), OutputTokens: int64(resp.Usage.OutputTokens),
 				CachedTokens: int64(cached), TotalTokens: int64(resp.Usage.TotalTokens),
 				TotalsKnown: true,
+				Turn:        acpTurnUsage(*resp.Usage, turnModel, turnCost),
 			}})
 		}
 	}

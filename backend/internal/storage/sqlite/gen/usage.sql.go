@@ -1311,10 +1311,13 @@ SELECT
     model_usage_events.estimated_cost_nanos,
     CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
         CASE model_usage_events.provider_id
-            WHEN 'anthropic' THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens')
+            WHEN 'anthropic' THEN COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.cachedWriteTokens'))
             ELSE COALESCE(
                 json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
-                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.cachedWriteTokens'))
         END
     END, -1) AS INTEGER) AS cache_write_tokens,
     CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)

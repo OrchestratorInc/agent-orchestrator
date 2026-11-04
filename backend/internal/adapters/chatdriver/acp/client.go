@@ -763,6 +763,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			cost := update.UsageUpdate.Cost.Amount
 			usage.Cost = &cost
 			usage.Currency = update.UsageUpdate.Cost.Currency
+			c.trackCost(cost, usage.Currency)
 		}
 		emit(ports.ChatEvent{Kind: ports.ChatEventUsage, Usage: usage})
 		if limits := claudeRateLimits(update.UsageUpdate.Meta); limits != nil {

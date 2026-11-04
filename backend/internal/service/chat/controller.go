@@ -224,6 +224,9 @@ type Controller struct {
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	// onTurnUsage receives each billed exchange the provider reported, after
+	// its event committed. Nil drops them.
+	onTurnUsage func(context.Context, ports.ChatTurnUsageReport)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -3027,6 +3030,33 @@ func (c *Controller) projectUnit(
 	return true
 }
 
+// reportTurnUsage hands one committed per-turn usage report to the usage
+// pipeline. It runs after the event's transaction, never inside it: the usage
+// store shares the database writer, and a usage failure must not roll back or
+// stall the conversation. An event whose archive identity was already seen
+// never reaches here, which is the first line of replay dedupe; the pipeline
+// keys by turn for the rest.
+func (c *Controller) reportTurnUsage(ctx context.Context, event ports.ChatEvent, now time.Time) {
+	if c.onTurnUsage == nil || event.Usage == nil || event.Usage.Turn == nil ||
+		event.ProviderTurnID == "" || c.reviewID != "" || c.sessionID == "" {
+		return
+	}
+	turn := *event.Usage.Turn
+	model := strings.TrimSpace(turn.ModelID)
+	if model == "" {
+		model = strings.TrimSpace(c.Settings().Model)
+	}
+	c.onTurnUsage(ctx, ports.ChatTurnUsageReport{
+		SessionID:      c.sessionID,
+		Harness:        c.harness,
+		ConversationID: c.conversation.ID,
+		ProviderTurnID: event.ProviderTurnID,
+		ModelID:        model,
+		Usage:          turn,
+		At:             now,
+	})
+}
+
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
 	if c.reviewID != "" {
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
@@ -3601,6 +3631,8 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// Only a completed turn releases queued work; a failed or recovered one holds
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+	case ports.ChatEventUsage:
+		c.reportTurnUsage(ctx, event, now)
 	case ports.ChatEventApprovalRequested:
 		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
