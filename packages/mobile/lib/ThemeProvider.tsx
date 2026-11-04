@@ -1,6 +1,6 @@
 import { requireOptionalNativeModule } from "expo-modules-core";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { Appearance, Platform, processColor, useColorScheme } from "react-native";
+import { Appearance, AppState, Platform, processColor, StatusBar, useColorScheme } from "react-native";
 import { composeThemeFor } from "./composeTheme";
 import { themeFor, type ColorScheme, type Theme } from "./theme";
 import {
@@ -107,10 +107,25 @@ export function ThemeProvider({ children, initial }: { children: ReactNode; init
 	//
 	// Guarded like the window colour above, because the module is native and a
 	// build made before it would have nothing to bind to.
+	//
+	// The status bar's icons are set here too, not only by the root <StatusBar>:
+	// React Native drops a style change that arrives while no activity is
+	// attached, and <StatusBar> only sends again when the style changes, so a
+	// scheme flip that lands then would leave black icons on a dark screen (or
+	// the reverse) until the next flip. Both bars are re-applied each time the
+	// app comes forward as well as on every scheme change.
 	useEffect(() => {
 		if (Platform.OS !== "android") return;
-		const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
-		void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
+		const applySystemBars = () => {
+			StatusBar.setBarStyle(scheme === "dark" ? "light-content" : "dark-content");
+			const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
+			void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
+		};
+		applySystemBars();
+		const subscription = AppState.addEventListener("change", (state) => {
+			if (state === "active") applySystemBars();
+		});
+		return () => subscription.remove();
 	}, [scheme]);
 
 	// Compose controls draw in this palette and family rather than the
