@@ -4220,21 +4220,21 @@ describe("ChatWorkspace message actions", () => {
 		const composer = screen.getByLabelText("Message the agent");
 		await typeInLexicalEditor(composer, "retry this exact draft");
 		fireEvent.keyDown(composer, { key: "Enter" });
-		await screen.findByText(/delivery wasn’t confirmed/);
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
 		const firstClientMessageId = onSend.mock.calls[0]?.[2];
 		expect(firstClientMessageId).toEqual(expect.any(String));
 		firstView.unmount();
 
 		const retryView = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
 		const restored = screen.getByLabelText("Message the agent");
-		expect(restored).toHaveTextContent("retry this exact draft");
-		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+		expect(restored).toHaveTextContent("");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("retry this exact draft");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		expect(onSend.mock.calls[1]?.[2]).toBe(firstClientMessageId);
-		await waitFor(() =>
-			expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(""),
-		);
-		await waitFor(() => expect(restored).toHaveTextContent(""));
+		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).unsent).toBeUndefined());
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+		expect(readChatSessionDraft(snapshot.sessionId).composer.delivery).toBeUndefined();
 		retryView.unmount();
 
 		render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);

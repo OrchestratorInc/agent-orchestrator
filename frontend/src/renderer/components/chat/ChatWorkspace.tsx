@@ -605,6 +605,8 @@ export interface ChatWorkspaceProps {
 	openingStartedAt?: string;
 	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
 	composerTray?: ReactNode;
+	/** Off where another flow owns an unanswered send, such as the new chat page's pending launch. */
+	parkUnsentSends?: boolean;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
@@ -823,6 +825,7 @@ function ChatWorkspaceContent({
 	draftNotice,
 	openingStartedAt,
 	composerTray,
+	parkUnsentSends = true,
 	centerInWindow = false,
 	showSetupStep = true,
 	holdAttachments,
@@ -2122,6 +2125,7 @@ function ChatWorkspaceContent({
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
+										parkUnsentSends={parkUnsentSends}
 									/>
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}

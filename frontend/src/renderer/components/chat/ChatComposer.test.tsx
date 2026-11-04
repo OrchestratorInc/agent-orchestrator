@@ -889,12 +889,12 @@ describe("send keys", () => {
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(new Error("response lost"))
 			.mockRejectedValue({ code, message: "Request was rejected" });
-		const first = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		const first = render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} />);
 		await typeInComposer(screen.getByLabelText("Message the agent"), "possibly accepted request");
 		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
 		await waitFor(() => expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled());
 		first.unmount();
-		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} />);
 		await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled());
@@ -1001,7 +1001,7 @@ describe("send keys", () => {
 			clientMessageId: "original-key",
 		});
 		const onSend = vi.fn().mockResolvedValue(undefined);
-		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} />);
 		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
 		expect(onSend).toHaveBeenCalledWith("/side original question", undefined, "original-key");
@@ -1056,7 +1056,7 @@ describe("send keys", () => {
 			clientMessageId: "composer-restored-delivery-id",
 		});
 
-		render(<ChatComposer onSend={vi.fn()} draftSessionId={sessionId} />);
+		render(<ChatComposer parkUnsentSends={false} onSend={vi.fn()} draftSessionId={sessionId} />);
 
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"Message delivery wasn’t confirmed before Chat restarted",
@@ -1944,7 +1944,7 @@ describe("steering", () => {
 		const sessionId = "send-snapshot-reconciliation";
 		// The answer is lost, as when the app restarts mid-send.
 		const onSend = vi.fn().mockRejectedValue(new Error("response lost"));
-		const first = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
+		const first = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} />);
 		const field = screen.getByLabelText("Message the agent");
 		await typeInComposer(field, "sent before the restart");
 		fireEvent.keyDown(field, { key: "Enter" });
@@ -1953,7 +1953,7 @@ describe("steering", () => {
 		const clientMessageId = onSend.mock.calls[0]?.[2] as unknown as string;
 		first.unmount();
 
-		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} acceptedClientMessageIds={new Set([clientMessageId])} />);
+		render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} acceptedClientMessageIds={new Set([clientMessageId])} />);
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("");
 		expect(screen.queryByText(/wasn.t confirmed before Chat restarted/)).not.toBeInTheDocument();
@@ -2491,7 +2491,7 @@ describe("attachments", () => {
 		const sessionId = `composer-native-retry-${restart}`;
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/native-retry.png"]);
 		const onSend = vi.fn().mockRejectedValueOnce(new Error("network request never arrived")).mockResolvedValue(undefined);
-		let view = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} nativeImages onStageAttachments={stage} />);
+		let view = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} nativeImages onStageAttachments={stage} />);
 		let field = screen.getByLabelText("Message the agent");
 		fireEvent.paste(field, { clipboardData: clipboardData([png("native-retry.png")]) });
 		await screen.findByLabelText("Remove native-retry.png");
@@ -2511,7 +2511,7 @@ describe("attachments", () => {
 			if (restart) {
 				view.unmount();
 				purgeFileAttachmentsForSession(sessionId);
-				view = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} nativeImages={false} onStageAttachments={stage} />);
+				view = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} nativeImages={false} onStageAttachments={stage} />);
 				field = screen.getByLabelText("Message the agent");
 			}
 			await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
@@ -3059,7 +3059,7 @@ describe("unavailable states", () => {
 it("shows restored composer recovery notices and actions in the selected language", async () => {
 	const sessionId = "composer-localized-recovery";
 	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: "bonjour", attachments: [], requestText: "bonjour", clientMessageId: "fr-recovery" });
-	const view = render(<ChatComposer draftSessionId={sessionId} onSend={vi.fn()} />);
+	const view = render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={vi.fn()} />);
 	try {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
 		await act(async () => { await appI18n.changeLanguage("fr"); });
@@ -3288,7 +3288,7 @@ it("retries a legacy cloud receipt with its original filename format and identit
 		}
 	}
 	const onSend=vi.fn().mockResolvedValue(undefined);
-	render(<ChatComposer draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text"/>);
+	render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text"/>);
 	await userEvent.click(await screen.findByRole("button",{name:"Retry message safely"}));
 	await waitFor(()=>expect(onSend).toHaveBeenCalledOnce());
 	expect(onSend.mock.calls[0][0]).toContain("cloud.ts#L1-L1");
@@ -3365,4 +3365,74 @@ it("keeps file annotations intact when a built-in command cannot carry them",asy
  await waitFor(()=>expect(screen.getByText("Remove file annotations before running /compact.")).toBeInTheDocument());
  expect(onCompact).not.toHaveBeenCalled();expect(onSend).not.toHaveBeenCalled();
  expect(readChatSessionDraft(sessionId).composer.fileReferences?.[0].id).toBe(ref.id);
+});
+
+describe("unsent message strip", () => {
+	function restoreUnsent(sessionId: string, text = "the long paste that never arrived") {
+		prepareChatComposerDelivery(sessionId, { kind: "send", composerText: text, attachments: [], requestText: text, clientMessageId: `${sessionId}-old` });
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		return { onSend, view, field: screen.getByLabelText("Message the agent") };
+	}
+
+	it("frees the box and sends new text beside a restored unsent message", async () => {
+		const { onSend, field } = restoreUnsent("unsent-free-box");
+		const strip = await screen.findByTestId("unsent-message-strip");
+		expect(strip).toHaveTextContent("Not sent");
+		expect(strip).toHaveTextContent("the long paste that never arrived");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+		await typeInComposer(field, "yo");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0]?.[0]).toBe("yo");
+		expect(onSend.mock.calls[0]?.[2]).not.toBe("unsent-free-box-old");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
+	});
+
+	it("retries the unsent message with its old ID and keeps the box text", async () => {
+		const { onSend, field } = restoreUnsent("unsent-retry");
+		await screen.findByTestId("unsent-message-strip");
+		await typeInComposer(field, "half typed");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0]?.[0]).toBe("the long paste that never arrived");
+		expect(onSend.mock.calls[0]?.[2]).toBe("unsent-retry-old");
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+		expect(composerWireText(field)).toBe("half typed");
+		expect(readChatSessionDraft("unsent-retry").unsent).toBeUndefined();
+	});
+
+	it("discards with an undo", async () => {
+		restoreUnsent("unsent-discard");
+		await screen.findByTestId("unsent-message-strip");
+		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
+		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
+		expect(readChatSessionDraft("unsent-discard").unsent).toBeUndefined();
+		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+		expect(await screen.findByText("Not sent")).toBeInTheDocument();
+		expect(readChatSessionDraft("unsent-discard").unsent?.clientMessageId).toBe("unsent-discard-old");
+	});
+
+	it("parks a send whose answer is lost in this session", async () => {
+		const onSend = vi.fn().mockRejectedValue(new Error("response lost"));
+		const { field } = renderComposer({ onSend, draftSessionId: "unsent-in-session" });
+		await typeInComposer(field, "lost answer");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("lost answer");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
+		expect(onSend).toHaveBeenCalledOnce();
+	});
+
+	it("drops the strip once the chat shows the message", async () => {
+		const { view, onSend } = restoreUnsent("unsent-observed");
+		await screen.findByTestId("unsent-message-strip");
+		view.rerender(<ChatComposer draftSessionId="unsent-observed" onSend={onSend} acceptedClientMessageIds={new Set(["unsent-observed-old"])} />);
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+		expect(readChatSessionDraft("unsent-observed").unsent).toBeUndefined();
+		expect(onSend).not.toHaveBeenCalled();
+	});
 });

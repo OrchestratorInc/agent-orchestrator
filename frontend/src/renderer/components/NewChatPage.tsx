@@ -375,6 +375,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				key={projectId}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				// The pending launch below tracks its own unanswered send.
+				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.
 				sessionTitle={echo ? echo.text.trim().slice(0, 100) : t("command.newTask")}
 				sessionRole="worker"
