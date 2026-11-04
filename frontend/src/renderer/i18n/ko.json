@@ -3622,7 +3622,6 @@
 	"settings.agentAccounts.checkSignIn": "로그인 확인",
 	"settings.agentAccounts.loginWaiting": "아직 로그인하지 않았습니다. 터미널에서 마친 후 다시 확인하세요.",
 	"settings.agentAccounts.loginDuplicate": "{{email}}은(는) 이미 추가되어 있습니다.",
-	"settings.agentAccounts.alsoCliLogin": "이 컴퓨터의 {{provider}} CLI도 이 계정으로 로그인되어 있습니다.",
 	"settings.agentAccounts.loginMismatch": "이 계정은 {{email}}입니다. 해당 로그인으로 다시 로그인하세요.",
 	"settings.agentAccounts.signInAgain": "다시 로그인",
 	"settings.agentAccounts.aoUsage": "AO에서 {{tokens}} 토큰, 최근 30일",

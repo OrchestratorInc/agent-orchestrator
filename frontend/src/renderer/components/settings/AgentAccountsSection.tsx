@@ -109,7 +109,6 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 				key={account.id}
 				account={cliTwin?.default ? { ...account, default: true } : account}
 				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
-				alsoCliLogin={Boolean(cliTwin)}
 				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
@@ -130,11 +129,9 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	</>;
 }
 
-function AccountRow({ account, aoTokens, alsoCliLogin = false, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
 	aoTokens: number | undefined;
-	/** The CLI's own login is signed in to this account too, and folded into it. */
-	alsoCliLogin?: boolean;
 	busy: string | null;
 	/** Only on the CLI's own login, which has no folder of its own to remove. */
 	cliLogin?: CliLoginControls;
@@ -172,7 +169,6 @@ function AccountRow({ account, aoTokens, alsoCliLogin = false, busy, cliLogin, o
 					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
-		{alsoCliLogin ? <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.agentAccounts.alsoCliLogin", { provider: providerNames[account.provider] })}</p> : null}
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
 		<AccountLimits account={account} />
 	</div>;

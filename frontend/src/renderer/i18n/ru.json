@@ -3744,7 +3744,6 @@
 	"settings.agentAccounts.checkSignIn": "Проверить вход",
 	"settings.agentAccounts.loginWaiting": "Вход ещё не выполнен. Завершите его в терминале, затем проверьте снова.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} уже добавлен.",
-	"settings.agentAccounts.alsoCliLogin": "{{provider}} CLI на этом компьютере тоже вошёл в этот аккаунт.",
 	"settings.agentAccounts.loginMismatch": "Этот аккаунт: {{email}}. Войдите снова с этим логином.",
 	"settings.agentAccounts.signInAgain": "Войти снова",
 	"settings.agentAccounts.aoUsage": "Токены в AO за последние 30 дней: {{tokens}}",
