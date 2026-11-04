@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPostHogSink: %v", err)
 	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return 2, nil })
 
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
@@ -68,6 +71,15 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
 		}
+		if props["project_id_hash"] == sha256String(string(projectID)) {
+			t.Fatal("project hash is guessable without the installation salt")
+		}
+		if props["lifetime_sessions"] != float64(2) || props["days_since_install"] != float64(0) {
+			t.Fatalf("shared metadata missing or incorrect: %#v", props)
+		}
+		if _, ok := props["is_signed_in"]; ok {
+			t.Fatal("unknown Cloud sign-in state was exported")
+		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
 		}
@@ -79,6 +91,158 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestLifetimeSessionCountUsesEnqueueTime(t *testing.T) {
+	var count atomic.Int64
+	count.Store(1)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	requests := make(chan map[string]any, 2)
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["event"] == "ao.daemon.started" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return count.Load(), nil })
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", OccurredAt: time.Now()})
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first export did not start")
+	}
+	count.Store(2)
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.session.spawned", OccurredAt: time.Now()})
+	count.Store(3)
+	close(releaseFirst)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-requests
+	spawn := <-requests
+	props, ok := spawn["properties"].(map[string]any)
+	if !ok || props["lifetime_sessions"] != float64(2) {
+		t.Fatalf("queued spawn count = %#v, want 2", spawn["properties"])
+	}
+}
+
+func TestProjectHashIsInstallationScoped(t *testing.T) {
+	first, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := domain.ProjectID("ao")
+	event := ports.TelemetryEvent{Name: "ao.session.spawned", ProjectID: &projectID}
+	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
+	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
+	if a == b || a == sha256String(string(projectID)) {
+		t.Fatalf("project hash is not installation scoped: %v %v", a, b)
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	for _, name := range []string{"ao.usage.messages_sent", "ao.prs.closed"} {
+		t.Run(name, func(t *testing.T) {
+			sink := &PostHogSink{ch: make(chan queuedPostHogEvent, 1), log: slog.Default()}
+			sink.ch <- queuedPostHogEvent{event: ports.TelemetryEvent{Name: "queued"}}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				sink.Emit(ctx, ports.TelemetryEvent{Name: name})
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("durable event dropped while the queue was full")
+			case <-time.After(20 * time.Millisecond):
+			}
+			<-sink.ch
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("durable event did not enter the queue after capacity opened")
+			}
+			if entry := <-sink.ch; entry.event.Name != name {
+				t.Fatalf("queued event = %q", entry.event.Name)
+			}
+		})
+	}
+}
+
+func TestUsageEventPayloadAllowlistRejectsContentAndInvalidIdentifiers(t *testing.T) {
+	projectID := "e484ce2d-1eb9-445a-ae52-a2e088870328"
+	sessionID := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{"ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed"} {
+		got := sanitizeRemotePayload(name, map[string]any{
+			"project_telemetry_id": projectID,
+			"session_telemetry_id": sessionID,
+			"count":                int64(3),
+			"historical":           true,
+			"repo":                 "private/repo",
+			"url":                  "https://github.com/private/repo/pull/1",
+			"title":                "private PR title",
+			"text":                 "private message",
+		})
+		if got["project_telemetry_id"] != projectID || got["count"] != int64(3) {
+			t.Fatalf("%s required payload = %#v", name, got)
+		}
+		for _, forbidden := range []string{"repo", "url", "title", "text"} {
+			if _, ok := got[forbidden]; ok {
+				t.Fatalf("%s leaked %s", name, forbidden)
+			}
+		}
+	}
+	if got := sanitizeRemotePayload("ao.usage.messages_sent", map[string]any{
+		"project_telemetry_id": "/private/repo", "session_telemetry_id": "worker-1",
+	}); len(got) != 0 {
+		t.Fatalf("invalid identifiers exported: %#v", got)
+	}
+}
+
+func TestMergedViaOnlyExportsKnownSurfaces(t *testing.T) {
+	for _, via := range []string{"desktop", "mobile", "cli", "github"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if got["merged_via"] != via {
+			t.Fatalf("merged_via %q = %#v", via, got)
+		}
+	}
+	for _, via := range []string{"other", "mobile_swipe", "https://example.com/private"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if _, ok := got["merged_via"]; ok {
+			t.Fatalf("merged_via %q escaped sanitization: %#v", via, got)
+		}
+	}
+}
+
+func TestRenamedEventAllowlists(t *testing.T) {
+	ended := sanitizeRemotePayload("ao.sessions.ended", map[string]any{
+		"kind": "standalone", "duration_ms": int64(1500), "duration_s": int64(1), "text": "private",
+	})
+	if ended["kind"] != "standalone" || ended["duration_ms"] != int64(1500) || len(ended) != 2 {
+		t.Fatalf("ended payload = %#v", ended)
+	}
+	closed := sanitizeRemotePayload("ao.prs.closed", map[string]any{
+		"kind": "worker", "count": int64(1), "title": "private",
+	})
+	if closed["kind"] != "worker" || closed["count"] != int64(1) || len(closed) != 2 {
+		t.Fatalf("closed payload = %#v", closed)
 	}
 }
 
@@ -370,7 +534,6 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
 		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
 		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
-		"ao.harness.stale_sessions":   {"harness", "sessions"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -513,5 +676,26 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	if second["$process_person_profile"] != false {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
+	}
+}
+
+func TestAutomationCreationPayloadIsClosedVocabulary(t *testing.T) {
+	got := sanitizeRemotePayload("ao.automation.created", map[string]any{
+		"template_id": "daily_pr_review_v1", "use_case": "pr_review",
+		"prompt": "private", "display_name": "private", "project_id": "private",
+		"repository": "private", "output": "private", "automation_id": "private",
+	})
+	if len(got) != 2 || got["template_id"] != "daily_pr_review_v1" || got["use_case"] != "pr_review" {
+		t.Fatalf("payload = %#v", got)
+	}
+	for _, hostile := range []any{"private prompt", "PR_REVIEW", " pr_review ", 42, true, []string{"pr_review"}, map[string]any{"use_case": "pr_review"}} {
+		got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": hostile, "use_case": hostile})
+		if len(got) != 0 {
+			t.Fatalf("accepted %#v: %#v", hostile, got)
+		}
+	}
+	got = sanitizeRemotePayload("ao.automation.created", map[string]any{"template_id": "custom", "use_case": "unknown"})
+	if len(got) != 2 {
+		t.Fatalf("legacy defaults lost: %#v", got)
 	}
 }

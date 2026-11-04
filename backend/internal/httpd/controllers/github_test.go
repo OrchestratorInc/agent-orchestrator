@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 )
@@ -35,6 +36,12 @@ func (invalidGitHubPATService) ListRepos(context.Context) ([]githubpat.Repo, err
 type loginGitHubPATService struct {
 	invalidGitHubPATService
 	login string
+}
+
+type unavailableGitHubPATService struct{ invalidGitHubPATService }
+
+func (unavailableGitHubPATService) ListRepos(context.Context) ([]githubpat.Repo, error) {
+	return nil, apierr.Unavailable("GITHUB_REFRESH_UNAVAILABLE", "GitHub credential refresh is temporarily unavailable")
 }
 
 func (s loginGitHubPATService) Login(context.Context) string { return s.login }
@@ -72,5 +79,19 @@ func TestGitHubListReposReportsInvalidCredentials(t *testing.T) {
 	}
 	if response.Code != "GITHUB_AUTH_INVALID" {
 		t.Fatalf("code = %q, want GITHUB_AUTH_INVALID", response.Code)
+	}
+}
+
+func TestGitHubListReposReportsRefreshOutageAsRetryable(t *testing.T) {
+	router := chi.NewRouter()
+	(&GitHubController{Svc: unavailableGitHubPATService{}}).Register(router)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/github/repos", nil))
+	var response envelope.APIError
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusServiceUnavailable || response.Code != "GITHUB_REFRESH_UNAVAILABLE" {
+		t.Fatalf("status=%d code=%q, want retryable refresh outage", recorder.Code, response.Code)
 	}
 }

@@ -73,4 +73,3 @@ export function OpenTargetIcon({ target, className }: { target?: OpenTarget; cla
 	}
 	return <Code2 className={className} aria-hidden="true" />;
 }
-

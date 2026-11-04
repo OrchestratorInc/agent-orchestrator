@@ -1,8 +1,10 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
@@ -123,6 +125,7 @@ export function toWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -151,7 +154,8 @@ const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(h
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
-	if (![401, 403, 426, 502, 503].includes(status)) return;
+	// 530: Cloudflare answers for a fixed address whose machine is offline.
+	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 15_000) return;
@@ -228,6 +232,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -413,6 +418,33 @@ export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
+/**
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
+ */
+export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
+		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
+	]).then(() => undefined);
+}
+
+/**
+ * Adds a session the desktop just created to the sessions list, when it runs
+ * on Freestyle, so its view opens on the in-place start instead of the
+ * startup screen shown while a session it does not know yet resolves. Other
+ * providers (Coder) are left to the next list refresh, so their start is
+ * unchanged.
+ */
+export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
+	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
+	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
+		current === undefined || current.some((candidate) => candidate.id === session.id) ? current : [...current, session]);
+}
+
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
 // product-ui mappers apply; fields with no cloud analogue take safe defaults.
@@ -438,6 +470,9 @@ export function toCloudWorkspaceSession(
 		workspaceId: project.id,
 		workspaceName: project.displayName,
 		title: session.displayName || session.id,
+		// The caller's own pin; older control planes send none.
+		isPinned: session.pinned ?? false,
+		pinnedAt: session.pinnedAt,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
@@ -477,6 +512,7 @@ export function toCloudWorkspaceSession(
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
+			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
@@ -567,8 +603,8 @@ export function refetchCloudProjectsForUnknownSessions(
 }
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const { client, ready, baseUrl } = useCloudCp();
-	const { org } = useCloudOrg();
+	const { client, ready, baseUrl } = useCloudCp(options.enabled !== false);
+	const { org } = useCloudOrg(options.enabled !== false);
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudProjectsQueryKey, baseUrl, orgId ?? ""],
@@ -631,6 +667,8 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
+			// Sessions an earlier build started ahead of a brief and never used.
+			void cleanUpLegacyPreparedCloudSessions(client, orgId);
 			return response.items;
 		},
 	});

@@ -10,6 +10,7 @@ import { cn } from "../lib/utils";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { PRSummaryCard } from "./SessionInspector";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 
 /**
  * The floating tile on a shared project's orchestrator: every pull request
@@ -44,12 +45,11 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 
 	return (
 		<div className="pointer-events-none absolute inset-y-3 right-3 z-chrome flex w-80 max-w-[calc(100%-24px)] flex-col items-end" data-shared-project-panel>
-			<button
-				type="button"
+			<Pressable
 				aria-expanded={open}
 				onClick={() => setOpen((value) => !value)}
 				className={cn(
-					"pointer-events-auto inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-left text-xs text-popover-foreground shadow-md transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+					"pointer-events-auto inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md transition-colors hover:bg-interactive-hover",
 					pending.length > 0 && !guest && "border-status-in-review",
 				)}
 			>
@@ -59,7 +59,7 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 					<span className="block truncate text-muted-foreground">{summary}</span>
 				</span>
 				<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
-			</button>
+			</Pressable>
 			{open ? (
 				<div className="pointer-events-auto mt-2 flex min-h-0 w-full flex-col overflow-y-auto rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-md" data-shared-project-list>
 					{prCount === 0 ? (

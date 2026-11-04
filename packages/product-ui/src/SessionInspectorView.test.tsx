@@ -81,6 +81,15 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
+    const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
+    const { rerender } = render(<SessionInspectorShellView activeView="summary" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="reviews" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView

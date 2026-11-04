@@ -48,7 +48,7 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 			refreshLink();
 		}
 	};
-	if (kind === "pdf") return <PdfPreview key={src} onError={onError} path={path} src={src} />;
+	if (kind === "pdf") return <PdfPreview cloud={source.kind === "artifact" && source.cloud} key={src} onError={onError} path={path} src={src} />;
 	// Only the daemon needs the renderer Origin; the control plane sends no CORS headers, so a cross-origin request to it would fail on a localhost control plane.
 	const crossOrigin = source.kind === "artifact" && source.cloud ? undefined : mediaCrossOrigin(src);
 	return (

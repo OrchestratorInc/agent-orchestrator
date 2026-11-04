@@ -1,6 +1,7 @@
 import { create } from "zustand";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { aoBridge } from "../lib/bridge";
-import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -25,6 +26,8 @@ import {
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
 
+export type ChatSendKeyMode = "enter" | "mod-enter";
+
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
@@ -35,6 +38,7 @@ export type GlobalSettingsSection =
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
+	| "computerUse"
 	| "diagnostics"
 	| "updates"
 	| "help";
@@ -56,6 +60,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Turn Connect Mobile on as the page opens: the user asked to pair a phone. */
+			startPairing?: boolean;
 			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
 			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
@@ -176,15 +182,29 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
+	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
+	/** Show each project's repository owner avatar in the sidebar instead of a folder. Default on. */
+	projectAvatars: boolean;
+	/**
+	 * The new left sidebar design (markers, hover preview, avatars, pink
+	 * Validating, settled board loaders). Default on. The switch lives in
+	 * Developer mode, and turning it off only takes effect there: read it
+	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
+	 */
+	newSidebarDesign: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
 	projectCreationPending: boolean;
+	// Freestyle cloud projects just created, whose board starts the orchestrator
+	// on its own instead of waiting for the Orchestrator button.
+	autoStartOrchestratorProjectIds: ReadonlySet<string>;
 	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
 	globalToasts: GlobalToast[];
@@ -201,6 +221,9 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
+	/** True while the first-run project prompt is pending, so shell notices wait for it. */
+	firstRunPromptActive: boolean;
+	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -232,13 +255,16 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
+	setProjectAvatars: (enabled: boolean) => void;
+	setNewSidebarDesign: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -269,6 +295,7 @@ export type UiState = {
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
+	setAutoStartOrchestrator: (projectId: string, autoStart: boolean) => void;
 	setProjectCreationPending: (pending: boolean) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
@@ -300,8 +327,11 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
+const projectAvatarsStorageKey = "ao.projectAvatars";
+const newSidebarDesignStorageKey = "ao.newSidebarDesign";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -329,12 +359,16 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialWindowTranslucency() {
-	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
-}
-
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialProjectAvatars() {
+	return getLocalStorage()?.getItem(projectAvatarsStorageKey) !== "false";
+}
+
+function initialChatSendKeyMode(): ChatSendKeyMode {
+	return getLocalStorage()?.getItem(chatSendKeyModeStorageKey) === "mod-enter" ? "mod-enter" : "enter";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -393,19 +427,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	windowTranslucency: initialWindowTranslucency(),
+	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
-	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
+	chatSendKeyMode: initialChatSendKeyMode(),
+	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
+	projectAvatars: initialProjectAvatars(),
+	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
+	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
 	globalToasts: [],
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	firstRunPromptActive: false,
+	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
@@ -472,6 +512,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
 	},
+	setProjectAvatars: (projectAvatars) => {
+		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
+		set({ projectAvatars });
+	},
+	setNewSidebarDesign: (newSidebarDesign) => {
+		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
+		set({ newSidebarDesign });
+	},
+	setChatSendKeyMode: (chatSendKeyMode) => {
+		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
+		set({ chatSendKeyMode });
+	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
@@ -483,6 +535,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.startPairing && section === "mobile" ? { startPairing: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
@@ -695,6 +748,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { restartingProjectIds };
 		}),
 	setProjectCreationPending: (pending) => set({ projectCreationPending: pending }),
+	setAutoStartOrchestrator: (projectId, autoStart) =>
+		set((state) => {
+			if (state.autoStartOrchestratorProjectIds.has(projectId) === autoStart) return state;
+			const autoStartOrchestratorProjectIds = new Set(state.autoStartOrchestratorProjectIds);
+			if (autoStart) autoStartOrchestratorProjectIds.add(projectId);
+			else autoStartOrchestratorProjectIds.delete(projectId);
+			return { autoStartOrchestratorProjectIds };
+		}),
 	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);
@@ -807,6 +868,15 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { visibleTerminalKindBySession };
 		}),
 }));
+
+// With the new design off, status tokens fall back to the old palette
+// (yellow Validating). See --color-status-validating in tokens.css.
+function syncLegacyStatusColors(state: UiState) {
+	if (typeof document === "undefined") return;
+	document.documentElement.toggleAttribute("data-legacy-status-colors", !isNewSidebarDesign(state));
+}
+syncLegacyStatusColors(useUiStore.getState());
+useUiStore.subscribe(syncLegacyStatusColors);
 
 // Hydration synchronizes legacy renderer-only Developer Mode state into the
 // main-process updater mirror. Until this completes, the updater is fail-closed.

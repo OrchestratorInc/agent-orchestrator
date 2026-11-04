@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button } from "../components/ui/button";
 import {
 	SessionInterfaceSwitchButton,
 	SessionInterfaceSwitchDialog,
@@ -382,6 +383,10 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [interfaceSwitch.transition?.phase, owner, session?.mode, switchIntent]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
+		if (session?.provider === "hermes") {
+			setDialogScope({ owner, targetMode: target });
+			return;
+		}
 		if (cloudTerminalToChat && !busy && session?.cloud) {
 			// The Cloud list can lag terminal input. Confirm the current activity
 			// before stopping a controller without asking the user first.
@@ -445,6 +450,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
 	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
+		mayStartFresh={session.provider === "hermes"}
 		supported={showStatus || (Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked))}
 		disabledReason={disabledReason}
 		pending={interfaceSwitch.starting || activeTransition || chatLeaveLocked}
@@ -466,7 +472,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 				<p className="font-medium">{t("session.interfaceSwitchFailed")}</p>
 				<p className="mt-1 break-words text-muted-foreground">{startError}</p>
 			</div>
-			<button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground" onClick={interfaceSwitch.resetStartError}>{t("session.dismissInterfaceSwitchNotice")}</button>
+			<Button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="px-1" onClick={interfaceSwitch.resetStartError} size="xs" variant="quiet">{t("session.dismissInterfaceSwitchNotice")}</Button>
 		</div> : null}
 		{cloudDrainUnconfirmed && !hasNotice && !interfaceSwitch.startError ? <div
 			role="alert"
@@ -476,16 +482,18 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 				<p className="font-medium">{t("session.interfaceSwitchDrainUnconfirmedTitle")}</p>
 				<p className="mt-1 break-words text-muted-foreground">{t("session.interfaceSwitchDrainUnconfirmed")}</p>
 			</div>
-			<button
+			<Button
 				type="button"
 				aria-label={t("session.dismissInterfaceSwitchError")}
-				className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"
+				className="px-1"
+				size="xs"
+				variant="quiet"
 				disabled={interfaceSwitch.acknowledgingNotice}
 				onClick={() => {
 					const transitionId = interfaceSwitch.transition?.id;
 					if (transitionId) void interfaceSwitch.acknowledgeNotice(transitionId).catch(() => {});
 				}}
-			>{t("session.dismissInterfaceSwitchNotice")}</button>
+			>{t("session.dismissInterfaceSwitchNotice")}</Button>
 		</div> : null}
 		{(!interfaceSwitch.startError || historyRecoveryNotice || restartRequiredNotice) && hasNotice ? <SessionInterfaceTransitionNotice
 			transition={interfaceSwitch.transition}
@@ -511,6 +519,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		<SessionInterfaceSwitchDialog
 			open={dialogOpen}
 			target={dialogScope?.targetMode ?? target}
+			mayStartFresh={session?.provider === "hermes"}
 			requireExplicitTerminalStop={cloudTerminalToChat && !(busy || dialogScope?.sourceBusy)}
 			waitingForInput={waitingForInput || dialogScope?.sourceWaitingForInput}
 			busy={interfaceSwitch.starting}

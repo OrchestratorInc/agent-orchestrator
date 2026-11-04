@@ -342,7 +342,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		const trigger = screen.getByRole("button", { name: /unread notifications/ });
 		const bell = trigger.querySelector("svg");
-		const badge = trigger.querySelector("span");
+		const badge = trigger.querySelector("span:not([data-nav-row-highlight])");
 
 		expect(bell?.classList.contains("size-icon-base")).toBe(true);
 		expect(badge?.classList.contains("h-3")).toBe(true);

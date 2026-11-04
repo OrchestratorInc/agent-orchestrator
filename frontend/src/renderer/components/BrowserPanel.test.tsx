@@ -1427,6 +1427,44 @@ describe("BrowserPanel", () => {
 		expect(screen.getByText("Connection refused")).toBeInTheDocument();
 	});
 
+	it("shows a session-ended state with disabled controls for terminated sessions", () => {
+		const terminated = { ...session, status: "terminated", isTerminated: true } as const;
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={terminated} />);
+
+		expect(screen.getByText("Session ended — browser preview unavailable.")).toBeInTheDocument();
+		expect(screen.queryByText("Enter a URL or click one in the terminal.")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Reload" })).toBeDisabled();
+		expect(screen.getByRole("textbox", { name: "Browser URL" })).toBeDisabled();
+		for (const button of screen.getAllByRole("button", { name: "Open new tab" })) {
+			expect(button).toBeDisabled();
+		}
+	});
+
+	it.each(["terminated artifact", "exited agent"])("keeps a useful browser interactive for a %s", async (kind) => {
+		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
+		const owner = kind === "terminated artifact"
+			? { ...session, isTerminated: true, previewUrl }
+			: { ...session, isTerminated: false, activity: { state: "exited" as const, lastActivityAt: "2026-06-10T00:00:00Z" } };
+		hookState.navState = { ...hookState.navState, url: previewUrl, canGoBack: true, canGoForward: true };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={owner} />);
+		expect(screen.queryByText("Session ended — browser preview unavailable.")).not.toBeInTheDocument();
+		expect(screen.getByRole("textbox", { name: "Browser URL" })).toBeEnabled();
+		for (const name of ["Back", "Forward", "Reload"]) {
+			expect(screen.getByRole("button", { name })).toBeEnabled();
+		}
+		for (const button of screen.getAllByRole("button", { name: "Open new tab" })) expect(button).toBeEnabled();
+		await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+		expect(hookState.reload).toHaveBeenCalled();
+	});
+
+	it("does not keep a remote artifact alive after its session terminates", () => {
+		const owner = { ...session, isTerminated: true, hostId: "remote", previewUrl: "http://ao-preview-artifact.abc.localhost:3001/report.html" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={owner} />);
+		expect(screen.getByRole("button", { name: "Reload" })).toBeDisabled();
+	});
+
 	it("toggles pop-out mode", async () => {
 		const onTogglePopOut = vi.fn();
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { darkTheme, lightTheme } from "../theme";
 import {
+	ARTIFACT_FRAME_HEIGHT,
 	RENDER_BRIDGE_SCRIPT,
+	artifactRenderRef,
+	readArtifactRef,
 	RENDER_MAX_HEIGHT,
 	REPORT_SETTLE_LIMIT_MS,
 	REPORT_SETTLE_MS,
@@ -23,7 +26,9 @@ import {
 	readRenderRef,
 	renderTheme,
 	renderThemeFragment,
+	renderThemeRule,
 	renderThemeScript,
+	withRenderTheme,
 } from "./renderFrameModel";
 
 const path = "/api/v1/sessions/ao-215/renders/render-be45c556";
@@ -53,6 +58,26 @@ describe("readRenderRef", () => {
 		expect(readRenderRef({ event: "steer", render: { id: "r", title: "T", height: 400, path } })).toBeUndefined();
 		expect(readRenderRef({ event: "render" })).toBeUndefined();
 		expect(readRenderRef(undefined)).toBeUndefined();
+	});
+});
+
+describe("readArtifactRef", () => {
+	it("reads the HTML page an agent reported, and builds the phone's own URL for it", () => {
+		const ref = readArtifactRef({ event: "artifact", artifact: { path: "site/report.html", name: "report.html", url: "/api/v1/sessions/ao-1/artifact-files/site/report.html" } } as never);
+		expect(ref).toEqual({ path: "site/report.html", name: "report.html" });
+		expect(artifactRenderRef("ao-1", ref!)).toEqual({
+			id: "artifact:site/report.html",
+			title: "report.html",
+			height: ARTIFACT_FRAME_HEIGHT,
+			path: "/api/v1/sessions/ao-1/preview/files/__ao_artifacts__/site/report.html",
+		});
+	});
+
+	it("ignores other events and paths that could leave the artifact folder", () => {
+		expect(readArtifactRef({ event: "render", artifact: { path: "a.html", name: "a" } } as never)).toBeUndefined();
+		expect(readArtifactRef({ event: "artifact", artifact: { path: "../secret.html", name: "x" } } as never)).toBeUndefined();
+		expect(readArtifactRef({ event: "artifact" } as never)).toBeUndefined();
+		expect(readArtifactRef({ event: "artifact", artifact: { path: "deck/index.html" } } as never)).toEqual({ path: "deck/index.html", name: "index.html" });
 	});
 });
 
@@ -436,5 +461,22 @@ describe("renderViewerStyleScript", () => {
 		const appended: unknown[] = [];
 		new Function("document", renderViewerStyleScript(16))({ createElement: () => ({}), head: null, documentElement: { appendChild: (node: unknown) => appended.push(node) } });
 		expect(appended).toHaveLength(1);
+	});
+});
+
+describe("withRenderTheme", () => {
+	const theme = { appearance: "light" as const, variables: { "--background": "#fff", "--foreground": "#111", "bad name": "x", "--evil": "red;}body{display:none" } };
+
+	it("builds the rule the page's bootstrap applies, dropping what it would drop", () => {
+		expect(renderThemeRule(theme)).toBe(":root{color-scheme:light;--background:#fff;--foreground:#111;--evil:redbodydisplay:none;}");
+	});
+
+	it("writes the app's theme into the bootstrap's theme style, so the page paints in it", () => {
+		const page = '<!doctype html><style id="ao-theme">:root{color-scheme:dark}@media (prefers-color-scheme: light){:root{color-scheme:light}}</style><style>html{}</style><style id="ao-theme">.page{}</style>';
+		expect(withRenderTheme(page, theme)).toBe(`<!doctype html><style id="ao-theme">${renderThemeRule(theme)}</style><style>html{}</style><style id="ao-theme">.page{}</style>`);
+	});
+
+	it("leaves a page without the bootstrap as it is", () => {
+		expect(withRenderTheme("<p>hi</p>", theme)).toBe("<p>hi</p>");
 	});
 });
