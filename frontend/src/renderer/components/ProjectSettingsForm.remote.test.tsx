@@ -43,12 +43,10 @@ vi.mock("../lib/api-client", () => ({
 	hasTrustedApiBaseUrl: () => true,
 }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-vi.mock("../lib/orchestrator-replacement-telemetry", () => ({ captureOrchestratorReplacementFailure: vi.fn() }));
 vi.mock("../stores/ui-store", () => ({
 	useUiStore: (selector: (state: Record<string, unknown>) => unknown) => selector({
 		developerMode: true,
 		remoteHosts: true,
-		setOrchestratorReplacementError: vi.fn(),
 		openGlobalSettings: vi.fn(),
 	}),
 }));
@@ -134,23 +132,14 @@ it("saves the full Project form on its owning host", async () => {
 	await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project-config", "box-b", "shared"] }));
 });
 
-it("replaces and retries the orchestrator on the selected host", async () => {
+it("saves an orchestrator agent change on the selected host without replacing the orchestrator", async () => {
 	connect("box-b");
-	let attempts = 0;
-	mocks.post.mockImplementation(async (_hostId: string, path: string) => {
-		if (path === "/api/v1/agents/readiness/ensure") return { data: agents };
-		attempts += 1;
-		return attempts === 1 ? { error: { message: "startup failed" }, response: { status: 500 } } : { data: { orchestrator: { id: "new-orchestrator" } } };
-	});
-	const onSaveState = vi.fn<(state: ProjectSettingsSaveState) => void>();
-	renderForm("box-b", "agents", onSaveState);
+	renderForm("box-b", "agents");
 	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator agent" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: /^Codex/ }));
 	fireEvent.submit(document.getElementById("project-settings-form")!);
-	await waitFor(() => expect(onSaveState.mock.lastCall?.[0].replacementError).toBe("startup failed"));
-	expect(mocks.post).toHaveBeenCalledWith("box-b", "/api/v1/orchestrators", { body: { projectId: "shared", clean: true } });
-	fireEvent.submit(document.getElementById("project-settings-form")!);
-	await waitFor(() => expect(attempts).toBe(2));
+	await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+	expect(mocks.post).not.toHaveBeenCalledWith("box-b", "/api/v1/orchestrators", expect.anything());
 	expect(mocks.localPost).not.toHaveBeenCalled();
 });
 

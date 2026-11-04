@@ -180,7 +180,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	};
 	useEffect(() => {
 		if (!closeWhenSavedRef.current) return;
-		if (projectSaveState.phase === "failed" || projectSaveState.replacementError) {
+		if (projectSaveState.phase === "failed") {
 			closeWhenSavedRef.current = false;
 		} else if (projectSaveState.unsaveable && !projectSaveState.requestPending) {
 			closeWhenSavedRef.current = false;
@@ -287,8 +287,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
-			projectSaveState.phase === "saving" ||
-			Boolean(remoteHostId && projectSaveState.replacementError));
+			projectSaveState.phase === "saving");
 
 	return {
 		modal: settingsModal,
@@ -488,9 +487,9 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 	const { projectSaveState, remoteHostId } = layer;
 	return (
 		<div className="mt-2 border-t border-(--color-border-settings-dialog-header) px-2 py-3 text-xs" role="status" aria-live="polite">
-			{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
+			{projectSaveState.phase === "failed" ? (
 				<div className="space-y-2 text-error">
-					<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? projectSaveState.replacementError ?? t("settings.project.saveFailed")}</p>
+					<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? t("settings.project.saveFailed")}</p>
 					<button className="text-settings-label underline underline-offset-2" onClick={() => {
 						if (projectSaveState.retry) projectSaveState.retry();
 						else (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();

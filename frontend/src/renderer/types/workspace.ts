@@ -463,21 +463,9 @@ export type WorkspaceSummary = {
 	sessions: WorkspaceSession[];
 };
 
-export function hasConfiguredOrchestratorAgent(
-	workspace: Pick<WorkspaceSummary, "orchestratorAgent"> | undefined,
-): boolean {
-	return Boolean(workspace?.orchestratorAgent);
-}
-
-export function orchestratorNeedsRestart(workspace: WorkspaceSummary, orchestrator?: WorkspaceSession): boolean {
-	if (!orchestrator || !workspace.orchestratorAgent) return false;
-	return orchestrator.provider !== workspace.orchestratorAgent;
-}
-
 export type OrchestratorHealth =
 	| { state: "ok" }
 	| { state: "restarting"; message: string }
-	| { state: "restart_needed"; message: string }
 	| { state: "missing"; message: string }
 	| { state: "duplicates"; message: string };
 
@@ -499,12 +487,6 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	if (!orchestrator) {
 		return { state: "missing", message: "No orchestrator is running for this project." };
-	}
-	if (orchestratorNeedsRestart(workspace, orchestrator)) {
-		return {
-			state: "restart_needed",
-			message: `Configured orchestrator agent is ${workspace.orchestratorAgent}; running agent is ${orchestrator.provider}.`,
-		};
 	}
 	return { state: "ok" };
 }

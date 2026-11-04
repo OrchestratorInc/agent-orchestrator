@@ -68,7 +68,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
@@ -1073,10 +1073,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		const projectKey = sessionUiKey(projectId, hostId);
 		const uiState = useUiStore.getState();
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			openProjectSettings(projectId, hostId);
-			return;
-		}
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
 			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useMutation, useMutationState, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, type WorkspaceSession } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost, type WorkspaceScope } from "./useWorkspaceQuery";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -134,14 +134,10 @@ export function useProjectOrchestratorAction({
 			source: "orchestrator-open", operation: "open_orchestrator",
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
-		if (hostId && projectId && !orchestrator && project && !hasConfiguredOrchestratorAgent(project)) {
-			useUiStore.getState().openProjectSettings(projectId, hostId);
-		} else if (resumableOrchestrator) {
+		if (resumableOrchestrator) {
 			mutation.mutate(mode);
 		} else if (orchestrator) {
 			void navigate(sessionNavigateTarget(projectId, orchestrator.id, hostId));
-		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
-			if (project) useUiStore.getState().openProjectSettings(projectId, hostId);
 		} else {
 			mutation.mutate(mode);
 		}

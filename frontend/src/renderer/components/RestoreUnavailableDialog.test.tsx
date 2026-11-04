@@ -1,18 +1,12 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useUiStore } from "../stores/ui-store";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
+import type { WorkspaceSession } from "../types/workspace";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 
-const { spawnMock, remoteSpawnMock, workspaceQueryMock } = vi.hoisted(() => ({
+const { spawnMock, remoteSpawnMock } = vi.hoisted(() => ({
 	spawnMock: vi.fn(),
 	remoteSpawnMock: vi.fn(),
-	workspaceQueryMock: vi.fn(),
-}));
-
-vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceScope: (projectId: string, sessionId?: string, hostId?: string) => workspaceQueryMock(projectId, sessionId, hostId),
 }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({
@@ -32,46 +26,8 @@ const session: WorkspaceSession = {
 	prs: [],
 };
 
-const workspace: WorkspaceSummary = {
-	id: "proj-1",
-	name: "Project One",
-	path: "/repo/project-one",
-	orchestratorAgent: "codex",
-	sessions: [session],
-};
-
-beforeEach(() => {
-	vi.clearAllMocks();
-	useUiStore.setState({ settingsModal: null });
-	workspaceQueryMock.mockReturnValue({ data: { project: workspace }, isLoading: false });
-});
-
 describe("RestoreUnavailableDialog", () => {
-	it("opens project settings instead of recreating when no orchestrator agent is configured", async () => {
-		const onOpenChange = vi.fn();
-		const onRecreated = vi.fn();
-		workspaceQueryMock.mockReturnValue({
-		data: { project: { ...workspace, orchestratorAgent: undefined } },
-			isLoading: false,
-		});
-		render(
-			<RestoreUnavailableDialog
-				open
-				session={session}
-				onOpenChange={onOpenChange}
-				onRecreated={onRecreated}
-			/>,
-		);
-
-		await userEvent.click(screen.getByRole("button", { name: "Configure orchestrator agent" }));
-
-		expect(onOpenChange).toHaveBeenCalledWith(false);
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(spawnMock).not.toHaveBeenCalled();
-		expect(onRecreated).not.toHaveBeenCalled();
-	});
-
-	it("preserves clean recreation when an orchestrator agent is configured", async () => {
+	it("recreates cleanly even when the project has no configured orchestrator agent", async () => {
 		const onOpenChange = vi.fn();
 		const onRecreated = vi.fn();
 		spawnMock.mockResolvedValue("orch-new");
@@ -99,19 +55,7 @@ describe("RestoreUnavailableDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
-		expect(workspaceQueryMock).toHaveBeenCalledWith("proj-1", undefined, "box-b");
 		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true, "restore_dialog");
 		expect(spawnMock).not.toHaveBeenCalled();
-	});
-
-	it("opens host-qualified settings when a remote project lacks an orchestrator", async () => {
-		workspaceQueryMock.mockReturnValue({ data: { project: { ...workspace, orchestratorAgent: undefined } }, isLoading: false });
-		render(<RestoreUnavailableDialog open hostId="box-b" session={session} onOpenChange={vi.fn()} onRecreated={vi.fn()} />);
-
-		await userEvent.click(screen.getByRole("button", { name: "Configure orchestrator agent" }));
-
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1", hostId: "box-b" });
-		expect(spawnMock).not.toHaveBeenCalled();
-		expect(remoteSpawnMock).not.toHaveBeenCalled();
 	});
 });

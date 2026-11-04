@@ -10,15 +10,13 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, setOrchestratorReplacementErrorMock, captureOrchestratorReplacementFailureMock, ensureAgentReadinessMock, trackerIntakeGate } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, navigateMock, closeSettingsMock, openGlobalSettingsMock, ensureAgentReadinessMock, trackerIntakeGate } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),
 	postMock: vi.fn(),
 	navigateMock: vi.fn(),
 	closeSettingsMock: vi.fn(),
 	openGlobalSettingsMock: vi.fn(),
-	setOrchestratorReplacementErrorMock: vi.fn(),
-	captureOrchestratorReplacementFailureMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
 	trackerIntakeGate: { enabled: true },
 }));
@@ -41,12 +39,7 @@ vi.mock("../stores/ui-store", () => ({
 		selector({
 			closeSettings: closeSettingsMock,
 			openGlobalSettings: openGlobalSettingsMock,
-			setOrchestratorReplacementError: setOrchestratorReplacementErrorMock,
 		}),
-}));
-
-vi.mock("../lib/orchestrator-replacement-telemetry", () => ({
-	captureOrchestratorReplacementFailure: captureOrchestratorReplacementFailureMock,
 }));
 
 vi.mock("../hooks/useSettings", () => ({
@@ -104,7 +97,6 @@ function TestProjectSettings({
 			<ProjectSettingsForm projectId={projectId} section={section} onSaveState={setSaveState} />
 			{saveState.error && <span>{saveState.error}</span>}
 			{saveState.phase === "saved" && <span>{"Saved"}</span>}
-			{saveState.replacementError && <span>{`Orchestrator restart failed: ${saveState.replacementError}`}</span>}
 		</>
 	);
 }
@@ -141,12 +133,6 @@ async function chooseCustomModel(label: string, model: string) {
 
 function submitSettings() {
 	fireEvent.submit(document.getElementById("project-settings-form")!);
-}
-
-async function expectReplacementWithoutNavigation() {
-	await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-	expect(navigateMock).not.toHaveBeenCalled();
-	expect(closeSettingsMock).not.toHaveBeenCalled();
 }
 
 const agentCatalogResponse = {
@@ -200,8 +186,6 @@ beforeEach(() => {
 	navigateMock.mockReset();
 	closeSettingsMock.mockReset();
 	openGlobalSettingsMock.mockReset();
-	setOrchestratorReplacementErrorMock.mockReset();
-	captureOrchestratorReplacementFailureMock.mockReset();
 	ensureAgentReadinessMock.mockReset();
 	trackerIntakeGate.enabled = true;
 	putMock.mockResolvedValue({ data: { project: {} }, error: undefined });
@@ -1223,7 +1207,7 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it("requires worker and orchestrator agents for existing projects missing role config", async () => {
+	it("saves a project with no pinned agents without sending empty agent values", async () => {
 		mockProject({
 			id: "proj-1",
 			name: "Project One",
@@ -1236,16 +1220,16 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "agents");
 
-		expect(await screen.findByText("Worker and orchestrator agents are required.")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent("Select worker agent");
-		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent(
-			"Select orchestrator agent",
-		);
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Select worker agent");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Select orchestrator agent");
 
 		submitSettings();
 
-		expect(await screen.findAllByText("Worker and orchestrator agents are required.")).toHaveLength(2);
-		expect(putMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const { config } = putMock.mock.calls[0][1].body;
+		expect(config.worker.agent).toBeUndefined();
+		expect(config.orchestrator.agent).toBeUndefined();
+		expect(screen.queryByText(/agents are required/)).not.toBeInTheDocument();
 	});
 
 	it("shows the resolved reviewer agent without an inherited placeholder", async () => {
@@ -2016,7 +2000,7 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it("restarts when the saved orchestrator agent already differs from the running orchestrator", async () => {
+	it("does not replace the orchestrator when its provider differs from the saved orchestrator agent", async () => {
 		getMock.mockResolvedValue({
 			data: {
 				status: "ok",
@@ -2060,20 +2044,17 @@ describe("ProjectSettingsForm", () => {
 			},
 		], "agents");
 
-		const orchestratorAgent = await screen.findByRole("button", { name: "Orchestrator agent" });
-		expect(orchestratorAgent).toHaveTextContent("Goose");
+		expect(await screen.findByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Goose");
 
 		submitSettings();
 
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators", {
-			body: { projectId: "proj-1", clean: true },
-		});
-		await expectReplacementWithoutNavigation();
+		expect(await screen.findByText("Saved")).toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/orchestrators", expect.anything());
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("navigates to the replacement orchestrator after changing the default agent", async () => {
+	it("only saves the config after changing the default orchestrator agent", async () => {
 		mockProject({
 			id: "proj-1",
 			name: "Project One",
@@ -2093,60 +2074,11 @@ describe("ProjectSettingsForm", () => {
 		await chooseOption(orchestratorAgent, "Goose");
 		submitSettings();
 
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		await expectReplacementWithoutNavigation();
-		expect(setOrchestratorReplacementErrorMock).not.toHaveBeenCalled();
-	});
-
-	it("keeps the config save successful when orchestrator replacement fails", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			defaultBranch: "main",
-			config: {
-				worker: { agent: "codex" },
-				orchestrator: { agent: "claude-code" },
-			},
-		});
-		postMock.mockResolvedValue({
-			data: undefined,
-			error: {
-				code: "ORCHESTRATOR_SPAWN_FAILED",
-				message: "missing goose binary",
-				requestId: "request-42",
-			},
-			response: { status: 500 },
-		});
-
-		const queryClient = renderSettings("proj-1", undefined, "agents");
-		const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
-		const orchestratorAgent = await screen.findByRole("button", { name: "Orchestrator agent" });
-		await chooseOption(orchestratorAgent, "goose");
-		submitSettings();
-
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.orchestrator.agent).toBe("goose");
 		expect(await screen.findByText("Saved")).toBeInTheDocument();
-		expect(await screen.findByText("Orchestrator restart failed: missing goose binary")).toBeInTheDocument();
-		expect(screen.queryByText("Save failed")).not.toBeInTheDocument();
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["project", "proj-1"] });
-		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/orchestrators", expect.anything());
+		expect(navigateMock).not.toHaveBeenCalled();
 		expect(closeSettingsMock).not.toHaveBeenCalled();
-		expect(setOrchestratorReplacementErrorMock).toHaveBeenCalledWith("proj-1", {
-			message: "missing goose binary",
-			code: "ORCHESTRATOR_SPAWN_FAILED",
-			requestId: "request-42",
-		});
-		expect(captureOrchestratorReplacementFailureMock).toHaveBeenCalledWith(
-			expect.objectContaining({
-				code: "ORCHESTRATOR_SPAWN_FAILED",
-				requestId: "request-42",
-			}),
-			"proj-1",
-		);
 	});
 });

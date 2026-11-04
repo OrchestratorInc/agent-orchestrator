@@ -250,7 +250,7 @@ describe("sessionNeedsAttention", () => {
 });
 
 describe("orchestratorHealth", () => {
-	it("reports restart_needed when the configured orchestrator agent differs from the newest active orchestrator", () => {
+	it("reports duplicates for several active orchestrators and ok when a lone one runs a different agent than the project config", () => {
 		const older = sessionWith({
 			id: "skills-1",
 			kind: "orchestrator",
@@ -290,7 +290,7 @@ describe("orchestratorHealth", () => {
 				orchestratorAgent: "codex",
 				sessions: [newest],
 			}).state,
-		).toBe("restart_needed");
+		).toBe("ok");
 	});
 });
 

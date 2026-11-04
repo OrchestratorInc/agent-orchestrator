@@ -78,7 +78,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		// A standalone project has no repository, so no branches or pull requests to configure.
-		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, requiredAgents: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
+		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },

@@ -526,7 +526,7 @@ describe("project board with no sessions", () => {
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
 		const unconfiguredProject = { ...project, orchestratorAgent: undefined };
 		respondWith([unconfiguredProject], []);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
@@ -535,9 +535,8 @@ describe("project board with no sessions", () => {
 		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
 		await userEvent.click(spawnButton);
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnOrchestratorMock).not.toHaveBeenCalled();
+		expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("shows the project creation startup error after navigating to the project board", async () => {

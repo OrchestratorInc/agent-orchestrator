@@ -20,7 +20,7 @@ function setup(cloud: boolean, save = vi.fn().mockResolvedValue({})) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	render(<QueryClientProvider client={client}><TooltipProvider>
 		<ProjectSettingsEditor initialValues={initialValues} section="general"
-			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredAgents: !cloud, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
+			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
 	</TooltipProvider></QueryClientProvider>);
 	return { save, onSaveState };
