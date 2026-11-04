@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -280,5 +283,126 @@ func TestInterfaceTransitionNonHermesChatToTUIStillRequiresHandoffCapability(t *
 	}
 	if len(store.transitions) != 0 || runtime.created != 0 || len(chat.relayMessages) != 0 {
 		t.Fatal("unsupported Chat→TUI handoff mutated session or controllers")
+	}
+}
+
+// hermesMessagedChatOrchestrator is a hermes Chat worker whose conversation
+// already carries a real turn, backed by the real SQLite store: the Chat has
+// messages, so its root branch is not untouched. The adapter (via
+// hermesDegradedTransitionAgent with resumeFound=false) cannot resolve the
+// native terminal, mirroring upstream issue #7724's unresumable conversation.
+func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *transitionRuntime, *transitionChat, *[]string, domain.SessionID) {
+	t.Helper()
+	ctx := context.Background()
+	store := sqlitetest.MustOpenAt(t, t.TempDir())
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "proj", Path: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	created, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "proj", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath:         t.TempDir(),
+			Branch:                "ao/session",
+			ProviderConversationID: "reserved-chat-id",
+			ControllerGeneration:  "chat-generation",
+		},
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := store.CreateConversation(ctx, "chat-conversation", domain.ConversationScopeSession,
+		created.ProjectID, created.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One real message: the Chat is not untouched.
+	if err := store.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation", "turn-1", "provider-turn-1", now); err != nil {
+		t.Fatal(err)
+	}
+	log := &[]string{}
+	runtime := &transitionRuntime{fakeRuntime: &fakeRuntime{}, log: log}
+	chat := &transitionChat{
+		log: log, supportsChat: true,
+		armed:   make(chan domain.SessionInterfaceTransitionPolicy, 1),
+		aborted: make(chan struct{}, 1),
+	}
+	manager := New(Deps{
+		Runtime: runtime, Agents: singleAgent{agent: &hermesDegradedTransitionAgent{}},
+		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Chat: chat,
+		Lifecycle: &sqliteTransitionLifecycle{store: store},
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	useFastInterfaceTransitionTimings(manager)
+	manager.browserCapabilities = &recordingBrowserAuthority{authority: browsersvc.NewAuthority()}
+	return manager, store, runtime, chat, log, created.ID
+}
+
+// TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI covers
+// upstream issue #7724: a hermes Chat whose conversation carries real messages
+// and whose native conversation cannot be resumed must still switch to the
+// terminal through the degraded fresh-TUI path. It used to fail the controller
+// epoch commit with SESSION_CHANGED ("release untouched Chat provider ...:
+// empty root proof changed") because the commit required the untouched-Chat
+// release proof, leaving the session stuck in Chat with every retry failing.
+// The fresh TUI must start, the degraded boundary must be recorded, and the
+// messaged Chat conversation must stay archived exactly as it was.
+func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *testing.T) {
+	manager, store, runtime, _, log, id := hermesMessagedChatOrchestrator(t)
+	ctx := context.Background()
+
+	status, err := manager.InterfaceTransitionStatus(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Supported {
+		t.Fatalf("degraded hermes Chat→TUI must keep the switch enabled for a messaged Chat: %+v", status)
+	}
+
+	transition, err := manager.StartInterfaceTransition(ctx, id,
+		domain.SessionModeTUI, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := settleSQLiteTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %s, code = %s, error = %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+	}
+	if settled.DegradedKind != domain.SessionInterfaceTransitionDegradedIdentityReset {
+		t.Fatalf("degradedKind = %q, want identity-reset", settled.DegradedKind)
+	}
+	if settled.NativeConversationID != "" {
+		t.Fatalf("native conversation = %q, want empty for a fresh TUI", settled.NativeConversationID)
+	}
+	current, _, err := store.GetSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if domain.NormalizeSessionMode(current.Mode) != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want tui", current.Mode)
+	}
+	if runtime.created != 1 {
+		t.Fatalf("terminal runtime created %d times, want 1", runtime.created)
+	}
+	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
+		t.Fatalf("controller order = %s", got)
+	}
+	// The messaged Chat conversation stays archived untouched: same root
+	// branch, same provider binding, still owned by the session.
+	conversation, err := store.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ProviderConversationID != "reserved-chat-id" || after.ProviderScopeID == "" {
+		t.Fatalf("archived Chat root was disturbed: %+v", after)
+	}
+	if conversation.LatestSequence == 0 {
+		t.Fatalf("archived Chat lost its history: latest sequence %d", conversation.LatestSequence)
 	}
 }
