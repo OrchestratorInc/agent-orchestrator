@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
 // TestParsePiUsageBearingEntries catches omitting Pi's nested tool/summarizer
@@ -135,7 +136,7 @@ func TestParsePiRecordsOtherProvidersWithPiCost(t *testing.T) {
 		t.Fatalf("z.ai costs = %+v", costs)
 	}
 
-	if gemini.ProviderID != domain.UsageProviderOpenAI || gemini.BillingProviderID != "google" || gemini.ModelID != "gemini-test" {
+	if gemini.ProviderID != domain.UsageProviderOpenAI || gemini.BillingProviderID != "gemini" || gemini.ModelID != "gemini-test" {
 		t.Fatalf("gemini event = %+v", gemini)
 	}
 	assertPiTokens(t, gemini.Tokens, 10, 4, 6, 2)
@@ -201,7 +202,8 @@ func TestParsePiNormalizesEveryAPIFamilyAlike(t *testing.T) {
 				t.Fatalf("result = %+v", result)
 			}
 			event := result.Events[0]
-			if event.ProviderID != domain.UsageProviderOpenAI || event.BillingProviderID != provider ||
+			// The billing provider is Pi's, in the catalog's spelling.
+			if event.ProviderID != domain.UsageProviderOpenAI || event.BillingProviderID != pricing.CanonicalProviderID(provider) ||
 				event.BillingProviderSource != domain.UsageBillingProviderObserved {
 				t.Fatalf("event = %+v", event)
 			}
