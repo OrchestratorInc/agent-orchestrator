@@ -444,7 +444,7 @@ export function AgentModelPicker({
 								</OptionMenuItem>
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
-								<OptionMenuSub>
+								<OptionMenuSub closeOnSelect>
 									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
@@ -458,9 +458,10 @@ export function AgentModelPicker({
 													aria-disabled={oneShot(agent.id) || undefined}
 													title={oneShot(agent.id) ? t("agentSwitch.terminalOneShot", { agent: agent.label }) : undefined}
 													onSelect={(event) => {
-														// The menu stays open so the model and effort can be set too.
-														event.preventDefault();
-														if (oneShot(agent.id)) return;
+														if (oneShot(agent.id)) {
+															event.preventDefault();
+															return;
+														}
 														if (agent.id === currentHarness) keepCurrent();
 														else if (agent.id !== pending?.harness) onPendingChange({ harness: agent.id });
 													}}
@@ -477,7 +478,7 @@ export function AgentModelPicker({
 									</OptionMenuSubContent>
 								</OptionMenuSub>
 								{settable && source.models.length > 0 ? (
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger label={t("agentSwitch.model")} value={modelValue} />
 										<OptionMenuSubContent scrollable className={SUB_CLASS}>
 											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(mergeSameNamedModels(source.models, source.modelId)) } : source} harness={shownHarness} />
@@ -499,7 +500,7 @@ export function AgentModelPicker({
 									</OptionMenuItem>
 								) : null}
 								{settable && !waiting && source.efforts.length > 0 ? (
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
 										<OptionMenuSubContent className={SUB_CLASS}>
 											{source.efforts.map((choice) => (
@@ -508,8 +509,7 @@ export function AgentModelPicker({
 													active={choice.value === source.effort}
 													radio
 													disabled={!source.onPickEffort}
-													onSelect={(event) => {
-														event.preventDefault();
+													onSelect={() => {
 														if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
 													}}
 													className="text-xs text-foreground"
@@ -522,7 +522,7 @@ export function AgentModelPicker({
 									</OptionMenuSub>
 								) : settable && !waiting && !modelsProblem ? (
 									// The same row, disabled, so the menu does not change shape between models.
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
 									</OptionMenuSub>
 								) : null}
@@ -694,9 +694,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							searchActive={model.id === searchActiveID}
 							radio
 							disabled={!source.onPickModel || Boolean(model.unavailableReason)}
-							onSelect={(event) => {
-								// The menu stays open so effort and speed can be set too.
-								event.preventDefault();
+							onSelect={() => {
 								if (!active) source.onPickModel?.(model.id);
 							}}
 							className="group/model text-xs text-foreground"

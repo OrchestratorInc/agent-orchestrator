@@ -70,6 +70,30 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Effort.*High/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
 		expect(current.onPickEffort).toHaveBeenCalledWith("max");
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
+	});
+
+	it.each(["Opus", "Sonnet"])("closes only the submenu after selecting model %s", async (model) => {
+		const user = userEvent.setup();
+		const { current } = open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Model.*Opus/ }));
+		fireEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
+		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
+		else expect(current.onPickModel).not.toHaveBeenCalled();
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
+		expect(screen.queryByRole("menuitemradio", { name: /^Sonnet/ })).not.toBeInTheDocument();
+	});
+
+	it.each(["Fast mode", "Thinking"])("keeps the parent menu open after toggling %s", async (label) => {
+		const user = userEvent.setup();
+		const onToggle = vi.fn();
+		open(undefined, false, "cursor", { fast: false, thinking: false, onToggleFast: onToggle, onToggleThinking: onToggle });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("switch", { name: label }));
+		expect(onToggle).toHaveBeenCalledExactlyOnceWith(true);
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
 	it("keeps a running Cursor chat's own effort and thinking", async () => {
@@ -171,6 +195,7 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
+		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
 	it("leaves out a chat agent whose chat adapter is missing", async () => {
