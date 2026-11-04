@@ -8,6 +8,7 @@ import { cn } from "../lib/utils";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TopbarButton } from "./TopbarButton";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { Pressable } from "./ui/pressable";
 
 const circleClassName =
 	"inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-micro font-semibold leading-none text-muted-foreground ring-2";
@@ -58,8 +59,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 		<HoverCard>
 			<HoverCardTrigger asChild>
 				{onActivate ? (
-					<button
-						type="button"
+					<Pressable
 						aria-label={label}
 						className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 						onClick={(event) => {
@@ -69,7 +69,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 						data-session-people
 					>
 						{circles}
-					</button>
+					</Pressable>
 				) : (
 					<span role="group" aria-label={label} tabIndex={0} className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" data-session-people>
 						{circles}

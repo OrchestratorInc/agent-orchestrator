@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle, X } from "lucide-react";
+import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
@@ -11,6 +11,7 @@ import type {
 import { aoBridge } from "../../lib/bridge";
 import { appI18n, type MessageKey } from "../../i18n";
 import { Button } from "../ui/button";
+import { CloseButton } from "../ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -241,14 +242,7 @@ export function BrowserImportDialog({
 		<Dialog open={open} onOpenChange={(next) => canClose && onOpenChange(next)}>
 			<DialogContent className={view === "result" ? `${settingsDialogContentClass} w-[min(30rem,calc(100vw-var(--space-8)))]` : settingsDialogContentClass} showCloseButton={false}>
 				<DialogClose asChild>
-					<button
-						aria-label={t("common.close")}
-						className="settings-dialog-close-button settings-close-button"
-						disabled={!canClose}
-						type="button"
-					>
-						<X aria-hidden="true" className="size-5" />
-					</button>
+					<CloseButton aria-label={t("common.close")} disabled={!canClose} floating />
 				</DialogClose>
 				<div className={settingsDialogHeaderClass}>
 					<DialogTitle className="settings-dialog-title">{t(view === "result" ? resultTitle : "settings.browserImport.title")}</DialogTitle>

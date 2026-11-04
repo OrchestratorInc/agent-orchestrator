@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -9,6 +9,7 @@ import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -18,13 +19,16 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { BrowserIcon } from "./icons";
 import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
@@ -211,6 +215,7 @@ function ArtifactViewerBody({
 	sendMessage,
 	sessionId,
 	toolbarHost,
+	onEditingChange,
 }: {
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
@@ -235,6 +240,7 @@ function ArtifactViewerBody({
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
+	onEditingChange?: (editing: boolean) => void;
 }) {
 	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
@@ -270,6 +276,7 @@ function ArtifactViewerBody({
 						sendMessage={sendMessage}
 						sessionId={sessionId}
 						toolbarHost={previewing || showingPage ? null : toolbarHost}
+						onEditingChange={onEditingChange}
 					/>
 				</div>
 				{showingPage ? <iframe className="absolute inset-0 h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} /> : null}
@@ -336,11 +343,10 @@ function CloudHtmlArtifactView({
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={t("files.addFeedback")}
-					className="text-muted-foreground hover:text-foreground"
 					onClick={() => begin({ path, side: "file", surface: "focused" })}
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
 				</Button>
@@ -376,6 +382,7 @@ export function SessionArtifactsView({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	const openInBrowser = useContext(AppBrowserLinkContext);
 	const cloud = Boolean(session.cloud);
 	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
 	const cloudRoot = cloudAccess.data;
@@ -395,12 +402,17 @@ export function SessionArtifactsView({
 	), [artifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
+	// Share hides while the open file is being edited.
+	const [editingFile, setEditingFile] = useState(false);
 	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
 	const { client: cloudClient } = useCloudCp(cloud);
+	// Only the person who started a cloud session shares its files.
+	const cloudUserId = useCloudMeUserId(cloud);
+	const cloudOwner = Boolean(cloudUserId) && session.cloud?.createdByUserId === cloudUserId;
 	const cloudOrgId = session.cloud?.orgId;
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
@@ -481,6 +493,9 @@ export function SessionArtifactsView({
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
 		const hasHtmlPreview = selected.kind === "html" && (cloud || (selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
 		const showingHtmlSource = htmlSourcePath === selected.path;
+		// The page also opens in the session's Browser, the same target as
+		// `ao preview` on its path; full screen is left first since it covers it.
+		const browserUrl = openInBrowser && !cloud && previewVersion === null ? selected.previewUrl : undefined;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onExitFullscreen={exitFullscreen}>
 				{/* One header row: back, the file's menu, the viewer's action buttons, and full screen. */}
@@ -501,22 +516,51 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
+						{/* Beside the viewer's Edit button: the artifact's public link. Only
+						    the person who started a cloud session publishes its files. */}
+						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
+							<ShareArtifactButton
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
+								name={selected.name}
+							/>
+						)) : !hostId ? (
+							<ShareArtifactButton
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								name={selected.name}
+							/>
+						) : null}
 						{hasHtmlPreview && previewVersion === null ? (
 							<div className="flex shrink-0 items-center gap-0.5">
-								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
-								<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
+								<Button aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
+								<Button aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
 							</div>
+						) : null}
+						{browserUrl ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										aria-label={t("inspector.openInAOBrowser")}
+										className="text-muted-foreground hover:text-foreground"
+										onClick={() => { setFullscreen(false); openInBrowser?.(browserUrl); }}
+										size="icon-sm"
+										type="button"
+										variant="ghost"
+									>
+										<BrowserIcon aria-hidden="true" className="size-icon-sm" />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("inspector.openInAOBrowser")}</TooltipContent>
+							</Tooltip>
 						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
 									aria-label={fullscreenLabel}
 									aria-pressed={fullscreen}
-									className="text-muted-foreground hover:text-foreground"
 									onClick={() => { if (cloud) pinned.refresh(); setFullscreen((current) => !current); }}
 									size="icon-sm"
 									type="button"
-									variant="ghost"
+									variant="quiet"
 								>
 									<FullscreenIcon aria-hidden="true" className="size-icon-sm" />
 								</Button>
@@ -563,6 +607,7 @@ export function SessionArtifactsView({
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
+							onEditingChange={setEditingFile}
 						/>
 					)}
 				</div>

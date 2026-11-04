@@ -84,6 +84,7 @@ import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -585,13 +586,12 @@ function InspectorPolicyRow({
 				{description ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={description}
-								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								type="button"
+								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className={cn("leading-normal", tooltipClassName)}>{description}</TooltipContent>
 					</Tooltip>
@@ -644,9 +644,9 @@ function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRRefere
 					<span>{t("inspector.reportedByWorker")}</span>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+							<Pressable aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground">
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
 					</Tooltip>
@@ -851,33 +851,29 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
 			<span className="min-w-0 text-sm text-settings-label">{t("inspector.archiveShort")}</span>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<SessionArchiveDialog
-							onConfirm={confirmTermination}
-							onOpenChange={setConfirmOpen}
-							open={confirmOpen}
-							session={session}
-							trigger={
-								<button
-									aria-label={t("inspector.archive")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-									onClick={() => {
-										clearTerminateSessionState(queryClient, session.id, hostId);
-										// Always open the confirm; the modal owns its own dismissal.
-										setConfirmOpen(true);
-									}}
-									type="button"
-								>
-									<Archive className="size-icon-sm" aria-hidden="true" />
-								</button>
-							}
-						/>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
-			</Tooltip>
+			<span className="inline-flex">
+				<SessionArchiveDialog
+					onConfirm={confirmTermination}
+					onOpenChange={setConfirmOpen}
+					open={confirmOpen}
+					session={session}
+					trigger={
+						<Button
+							aria-label={t("inspector.archive")}
+							size="icon-sm"
+							variant="quiet"
+							onClick={() => {
+								clearTerminateSessionState(queryClient, session.id, hostId);
+								// Always open the confirm; the modal owns its own dismissal.
+								setConfirmOpen(true);
+							}}
+							type="button"
+						>
+							<Archive className="size-icon-sm" aria-hidden="true" />
+						</Button>
+					}
+				/>
+			</span>
 		</div>
 	);
 
@@ -1015,9 +1011,9 @@ export function PRSummaryCard({
 		stateLabel: t(prStateLabelKeys[pr.state]),
 		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
-			<button className="whitespace-nowrap text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
+			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
-			</button>
+			</Button>
 		) : undefined,
 	};
 	return (
@@ -1029,7 +1025,7 @@ export function PRSummaryCard({
 				canMerge && asksToMerge ? (
 					<Button
 						aria-label={t("pr.merge.requestFor", { number: pr.number })}
-						className="gap-1 px-2 text-xs"
+						className="gap-1 px-2"
 						disabled={requestMerge.isPending || Boolean(pendingRequest)}
 						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
 						size="sm"
@@ -1047,7 +1043,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1082,10 +1078,9 @@ function ArtifactSummaryCard({
 	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
 		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<button
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left outline-none"
+			<Pressable
+				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5"
 				onClick={handleOpen}
-				type="button"
 			>
 				{artifact.kind === "html" ? (
 					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
@@ -1093,7 +1088,7 @@ function ArtifactSummaryCard({
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-			</button>
+			</Pressable>
 		</div>
 	);
 }
@@ -2531,14 +2526,13 @@ function ReviewPanel({
 				{notice ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={notice}
-								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-								type="button"
+								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="mt-px size-icon-2xs shrink-0" />
 								<span className="min-w-0 text-xs">{t("inspector.reviewAlreadyRanShort")}</span>
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
 					</Tooltip>
@@ -2618,7 +2612,7 @@ function ReviewPanel({
 										<span className="truncate">{agentLabel(surface.harness)}</span>
 									</span>
 									<Button
-										className="shrink-0 px-1.5 text-xs"
+										className="shrink-0 px-1.5"
 										disabled={surface.mode !== "chat" && !surface.handleId}
 										onClick={() => onOpenReviewer(surface)}
 										size="sm"
@@ -2644,7 +2638,7 @@ function ReviewPanel({
 						<div className="flex min-w-0 items-center justify-end gap-1.5">
 							<Button
 								aria-label={primaryReviewActionLabel}
-								className="shrink-0 gap-1 px-1.5 text-xs [&_svg]:size-icon-sm"
+								className="shrink-0 gap-1 px-1.5 [&_svg]:size-icon-sm"
 								disabled={reviewRunning ? isCancelling || isKilling || isSwitchingReviewer : runDisabled || autoReviewEnabled}
 								onClick={reviewRunning ? onCancel : onTrigger}
 								size="sm"

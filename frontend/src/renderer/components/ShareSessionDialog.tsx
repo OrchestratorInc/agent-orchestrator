@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -7,8 +6,9 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpShareLink } from "../lib/cloud-cp";
-import { shareLinkUrl } from "../lib/share-links";
+import { isShareCode, shareCodeLinkUrl, shareLinkUrl } from "../lib/share-links";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -50,6 +50,16 @@ export function shareLinkRequest({ scope, access, modeCap, expiry, sessionId }: 
 		modeCap: access === "editor" ? modeCap : "read-only" as const,
 		...(hours ? { expiresInHours: hours } : {}),
 	};
+}
+
+/**
+ * The link to copy for a link just created: its short link when the control
+ * plane minted a well-formed code, else the token link (what a control plane
+ * with codes off returns), or undefined when the response carries neither.
+ */
+export function createdShareLinkUrl(baseUrl: string, orgId: string, link: Pick<CloudCpShareLink, "code" | "token">): string | undefined {
+	if (isShareCode(link.code)) return shareCodeLinkUrl(baseUrl, link.code);
+	return link.token ? shareLinkUrl(baseUrl, orgId, link.token) : undefined;
 }
 
 /** What an active link lets people do, naming a whole-project link as such. */
@@ -96,8 +106,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const create = useMutation({
 		mutationFn: async () => {
 			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
-			if (!link.token) throw new Error(t("share.noToken"));
-			return shareLinkUrl(baseUrl, orgId, link.token);
+			const url = createdShareLinkUrl(baseUrl, orgId, link);
+			if (!url) throw new Error(t("share.noToken"));
+			return url;
 		},
 		onSuccess: (url) => {
 			setCreated(url);
@@ -134,9 +145,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				data-share-session-dialog
 			>
 				<DialogClose asChild>
-					<button type="button" className="settings-dialog-close-button settings-close-button" aria-label={t("confirm.close")}>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("confirm.close")} />
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">{t("share.title")}</DialogTitle>

@@ -10,6 +10,17 @@ import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
 import { CloudCpError } from "../lib/cloud-cp";
 
+// Import preparation assumes GitHub is ready. The setup panel's real auth and
+// terminal lifecycle are covered in the board empty states integration suite.
+vi.mock("../hooks/useSystemRequirementsGate", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSystemRequirementsGate")>()),
+	useSystemRequirementsGate: () => ({
+		query: { isSuccess: true, isError: false },
+		requirements: [{ id: "gh", satisfied: true }],
+	}),
+	useGitHubAuthRequirement: () => ({ isSuccess: true, isError: false, data: { satisfied: true } }),
+}));
+
 const bridgeMocks = vi.hoisted(() => ({
 	checkAncestorRepo: vi.fn(),
 	checkGitRepository: vi.fn(),
@@ -244,13 +255,16 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ disabled, error, open, onBack, onChange, onClose, onContinue, onUseExisting, value }: {
+	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onUseExisting, value }: {
 		disabled?: boolean;
 		error?: string | null;
+		firstRun?: boolean;
 		onBack?: () => void;
 		onChange?: (value: { remoteUrl: string; destinationParent: string }) => void;
 		onClose?: () => void;
 		onContinue?: (selection: { remoteUrl: string; destinationParent: string; targetPath: string }) => void;
+		onOpenLocalFolder?: () => void;
+		onStartStandaloneAgent?: () => void;
 		onUseExisting?: (path: string) => void;
 		open: boolean;
 		value: { remoteUrl: string; destinationParent: string };
@@ -265,6 +279,8 @@ vi.mock("./CloneRepositoryDialog", () => ({
 				/>
 				<button type="button" onClick={onBack}>Back clone</button>
 				<button type="button" onClick={onClose}>Close clone</button>
+				{firstRun ? <button type="button" onClick={onOpenLocalFolder}>Open a local folder</button> : null}
+				{firstRun ? <button type="button" onClick={onStartStandaloneAgent}>Start a standalone agent</button> : null}
 				<button type="button" disabled={disabled} onClick={() => onUseExisting?.("/repo/existing")}>Use existing checkout</button>
 				<button type="button" onClick={() => onContinue?.({ remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo", targetPath: "/repo/empty-repository" })}>
 					Continue clone
@@ -418,6 +434,65 @@ beforeEach(() => {
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
 	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false, autoStartOrchestratorProjectIds: new Set() });
+});
+
+describe("first run project actions", () => {
+	it("keeps the first run modal behind the native picker and after cancellation", async () => {
+		const onFirstRunDismiss = vi.fn();
+		let resolvePicker!: (path: string | null) => void;
+		bridgeMocks.chooseDirectory.mockImplementation(() => new Promise<string | null>((resolve) => { resolvePicker = resolve; }));
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		expect(await screen.findByTestId("clone-dialog")).toBeInTheDocument();
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Open a local folder" }));
+		await waitFor(() => expect(bridgeMocks.chooseDirectory).toHaveBeenCalledOnce());
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+		await act(async () => resolvePicker(null));
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+	});
+
+	it("closes the first run modal only after the selected local folder is validated", async () => {
+		const onFirstRunDismiss = vi.fn();
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		let resolveValidation!: (value: { data: ReturnType<typeof projectValidation> }) => void;
+		apiMocks.POST.mockImplementationOnce(() => new Promise((resolve) => { resolveValidation = resolve; }));
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
+		await waitFor(() => expect(apiMocks.POST).toHaveBeenCalledOnce());
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+		await act(async () => resolveValidation({ data: projectValidation("/repo/project") }));
+		expect(await screen.findByTestId("agent-sheet")).toBeInTheDocument();
+		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
+		expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("local_folder");
+	});
+
+	it("reports standalone through its real callback", async () => {
+		const onFirstRunDismiss = vi.fn();
+		const onCreateStandaloneAgent = vi.fn();
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss, onCreateStandaloneAgent };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Start a standalone agent" }));
+		expect(onCreateStandaloneAgent).toHaveBeenCalledOnce();
+		expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("standalone");
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+	});
+
+	it("reports dismissing the first run clone dialog", async () => {
+		const onFirstRunDismiss = vi.fn();
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Close clone" }));
+		await waitFor(() => expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("dismissed"));
+	});
 });
 
 describe("CreateProjectFlow remote host", () => {
@@ -635,7 +710,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		const { rerender } = render(<CreateProjectFlow mode="choose" {...noop} openSignal={0} />);
 		rerender(<CreateProjectFlow mode="choose" {...noop} openSignal={1} />);
 		await user.click(await screen.findByRole("button", { name: "Clone a repo" }));
-		expect(await screen.findByTestId("clone-dialog")).toHaveAttribute("data-destination", saved ?? "~/ao/projects");
+			expect(await screen.findByTestId("clone-dialog")).toHaveAttribute("data-destination", saved ?? "~/ao/projects");
 		window.localStorage.removeItem("ao.clone.lastDestinationParent");
 	});
 
@@ -925,6 +1000,7 @@ describe("CreateProjectFlow project import validation", () => {
 	it("offers to import a repository selected as a workspace as a project", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		let resolveValidation!: (value: { data: ReturnType<typeof projectValidation> }) => void;
 		apiMocks.POST
 			.mockResolvedValueOnce({
 				data: projectValidation("/repo/project", {
@@ -934,7 +1010,7 @@ describe("CreateProjectFlow project import validation", () => {
 					warning: "This folder is already a Git project. AO will import it as a project instead of a workspace.",
 				}),
 			})
-			.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+			.mockImplementationOnce(() => new Promise((resolve) => { resolveValidation = resolve; }));
 
 		renderChooseFlow();
 
@@ -945,8 +1021,10 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByText("proj")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Import as project" }));
+		await waitFor(() => expect(apiMocks.POST).toHaveBeenCalledTimes(2));
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 		expect(screen.queryByText("Choose a project folder")).not.toBeInTheDocument();
+		await act(async () => resolveValidation({ data: projectValidation("/repo/project") }));
 
 		const sheet = await screen.findByTestId("agent-sheet");
 		expect(sheet).toHaveAttribute("data-path", "/repo/project");
@@ -1152,7 +1230,7 @@ describe("CreateProjectFlow project import validation", () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/workspace");
 		bridgeMocks.scanImportFolder.mockResolvedValue({ path: "/repo/workspace", repos: [] });
-		apiMocks.POST.mockResolvedValueOnce({
+		const validation = {
 			data: {
 				...projectValidation("/repo/workspace", {
 					isValid: false,
@@ -1162,10 +1240,13 @@ describe("CreateProjectFlow project import validation", () => {
 				}),
 				importKind: "workspace",
 			},
-		});
+		};
+		let resolveValidation!: (value: typeof validation) => void;
+		apiMocks.POST.mockImplementationOnce(() => new Promise((resolve) => { resolveValidation = resolve; }));
 
 		renderChooseFlow();
 		await openSource(user, "Open a workspace");
+		await act(async () => resolveValidation(validation));
 
 		expect(useUiStore.getState().globalToast?.body).toBe("Repair the Git metadata or choose a different folder.");
 		await waitFor(() => expect(screen.getByRole("dialog", { name: "Import workspace" })).toHaveClass("modal-shake"));
@@ -1261,6 +1342,8 @@ describe("CreateProjectFlow project import validation", () => {
 
 	it("groups all required Git preparation behind one approval", async () => {
 		const user = userEvent.setup();
+		let resolveAvailability!: (value: { available: boolean }) => void;
+		bridgeMocks.checkGitHubRepositoryAvailability.mockImplementation(() => new Promise((resolve) => { resolveAvailability = resolve; }));
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
 		apiMocks.POST.mockResolvedValueOnce({
 			data: projectValidation("/repo/project", {
@@ -1288,7 +1371,10 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByText("Create the first commit so the project has a usable history.")).not.toBeInTheDocument();
 		await waitFor(() => expect(screen.getByLabelText("Owner")).toHaveTextContent("username"));
 		expect(screen.getByLabelText("Repository name")).toHaveValue("project");
-			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
+		await waitFor(() => expect(bridgeMocks.checkGitHubRepositoryAvailability).toHaveBeenCalled());
+		expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
+		await act(async () => resolveAvailability({ available: true }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeEnabled());
 		expect(screen.queryByText("Plain folder")).not.toBeInTheDocument();
 		expect(screen.queryByText("No commit yet")).not.toBeInTheDocument();
 		expect(screen.queryByText("No origin remote")).not.toBeInTheDocument();

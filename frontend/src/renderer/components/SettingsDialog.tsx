@@ -1,5 +1,5 @@
 import type { AppIcon } from "./icons";
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X } from "lucide-react";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,6 +26,9 @@ import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type Projec
 import { cn } from "../lib/utils";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
+import { Pressable } from "./ui/pressable";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -312,7 +315,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 				return (
 					<div className="space-y-2 text-sm text-error" role="alert">
 						<p>{t("settings.project.cloudLoadFailed")} {cloudProjects.error instanceof Error ? cloudProjects.error.message : ""}</p>
-						<button className="text-settings-label underline underline-offset-2" onClick={() => void cloudProjects.refetch()} type="button">{t("settings.project.retry")}</button>
+						<Button className="text-settings-label" onClick={() => void cloudProjects.refetch()} type="button" variant="link">{t("settings.project.retry")}</Button>
 					</div>
 				);
 			}
@@ -493,10 +496,10 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 			{projectSaveState.phase === "failed" || (remoteHostId && projectSaveState.replacementError) ? (
 				<div className="space-y-2 text-error">
 					<p className="flex items-start gap-2" role="alert"><TriangleAlert className="size-4 shrink-0" aria-hidden="true" />{projectSaveState.error ?? projectSaveState.replacementError ?? t("settings.project.saveFailed")}</p>
-					<button className="text-settings-label underline underline-offset-2" onClick={() => {
+					<Button className="text-settings-label" variant="link" onClick={() => {
 						if (projectSaveState.retry) projectSaveState.retry();
 						else (document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
-					}} type="button">{t("createProject.retry")}</button>
+					}} type="button">{t("createProject.retry")}</Button>
 				</div>
 			) : (
 				<p className="flex items-center gap-2 text-settings-muted">
@@ -590,22 +593,21 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("shell.projectSettings")}</p>
 							<nav aria-label={t("settings.navSectionsAria")} className="flex flex-col gap-0.5 p-2 pt-0">
 								{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
-									<button
+									<Pressable
 										aria-current={active ? "page" : undefined}
 										className={cn(
 											NAV_ROW_HIGHLIGHT_HOST_CLASS,
-											"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50",
+											"flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
 										)}
 										data-active={active}
 										disabled={disabled}
 										key={id}
 										onClick={onSelect}
-										type="button"
 									>
 										<NavRowHighlight active={active} disabled={disabled} />
 										<Icon aria-hidden="true" className="relative z-[1] size-icon-md shrink-0" />
 										<span className="relative z-[1] min-w-0 flex-1 truncate">{label}</span>
-									</button>
+									</Pressable>
 								))}
 							</nav>
 							<div className="mt-auto"><SettingsSaveStatus layer={layer} /></div>
@@ -614,9 +616,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 py-3 pl-(--size-modal-padding) pr-3")}>
 								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
-								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} type="button">
-									<X aria-hidden="true" className="size-4" />
-								</button>
+								<CloseButton aria-label={t("settings.close")} disabled={layer.cueBusy} onClick={layer.close} />
 							</DialogHeader>
 							<div aria-busy={!layer.isBodyReady} className={cn(settingsDialogBodyClass, "settings-dialog-body flex-1 px-(--size-modal-padding) pt-0")}>
 								<div className="flex min-h-0 flex-1 flex-col" ref={(node) => { if (node && bodyHost.parentElement !== node) node.appendChild(bodyHost); }} />

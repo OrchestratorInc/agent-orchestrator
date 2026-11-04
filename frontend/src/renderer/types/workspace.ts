@@ -245,6 +245,8 @@ export type WorkspaceSession = {
 		shared?: boolean;
 		/** The guest the session was started for, when someone the project was shared with asked for it. */
 		requestedBy?: { userId: string; name: string };
+		/** The control-plane user who started the session; only they share its files as public links. */
+		createdByUserId?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;

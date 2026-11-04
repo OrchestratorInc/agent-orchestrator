@@ -18,7 +18,6 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { isFileViewCapture } from "../../shared/chat-file-reference";
-import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
@@ -137,7 +136,6 @@ const INSPECTOR_COMPACT_MAX_PX = 325;
 const TOPBAR_SECONDARY_COMPACT_MAX_PX = 759;
 const isMac = isMacPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
-const newTerminalShortcutLabel = shortcutBindingLabel(defaultShortcutBindings("new-shell-terminal", isMac)[0], isMac);
 
 type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
 type ReviewerSurface = components["schemas"]["DomainReviewerSurface"];
@@ -1404,12 +1402,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<Plus aria-hidden="true" className="size-icon-md" />
 					</TopbarButton>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">
-					{newTerminalError ?? t("terminal.newWithShortcut", { shortcut: newTerminalShortcutLabel })}
+				<TooltipContent shortcut={newTerminalError ? undefined : "new-shell-terminal"} side="bottom">
+					{newTerminalError ?? t("terminal.new")}
 				</TooltipContent>
 			</Tooltip>
 		) : null,
-		[addShellTerminal, isOrchestrator, newTerminalError, newTerminalShortcutLabel, session, t],
+		[addShellTerminal, isOrchestrator, newTerminalError, session, t],
 	);
 	const sendCloudFileAnnotation = useCallback(async (message: string) => {
 		const orgId = session?.cloud?.orgId;
@@ -2351,10 +2349,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							)}
 						</TopbarButton>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">
+					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
 						{browserOnly
 							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>

@@ -36,6 +36,18 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the first run experiment variants and prompt actions", async () => {
+		for (const variant of ["prompt", "control"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
+		}
+		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
+		}
+		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
+		}
+	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");

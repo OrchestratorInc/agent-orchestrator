@@ -52,6 +52,14 @@ import {
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
+import {
+	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareFile,
+	type CloudShareInspection,
+	type CloudShareLinks,
+	type CloudShareProgress,
+	type CloudSharePublishResult,
+} from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type {
 	CloudCpProxyRequestInit,
@@ -217,6 +225,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		listGitHubRepos: (query: string) =>
+			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		refreshGitHubOwners: () => ipcRenderer.invoke("app:refreshGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		checkGitHubRepositoryAvailability: (input: { owner: string; name: string }) =>
@@ -401,6 +411,24 @@ const api = {
 	chatImage: {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
+	},
+	// Public share links, published from the share popover's Publish button.
+	// The main process reads and uploads the file; the renderer never sees
+	// the file or the token. See shared/cloud-share.ts.
+	cloudShare: {
+		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
+		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
+		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
+		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		onProgress: (listener: (progress: CloudShareProgress) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
+			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
+			};
+		},
 	},
 	cloudArtifact: {
 		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
@@ -726,6 +754,10 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getExperimentCohort: () => ipcRenderer.invoke("appState:getExperimentCohort") as Promise<number | null>,
+		claimFirstRunExperimentExposure: () => ipcRenderer.invoke("appState:claimFirstRunExperimentExposure") as Promise<boolean>,
+		getFirstRunProjectPrompt: () => ipcRenderer.invoke("appState:getFirstRunProjectPrompt") as Promise<"pending" | "seen">,
+		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},
 	cliLink: {
 		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
