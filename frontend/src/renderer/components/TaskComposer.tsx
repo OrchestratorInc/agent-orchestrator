@@ -1055,7 +1055,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					} else message = t("newTask.selectedEffortUnsupported", { defaultValue: "The selected effort is unavailable. Choose another level before starting." });
 				} else if (err.code === "AGENT_BINARY_NOT_FOUND") {
 					setErrorAction("install-agent");
-					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
+					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agents settings to install it, then try again." });
 				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
 					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
 				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
@@ -1200,7 +1200,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		error,
 		status,
 		errorAction: errorAction === "install-agent" ? {
-			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agents settings" }),
 			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
 		} : errorAction === "choose-branch" ? {
 			label: t("newTask.chooseNewBranch", { defaultValue: "Choose new branch" }),

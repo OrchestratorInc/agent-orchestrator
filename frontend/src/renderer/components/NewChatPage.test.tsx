@@ -242,10 +242,10 @@ describe("NewChatPage", () => {
 		});
 		const openSettings = vi.fn();
 		h.error = "This agent is not installed.";
-		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		h.errorAction = { label: "Open Agents settings", onClick: openSettings };
 		act(() => page.refresh());
 		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
-		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 		expect(openSettings).toHaveBeenCalledOnce();
 	});
 

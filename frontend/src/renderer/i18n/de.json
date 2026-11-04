@@ -911,7 +911,7 @@
 	"inspector.resumeAlreadyRunning": "Der Agent läuft bereits. Aktualisiere die Sitzung.",
 	"inspector.resumeInProgress": "Der Agent wird bereits fortgesetzt. Warte, bis die Sitzung aktualisiert ist.",
 	"inspector.resumeSavedConversationFailed": "Die gespeicherte Unterhaltung konnte nicht fortgesetzt werden. Dein AO-Verlauf ist verfügbar. Prüfe den Agenten und versuche es erneut.",
-	"inspector.resumeAuthRequired": "Der Agent muss angemeldet werden. Öffne die Harness-Einstellungen, melde dich an und versuche es erneut.",
+	"inspector.resumeAuthRequired": "Der Agent muss angemeldet werden. Öffne die Agenteneinstellungen, melde dich an und versuche es erneut.",
 	"inspector.resumeFallbackBody": "AO konnte die native Agent-Sitzung nicht fortsetzen und hat daher eine neue Unterhaltung aus dem gespeicherten Prompt gestartet.",
 	"inspector.resumingAgent": "Agent wird fortgesetzt",
 	"inspector.returnToPanel": "Zurück zum Panel",

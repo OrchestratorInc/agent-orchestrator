@@ -911,7 +911,7 @@
 	"inspector.resumeAlreadyRunning": "エージェントはすでに実行中です。セッションを更新してください。",
 	"inspector.resumeInProgress": "エージェントは再開中です。セッションの更新を待ってください。",
 	"inspector.resumeSavedConversationFailed": "保存された会話を再開できませんでした。AO の履歴は利用できます。エージェントを確認して再試行してください。",
-	"inspector.resumeAuthRequired": "エージェントへのサインインが必要です。ハーネス設定を開いてサインインし、再試行してください。",
+	"inspector.resumeAuthRequired": "エージェントへのサインインが必要です。エージェント設定を開いてサインインし、再試行してください。",
 	"inspector.resumeFallbackBody": "AO はネイティブのエージェントセッションを再開できなかったため、保存済みのプロンプトから新しい会話を開始しました。",
 	"inspector.resumingAgent": "エージェントを再開中",
 	"inspector.returnToPanel": "パネルに戻る",

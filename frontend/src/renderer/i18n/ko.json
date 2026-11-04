@@ -911,7 +911,7 @@
 	"inspector.resumeAlreadyRunning": "에이전트가 이미 실행 중입니다. 세션을 새로고침하세요.",
 	"inspector.resumeInProgress": "에이전트가 이미 재개 중입니다. 세션이 새로고침될 때까지 기다리세요.",
 	"inspector.resumeSavedConversationFailed": "저장된 대화를 재개할 수 없습니다. AO 기록은 사용할 수 있습니다. 에이전트를 확인하고 다시 시도하세요.",
-	"inspector.resumeAuthRequired": "에이전트에 로그인해야 합니다. 하네스 설정을 열어 로그인한 뒤 다시 시도하세요.",
+	"inspector.resumeAuthRequired": "에이전트에 로그인해야 합니다. 에이전트 설정을 열어 로그인한 뒤 다시 시도하세요.",
 	"inspector.resumeFallbackBody": "AO가 네이티브 에이전트 세션을 재개할 수 없어, 저장된 프롬프트로 새 대화를 시작했습니다.",
 	"inspector.resumingAgent": "에이전트 재개 중",
 	"inspector.returnToPanel": "패널로 돌아가기",
