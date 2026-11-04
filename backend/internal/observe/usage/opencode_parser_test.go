@@ -169,6 +169,12 @@ func TestReadOpenCodeStepsForSessionTree(t *testing.T) {
 	if providerUsageTokens(t, root.ProviderUsageJSON, "tokens", "reasoning") != 5 {
 		t.Fatalf("provider usage = %s", root.ProviderUsageJSON)
 	}
+	// Break caught: the cache-write count left nested under tokens.cache,
+	// where pricing never looks, so a cache-write-rated model priced its
+	// input as unknown.
+	if providerUsageTokens(t, root.ProviderUsageJSON, "cacheWrite") != 10 {
+		t.Fatalf("provider usage cacheWrite missing: %s", root.ProviderUsageJSON)
+	}
 	sub := result.Events[1]
 	if sub.ProviderID != domain.UsageProviderOpenAI || sub.BillingProviderID != "zai-coding-plan" ||
 		tokenValue(sub.Tokens.InputTokens) != 22000 || tokenValue(sub.Tokens.CachedInputTokens) != 21824 ||

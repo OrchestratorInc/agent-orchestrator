@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,7 +172,7 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 			ModelID:               model,
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
-			ProviderUsageJSON:     boundedProviderUsage(row.Step),
+			ProviderUsageJSON:     openCodeProviderUsage(row.Step, usage.Cache.Write),
 			SourceEventKey:        stableSourceEventKey(keyPrefix, source.NativeRootID, row.PartID),
 			Costs:                 openCodeReportedCosts(step.Cost, pricingVersion),
 		}
@@ -188,6 +189,23 @@ func parseOpenCode(source domain.UsageSourceContext, records []jsonlRecord, resu
 		eventsByKey[event.SourceEventKey] = event
 		result.Events = append(result.Events, event)
 	}
+}
+
+// openCodeProviderUsage stores the step as reported, with its cache-write
+// count also under the top-level cacheWrite key pricing reads for both token
+// vocabularies. Left nested, a model whose rates carry a cache-write price
+// would price its input as unknown whenever the catalog prices the call.
+func openCodeProviderUsage(step json.RawMessage, cacheWrite int64) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(step, &fields) != nil {
+		return boundedProviderUsage(step)
+	}
+	fields["cacheWrite"] = json.RawMessage(strconv.FormatInt(cacheWrite, 10))
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return boundedProviderUsage(step)
+	}
+	return boundedProviderUsage(data)
 }
 
 // openCodeReportedCosts keeps the USD cost OpenCode computed for the call from
