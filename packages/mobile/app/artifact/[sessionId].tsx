@@ -8,7 +8,7 @@ import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getA
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactVisual } from "../../lib/artifactVisual";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, stableArtifactOrder, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -51,7 +51,8 @@ const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
  * to the session's review, the same one the Files screen keeps.
  *
  * A listed artifact opens as one page of a gallery: swiping sideways moves
- * through the session's other artifacts, in the gallery's order. The header and
+ * through the session's other artifacts, in the gallery's order when it opened
+ * (a file rewritten or written later never moves the page on screen). The header and
  * its actions follow the page on screen.
  */
 export default function ArtifactViewerScreen() {
@@ -76,9 +77,18 @@ function ArtifactViewerContent() {
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
 	// The page on screen: the file the route opened, until a swipe moves on.
 	const [currentPath, setCurrentPath] = useState(path);
-	const artifact = artifacts?.find((candidate) => candidate.path === currentPath);
-	const pageIndex = artifact && artifacts ? artifacts.indexOf(artifact) : -1;
-	const pageCount = artifacts?.length ?? 0;
+	// The pages keep the order they had on open: the list is newest first, so a
+	// file the agent rewrites would otherwise jump to the front and remount.
+	const pageOrder = useRef<string[]>(undefined);
+	const pages = useMemo(() => {
+		if (!artifacts) return undefined;
+		const next = stableArtifactOrder(pageOrder.current, artifacts);
+		pageOrder.current = next.map((page) => page.path);
+		return next;
+	}, [artifacts]);
+	const artifact = pages?.find((candidate) => candidate.path === currentPath);
+	const pageIndex = artifact && pages ? pages.indexOf(artifact) : -1;
+	const pageCount = pages?.length ?? 0;
 	const leave = useCallback(() => backOr(router), [router]);
 	const { openMenu, menu } = useArtifactActions(sessionId, leave);
 	const openHistory = useCallback((target: SessionArtifact) => {
@@ -103,11 +113,11 @@ function ArtifactViewerContent() {
 	const pagerRef = useRef<PagerHandle>(null);
 	// A tap on the strip moves the pager there with an animation, then shows that page.
 	const pageTo = useCallback((target: number) => {
-		const next = artifacts?.[target];
+		const next = pages?.[target];
 		if (!next) return;
 		pagerRef.current?.scrollToPage(target);
 		showPage(next);
-	}, [artifacts, showPage]);
+	}, [pages, showPage]);
 	const askedOnOpen = useRef(false);
 	useEffect(() => {
 		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
@@ -176,25 +186,25 @@ function ArtifactViewerContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!artifact || !artifacts) {
+	if (!artifact || !pages) {
 		const url = artifactFileUrl(config, sessionId, currentPath);
 		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	// The strip shows the session's artifacts when there is more than one. It leaves while a comment is open.
-	const filmstrip = !ask && artifacts.length > 1;
+	const filmstrip = !ask && pages.length > 1;
 	return (
 		<View style={styles.screen}>
 			{headerItems}
 			<ArtifactPager
 				ref={pagerRef}
-				pages={artifacts}
+				pages={pages}
 				index={pageIndex}
 				// A comment belongs to the file it was opened on; paging waits until it is sent or closed.
 				scrollEnabled={!ask}
 				onPage={showPage}
 				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
 			/>
-			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={artifacts} index={pageIndex} versionOf={versionOf} onSelect={pageTo} /> : null}
+			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={pages} index={pageIndex} versionOf={versionOf} onSelect={pageTo} /> : null}
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
@@ -246,9 +256,9 @@ const ArtifactPager = forwardRef<PagerHandle, {
 			list.current?.scrollToIndex({ index: target, animated: true });
 		},
 	}), []);
-	// A file written while this is open lands at the front of the list, so the
-	// page on screen moves to its new index and stays put.
-	useEffect(() => {
+	// Pages keep their order, so the index only moves when an earlier page is
+	// removed. The list follows before paint, so the page on screen stays put.
+	useLayoutEffect(() => {
 		if (width <= 0 || index < 0 || index === shownIndex.current) return;
 		shownIndex.current = index;
 		list.current?.scrollToOffset({ offset: index * width, animated: false });

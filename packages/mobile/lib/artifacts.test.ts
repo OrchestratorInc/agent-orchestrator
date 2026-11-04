@@ -19,6 +19,7 @@ import {
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
+	stableArtifactOrder,
 } from "./artifacts";
 
 describe("parseArtifacts", () => {
@@ -218,5 +219,25 @@ describe("artifactPageAt", () => {
 	it("has no page before the pager is measured or when it is empty", () => {
 		expect(artifactPageAt(pages, 390, 0)).toBeUndefined();
 		expect(artifactPageAt([], 0, 390)).toBeUndefined();
+	});
+});
+
+describe("stableArtifactOrder", () => {
+	const files = (...paths: string[]) => paths.map((path) => ({ path, updatedAt: "" }));
+
+	it("starts in the list's order", () => {
+		expect(stableArtifactOrder(undefined, files("c", "b", "a")).map((f) => f.path)).toEqual(["c", "b", "a"]);
+	});
+
+	it("keeps a rewritten file's page when it moves to the front of the list", () => {
+		const rewritten = { path: "a", updatedAt: "later" };
+		const order = stableArtifactOrder(["c", "b", "a"], [rewritten, ...files("c", "b")]);
+		expect(order.map((f) => f.path)).toEqual(["c", "b", "a"]);
+		// The page carries the file's new version.
+		expect(order[2]).toBe(rewritten);
+	});
+
+	it("puts a new file at the end and drops a removed one", () => {
+		expect(stableArtifactOrder(["c", "b", "a"], files("new", "c", "a")).map((f) => f.path)).toEqual(["c", "a", "new"]);
 	});
 });
