@@ -262,6 +262,11 @@ func copyTree(ctx context.Context, source, destination string) error {
 	if walkErr != nil || closeErr != nil {
 		return errors.Join(walkErr, closeErr)
 	}
+	// Every entry of a store deleted mid-walk is skipped as vanished. Don't let
+	// that near-empty copy become the permanent OpenCode 2 store.
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("legacy data store vanished during migration: %w", err)
+	}
 	databasePath := filepath.Join(source, "opencode.db")
 	if _, err := os.Stat(databasePath); errors.Is(err, os.ErrNotExist) {
 		return nil

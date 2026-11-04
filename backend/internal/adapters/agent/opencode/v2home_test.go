@@ -305,6 +305,52 @@ func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
 	}
 }
 
+// Children of a deleted store are skipped as vanished, so only the root check
+// stops a near-empty copy from becoming the permanent store.
+func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
+	for at := 1; ; at++ {
+		parent := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", parent)
+		legacy := filepath.Join(parent, "opencode")
+		for _, entry := range []string{
+			filepath.Join("shell", "project", "sh_0.out"),
+			filepath.Join("storage", "session.json"),
+		} {
+			if err := os.MkdirAll(filepath.Join(legacy, filepath.Dir(entry)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(legacy, entry), []byte("data"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// PrepareV2DataHome's own check runs before the copy, so check 1 would
+		// take the "no legacy store" path instead. Start deleting inside the copy.
+		ctx := &removeAtCheckContext{
+			Context: context.Background(),
+			at:      at + 1,
+			remove:  func() { _ = os.RemoveAll(legacy) },
+		}
+		_, err := PrepareV2DataHome(ctx)
+		if ctx.calls < ctx.at {
+			// Every check has been exercised; this run deleted nothing.
+			if err != nil {
+				t.Fatalf("copy without a deletion: %v", err)
+			}
+			return
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("deleting at context check %d: error = %v, want the vanished store to fail", ctx.at, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(parent, v2DataHomeDirName, "opencode")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("deleting at context check %d: activated a copy of a vanished store: %v", ctx.at, statErr)
+		}
+		staging, _ := filepath.Glob(filepath.Join(parent, v2DataHomeDirName, ".opencode-migration-*"))
+		if len(staging) != 0 {
+			t.Fatalf("deleting at context check %d: left staging behind: %v", ctx.at, staging)
+		}
+	}
+}
+
 func TestCopyTreeStillFailsOnOtherErrors(t *testing.T) {
 	source, destination := t.TempDir(), t.TempDir()
 	if err := os.Symlink("missing-target", filepath.Join(source, "dangling")); err != nil {
