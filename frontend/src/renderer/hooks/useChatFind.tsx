@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Button } from "../components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronUp, Loader2, Search, X } from "lucide-react";
 import { useAppShortcut, isSettingsPageOpen } from "./useAppShortcut";
@@ -367,7 +368,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const bar = open ? <div ref={barRef} role="search" onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
 		if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
 		else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
-	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="relative z-20 mt-3 mr-3 mb-1 ml-auto flex w-[360px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-full border border-border bg-surface px-3 py-2 text-sm leading-5 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="absolute top-3 right-3 z-20 flex w-[320px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm leading-5 shadow-sm focus-within:ring-1 focus-within:ring-ring/40">
 		<Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 		<input ref={input} type="search" aria-label={t("shortcut.find-in-chat")} placeholder={t("shortcut.find-in-chat")} value={query} className="min-w-0 flex-1 bg-transparent px-1 outline-none [&::-webkit-search-cancel-button]:hidden" onChange={(event) => {
 			const value = event.target.value;
@@ -381,9 +382,9 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 			{state.phase === "searching" ? engaged ? <><Loader2 aria-hidden="true" className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /><span className="sr-only">{t("command.searching")}</span></> : null : state.phase === "error" ? t("chat.find.incomplete") : isEmptyFindQuery(query) ? "" : state.total ? <><span aria-hidden="true">{activeIndex}/{state.total}</span><span className="sr-only">{t("browser.find.matchCount", { active: activeIndex, total: state.total })}</span></> : state.phase === "ready" ? t("browser.find.noResults") : ""}
 		</span>
 		<div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-			<button type="button" aria-label={t("browser.find.previous")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(-1)} className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"><ChevronUp className="size-3.5" /></button>
-			<button type="button" aria-label={t("browser.find.next")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(1)} className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"><ChevronDown className="size-3.5" /></button>
-			<button type="button" aria-label={t("browser.find.close")} onClick={() => close()} className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"><X className="size-3.5" /></button>
+			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.previous")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(-1)} className="focus-visible:ring-1 focus-visible:ring-ring"><ChevronUp className="size-3.5" /></Button>
+			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.next")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(1)} className="focus-visible:ring-1 focus-visible:ring-ring"><ChevronDown className="size-3.5" /></Button>
+			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.close")} onClick={() => close()} className="focus-visible:ring-1 focus-visible:ring-ring"><X className="size-3.5" /></Button>
 		</div>
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>

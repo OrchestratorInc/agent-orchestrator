@@ -505,7 +505,7 @@ export function FileReference({ path, line, className, children }: { path: strin
 	const file = useWorkspaceFile(path);
 	if (!file) return <span className={className} title={path}>{children}</span>;
 	return (
-		<Pressable className={className} title={path} onClick={() => file.open(line)}>
+		<Pressable data-chat-find-include="" className={className} title={path} onClick={() => file.open(line)}>
 			{children}
 		</Pressable>
 	);
@@ -544,6 +544,7 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
 	return (
 		<Pressable
+			data-chat-find-include=""
 			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
 			aria-label={`Open ${file.filePath} in Files`}
 			className="inline rounded transition-colors hover:bg-interactive-hover"

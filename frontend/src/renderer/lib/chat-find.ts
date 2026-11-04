@@ -88,7 +88,8 @@ export function occurrenceKey(hit: FindOccurrence): string {
 
 export function renderedFindBlocks(root: HTMLElement): Array<{ text: string; nodes: Text[] }> {
 	const blocks = new Map<Element, { text: string; nodes: Text[] }>();
-	const excluded = "button, svg, img, iframe, script, style, [aria-hidden='true'], .katex, [data-chat-find-exclude]";
+	// Inline file references are message text rendered as buttons, not toolbar controls.
+	const excluded = "button:not([data-chat-find-include]), svg, img, iframe, script, style, [aria-hidden='true'], .katex, [data-chat-find-exclude]";
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
 	while (walker.nextNode()) {
 		const current = walker.currentNode;

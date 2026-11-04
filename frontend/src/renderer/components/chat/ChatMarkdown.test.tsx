@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
+import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
@@ -153,6 +154,15 @@ describe("ChatMarkdown", () => {
 
 		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
 		expect(screen.getByText("--resume").closest("button")).toBeNull();
+	});
+
+	it("reveals filename matches in clickable inline code using the same offsets as search", () => {
+		const text = "Open `backend/service.go:42` but keep `--resume` as code.";
+		const { container } = renderWithLinkHandler(text, vi.fn(), ["backend/service.go"], vi.fn());
+		const rendered = renderedFindBlocks(container);
+		expect(rendered.map((block) => block.text)).toEqual(findBlocks(text, true));
+		const [hit] = findTextOccurrences(findBlocks(text, true)[0], "service.go");
+		expect(findRange(rendered[0].nodes, hit.start, hit.end)?.toString()).toBe("service.go");
 	});
 
 	it("opens an absolute markdown file link in Files instead of externally", async () => {
