@@ -70,6 +70,12 @@ describe("applyUserAgentFallback", () => {
 		expect(main).toMatch(/app\.whenReady\(\)\.then\(async \(\) => \{\s*applyUserAgentFallback\(app\);/);
 	});
 
+	it("does not hold up the window for the profile cookie repair", () => {
+		const main = readFileSync(path.join(process.cwd(), "src/main.ts"), "utf8");
+		expect(main).toMatch(/void repairBrowserProfileCookies\(/);
+		expect(main).not.toMatch(/await repairBrowserProfileCookies\(/);
+	});
+
 	it("is stable when applied twice", () => {
 		const target = { userAgentFallback: ELECTRON_MAC_UA };
 		applyUserAgentFallback(target);

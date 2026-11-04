@@ -56,6 +56,7 @@ class FakeChrome {
 	/** When set, tabs.update leaves the commit to the test. */
 	deferCommit?: () => void;
 	holdCommit = false;
+	windowsRemoved: number[] = [];
 	windowStates = new Map<number, string>();
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
@@ -208,7 +209,10 @@ class FakeChrome {
 					if (props.state) self.windowStates.set(windowId, props.state);
 					return { id: windowId, focused: false };
 				},
-				remove: async () => undefined,
+				remove: async (windowId) => {
+					self.windowsRemoved.push(windowId);
+					for (const [id, tab] of self.tabs) if (tab.windowId === windowId) self.tabs.delete(id);
+				},
 				onRemoved: self.events.windowsRemoved,
 			},
 			scripting: {
@@ -403,6 +407,48 @@ describe("Executor", () => {
 		expect(windowOf("https://shop.test/more")).toBe(windowOf("https://shop.test/"));
 	});
 
+	it("closes a finished session's window when everything in it was the session's", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		await run("tab-new", { url: "https://shop.test/more" }, "s1");
+		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
+		const own = windowOf("https://shop.test/");
+		const other = windowOf("https://shop.test/done");
+		await run("__destroy-session", {}, "s1");
+		expect(fake.windowsRemoved).toEqual([own]);
+		expect(fake.windowsRemoved).not.toContain(other);
+	});
+
+	it("keeps the window and the pages when the user has their own tab in it", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const page = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId: page.windowId });
+		await run("__destroy-session");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(personal.id!)).toBeDefined();
+		expect(fake.tabs.get(page.id!)?.groupId).toBe(-1);
+	});
+
+	it("keeps the window when the user handed the session one of their tabs", async () => {
+		const { fake, run, approve, sessions } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const page = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		const handed = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: page.windowId });
+		const tab = fake.tabs.get(handed.id!)!;
+		tab.groupId = page.groupId;
+		fake.events.tabsUpdated.fire(handed.id, { groupId: page.groupId }, tab);
+		await vi.waitFor(() => expect(sessions.ownerOf(handed.id!)).toBeDefined());
+		await run("__destroy-session");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(handed.id!)?.groupId).toBe(-1);
+	});
+
 	it("restores a minimized agent window for trusted input without focusing it", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
@@ -477,16 +523,26 @@ describe("Executor", () => {
 		await expect(run("tab-close", { tabId: "t1" })).rejects.toMatchObject({ code: "CANNOT_CLOSE_LAST_TAB" });
 	});
 
-	it("releases the session: closes blank tabs, keeps pages, revokes consent", async () => {
+	it("releases the session: closes its window and revokes consent", async () => {
 		const { fake, consent, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
 		await run("tab-new");
 		await run("__destroy-session");
-		const remaining = [...fake.tabs.values()];
-		expect(remaining).toHaveLength(1);
-		expect(remaining[0]).toMatchObject({ url: "https://shop.test/", groupId: -1 });
+		expect([...fake.tabs.values()]).toHaveLength(0);
 		expect(await consent.approvals()).toEqual({});
+	});
+
+	it("closes blank tabs and keeps pages when the window holds a tab of the user's", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await run("tab-new");
+		const windowId = [...fake.tabs.values()][0]!.windowId;
+		await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId });
+		await run("__destroy-session");
+		expect([...fake.tabs.values()].map((tab) => tab.url).sort()).toEqual(["https://personal.test/", "https://shop.test/"]);
+		expect([...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")).toMatchObject({ groupId: -1 });
 	});
 
 	it("adds every enclosing frame's offset to trusted pointer coordinates", async () => {
@@ -620,9 +676,11 @@ describe("Executor", () => {
 		const opening = run("open", { url: "https://shop.test/#more" });
 		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
 		tab.url = "https://shop.test/#more";
+		const started = Date.now();
+		// A same-document navigation fires no DOMContentLoaded or load event.
 		fake.events.navFragment.fire({ tabId: tab.id, frameId: 0, url: tab.url });
-		fake.events.navCompleted.fire({ tabId: tab.id, frameId: 0, url: tab.url });
 		expect(await opening).toMatchObject({ isLoading: false, target: { tabId: "t1" } });
+		expect(Date.now() - started).toBeLessThan(1_000);
 	});
 
 	it("reports a fully loaded page when load finishes within the grace period", async () => {

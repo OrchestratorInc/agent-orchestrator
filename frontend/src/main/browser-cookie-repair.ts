@@ -90,6 +90,15 @@ export async function repairCookies(session: RepairSession): Promise<RepairResul
 	return { ...repaired, failed: antiBot.length + widened.length - repaired.antiBot - repaired.duplicates };
 }
 
+type RepairOptions = {
+	stateDir: string;
+	profileIds: string[];
+	fromProfile: (profileId: string) => RepairSession;
+	log?: (message: string) => void;
+};
+
+const runs = new Map<string, Promise<void>>();
+
 type RepairState = { kind: "first-run" } | { kind: "unreadable" } | { kind: "ready"; pending: string[] };
 
 async function readState(file: string): Promise<RepairState> {
@@ -120,13 +129,17 @@ async function writeState(file: string, pending: string[]): Promise<void> {
  * retried: repeating this at every launch would wipe freshly earned anti-bot
  * cookies. Never throws, so a failed repair cannot stop AO starting.
  */
-export async function repairBrowserProfileCookies(options: {
-	stateDir: string;
-	profileIds: string[];
-	fromProfile: (profileId: string) => RepairSession;
-	log?: (message: string) => void;
-}): Promise<void> {
+export function repairBrowserProfileCookies(options: RepairOptions): Promise<void> {
+	// Reopening the window can start this during a run. They share one run.
 	const file = path.join(options.stateDir, STATE_FILE);
+	const running = runs.get(file);
+	if (running) return running;
+	const run = runRepair(file, options).finally(() => runs.delete(file));
+	runs.set(file, run);
+	return run;
+}
+
+async function runRepair(file: string, options: RepairOptions): Promise<void> {
 	const state = await readState(file);
 	if (state.kind === "unreadable") {
 		options.log?.("AO: browser profile cookie repair skipped: its state file is unreadable");

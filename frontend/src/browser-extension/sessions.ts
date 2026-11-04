@@ -16,6 +16,8 @@ export type SessionTabs = {
 	tabs: Record<string, number>;
 	activeTabId?: string;
 	nextTab: number;
+	/** Tabs the user handed over by dragging them into the group: never closed. */
+	handedTabs?: number[];
 };
 
 export type ActiveTab = { logicalId: string; tabId: number; tab: Tab };
@@ -183,8 +185,9 @@ export class SessionTabRegistry {
 	}
 
 	/**
-	 * Release a session: close tabs still on about:blank, ungroup the rest so
-	 * the user keeps any page they were looking at.
+	 * Release a session: close its window when everything in it was the
+	 * session's. Otherwise the window also holds something of the user's, so
+	 * close tabs still on about:blank and ungroup the rest for them to keep.
 	 */
 	async destroy(sessionId: string): Promise<void> {
 		await this.load();
@@ -192,6 +195,7 @@ export class SessionTabRegistry {
 		if (!session) return;
 		this.sessions.delete(sessionId);
 		await this.save();
+		if (await this.closeOwnWindow(session)) return;
 		const keep: number[] = [];
 		for (const tabId of Object.values(session.tabs)) {
 			const tab = await this.chrome.tabs.get(tabId).catch(() => undefined);
@@ -200,6 +204,17 @@ export class SessionTabRegistry {
 			else keep.push(tabId);
 		}
 		if (keep.length > 0) await this.chrome.tabs.ungroup(keep).catch(() => undefined);
+	}
+
+	private async closeOwnWindow(session: SessionTabs): Promise<boolean> {
+		if (session.windowId === undefined || session.handedTabs?.length) return false;
+		const owned = new Set(Object.values(session.tabs));
+		const inWindow = await this.chrome.tabs.query({ windowId: session.windowId }).catch(() => []);
+		if (owned.size === 0 || inWindow.length !== owned.size || !inWindow.every((tab) => tab.id !== undefined && owned.has(tab.id))) return false;
+		return this.chrome.windows.remove(session.windowId).then(
+			() => true,
+			() => false,
+		);
 	}
 
 	/** Find which session owns a Chrome tab, if any. */
@@ -249,6 +264,7 @@ export class SessionTabRegistry {
 			const session = [...this.sessions.values()].find((candidate) => candidate.groupId === groupId);
 			if (!session) return;
 			session.tabs[`t${session.nextTab++}`] = tabId;
+			(session.handedTabs ??= []).push(tabId);
 			await this.save();
 		}
 	}

@@ -839,7 +839,8 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
-	await repairBrowserProfileCookies({
+	// In the background: this must never hold up the window.
+	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
 		profileIds: browserProfileStore.profiles.map((profile) => profile.id),
 		fromProfile: (profileId) => session.fromPartition(browserProfilePartition(profileId)),

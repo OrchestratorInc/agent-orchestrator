@@ -357,7 +357,7 @@ export class Executor {
 				if (done) return;
 				done = true;
 				chrome.webNavigation.onCommitted.removeListener(onCommitted);
-				chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onCommitted);
+				chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onFragment);
 				chrome.webNavigation.onDOMContentLoaded.removeListener(onDomContentLoaded);
 				chrome.webNavigation.onCompleted.removeListener(onCompleted);
 				chrome.webNavigation.onErrorOccurred.removeListener(onError);
@@ -372,6 +372,10 @@ export class Executor {
 			let committed = false;
 			const onCommitted = (details: { tabId: number; frameId: number }) => {
 				if (details.tabId === tabId && details.frameId === 0) committed = true;
+			};
+			// A same-document navigation is done at once and fires no load events.
+			const onFragment = (details: { tabId: number; frameId: number }) => {
+				if (details.tabId === tabId && details.frameId === 0) finish(true);
 			};
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const onDomContentLoaded = (details: { tabId: number; frameId: number }) => {
@@ -388,7 +392,7 @@ export class Executor {
 			const onAbort = () => finish(false, new BridgeError("BROWSER_COMMAND_CANCELED", "Browser command was canceled"));
 			const timer = setTimeout(() => finish(false), NAVIGATION_TIMEOUT_MS);
 			chrome.webNavigation.onCommitted.addListener(onCommitted);
-			chrome.webNavigation.onReferenceFragmentUpdated.addListener(onCommitted);
+			chrome.webNavigation.onReferenceFragmentUpdated.addListener(onFragment);
 			chrome.webNavigation.onDOMContentLoaded.addListener(onDomContentLoaded);
 			chrome.webNavigation.onCompleted.addListener(onCompleted);
 			chrome.webNavigation.onErrorOccurred.addListener(onError);

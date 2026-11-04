@@ -29,6 +29,9 @@ import (
 //
 // Chrome must run with the extension loaded, --use-mock-keychain (or macOS asks
 // for the login password on every launch and pages stall until it is answered)
+// --disable-features=MacWebContentsOcclusion,CalculateNativeWinOcclusion and
+// --disable-backgrounding-occluded-windows (or a covered test window reads as
+// hidden and trusted input and screenshots fail with BROWSER_TAB_HIDDEN),
 // and --remote-debugging-port, used here only to click the consent prompt the
 // way a person would, and to act as the user on tabs and windows. Stop the
 // daemon first: this test serves the Chrome runtime socket itself.
@@ -293,8 +296,13 @@ func TestChromeE2E(t *testing.T) {
 	if windowOf("AO · "+second) == agentWindow {
 		t.Fatal("sessions share a window")
 	}
+	secondWindow := windowOf("AO · " + second)
 	if err := broker.DestroySession(ctx, second); err != nil {
 		t.Fatalf("destroy second: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if left := extension(fmt.Sprintf(`chrome.windows.getAll().then((all) => ({ open: all.some((w) => w.id === %d) }))`, secondWindow)); left["open"] == true {
+		t.Fatal("a finished session left its window open")
 	}
 
 	// Allowing every session: the next new session runs without asking.

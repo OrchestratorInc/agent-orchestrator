@@ -249,6 +249,20 @@ describe("repairBrowserProfileCookies", () => {
 		}
 	});
 
+	it("shares one run when a second window starts it during the first", async () => {
+		const { stateDir, cleanup } = await fixture();
+		try {
+			const fromProfile = vi.fn(() => fakeSession([cookie(".x.com", "cf_clearance", "stale")]));
+			await Promise.all([
+				repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile }),
+				repairBrowserProfileCookies({ stateDir, profileIds: ["p1"], fromProfile }),
+			]);
+			expect(fromProfile).toHaveBeenCalledOnce();
+		} finally {
+			await cleanup();
+		}
+	});
+
 	it("finishes the remaining profiles after a crash partway through", async () => {
 		const { stateDir, cleanup } = await fixture();
 		try {
