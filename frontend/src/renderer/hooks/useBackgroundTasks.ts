@@ -15,12 +15,14 @@ const selectReadings = (data: components["schemas"]["ListBackgroundTasksResponse
 	new Map(data.sessions.map((reading) => [reading.sessionId, reading]));
 
 /** One batch query for the local board, independent of Diagnostics. */
-export function useBackgroundTaskReadings(enabled: boolean) {
+export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) {
 	return useQuery({
-		queryKey: [...backgroundTasksQueryRoot, "all"],
+		queryKey: [...backgroundTasksQueryRoot, "all", projectId ?? null],
 		enabled,
 		queryFn: async ({ signal }) => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/background-tasks", { signal });
+			const { data, error } = await apiClient.GET("/api/v1/sessions/background-tasks", {
+				params: { query: projectId ? { projectId } : {} }, signal,
+			});
 			if (error) throw error;
 			if (!data || !Array.isArray(data.sessions) || !data.sessions.every(isTaskReading)) {
 				throw new Error("Invalid background task inventory response");

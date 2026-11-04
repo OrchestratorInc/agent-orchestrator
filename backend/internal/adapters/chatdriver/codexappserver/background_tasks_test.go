@@ -12,12 +12,12 @@ import (
 
 func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 	for _, tc := range []struct {
-		name, response       string
-		count                int
-		unsupported, wantErr bool
+		name, response                string
+		count                         int
+		unsupported, wantErr, partial bool
 	}{
-		{name: "empty", response: `{"data":[],"nextCursor":null}`},
-		{name: "shell", response: `{"data":[{"processId":"63962","itemId":"cmd-1","command":"sleep 1800","osPid":20205}],"nextCursor":null}`, count: 1},
+		{name: "empty with unobserved agents", response: `{"data":[],"nextCursor":null}`, wantErr: true, partial: true},
+		{name: "shell with unobserved agents", response: `{"data":[{"processId":"63962","itemId":"cmd-1","command":"sleep 1800","osPid":20205}],"nextCursor":null}`, count: 1, wantErr: true, partial: true},
 		{name: "missing data", response: `{}`, wantErr: true},
 		{name: "missing identity", response: `{"data":[{"command":"sleep"}]}`, wantErr: true},
 		{name: "duplicate identity", response: `{"data":[{"processId":"1"},{"processId":"1"}]}`, wantErr: true},
@@ -37,7 +37,7 @@ func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 			}
 			defer func() { _ = conv.Close() }()
 			tasks, err := conv.(ports.ChatBackgroundTaskInspector).BackgroundTasks(context.Background())
-			if (err != nil) != tc.wantErr || errors.Is(err, ports.ErrBackgroundTasksUnsupported) != tc.unsupported || len(tasks) != tc.count {
+			if (err != nil) != tc.wantErr || errors.Is(err, ports.ErrBackgroundTasksUnsupported) != tc.unsupported || errors.Is(err, ports.ErrBackgroundTasksPartial) != tc.partial || len(tasks) != tc.count {
 				t.Fatalf("tasks=%+v err=%v", tasks, err)
 			}
 			if tc.count > 0 && (tasks[0].ID != "63962" || tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800") {
