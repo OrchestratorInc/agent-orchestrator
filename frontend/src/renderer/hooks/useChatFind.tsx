@@ -367,7 +367,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const bar = open ? <div ref={barRef} role="search" onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
 		if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
 		else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
-	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="relative z-20 my-1 mr-3 ml-auto flex w-[360px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-full border border-border bg-surface px-3 py-2 text-sm leading-5 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="relative z-20 mt-3 mr-3 mb-1 ml-auto flex w-[360px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-full border border-border bg-surface px-3 py-2 text-sm leading-5 shadow-sm focus-within:ring-1 focus-within:ring-ring">
 		<Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 		<input ref={input} type="search" aria-label={t("shortcut.find-in-chat")} placeholder={t("shortcut.find-in-chat")} value={query} className="min-w-0 flex-1 bg-transparent px-1 outline-none [&::-webkit-search-cancel-button]:hidden" onChange={(event) => {
 			const value = event.target.value;
@@ -377,7 +377,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 			if (event.nativeEvent.isComposing || composing) return;
 			if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); move(event.shiftKey ? -1 : 1); }
 		}} />
-		<span role="status" aria-live="polite" className="inline-flex min-h-4 min-w-16 max-w-24 shrink-0 items-center justify-center overflow-hidden whitespace-nowrap text-muted-foreground tabular-nums">
+		<span role="status" aria-live="polite" className={`inline-flex min-h-4 min-w-16 max-w-24 shrink-0 items-center ${state.phase === "searching" ? "justify-center" : "justify-end"} overflow-hidden px-2 whitespace-nowrap text-muted-foreground tabular-nums`}>
 			{state.phase === "searching" ? engaged ? <><Loader2 aria-hidden="true" className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /><span className="sr-only">{t("command.searching")}</span></> : null : state.phase === "error" ? t("chat.find.incomplete") : isEmptyFindQuery(query) ? "" : state.total ? <><span aria-hidden="true">{activeIndex}/{state.total}</span><span className="sr-only">{t("browser.find.matchCount", { active: activeIndex, total: state.total })}</span></> : state.phase === "ready" ? t("browser.find.noResults") : ""}
 		</span>
 		<div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
