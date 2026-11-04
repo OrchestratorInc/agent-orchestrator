@@ -3330,7 +3330,8 @@ type ConversationActivityResponse struct {
 	// The keys that depend on the kind:
 	//
 	//   command      command, rawCommand, cwd, exitCode, durationMs, processId,
-	//                output (+ outputSource, outputMayBePartial, outputTruncated),
+	//                output (+ outputSource, outputMayBePartial, outputTruncated,
+	//                and outputBytes when outputLimit kept only its head and tail),
 	//                terminalInput -- the keystrokes the agent sent to the PTY, kept
 	//                out of output because the PTY echoes them
 	//   file_change  files[] with path, oldPath, status, additions, deletions, patch
@@ -3378,6 +3379,10 @@ type ConversationSnapshotResponse struct {
 	LatestSequence int64  `json:"latestSequence"`
 	OldestSequence int64  `json:"oldestSequence,omitempty"`
 	HasMoreBefore  bool   `json:"hasMoreBefore"`
+	// AfterSequence echoes the afterSequence floor when the daemon applied it: the
+	// page then holds only rows after it, and hasMoreBefore means rows between the
+	// floor and oldestSequence were left out. Absent means a whole page.
+	AfterSequence int64 `json:"afterSequence,omitempty"`
 	// NativeForkAvailableAfterSequence is the first provider-backed human prompt
 	// in the active provider scope. It keeps edit gating exact across bounded pages.
 	NativeForkAvailableAfterSequence int64                             `json:"nativeForkAvailableAfterSequence"`

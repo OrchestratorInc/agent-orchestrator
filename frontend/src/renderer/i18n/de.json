@@ -3478,6 +3478,7 @@
 	"remote.addHost": "Host hinzufügen",
 	"remote.loadHostsFailed": "Gespeicherte Hosts konnten nicht geladen werden.",
 	"remote.hostOffline": "Der Host ist offline. Prüfen Sie Adresse und Passwort.",
+	"remote.offlineCopy": "Die zuletzt gespeicherte Kopie wird angezeigt, bis der Host verbunden ist.",
 	"remote.hostIncompatible": "Die AO-Versionen sind nicht kompatibel. Aktualisieren Sie AO auf diesem Computer und dem Remote-Host.",
 	"remote.updateAO": "AO aktualisieren",
 	"remote.hostUnauthorized": "Der Host hat das Passwort abgelehnt. Prüfen Sie Adresse und Passwort.",

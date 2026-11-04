@@ -355,6 +355,11 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 }
 
 const CONVERSATION_PAGE_SIZE = 200;
+// A remote page crosses a tunnel, often on the host's upload: a small live page,
+// larger pages on scroll, and each tool output cut to its head and tail.
+const REMOTE_LIVE_PAGE_SIZE = 30;
+const REMOTE_OLDER_PAGE_SIZE = 100;
+const REMOTE_OUTPUT_LIMIT = 512;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
 const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
@@ -389,25 +394,96 @@ export interface ConversationQueryResult {
 	loadOlder: () => void;
 }
 
-async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+type ConversationPageQuery = { beforeSequence?: number; afterSequence?: number; limit: number; outputLimit?: number };
+
+async function fetchConversationWire(sessionId: string, hostId: string | undefined, query: ConversationPageQuery): Promise<WireSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		params: { path: { sessionId }, query },
 	});
 	if (error) throw error;
-	return toSnapshot(data as WireSnapshot);
+	return data as WireSnapshot;
+}
+
+function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
+	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
+	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
+}
+
+async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
+}
+
+/** The whole output of one activity, for a page that carries only its head and tail. */
+export async function fetchActivityOutput(sessionId: string, hostId: string | undefined, sequence: number, activityId: string): Promise<string | undefined> {
+	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 });
+	const activity = wire.activities?.find((candidate) => candidate.id === activityId);
+	return (activity?.detail as { output?: unknown } | undefined)?.output as string | undefined;
+}
+
+/**
+ * Rows above this sequence can still change: the newest turn (an undo always
+ * takes it back), every open turn, and every unsettled activity.
+ */
+export function remoteConversationFloor(page: ConversationSnapshot): number {
+	const live = new Set(page.turns.filter((turn) => turn.state === "queued" || turn.state === "running").map((turn) => turn.id));
+	const newest = page.turns.at(-1);
+	if (newest) live.add(newest.id);
+	let floor = page.latestSequence;
+	for (const item of page.items) {
+		const unsettled = item.kind === "activity" && (item.status === "running" || item.status === "pending");
+		if (unsettled || (item.turnId && live.has(item.turnId))) floor = Math.min(floor, item.sequence - 1);
+	}
+	return floor;
+}
+
+/**
+ * A tail holds every row that can still change, so it replaces the rows above its
+ * floor. A turn that starts, settles or is taken back, a branch switch, compaction,
+ * or a tail that did not reach its floor can change rows below it, so those cases
+ * read the whole live page instead.
+ */
+export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: ConversationSnapshot, floor: number): ConversationSnapshot | undefined {
+	if (tail.conversationId !== prior.conversationId || tail.activeBranchId !== prior.activeBranchId || tail.hasMoreBefore) return undefined;
+	if (tail.compactedAt !== prior.compactedAt || tail.nativeForkAvailableAfterSequence !== prior.nativeForkAvailableAfterSequence) return undefined;
+	const priorTurns = new Map(prior.turns.map((turn) => [turn.id, turn]));
+	const turnsUnchanged = tail.turns.every((turn) => {
+		const before = priorTurns.get(turn.id);
+		return before?.state === turn.state && Boolean(before.rolledBack) === Boolean(turn.rolledBack);
+	});
+	if (!turnsUnchanged) return undefined;
+	const kept = prior.items.filter((item) => item.sequence <= floor);
+	const keptTurnIds = new Set(kept.map((item) => item.turnId));
+	return mergeConversationPages([tail, { ...prior, items: kept, turns: prior.turns.filter((turn) => keptTurnIds.has(turn.id)) }]);
 }
 
 /** Refresh only the live page; refetching an infinite query downloads all older history. */
 export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
+	const key = conversationQueryKey(sessionId, hostId);
 	let latest: ConversationSnapshot;
 	try {
-		latest = await fetchConversationPage(sessionId, hostId);
+		const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+		const floor = prior ? remoteConversationFloor(prior) : 0;
+		if (prior && floor >= 1) {
+			const wire = await fetchConversationWire(sessionId, hostId, { afterSequence: floor, limit: REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT });
+			const tail = toSnapshot(wire);
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+			// An older daemon ignores afterSequence and answers with a whole live page.
+			const merged = wire.afterSequence === floor && current?.pages.length ? mergeRemoteConversationTail(current.pages[0], tail, floor) : undefined;
+			if (merged && current) {
+				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+				return;
+			}
+			latest = wire.afterSequence ? await fetchConversationPage(sessionId, hostId) : tail;
+		} else {
+			latest = await fetchConversationPage(sessionId, hostId);
+		}
 	} catch (error) {
 		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
-	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (previous) => {
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
 		const priorLive = previous.pages[0];
@@ -422,12 +498,39 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	});
 }
 
+const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
+
+/**
+ * One refresh of a remote chat at a time, and one catch-up for everything that
+ * changed while it ran, so a burst of events never stacks reads on the tunnel.
+ */
+export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionId: string, hostId: string): void {
+	let running = remoteConversationRefreshes.get(queryClient);
+	if (!running) remoteConversationRefreshes.set(queryClient, (running = new Map()));
+	const key = `${hostId}\0${sessionId}`;
+	const inFlight = running.get(key);
+	if (inFlight) {
+		inFlight.dirty = true;
+		return;
+	}
+	const state = { dirty: false };
+	running.set(key, state);
+	void (async () => {
+		do {
+			state.dirty = false;
+			try { await refreshRemoteConversation(queryClient, sessionId, hostId); }
+			catch { /* A later event or the polling fallback retries. */ }
+		} while (state.dirty);
+		running.delete(key);
+	})();
+}
+
 /**
  * A cached local chat whose controller is ready or working. Such a chat learns
  * every change through events; one still starting up or waking does not.
  */
-export function conversationSettled(queryClient: QueryClient, sessionId: string): boolean {
-	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId))?.pages[0]?.controller.state;
+export function conversationSettled(queryClient: QueryClient, sessionId: string, hostId?: string): boolean {
+	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0]?.controller.state;
 	return state === "ready" || state === "busy";
 }
 
@@ -440,8 +543,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		// A local chat changes only through events, which invalidate it even while
 		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
 		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. Remote chats keep the default and their own polling.
-		...(hostId ? {} : { staleTime: Infinity }),
+		// it had. A remote chat refreshes its live page when it opens, and events
+		// refresh it while it is open, so a cached remote page is not refetched whole.
+		staleTime: Infinity,
+		...(hostId ? { refetchOnMount: false } : {}),
 		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
@@ -473,11 +578,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		select: selectConversationPages,
 	});
 	useEffect(() => {
-		if (!hostId || !sessionId) return;
-		const timer = window.setInterval(() => {
-			void refreshRemoteConversation(queryClient, sessionId, hostId).catch(() => {});
-		}, 2_000);
-		return () => window.clearInterval(timer);
+		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
+		// at once; the open reads what changed since.
+		if (hostId && sessionId && queryClient.getQueryData(conversationQueryKey(sessionId, hostId))) {
+			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		}
 	}, [hostId, queryClient, sessionId]);
 
 	if (query.error && (!hostId || !query.data)) {
