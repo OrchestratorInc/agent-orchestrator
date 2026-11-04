@@ -19,6 +19,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          sparse-checkout: |
+            /README.md
+            /translations/
+            /frontend/src/docs/src/components/mdx.tsx
+          sparse-checkout-cone-mode: false
+
       - name: Verify latest stable release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,15 +56,22 @@ jobs:
           mapfile -t assets < <(jq -r '.assets[].name' <<<"$release_json")
           printf 'Assets:\n%s\n' "${assets[@]}"
 
+          # The release conductor names the assets, so a rename there can leave
+          # the published download links pointing at nothing (#7726).
+          linked_assets="$(grep -ohE '[A-Za-z-]+-(darwin|win32|linux)-(arm64|x64)\.(dmg|zip|exe|AppImage|deb|rpm)' \
+            README.md translations/README.*.md frontend/src/docs/src/components/mdx.tsx | sort -u)"
+          mapfile -t linked_assets <<<"$linked_assets"
+
           required_assets=(
             latest.yml
             latest-mac.yml
             latest-linux.yml
+            "${linked_assets[@]}"
           )
 
           for required in "${required_assets[@]}"; do
             if ! printf '%s\n' "${assets[@]}" | grep -Fxq "$required"; then
-              echo "::error::Latest stable release '$tag' is missing updater feed asset '$required'."
+              echo "::error::Latest stable release '$tag' is missing asset '$required'."
               exit 1
             fi
           done

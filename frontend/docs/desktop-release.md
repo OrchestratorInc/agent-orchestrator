@@ -82,6 +82,10 @@ a ZIP for electron-updater. The ZIP and `latest-mac.yml` must remain available:
 electron-updater cannot install an update from a DMG. Nightly and preview
 channels omit the first-install DMG.
 
+The conductor chooses asset names. The README and docs link
+`Orchestrator-darwin-<arch>.dmg`, and `release-latest-guard.yml` fails when the
+latest stable release lacks an asset those pages link.
+
 ## Local updater diagnostics
 
 AO writes updater decisions to `logs/updater.jsonl` beside `staged-update.json`
