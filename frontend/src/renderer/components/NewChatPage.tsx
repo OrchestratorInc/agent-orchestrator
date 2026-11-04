@@ -355,7 +355,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => void task.refreshModels().catch(() => undefined)}>
+			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
 				{t("newTask.modelNotice.retry")}
 			</Button>
 		</div>
@@ -630,14 +630,16 @@ function MobileConnected() {
 	const live = data?.filter((device) => device.live) ?? [];
 	if (live.length === 0) return null;
 	return (
-		<button
+		<Button
 			type="button"
-			className={cn(TRIGGER_CLASS, "ml-auto inline-flex w-fit shrink-0 items-center gap-1.5")}
+			variant="quiet"
+			size="sm"
+			className="ml-auto w-fit"
 			title={live.map((device) => device.deviceName).filter(Boolean).join(", ") || undefined}
 			onClick={() => openGlobalSettings("mobile")}
 		>
 			<Smartphone aria-hidden="true" className="size-3.5 shrink-0" />
 			{t("newTask.phoneConnected", { count: live.length })}
-		</button>
+		</Button>
 	);
 }

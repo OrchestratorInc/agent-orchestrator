@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ConversationContentSummary } from "../../types/conversation";
-import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConversationContentItems } from "./ConversationContentItems";
@@ -134,28 +133,21 @@ export function HumanMessageEditor({
 					onClick={onCancel}
 					disabled={pending || locked}
 					aria-label={t("chat.edit.cancel")}
-					className="size-7"
 				>
 					<X aria-hidden="true" className="size-3.5" />
 				</Button>
 			</span>
-		
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span className="inline-flex">
 						<Button
 							type="button"
-							variant="ghost"
+							variant="primary"
 							size="icon-sm"
+							shape="pill"
 							onClick={submit}
 							disabled={sendDisabled}
 							aria-label={recoveryLabel ?? t("chat.edit.send")}
-							className={cn(
-								"size-7 rounded-full border-transparent",
-								sendDisabled
-									? "bg-primary text-primary-foreground"
-									: "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground",
-							)}
 						>
 							{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <ArrowUp aria-hidden="true" className="size-3.5" />}
 						</Button>

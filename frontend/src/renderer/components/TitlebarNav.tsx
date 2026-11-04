@@ -9,6 +9,7 @@ import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { AOMascot } from "./AOMascot";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
@@ -214,18 +215,20 @@ function TitlebarButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="inline-flex">
-          <button
+          <Button
             aria-label={label}
             aria-disabled={disabled || undefined}
-            className="grid size-control-md place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent disabled:hover:text-passive"
+            className="disabled:opacity-55"
             disabled={disabled}
             onClick={onClick}
+            size="icon-sm"
             style={noDragStyle}
             tabIndex={tabIndex}
             type="button"
+            variant="quiet"
           >
             {children}
-          </button>
+          </Button>
         </span>
       </TooltipTrigger>
       <TooltipContent shortcut={shortcut} side="bottom">{label}</TooltipContent>

@@ -107,11 +107,11 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
-			className={cn("text-muted-foreground hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground dark:data-[state=open]:bg-muted/50", className)}
+			className={className}
 			disabled={video}
 			size="sm"
 			type="button"
-			variant="ghost"
+			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
 			{t("artifacts.share.menu")}
@@ -362,7 +362,7 @@ function SharePanel({
 								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, outdated })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
 								</Button>
-								<Button className="bg-danger-strong hover:bg-danger-strong" disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="primary">
+								<Button disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="destructive">
 									{t("artifacts.share.unpublish")}
 								</Button>
 							</>,
@@ -390,11 +390,11 @@ function SharePanel({
 					{phase.error ? status(phase.error, "alert") : null}
 					{footer(
 						<Button
-							className="-ml-2.5 text-error hover:text-error"
+							className="-ml-2.5"
 							onClick={() => setPhase({ kind: "published", share, outdated, unpublishing: "confirm" })}
 							size="sm"
 							type="button"
-							variant="ghost"
+							variant="destructive-ghost"
 						>
 							{t("artifacts.share.unpublish")}
 						</Button>,

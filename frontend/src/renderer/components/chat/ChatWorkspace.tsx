@@ -2179,7 +2179,7 @@ function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: Com
 			<div role="alert" className="flex items-center gap-2">
 				<TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" />
 				<span>{t("chat.startup.failed")}</span>
-				{onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
+				{onRetry ? <Button type="button" variant="link" className="ml-auto text-xs text-foreground" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</Button> : null}
 			</div>
 			{error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
 			{retryError ? <p role="alert" className="mt-1 text-destructive">{retryError}</p> : null}
@@ -4411,10 +4411,9 @@ export function Timeline({
 							<Button
 								type="button"
 								size="sm"
-								variant="ghost"
+								variant="quiet"
 								disabled={loadingOlder}
 								onClick={onLoadOlder}
-								className="gap-1.5 text-muted-foreground"
 							>
 								{loadingOlder ? (
 									<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
@@ -5825,15 +5824,17 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
 						{prompts.map(({ prompt, chip, icon: Icon }) => (
 							<li key={prompt}>
-								<button
+								<Button
 									type="button"
+									variant="quiet"
+									shape="pill"
 									title={t(prompt)}
-									className="welcome-prompt-suggestion inline-flex h-8 items-center gap-1.5 rounded-full border border-border px-3 text-control text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:border-ring focus-visible:bg-interactive-hover focus-visible:text-foreground"
+									className="welcome-prompt-suggestion border-border"
 									onClick={() => onPick(t(prompt))}
 								>
 									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
 									<span className="whitespace-nowrap">{t(chip)}</span>
-								</button>
+								</Button>
 							</li>
 						))}
 					</ul>

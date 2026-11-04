@@ -225,9 +225,6 @@ function CueRunMenuTrigger({
 						ref={buttonRef}
 						type="button"
 						aria-label={t("cues.run")}
-						// The menu is anchored to this button: pressing must not scale it,
-						// or the open menu shifts with the trigger.
-						className="topbar-control--static-press"
 						data-priority="secondary"
 						disabled={disabled || spinner}
 						variant="icon"

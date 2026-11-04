@@ -35,6 +35,7 @@ import { cn } from "../../lib/utils";
 import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
+import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
@@ -106,8 +107,10 @@ export interface ApprovalModeLimits {
 	requested?: ApprovalMode;
 }
 
-export const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
+export const TRIGGER_CLASS = cn(
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+	GHOST_PILL_CLASS,
+);
 export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
@@ -631,17 +634,20 @@ export function TurnSettingsBar({
 							</Picker>
 						) : null}
 						{unified && planOn ? (
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="sm"
+								aria-pressed
 								disabled={optionDisabled}
 								onClick={leavePlan}
 								aria-label="Plan mode is on. Turn it off"
 								title="Plan mode is on. Click to turn it off"
-								className={cn(TRIGGER_CLASS, "inline-flex items-center px-2 text-foreground")}
+								className="rounded-lg"
 							>
 								<ListTodo aria-hidden="true" className="size-3.5 shrink-0" />
 								<span>Plan</span>
-							</button>
+							</Button>
 						) : null}
 					</div>
 				) : null}
