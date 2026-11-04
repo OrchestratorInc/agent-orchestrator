@@ -798,8 +798,9 @@ func TestUsageServiceTierPersistsAndGuardsBackfill(t *testing.T) {
 }
 
 // Break caught: a time range over created_at's stored text that drops or
-// leaks events at the edges, cache writes read from the wrong provider field,
-// or a session title that does not match the one the UI shows.
+// leaks events at the edges, cache writes read from the wrong provider field
+// (including the ao_ keys every agent other than Claude and Codex stores them
+// under), or a session title that does not match the one the UI shows.
 func TestListUsageReportEventsReadsWindowCacheWritesAndTitle(t *testing.T) {
 	s := sqlitetest.MustOpen(t)
 	ctx := context.Background()
@@ -821,23 +822,28 @@ func TestListUsageReportEventsReadsWindowCacheWritesAndTitle(t *testing.T) {
 		event("before", day.Add(-time.Millisecond), ""),
 		event("first", day, `{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":10}}`),
 		event("unsplit", day.Add(time.Hour), `{"cache_creation_input_tokens":7}`),
+		event("agent", day.Add(2*time.Hour),
+			`{"cacheWrite":9,"ao_derived_cache_write_input_tokens":9,"ao_derived_cache_write_1h_input_tokens":4}`),
 		event("after", day.Add(24*time.Hour), ""),
 	}))
 
 	events, err := s.ListUsageReportEvents(ctx, day, day.Add(24*time.Hour))
 	mustNoError(t, err)
-	if len(events) != 2 {
-		t.Fatalf("events = %+v, want the two inside the window", events)
+	if len(events) != 3 {
+		t.Fatalf("events = %+v, want the three inside the window", events)
 	}
-	first, unsplit := events[0], events[1]
+	first, unsplit, agent := events[0], events[1], events[2]
 	if !first.CreatedAt.Equal(day) || first.ServiceTier != "fast" || first.SessionID != sess.ID || first.Harness != domain.HarnessClaudeCode {
 		t.Fatalf("first = %+v", first)
 	}
-	if tokenOrNil(first.CacheWriteTokens) != 12 || tokenOrNil(first.CacheWrite5mTokens) != 2 || tokenOrNil(first.CacheWrite1hTokens) != 10 {
-		t.Fatalf("first cache writes = %v/%v/%v", first.CacheWriteTokens, first.CacheWrite5mTokens, first.CacheWrite1hTokens)
+	if tokenOrNil(first.CacheWriteTokens) != 12 || tokenOrNil(first.CacheWrite1hTokens) != 10 {
+		t.Fatalf("first cache writes = %v/%v", first.CacheWriteTokens, first.CacheWrite1hTokens)
 	}
-	if tokenOrNil(unsplit.CacheWriteTokens) != 7 || unsplit.CacheWrite5mTokens != nil || unsplit.CacheWrite1hTokens != nil {
-		t.Fatalf("unsplit cache writes = %v/%v/%v", unsplit.CacheWriteTokens, unsplit.CacheWrite5mTokens, unsplit.CacheWrite1hTokens)
+	if tokenOrNil(unsplit.CacheWriteTokens) != 7 || unsplit.CacheWrite1hTokens != nil {
+		t.Fatalf("unsplit cache writes = %v/%v", unsplit.CacheWriteTokens, unsplit.CacheWrite1hTokens)
+	}
+	if tokenOrNil(agent.CacheWriteTokens) != 9 || tokenOrNil(agent.CacheWrite1hTokens) != 4 {
+		t.Fatalf("agent cache writes = %v/%v", agent.CacheWriteTokens, agent.CacheWrite1hTokens)
 	}
 	if first.SessionTitle != string(sess.ID) && first.SessionTitle != sess.DisplayName {
 		t.Fatalf("title = %q, want the display name or id", first.SessionTitle)

@@ -79,7 +79,7 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 		CreatedAt: at(24, 9, 0), ProviderID: domain.UsageProviderAnthropic, BillingProviderID: "anthropic", ModelID: "claude-opus-5-5",
 		Tokens:  domain.UsageTokenMetrics{CachedInputTokens: int64p(5000), UncachedInputTokens: int64p(2000), OutputTokens: int64p(50)},
 		Harness: domain.HarnessClaudeCode, SessionID: "app-2", ProjectID: "app", SessionTitle: "Add tests",
-		CacheWriteTokens: int64p(1500), CacheWrite5mTokens: int64p(0), CacheWrite1hTokens: int64p(1500),
+		CacheWriteTokens: int64p(1500), CacheWrite1hTokens: int64p(1500),
 	}, `{"cache_creation_input_tokens":1500,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1500}}`)
 	unpriced := domain.UsageReportEvent{
 		CreatedAt: at(25, 8, 0), ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: "glm-unknown",

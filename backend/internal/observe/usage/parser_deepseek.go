@@ -184,11 +184,11 @@ func parseDeepSeek(source domain.UsageSourceContext, records []jsonlRecord, resu
 			recordMalformed(result)
 			continue
 		}
-		// The pricer reads the cache-write count under the neutral cacheWrite
-		// key, which a write-rated model needs to price its input at all.
+		// The cache-write count goes under AO's key, which a write-rated model
+		// needs to price its input at all.
 		providerUsage, _ := json.Marshal(map[string]int64{
 			"inputTokens": *usage.InputTokens, "outputTokens": *usage.OutputTokens,
-			"cacheReadTokens": usage.CacheReadTokens, "cacheWrite": usage.CacheWriteTokens,
+			"cacheReadTokens": usage.CacheReadTokens, derivedCacheWriteKey: usage.CacheWriteTokens,
 		})
 		billingProvider := canonicalBillingProvider(reply.Provider)
 		messageKey := reply.MessageID

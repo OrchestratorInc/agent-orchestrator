@@ -35,7 +35,7 @@ func TestParsePiUsageBearingEntries(t *testing.T) {
 		t.Fatalf("assistant event = %+v", assistant)
 	}
 	assertPiTokens(t, assistant.Tokens, 19, 5, 14, 7)
-	if providerUsageTokens(t, assistant.ProviderUsageJSON, "cacheWrite") != 3 {
+	if providerUsageTokens(t, assistant.ProviderUsageJSON, derivedCacheWriteKey) != 3 {
 		t.Fatalf("assistant provider usage = %s", assistant.ProviderUsageJSON)
 	}
 
@@ -58,7 +58,7 @@ func TestParsePiUsageBearingEntries(t *testing.T) {
 func TestParsePiAnthropicAssistantUsesResponseModel(t *testing.T) {
 	source := usageSource(domain.UsageSourcePiSession)
 	source.NativeRootID = "pi-session"
-	record := jsonlRecord{Data: []byte(`{"type":"message","id":"assistant-1","message":{"role":"assistant","provider":"anthropic","model":"requested","responseModel":"claude-sonnet","usage":{"input":11,"output":7,"cacheRead":5,"cacheWrite":3,"totalTokens":26}}}`)}
+	record := jsonlRecord{Data: []byte(`{"type":"message","id":"assistant-1","message":{"role":"assistant","provider":"anthropic","model":"requested","responseModel":"claude-sonnet","usage":{"input":11,"output":7,"cacheRead":5,"cacheWrite":3,"cacheWrite1h":2,"totalTokens":26}}}`)}
 
 	result := parseRecords(source, []jsonlRecord{record}, 100, time.Now())
 	if result.err != nil || len(result.Events) != 1 {
@@ -71,6 +71,12 @@ func TestParsePiAnthropicAssistantUsesResponseModel(t *testing.T) {
 		t.Fatalf("event = %+v", event)
 	}
 	assertPiTokens(t, event.Tokens, 19, 5, 14, 7)
+	// Break caught: Pi's 1-hour write split dropped, so a model with a 1h
+	// write rate prices its input as unknown.
+	if providerUsageTokens(t, event.ProviderUsageJSON, derivedCacheWriteKey) != 3 ||
+		providerUsageTokens(t, event.ProviderUsageJSON, derivedCacheWrite1HKey) != 2 {
+		t.Fatalf("provider usage = %s", event.ProviderUsageJSON)
+	}
 }
 
 func TestParsePiExplicitUsageEntry(t *testing.T) {

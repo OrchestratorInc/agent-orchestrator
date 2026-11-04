@@ -573,6 +573,10 @@ func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {
 // cacheWriteSplitFor reads the write buckets back out of the bounded provider
 // usage object. An event stored before that object was captured, or one whose
 // object omits the counters, simply reports an unknown split.
+//
+// Claude and Codex report the count in their own vocabulary. Every other agent,
+// and a Codex record carrying only cumulative totals, has it under the ao_ keys
+// the usage parser adds (see providerUsageWithCacheWrite).
 func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 	if event.ProviderUsageJSON == "" {
 		return cacheWriteSplit{}
@@ -581,49 +585,39 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 	case domain.UsageProviderAnthropic:
 		var usage struct {
 			CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
-			PiCacheWrite             *int64 `json:"cacheWrite"`
-			PiCacheWrite1H           *int64 `json:"cacheWrite1h"`
-			GooseCacheWrite          *int64 `json:"cache_write_tokens"`
 			CacheCreation            *struct {
 				Ephemeral5mInputTokens *int64 `json:"ephemeral_5m_input_tokens"`
 				Ephemeral1hInputTokens *int64 `json:"ephemeral_1h_input_tokens"`
 			} `json:"cache_creation"`
+			AOWrite   *int64 `json:"ao_derived_cache_write_input_tokens"`
+			AOWrite1H *int64 `json:"ao_derived_cache_write_1h_input_tokens"`
 		}
 		if err := json.Unmarshal([]byte(event.ProviderUsageJSON), &usage); err != nil {
 			return cacheWriteSplit{}
 		}
-		total := usage.CacheCreationInputTokens
-		if total == nil {
-			total = usage.PiCacheWrite
+		split := cacheWriteSplit{total: usage.CacheCreationInputTokens}
+		if split.total == nil {
+			split.total = usage.AOWrite
 		}
-		if total == nil {
-			total = usage.GooseCacheWrite
-		}
-		split := cacheWriteSplit{total: total}
 		if usage.CacheCreation != nil {
 			split.fiveM = usage.CacheCreation.Ephemeral5mInputTokens
 			split.oneH = usage.CacheCreation.Ephemeral1hInputTokens
-		} else if usage.PiCacheWrite != nil && usage.PiCacheWrite1H != nil &&
-			*usage.PiCacheWrite1H >= 0 && *usage.PiCacheWrite1H <= *usage.PiCacheWrite {
-			fiveM := *usage.PiCacheWrite - *usage.PiCacheWrite1H
+		} else if split.total != nil && usage.AOWrite1H != nil &&
+			*usage.AOWrite1H >= 0 && *usage.AOWrite1H <= *split.total {
+			fiveM := *split.total - *usage.AOWrite1H
 			split.fiveM = &fiveM
-			split.oneH = usage.PiCacheWrite1H
+			split.oneH = usage.AOWrite1H
 		}
 		return split
 	case domain.UsageProviderOpenAI:
 		// The neutral counters come from last_token_usage when Codex emits it,
 		// so the write bucket must be read from the same per-event object rather
-		// than from the cumulative totals beside it. When Codex emitted no such
-		// object the parser derived the bucket from those cumulative readings
-		// and stored it under its own key; without that fallback every
-		// write-rated model prices its input as unknown.
+		// than from the cumulative totals beside it.
 		var usage struct {
 			Last *struct {
 				CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
 			} `json:"last_token_usage"`
-			Derived         *int64 `json:"ao_derived_cache_write_input_tokens"`
-			PiCacheWrite    *int64 `json:"cacheWrite"`
-			GooseCacheWrite *int64 `json:"cache_write_tokens"`
+			AOWrite *int64 `json:"ao_derived_cache_write_input_tokens"`
 		}
 		if err := json.Unmarshal([]byte(event.ProviderUsageJSON), &usage); err != nil {
 			return cacheWriteSplit{}
@@ -631,13 +625,7 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 		if usage.Last != nil && usage.Last.CacheWriteInputTokens != nil {
 			return cacheWriteSplit{total: usage.Last.CacheWriteInputTokens}
 		}
-		if usage.Derived != nil {
-			return cacheWriteSplit{total: usage.Derived}
-		}
-		if usage.PiCacheWrite != nil {
-			return cacheWriteSplit{total: usage.PiCacheWrite}
-		}
-		return cacheWriteSplit{total: usage.GooseCacheWrite}
+		return cacheWriteSplit{total: usage.AOWrite}
 	default:
 		return cacheWriteSplit{}
 	}

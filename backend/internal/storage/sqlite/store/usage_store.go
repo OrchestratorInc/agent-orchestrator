@@ -1234,7 +1234,6 @@ func (s *Store) ListUsageReportEvents(ctx context.Context, since, until time.Tim
 				OutputTokens:        nullInt64Ptr(row.OutputTokens),
 			},
 			CacheWriteTokens:   reported(row.CacheWriteTokens),
-			CacheWrite5mTokens: reported(row.CacheWrite5mTokens),
 			CacheWrite1hTokens: reported(row.CacheWrite1hTokens),
 			Costs: domain.UsageEventCosts{
 				InputCostNanos:       nullInt64Ptr(row.InputCostNanos),

@@ -2,7 +2,6 @@ package usage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -232,7 +231,7 @@ type costSplit struct {
 }
 
 func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) map[priceKey]costSplit {
-	type tokens struct{ cached, uncached, output, write, write5m, write1h int64 }
+	type tokens struct{ cached, uncached, output, write, write1h int64 }
 	sums := map[priceKey]*tokens{}
 	for _, event := range events {
 		if event.Costs.EstimatedCostNanos == nil {
@@ -253,9 +252,7 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 		// ponytail: a write without a reported 5m/1h split counts as 5m, the
 		// API's default lifetime; read the split from the transcript if this
 		// ever matters for old rows.
-		oneHour := min(max(tokenValue(event.CacheWrite1hTokens), 0), write)
-		sum.write1h += oneHour
-		sum.write5m += write - oneHour
+		sum.write1h += min(max(tokenValue(event.CacheWrite1hTokens), 0), write)
 	}
 	out := make(map[priceKey]costSplit, len(sums))
 	if snapshot == nil {
@@ -269,7 +266,7 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 				Tokens: domain.UsageTokenMetrics{
 					InputTokens: &input, CachedInputTokens: &cached, UncachedInputTokens: &uncached, OutputTokens: &sum.output,
 				},
-				ProviderUsageJSON: syntheticProviderUsage(key.provider, sum.write, sum.write5m, sum.write1h),
+				ProviderUsageJSON: syntheticProviderUsage(sum.write, sum.write1h),
 			}
 		}
 		actual, err := snapshot.Estimate(event(key.tier, sum.cached, sum.uncached))
@@ -296,27 +293,10 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 	return out
 }
 
-// syntheticProviderUsage writes summed cache-write counts in the shape each
-// provider's stored usage object uses, so the estimator splits them as it
-// would a single event.
-func syntheticProviderUsage(provider domain.UsageProviderID, write, write5m, write1h int64) string {
-	var object any
-	switch provider {
-	case domain.UsageProviderAnthropic:
-		object = map[string]any{
-			"cache_creation_input_tokens": write,
-			"cache_creation":              map[string]int64{"ephemeral_5m_input_tokens": write5m, "ephemeral_1h_input_tokens": write1h},
-		}
-	case domain.UsageProviderOpenAI:
-		object = map[string]any{"last_token_usage": map[string]int64{"cache_write_input_tokens": write}}
-	default:
-		return ""
-	}
-	encoded, err := json.Marshal(object)
-	if err != nil {
-		return ""
-	}
-	return string(encoded)
+// syntheticProviderUsage writes summed cache-write counts under the ao_ keys
+// the pricer reads for either token vocabulary.
+func syntheticProviderUsage(write, write1h int64) string {
+	return fmt.Sprintf(`{"ao_derived_cache_write_input_tokens":%d,"ao_derived_cache_write_1h_input_tokens":%d}`, write, write1h)
 }
 
 func tokenValue(value *int64) int64 {

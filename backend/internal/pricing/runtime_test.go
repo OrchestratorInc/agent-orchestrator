@@ -178,10 +178,11 @@ func TestEstimateLeavesInputUnknownWhenAPricedWriteSplitIsMissing(t *testing.T) 
 	assertCost(t, "total", priced.TotalNanos, 4_995_000)
 }
 
-// TestEstimateReadsPiCacheWriteUsage catches treating Pi's emitted camelCase
-// usage object as if it were a Claude or Codex transcript object. A model with
-// a distinct write rate cannot be priced unless that native split survives.
-func TestEstimateReadsPiCacheWriteUsage(t *testing.T) {
+// TestEstimateReadsAOCacheWriteUsage catches pricing an agent's own usage
+// object (Pi's camelCase one here) without the cache-write count the usage
+// parser stores beside it. A model with a distinct write rate cannot be priced
+// unless that count survives, in either token vocabulary.
+func TestEstimateReadsAOCacheWriteUsage(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "0.000001", Read: strptr("0.0000001"), Write: strptr("0.000002"), Output: "0.000003"}},
 		"openai":    {{ID: "gpt-test", Input: "0.000001", Read: strptr("0.0000001"), Write: strptr("0.000002"), Output: "0.000003"}},
@@ -200,7 +201,7 @@ func TestEstimateReadsPiCacheWriteUsage(t *testing.T) {
 			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
 				ProviderID: tc.providerID, BillingProviderID: tc.billingID, ModelID: tc.modelID,
 				Tokens:            pricingTokens(1000, 400, 600, 200),
-				ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"output":200}`,
+				ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"output":200,"ao_derived_cache_write_input_tokens":100}`,
 			})
 			if err != nil {
 				t.Fatalf("Estimate: %v", err)
@@ -213,7 +214,7 @@ func TestEstimateReadsPiCacheWriteUsage(t *testing.T) {
 	}
 }
 
-func TestEstimateReadsPiOneHourCacheWriteUsage(t *testing.T) {
+func TestEstimateReadsAOOneHourCacheWriteUsage(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{
 			ID: "claude-test", Input: "0.000001", Read: strptr("0.0000001"),
@@ -224,8 +225,9 @@ func TestEstimateReadsPiOneHourCacheWriteUsage(t *testing.T) {
 	})
 	estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
 		ProviderID: domain.UsageProviderAnthropic, BillingProviderID: "anthropic", ModelID: "claude-test",
-		Tokens:            pricingTokens(1000, 400, 600, 200),
-		ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"cacheWrite1h":40,"output":200}`,
+		Tokens: pricingTokens(1000, 400, 600, 200),
+		ProviderUsageJSON: `{"input":500,"cacheRead":400,"cacheWrite":100,"cacheWrite1h":40,"output":200,` +
+			`"ao_derived_cache_write_input_tokens":100,"ao_derived_cache_write_1h_input_tokens":40}`,
 	})
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)

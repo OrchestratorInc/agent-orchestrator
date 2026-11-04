@@ -773,7 +773,7 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 	// A record that carried no per-event vector still gives up its cache-write
 	// count, because the neutral counters beside it are the same subtraction of
 	// the same two native readings. Persisting it is what keeps a write-rated
-	// model priceable; see codexProviderUsage.
+	// model priceable; see providerUsageWithCacheWrite.
 	var derivedCacheWrite *int64
 	if info.Last == nil {
 		write := selected.CacheWriteInputTokens
@@ -789,7 +789,7 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 		ModelID:               model,
 		MeasurementKind:       domain.UsageMeasurementNativeReported,
 		Tokens:                tokens,
-		ProviderUsageJSON:     codexProviderUsage(payload.Info, derivedCacheWrite),
+		ProviderUsageJSON:     providerUsageWithCacheWrite(payload.Info, derivedCacheWrite, nil),
 		ServiceTier:           state.ServiceTier,
 		CreatedAt:             parseUsageTimestamp(envelope.Timestamp),
 		SourceEventKey: stableSourceEventKey(
@@ -919,28 +919,32 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
-// codexProviderUsage stores the CLI's own usage object, plus the per-event
-// cache-write count when the CLI reported only cumulative totals.
+// providerUsageWithCacheWrite stores an agent's own usage object plus AO's
+// per-event cache-write counts, under the ao_ keys that pricing and the usage
+// report read for every agent. Claude reports the count as
+// cache_creation_input_tokens and Codex in last_token_usage; every other agent
+// names it differently, or not at all.
 //
 // The estimator needs a per-event write bucket to price a model that publishes
-// a cache-write rate — every current gpt-5.6 variant does — and it reads that
-// bucket from last_token_usage, which is optional. On a record without one the
-// counters AO stores are already a delta of two native cumulative readings, and
-// this is that same subtraction over the same readings, so it is derived rather
-// than invented. It is namespaced instead of folded into a last_token_usage the
-// CLI never emitted: a reader must still be able to tell what the provider said
-// from what AO worked out.
-func codexProviderUsage(raw json.RawMessage, derivedCacheWrite *int64) string {
+// a cache-write rate. Codex omits last_token_usage from a record carrying only
+// cumulative totals; there the counters AO stores are already a delta of two
+// native cumulative readings, and the write count is that same subtraction over
+// the same readings, so it is derived rather than invented. The keys are
+// namespaced instead of folded into the native object: a reader must still be
+// able to tell what the provider said from what AO worked out.
+func providerUsageWithCacheWrite(raw json.RawMessage, write, write1h *int64) string {
 	stored := boundedProviderUsage(raw)
-	if stored == "" || derivedCacheWrite == nil {
+	if stored == "" || write == nil {
 		return stored
 	}
-	derived := json.RawMessage(strconv.FormatInt(*derivedCacheWrite, 10))
 	object := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(stored), &object); err != nil {
 		return stored
 	}
-	object[derivedCacheWriteKey] = derived
+	object[derivedCacheWriteKey] = json.RawMessage(strconv.FormatInt(*write, 10))
+	if write1h != nil {
+		object[derivedCacheWrite1HKey] = json.RawMessage(strconv.FormatInt(*write1h, 10))
+	}
 	encoded, err := json.Marshal(object)
 	if err != nil || len(encoded) > maxProviderUsageBytes {
 		return stored
@@ -948,10 +952,15 @@ func codexProviderUsage(raw json.RawMessage, derivedCacheWrite *int64) string {
 	return string(encoded)
 }
 
-// derivedCacheWriteKey names the one member AO adds to a stored provider usage
-// object. The ao_ prefix is the whole point: nothing reading this object should
-// mistake it for something a provider reported.
-const derivedCacheWriteKey = "ao_derived_cache_write_input_tokens"
+// derivedCacheWriteKey and derivedCacheWrite1HKey name the members AO adds to a
+// stored provider usage object: the cache-write count, and the part of it
+// written at the 1-hour lifetime when the agent reports that split. The ao_
+// prefix is the whole point: nothing reading this object should mistake them
+// for something a provider reported.
+const (
+	derivedCacheWriteKey   = "ao_derived_cache_write_input_tokens"
+	derivedCacheWrite1HKey = "ao_derived_cache_write_1h_input_tokens"
+)
 
 // boundedProviderUsage compacts one provider usage object for durable storage.
 // It returns empty for anything that is not a JSON object or exceeds the bound,

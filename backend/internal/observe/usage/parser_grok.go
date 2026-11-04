@@ -141,7 +141,7 @@ func parseGrok(source domain.UsageSourceContext, records []jsonlRecord, result *
 		}
 		providerUsage, _ := json.Marshal(map[string]int64{
 			"inputTokens": usage.InputTokens, "outputTokens": usage.OutputTokens,
-			"cachedReadTokens": usage.CachedReadTokens, "cacheWrite": usage.CacheCreationTokens,
+			"cachedReadTokens": usage.CachedReadTokens, derivedCacheWriteKey: usage.CacheCreationTokens,
 			"reasoningTokens": usage.ReasoningTokens, "modelCalls": usage.ModelCalls,
 		})
 		event := domain.ModelUsageEvent{

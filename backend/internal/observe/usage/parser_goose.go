@@ -125,7 +125,7 @@ func parseGoose(source domain.UsageSourceContext, records []jsonlRecord, result 
 			recordMalformed(result)
 			continue
 		}
-		event.ProviderUsageJSON = boundedProviderUsage(record.Data)
+		event.ProviderUsageJSON = providerUsageWithCacheWrite(record.Data, row.CacheWriteTokens, nil)
 		result.addEvent(eventsByKey, event)
 	}
 }

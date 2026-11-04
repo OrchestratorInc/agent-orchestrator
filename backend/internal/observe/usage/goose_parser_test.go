@@ -110,7 +110,7 @@ VALUES ('20261103_1', 1793750400, 7, 7, 'carried_forward')`)
 		root.Costs.PricingVersion != goosePricingVersion {
 		t.Fatalf("root costs = %+v, want Goose's provider-reported cost", root.Costs)
 	}
-	if providerUsageTokens(t, root.ProviderUsageJSON, "cache_write_tokens") != 10 {
+	if providerUsageTokens(t, root.ProviderUsageJSON, derivedCacheWriteKey) != 10 {
 		t.Fatalf("provider usage = %s", root.ProviderUsageJSON)
 	}
 	child := result.Events[1]

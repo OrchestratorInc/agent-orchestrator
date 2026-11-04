@@ -388,7 +388,7 @@ func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *p
 		}
 		billingProvider := agyBillingProvider(model)
 		providerUsage, _ := json.Marshal(map[string]any{
-			"input": call.Input, "output": call.Output, "cacheRead": call.CacheRead, "cacheWrite": call.CacheWrite,
+			"input": call.Input, "output": call.Output, "cacheRead": call.CacheRead, derivedCacheWriteKey: call.CacheWrite,
 			"thinkingOutput": call.ThinkingOutput, "model": call.Model, "modelEnum": call.ModelEnum,
 		})
 		key := call.ResponseID

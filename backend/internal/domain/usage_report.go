@@ -13,7 +13,6 @@ type UsageReportEvent struct {
 	ServiceTier        string
 	Tokens             UsageTokenMetrics
 	CacheWriteTokens   *int64
-	CacheWrite5mTokens *int64
 	CacheWrite1hTokens *int64
 	Costs              UsageEventCosts
 	Harness            AgentHarness

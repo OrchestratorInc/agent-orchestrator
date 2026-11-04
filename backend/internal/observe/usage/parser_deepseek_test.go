@@ -78,8 +78,8 @@ func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 		!flash.CreatedAt.Equal(time.UnixMilli(1792333059993).UTC()) {
 		t.Fatalf("flash event = %+v", flash)
 	}
-	if !strings.Contains(flash.ProviderUsageJSON, `"cacheWrite":0`) {
-		t.Fatalf("provider usage %s lacks the cacheWrite count the pricer reads", flash.ProviderUsageJSON)
+	if !strings.Contains(flash.ProviderUsageJSON, `"ao_derived_cache_write_input_tokens":0`) {
+		t.Fatalf("provider usage %s lacks the cache-write count the pricer reads", flash.ProviderUsageJSON)
 	}
 	if pro.ModelID != "deepseek-v4-pro" || tokenValue(pro.Tokens.InputTokens) != 15807 ||
 		tokenValue(pro.Tokens.OutputTokens) != 90 || flash.SourceEventKey == pro.SourceEventKey {

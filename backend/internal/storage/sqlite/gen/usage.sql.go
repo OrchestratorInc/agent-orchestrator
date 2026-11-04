@@ -1309,16 +1309,18 @@ SELECT
     model_usage_events.estimated_cost_nanos,
     CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
         CASE model_usage_events.provider_id
-            WHEN 'anthropic' THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens')
+            WHEN 'anthropic' THEN COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
             ELSE COALESCE(
                 json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
                 json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
         END
     END, -1) AS INTEGER) AS cache_write_tokens,
     CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
-        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_5m_input_tokens') END, -1) AS INTEGER) AS cache_write_5m_tokens,
-    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
-        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens') END, -1) AS INTEGER) AS cache_write_1h_tokens,
+        THEN COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens')) END, -1) AS INTEGER) AS cache_write_1h_tokens,
     usage_bindings.harness,
     usage_bindings.session_id,
     sessions.project_id,
@@ -1351,7 +1353,6 @@ type ListUsageReportEventsRow struct {
 	OutputCostNanos      sql.NullInt64
 	EstimatedCostNanos   sql.NullInt64
 	CacheWriteTokens     int64
-	CacheWrite5mTokens   int64
 	CacheWrite1hTokens   int64
 	Harness              domain.AgentHarness
 	SessionID            domain.SessionID
@@ -1362,8 +1363,9 @@ type ListUsageReportEventsRow struct {
 // Every timestamped usage event in a window, with the session it belongs to.
 // created_at is stored as Go's UTC text, so a range over its fixed-width
 // "YYYY-MM-DD HH:MM:SS" prefix is a time range. The cache-write counts are read
-// out of the bounded provider object, where each provider reports them; -1
-// means the object did not report that count.
+// out of the bounded provider object: Claude and Codex report them in their own
+// vocabulary, and every other agent has them under the ao_ keys the usage
+// parser adds. -1 means the object did not report that count.
 func (q *Queries) ListUsageReportEvents(ctx context.Context, arg ListUsageReportEventsParams) ([]ListUsageReportEventsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUsageReportEvents, arg.SinceUtc, arg.UntilUtc)
 	if err != nil {
@@ -1387,7 +1389,6 @@ func (q *Queries) ListUsageReportEvents(ctx context.Context, arg ListUsageReport
 			&i.OutputCostNanos,
 			&i.EstimatedCostNanos,
 			&i.CacheWriteTokens,
-			&i.CacheWrite5mTokens,
 			&i.CacheWrite1hTokens,
 			&i.Harness,
 			&i.SessionID,

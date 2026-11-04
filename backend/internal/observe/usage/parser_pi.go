@@ -70,11 +70,14 @@ type piSessionRecord struct {
 // to the same shape, with input excluding both cache counters and output
 // already including reasoning.
 type piNativeUsage struct {
-	Input      int64         `json:"input"`
-	Output     int64         `json:"output"`
-	CacheRead  int64         `json:"cacheRead"`
-	CacheWrite int64         `json:"cacheWrite"`
-	Cost       *piNativeCost `json:"cost"`
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+	// CacheWrite1H is the part of CacheWrite Pi wrote at Anthropic's 1-hour
+	// lifetime; absent when Pi did not split it.
+	CacheWrite1H *int64        `json:"cacheWrite1h"`
+	Cost         *piNativeCost `json:"cost"`
 }
 
 // piNativeCost is the USD cost Pi computed from its own model registry.
@@ -167,7 +170,7 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			ModelID:               model,
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
-			ProviderUsageJSON:     boundedProviderUsage(usageRaw),
+			ProviderUsageJSON:     providerUsageWithCacheWrite(usageRaw, &usage.CacheWrite, usage.CacheWrite1H),
 			CreatedAt:             parseUsageTimestamp(native.Timestamp),
 			SourceEventKey: stableSourceEventKey(
 				dialect.eventKeyPrefix, source.NativeRootID, native.Type, identity,

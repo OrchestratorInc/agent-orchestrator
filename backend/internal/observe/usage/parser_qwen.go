@@ -70,7 +70,7 @@ func parseQwen(source domain.UsageSourceContext, records []jsonlRecord, result *
 			ModelID:               model,
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
-			ProviderUsageJSON:     codexProviderUsage(record.Data, qwenCacheWriteTokens(native)),
+			ProviderUsageJSON:     providerUsageWithCacheWrite(record.Data, qwenCacheWriteTokens(native), nil),
 			CreatedAt:             parseUsageTimestamp(native.Timestamp),
 			SourceEventKey: stableSourceEventKey(
 				"qwen", source.NativeRootID, identity, model,
