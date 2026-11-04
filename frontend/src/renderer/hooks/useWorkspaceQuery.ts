@@ -739,10 +739,26 @@ export function sharedSessionVia(share: WorkspaceShare, sessionId: string): stri
 }
 
 /**
+ * A shared session whose files failed to load is read again after this, not
+ * on every refresh of the shared list.
+ */
+export const SHARED_ARTIFACT_RETRY_MS = 60_000;
+
+/**
+ * Per query client, for each shared session: the last files read for it, and
+ * the artifact version whose read last failed and when.
+ */
+const sharedArtifactReads = new WeakMap<QueryClient, {
+	last: Map<string, CloudCpSessionArtifact[]>;
+	failed: Map<string, { version: string; at: number }>;
+}>();
+
+/**
  * A shared session with its artifact files, read once per artifact version as
  * the organization's own sessions' files are. A session listed without
- * artifacts (or by a control plane that does not count them), or whose files
- * cannot be read, comes back as it is.
+ * artifacts (or by a control plane that does not count them) comes back as it
+ * is. One whose files cannot be read keeps the last files read for it, as an
+ * organization's own session does, and is read again a minute later.
  */
 async function withSharedArtifactFiles(
 	queryClient: QueryClient,
@@ -751,17 +767,33 @@ async function withSharedArtifactFiles(
 	session: CloudCpSession,
 ): Promise<CloudCpSession> {
 	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	let reads = sharedArtifactReads.get(queryClient);
+	if (!reads) {
+		reads = { last: new Map(), failed: new Map() };
+		sharedArtifactReads.set(queryClient, reads);
+	}
+	const key = `${baseUrl}\n${session.orgId}\n${session.id}`;
+	const version = cloudArtifactVersion(session);
+	const withLastFiles = () => {
+		const files = reads.last.get(key);
+		return files ? { ...session, artifactFiles: files } : session;
+	};
+	const failed = reads.failed.get(key);
+	if (failed?.version === version && Date.now() - failed.at < SHARED_ARTIFACT_RETRY_MS) return withLastFiles();
 	try {
 		const artifactFiles = await queryClient.fetchQuery({
-			queryKey: cloudArtifactFilesQueryKey(baseUrl, session.orgId, session.id, cloudArtifactVersion(session)),
+			queryKey: cloudArtifactFilesQueryKey(baseUrl, session.orgId, session.id, version),
 			staleTime: Infinity,
 			retry: 1,
 			queryFn: ({ signal }) =>
 				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(session.orgId, session.id, { signal })).artifacts),
 		});
+		reads.failed.delete(key);
+		reads.last.set(key, artifactFiles);
 		return { ...session, artifactFiles };
 	} catch {
-		return session;
+		reads.failed.set(key, { version, at: Date.now() });
+		return withLastFiles();
 	}
 }
 

@@ -49,7 +49,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -119,6 +119,43 @@ describe("cloud sessions shared with this person", () => {
 		expect(sessions.find((session) => session.id === "no-files")?.artifactFiles).toBeUndefined();
 		expect(listSessionArtifactsMock).toHaveBeenCalledTimes(1);
 		expect(listSessionArtifactsMock).toHaveBeenCalledWith("org-owner", "with-files", expect.anything());
+	});
+
+	it("reads a session's failing files again a minute later, not on every refresh", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("with-files", 1)] });
+		listSessionArtifactsMock.mockRejectedValue(new CloudCpError("The service is unavailable.", { status: 503, code: "unavailable" }));
+		const now = vi.spyOn(Date, "now");
+		const start = Date.now();
+		try {
+			const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+			await waitFor(() => expect(result.current.data).toBeDefined());
+			const firstRead = listSessionArtifactsMock.mock.calls.length;
+			expect(firstRead).toBeGreaterThan(0);
+			await act(async () => { await result.current.refetch(); });
+			await act(async () => { await result.current.refetch(); });
+			expect(listSessionArtifactsMock).toHaveBeenCalledTimes(firstRead);
+			now.mockReturnValue(start + SHARED_ARTIFACT_RETRY_MS + 10_000);
+			await act(async () => { await result.current.refetch(); });
+			expect(listSessionArtifactsMock.mock.calls.length).toBeGreaterThan(firstRead);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("keeps a shared session's last files when a newer version can't be read", async () => {
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("with-files", 1)] });
+		listSessionArtifactsMock.mockResolvedValue({ artifacts: [artifact("plan.md")] });
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions[0]?.artifactFiles?.map((file) => file.path)).toEqual(["plan.md"]));
+
+		listSharedProjectSessionsMock.mockResolvedValue({
+			sessions: [{ ...sharedSession("with-files", 2), displayName: "with-files v2", artifactsUpdatedAt: "2026-08-03T00:00:00Z" }],
+		});
+		listSessionArtifactsMock.mockRejectedValue(new CloudCpError("The service is unavailable.", { status: 503, code: "unavailable" }));
+		await act(async () => { await result.current.refetch(); });
+		await waitFor(() => expect(result.current.data?.[0]?.sessions[0]?.title).toBe("with-files v2"));
+		expect(listSessionArtifactsMock).toHaveBeenCalledTimes(3);
+		expect(result.current.data?.[0]?.sessions[0]?.artifactFiles?.map((file) => file.path)).toEqual(["plan.md"]);
 	});
 
 	it("still lists a shared session whose files cannot be read", async () => {
