@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeCodex is fakeClaude answering for Codex, so one email can be signed in
-// to both providers.
 type fakeCodex struct{ *fakeClaude }
 
 func (fakeCodex) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderCodex }
@@ -27,7 +25,6 @@ func newDuplicateFixture(t *testing.T, device string) (*Service, *fakeClaude, *m
 	return New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil), claude, store, root
 }
 
-// addSaved adds a signed-in account through AO's own sign-in.
 func addSaved(t *testing.T, svc *Service, claude *fakeClaude, root, email string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -54,18 +51,15 @@ func viewByID(t *testing.T, views []AccountView, id string) AccountView {
 	return AccountView{}
 }
 
-// The reported case: an account is added in AO, and the computer's own CLI is
-// later signed in, outside AO, to that same login. Both are signed in as one
-// email, so the CLI's row names the saved account it duplicates.
 func TestListNamesTheAccountTheComputersLoginDuplicates(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name        string
-		deviceAfter string // "" leaves the computer signed out
-		before      string // the computer's login when the account was added
+		deviceAfter string
+		before      string
 		savedHome   func(home string, claude *fakeClaude)
 		deviceFails bool
-		makeDefault string // "device" or "saved"
+		makeDefault string
 		want        bool
 	}{
 		{name: "terminal signs in after the account was added", before: "", deviceAfter: "a@example.com", want: true},
@@ -127,7 +121,6 @@ func TestListNamesTheAccountTheComputersLoginDuplicates(t *testing.T) {
 	}
 }
 
-// One email signed in to two providers is two subscriptions, not a duplicate.
 func TestListDoesNotFoldAcrossProviders(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -146,12 +139,10 @@ func TestListDoesNotFoldAcrossProviders(t *testing.T) {
 	}
 }
 
-// The terminal was signed in moments before the same login is added in AO.
-// The duplicate check must not trust a cached "signed out" for the computer.
 func TestAddRefusesALoginTheComputerSignedInToSinceTheLastReading(t *testing.T) {
 	ctx := context.Background()
 	svc, claude, store, root := newDuplicateFixture(t, "")
-	if _, err := svc.List(ctx, false); err != nil { // caches the computer as signed out
+	if _, err := svc.List(ctx, false); err != nil {
 		t.Fatal(err)
 	}
 	claude.signedInAs[""] = "a@example.com"
@@ -174,9 +165,6 @@ func TestAddRefusesALoginTheComputerSignedInToSinceTheLastReading(t *testing.T) 
 	}
 }
 
-// A saved account that is signed out still belongs to its login: adding that
-// login again would leave two folders once the first is signed in again. It is
-// refused, naming the account to sign in again instead.
 func TestAddRefusesTheLoginOfASignedOutSavedAccount(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

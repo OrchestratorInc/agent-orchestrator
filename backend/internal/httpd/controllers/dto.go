@@ -4142,12 +4142,9 @@ type AgentAccountResponse struct {
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
-	Problem string                     `json:"problem,omitempty"`
-	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
-	// SameLoginAs is set on the computer's own login when a saved account is
-	// signed in as the same login: the id of that account, which the app shows
-	// in its place.
-	SameLoginAs string `json:"sameLoginAs,omitempty"`
+	Problem     string                     `json:"problem,omitempty"`
+	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
+	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.

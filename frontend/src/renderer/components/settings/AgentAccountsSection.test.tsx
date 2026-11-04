@@ -184,8 +184,6 @@ it("shows an API-key CLI login as logged in without a subscription and keeps its
 	expect(cliLogin.onLogout).toHaveBeenCalledTimes(1);
 });
 
-// The reported case: an account added in AO, and the CLI later signed in to
-// the same login outside AO. One login is one row.
 it("lists a login the CLI and a saved account share once", async () => {
 	const twin = { ...device, default: false, sameLoginAs: "acct-a" };
 	const savedA = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" };
@@ -204,7 +202,6 @@ it("lists a login the CLI and a saved account share once", async () => {
 	expect(document.querySelector('[data-agent-account="device-claude"]')).not.toBeInTheDocument();
 	expect(screen.getAllByText("a@example.com")).toHaveLength(1);
 	expect(screen.queryByText("Claude Code CLI login")).not.toBeInTheDocument();
-	// Its usage in AO is the login's, through either folder.
 	await waitFor(() => expect(within(row).getByText(/3K tokens in AO/)).toBeInTheDocument());
 	expect(within(row).getByRole("button", { name: "Remove account" })).toBeInTheDocument();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();

@@ -38,7 +38,6 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 
 	if (!provider || session.cloud || session.isTerminated) return null;
 	const currentId = current.data?.[provider];
-	// One login is one choice: moving between two folders of it gains nothing.
 	const options = withoutSameLogins((accounts.data ?? []).filter((account) => account.provider === provider), currentId);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";

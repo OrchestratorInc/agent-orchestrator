@@ -40,7 +40,6 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
-	// The CLI signed in, outside AO, to a login already added shows as that one account.
 	const rows = withoutSameLogins(providerAccounts);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id);
 	const login = logins[provider];
