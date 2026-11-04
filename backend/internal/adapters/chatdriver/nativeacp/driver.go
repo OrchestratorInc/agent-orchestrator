@@ -71,10 +71,13 @@ type Config struct {
 	PromptErrorFailure func(error, bool) error
 	// HistoryReconciler rewrites a completed session/load replay. See
 	// acpdriver.Config.HistoryReconciler.
-	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
-	PermissionPolicy             acpdriver.PermissionPolicy
-	ClientExtension              acpdriver.ClientExtensionHandler
-	ClientExtensionAliases       map[string]string
+	HistoryReconciler      func([]ports.ChatEvent) []ports.ChatEvent
+	PermissionPolicy       acpdriver.PermissionPolicy
+	ClientExtension        acpdriver.ClientExtensionHandler
+	ClientExtensionAliases map[string]string
+	// SteerRequest and SteerDrain: see acpdriver.Config.
+	SteerRequest                 *acpdriver.SteerRequest
+	SteerDrain                   *acpdriver.SteerDrain
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
@@ -180,6 +183,8 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
+		SteerRequest:                 cfg.SteerRequest,
+		SteerDrain:                   cfg.SteerDrain,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,

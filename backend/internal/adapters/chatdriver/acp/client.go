@@ -666,7 +666,10 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
+		c.mu.Lock()
+		segment := c.steerSegment
+		c.mu.Unlock()
+		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
 			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
 				c.mu.Lock()
@@ -697,7 +700,10 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentThoughtChunk.MessageId, "thought", turnID))
+		c.mu.Lock()
+		segment := c.steerSegment
+		c.mu.Unlock()
+		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()
 			_, existed := c.thoughts[id]
@@ -784,9 +790,16 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-func messageID(id *string, prefix, turnID string) string {
+// segmentedMessageID names a streamed message. An agent that sends no message
+// id streams the whole turn as one message, so each steer the turn takes starts
+// a new one: otherwise the reply written after the steer would grow the message
+// that sits above it in the timeline.
+func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	if id != nil && *id != "" {
 		return *id
+	}
+	if segment > 0 {
+		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment)
 	}
 	return prefix + "-" + turnID
 }
