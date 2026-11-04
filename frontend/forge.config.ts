@@ -133,9 +133,10 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
-// The dictation helper records the microphone itself (it disclaims the app as
-// its responsible process), and the hardened runtime blocks audio input
-// without this entitlement. osx-sign signs its executable, then its bundle.
+// The dictation helper records the microphone itself, and the hardened runtime
+// blocks audio input without this entitlement. Its disclaim only helps dev and
+// terminal launches: signed and nested here, macOS checks the app's usage
+// strings instead (see extendInfo). osx-sign signs its executable, then its bundle.
 const DICTATION_HELPER_PATHS = [
 	"/Contents/Resources/dictation-helper/Orchestrator.app",
 	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
@@ -186,11 +187,13 @@ const config: ForgeConfig = {
 		extendInfo: {
 			LSHasLocalizedDisplayName: true,
 			CFBundleDevelopmentRegion: "en",
-			// In a signed build, macOS asks the enclosing app for the dictation
-			// helper's speech and microphone access, despite the helper's own
-			// usage strings and its disclaim. Without this key it kills the helper.
+			// In a signed build, macOS checks the dictation helper's speech and
+			// microphone requests against this app's Info.plist, despite the
+			// helper's own usage strings and its disclaim. Without the speech key
+			// it kills the helper. The microphone string also covers terminals and
+			// agents, which macOS attributes to this app.
 			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
-			NSMicrophoneUsageDescription: "Orchestrator uses the microphone to dictate messages.",
+			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
 		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
