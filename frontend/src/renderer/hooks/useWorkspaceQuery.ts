@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
-import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
@@ -705,12 +705,41 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 }
 
 /**
+ * A shared session with its artifact files, read once per artifact version as
+ * the organization's own sessions' files are. A session listed without
+ * artifacts (or by a control plane that does not count them), or whose files
+ * cannot be read, comes back as it is.
+ */
+async function withSharedArtifactFiles(
+	queryClient: QueryClient,
+	client: Pick<CloudCpClient, "listSessionArtifacts">,
+	baseUrl: string,
+	session: CloudCpSession,
+): Promise<CloudCpSession> {
+	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	try {
+		const artifactFiles = await queryClient.fetchQuery({
+			queryKey: cloudArtifactFilesQueryKey(baseUrl, session.orgId, session.id, cloudArtifactVersion(session)),
+			staleTime: Infinity,
+			retry: 1,
+			queryFn: ({ signal }) =>
+				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(session.orgId, session.id, { signal })).artifacts),
+		});
+		return { ...session, artifactFiles };
+	} catch {
+		return session;
+	}
+}
+
+/**
  * Cloud projects and sessions people in other organizations shared with this
  * person, as workspaces beside their own. A project shared both whole and
- * one session at a time shows once.
+ * one session at a time shows once. Each shared session carries its artifact
+ * files, so a guest sees them as the owner does.
  */
 export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl],
 		enabled: options.enabled !== false && ready,
@@ -726,7 +755,8 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 			}
 			return Promise.all([...byProject.values()].map(async (item) => {
 				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
-				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
+				const withFiles = await Promise.all(sessions.map((session) => withSharedArtifactFiles(queryClient, client, baseUrl, session)));
+				const workspace = toCloudWorkspace(item.project, withFiles, item.project.orgId);
 				return {
 					...workspace,
 					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
