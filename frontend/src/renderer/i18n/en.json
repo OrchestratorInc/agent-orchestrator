@@ -2214,6 +2214,8 @@
 	"shell.pinned": "Pinned",
 	"shell.pinSession": "Pin session",
 	"shell.unpinSession": "Unpin session",
+	"shell.pinProject": "Pin to top",
+	"shell.unpinProject": "Unpin",
 	"shell.projects": "Projects",
 	"shell.showMore": "Show more",
 	"shell.showLess": "Show less",

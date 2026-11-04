@@ -2897,6 +2897,8 @@
 	"settings.dev.increaseAria": "Increase {{label}}",
 	"shell.pinSession": "Pin session",
 	"shell.unpinSession": "Unpin session",
+	"shell.pinProject": "Pin to top",
+	"shell.unpinProject": "Unpin",
 	"newTask.task": "Task",
 	"newTask.taskPlaceholders": [
 		"バックエンドのファイルを確認し、デッドコードがないか教えてください",

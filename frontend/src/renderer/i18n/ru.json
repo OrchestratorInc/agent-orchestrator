@@ -2287,6 +2287,8 @@
 	"shell.pinned": "Закреплено",
 	"shell.pinSession": "Закрепить сессию",
 	"shell.unpinSession": "Открепить сессию",
+	"shell.pinProject": "Закрепить проект",
+	"shell.unpinProject": "Открепить проект",
 	"shell.projects": "Проекты",
 	"shell.showMore": "Показать ещё",
 	"shell.showLess": "Показать меньше",

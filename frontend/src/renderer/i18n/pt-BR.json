@@ -2945,6 +2945,8 @@
 	"settings.dev.increaseAria": "Increase {{label}}",
 	"shell.pinSession": "Pin session",
 	"shell.unpinSession": "Unpin session",
+	"shell.pinProject": "Pin to top",
+	"shell.unpinProject": "Unpin",
 	"newTask.task": "Task",
 	"newTask.taskPlaceholders": [
 		"Analise os arquivos do backend e me diga se há algum código morto neles",
