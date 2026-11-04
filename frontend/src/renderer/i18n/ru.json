@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Копировать путь",
+	"chat.path.revealInFinder": "Показать в Finder",
+	"chat.path.revealInFileManager": "Показать в файловом менеджере",
+	"chat.path.openWith": "Открыть в {{editor}}",
+	"chat.path.actionFailed": "Не удалось выполнить действие с путём",
 	"awake.offTooltip": "Stay Awake выключен. Нажмите, чтобы включить.",
 	"awake.activeTooltip": "Stay Awake включён. Нажмите, чтобы выключить.",
 	"awake.pausedBattery": "Приостановлено: заряд ниже {{percent}}%.\nВозобновится после зарядки.",
@@ -974,7 +979,7 @@
 	"inspector.openInSystemBrowser": "Открыть в системном браузере",
 	"link.copy": "Копировать ссылку",
 	"link.openInAOBrowser": "Открыть в браузере AO",
-	"link.openInFiles": "Открыть в «Файлах»",
+	"link.openInAO": "Открыть в AO",
 	"link.openInExternalBrowser": "Открыть во внешнем браузере",
 	"inspector.openInlineComments": "Открытых комментариев: {{count}}",
 	"inspector.requestRereviewPR": "Запросить повторное ревью PR",
