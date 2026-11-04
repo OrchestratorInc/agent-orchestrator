@@ -260,6 +260,7 @@ describe("optimistic orchestrator topbar", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+		expect(screen.getAllByTestId("workspace-topbar-actions")[0].querySelectorAll("button")).toHaveLength(5);
 	});
 });
 

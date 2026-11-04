@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, LayoutDashboard, Plus } from "lucide-react";
+import { Archive, ChevronDown, Code2, LayoutDashboard, Play, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import {
@@ -138,6 +138,25 @@ export function SessionTopbarActions({
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("shell.openKanban")}</TooltipContent>
 					</Tooltip>
+				</>
+			) : null}
+			{/* The session's own controls take their space while it starts, so the
+			    cluster keeps its width and nothing slides when the session lands. */}
+			{startingOrchestrator ? (
+				<>
+					<div aria-hidden="true" className="topbar-control-group inline-flex items-center gap-0 rounded-md" style={noDragStyle}>
+						<TopbarButton aria-label={t("editor.chooseEditor")} className="bg-transparent" disabled highlight={false} tabIndex={-1} variant="icon">
+							<Code2 className="size-icon-md" aria-hidden="true" />
+						</TopbarButton>
+						<TopbarButton aria-label={t("editor.openOptionsAria")} className="bg-transparent" disabled highlight={false} tabIndex={-1} variant="icon">
+							<ChevronDown className="size-icon-sm" aria-hidden="true" />
+						</TopbarButton>
+					</div>
+					<span className="inline-flex" style={noDragStyle}>
+						<TopbarButton aria-label={t("cues.run")} data-priority="secondary" disabled tabIndex={-1} variant="icon">
+							<Play className="size-icon-md" aria-hidden="true" />
+						</TopbarButton>
+					</span>
 				</>
 			) : null}
 			{/* Open-in-editor leads the session actions: it is the only

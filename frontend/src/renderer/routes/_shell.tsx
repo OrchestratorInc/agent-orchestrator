@@ -691,17 +691,19 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			);
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
-			window.clearTimeout(provisioningGuard);
-			setProjectProvisioning(workspace.id, false);
 			// Follow the new orchestrator only if the user is still waiting on
 			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
 			const current = routeParamsRef.current;
 			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
+				await navigate({
 					to: "/projects/$projectId/sessions/$sessionId",
 					params: { projectId: workspace.id, sessionId },
 				});
 			}
+			window.clearTimeout(provisioningGuard);
+			setProjectProvisioning(workspace.id, false);
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
