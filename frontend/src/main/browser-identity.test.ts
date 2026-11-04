@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	acceptLanguages,
 	applyBrowserIdentity,
+	applyUserAgentFallback,
 	browserUserAgent,
 	chromiumBrands,
 	clientHintHeaders,
@@ -48,6 +49,24 @@ describe("browserUserAgent", () => {
 				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Agent Orchestrator/1.0.0 Chrome/144.0.7559.173 Electron/40.5.0 Safari/537.36",
 			),
 		).toBe("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
+	});
+});
+
+describe("applyUserAgentFallback", () => {
+	it("gives the process-wide fallback the same user agent as the Browser sessions", () => {
+		const target = { userAgentFallback: ELECTRON_MAC_UA };
+		const fake = fakeSession();
+		applyBrowserIdentity(fake.session, { chromeVersion: "130.0.6723.191", platform: "darwin", languages: "en-GB" });
+		applyUserAgentFallback(target);
+		expect(target.userAgentFallback).toBe(fake.calls[0]?.[0]);
+	});
+
+	it("is stable when applied twice", () => {
+		const target = { userAgentFallback: ELECTRON_MAC_UA };
+		applyUserAgentFallback(target);
+		const once = target.userAgentFallback;
+		applyUserAgentFallback(target);
+		expect(target.userAgentFallback).toBe(once);
 	});
 });
 

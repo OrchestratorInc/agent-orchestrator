@@ -88,7 +88,7 @@ import {
 	slowDaemonStartupStatus,
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
-import { acceptLanguages, applyBrowserIdentity } from "./main/browser-identity";
+import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
 import { attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
@@ -3777,6 +3777,7 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	if (app.isPackaged) {

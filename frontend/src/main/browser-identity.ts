@@ -43,6 +43,13 @@ export function browserUserAgent(electronUserAgent: string): string {
 		.replace(/Chrome\/(\d+)[\d.]*/, "Chrome/$1.0.0.0");
 }
 
+// session.setUserAgent leaves the process-wide fallback on Electron's default,
+// and Cloudflare Turnstile rejects a page that reports both strings ("There was
+// a problem with verification"). Any edit to the user agent needs this too.
+export function applyUserAgentFallback(target: { userAgentFallback: string }): void {
+	target.userAgentFallback = browserUserAgent(target.userAgentFallback);
+}
+
 // Chromium's GREASE brand list for a build without an embedder brand, seeded
 // by the major version (GetGreasedUserAgentBrandVersion and
 // GenerateBrandVersionList in components/embedder_support/user_agent_utils.cc).
