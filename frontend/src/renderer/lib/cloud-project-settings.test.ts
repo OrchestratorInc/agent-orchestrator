@@ -8,11 +8,26 @@ const project = (config: CloudCpProject["config"]): CloudCpProject => ({
 });
 
 describe("cloud project settings draft", () => {
-	it("names Claude Code for a role without an agent without sending it until the role changes", () => {
+	it("reads only role permissions and ignores a pinned role agent", () => {
+		const draft = cloudProjectSettingsDraft(project({
+			worker: { agent: "codex", agentConfig: { model: "gpt", permissions: "auto" } },
+			orchestrator: { agent: "cursor" },
+			workerAgent: "codex",
+		}));
+		expect(draft.workerPermissions).toBe("auto");
+		expect(draft.orchestratorPermissions).toBe("");
+		expect(draft).not.toHaveProperty("worker");
+		expect(draft).not.toHaveProperty("orchestrator");
+		expect(cloudProjectSettingsPatch(draft, cloudProjectSettingsDraft(project({})))).toEqual({
+			config: { worker: { agentConfig: { permissions: "" } } },
+		});
+	});
+
+	it("sends only the permissions of a role that changed, never an agent or null", () => {
 		const before = cloudProjectSettingsDraft(project({}));
-		expect(before.worker.agent).toBe("claude-code");
-		expect(before.orchestrator.agent).toBe("claude-code");
 		expect(cloudProjectSettingsPatch(before, cloudProjectSettingsDraft(project({})))).toEqual({});
+		const patch = cloudProjectSettingsPatch(before, { ...before, orchestratorPermissions: "bypass-permissions" });
+		expect(patch).toEqual({ config: { orchestrator: { agentConfig: { permissions: "bypass-permissions" } } } });
 	});
 
 	it("sends workers-request-review and the whole issue intake rule when they change", () => {

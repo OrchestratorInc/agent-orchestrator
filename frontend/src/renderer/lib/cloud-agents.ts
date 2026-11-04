@@ -1,5 +1,5 @@
 import { agentLabel } from "./agent-options";
-import type { AgentInfo } from "./agent-select-options";
+import { defaultAuthorizedAgentForRole, type AgentInfo } from "./agent-select-options";
 import type { CloudCpProviderConnection } from "./cloud-cp";
 
 /** The agents AO cloud offers: the ones with a cloud login on the Harness
@@ -82,4 +82,11 @@ export function cloudAgentInfos(connections: CloudCpProviderConnection[] | undef
 			lastUsedAt: null,
 		};
 	});
+}
+
+/** The agent a cloud surface preselects when nothing else decides: the first
+ * connected provider in claude-code, codex, cursor, opencode order. Empty when
+ * no harness is connected. */
+export function defaultCloudAgent(connections: CloudCpProviderConnection[] | undefined): string {
+	return defaultAuthorizedAgentForRole(cloudAgentInfos(connections).filter((agent) => agent.effectiveReadiness === "ready"));
 }

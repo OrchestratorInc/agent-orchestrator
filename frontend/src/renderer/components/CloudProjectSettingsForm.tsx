@@ -12,14 +12,13 @@ import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
-import { defaultReviewerHarness } from "../lib/reviewer-harnesses";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { isStandaloneCloudProject, projectAdditionalRepos, projectConfigText } from "../lib/cloud-project-repos";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
-import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
+import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectPermissions, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
@@ -78,7 +77,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		// A standalone project has no repository, so no branches or pull requests to configure.
-		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, roleAgents: true }}
+		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
@@ -94,8 +93,6 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
-		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
-		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent ?? "", true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}
 		// The control plane takes only issues from the repository's owners, members and collaborators.
 		intakeDescription={t("settings.cloudProject.intakeDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
@@ -265,16 +262,13 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	</SettingsRow>;
 }
 
-function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {
+function CloudAgentPicker({ role, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
-	// Show the agent a reviewer actually runs with when none is chosen.
-	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent ?? "", true) : "");
 	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
-		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
-		// The worker and orchestrator need an agent, as on local projects; a
-		// reviewer can follow the worker agent's default.
-		options={role === "reviewer" ? [{ value: "", label: t("settings.cloudProject.sessionAgent") }, ...agents] : agents}
+		disabled={disabled} value={value} placeholder={t("settings.cloudProject.sessionSelection")}
+		// With no reviewer chosen, review follows the session's agent on the server.
+		options={[{ value: "", label: t("settings.cloudProject.sessionAgent") }, ...agents]}
 		triggerClassName="w-fit" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
 		onChange={onChange} />;
@@ -285,33 +279,29 @@ function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft 
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
 		sessionPrefix: values.sessionPrefix, workersRequestReview: values.workersRequestReview,
 		intakeEnabled: values.intake.enabled, intakeRepo: values.intake.repo, intakeAssignee: values.intake.assignee,
-		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,
-		workerModel: values.worker.agentConfig.model, orchestratorModel: values.orchestrator.agentConfig.model, reviewerModel: values.reviewer.agentConfig.model,
-		workerMode: values.worker.agentConfig.mode, orchestratorMode: values.orchestrator.agentConfig.mode, reviewerMode: values.reviewer.agentConfig.mode,
-		workerEffort: values.worker.agentConfig.effort, orchestratorEffort: values.orchestrator.agentConfig.effort, reviewerEffort: values.reviewer.agentConfig.effort,
-		workerPermissions: values.worker.agentConfig.permissions, orchestratorPermissions: values.orchestrator.agentConfig.permissions, reviewerPermissions: values.reviewer.agentConfig.permissions,
+		reviewerHarness: values.reviewer.agent, reviewerModel: values.reviewer.agentConfig.model,
+		reviewerMode: values.reviewer.agentConfig.mode, reviewerEffort: values.reviewer.agentConfig.effort,
+		workerPermissions: values.workerPermissions, orchestratorPermissions: values.orchestratorPermissions, reviewerPermissions: values.reviewer.agentConfig.permissions,
 	};
 }
 
 function toCloudDraft(values: ProjectSettingsDraft): CloudProjectSettingsDraft {
-	const role = (name: "worker" | "orchestrator" | "reviewer"): CloudProjectRoleDraft => {
-		const agent = name === "reviewer" ? values.reviewerHarness : values[`${name}Agent`];
-		const model = values[`${name}Model`];
-		const mode = values[`${name}Mode`];
-		const effort = values[`${name}Effort`];
-		const permissions = values[`${name}Permissions`];
-		const provider = agent === "" ? "" : CLOUD_AGENT_PROVIDERS.find((provider) => provider === agent);
-		if (provider === undefined) throw new Error("Unsupported Cloud agent");
-		if (mode !== "" && mode !== "plan" && mode !== "ask") throw new Error("Unsupported Cloud mode");
-		if (effort !== "" && effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max") throw new Error("Unsupported Cloud effort");
-		if (permissions !== "" && permissions !== "default" && permissions !== "auto" && permissions !== "accept-edits" && permissions !== "bypass-permissions") throw new Error("Unsupported Cloud permissions");
-		return { agent: provider, agentConfig: { model, mode, effort, permissions } };
+	const permissions = (value: string): CloudProjectPermissions => {
+		if (value !== "" && value !== "default" && value !== "auto" && value !== "accept-edits" && value !== "bypass-permissions") throw new Error("Unsupported Cloud permissions");
+		return value;
 	};
+	const agent = values.reviewerHarness;
+	const provider = agent === "" ? "" : CLOUD_AGENT_PROVIDERS.find((provider) => provider === agent);
+	if (provider === undefined) throw new Error("Unsupported Cloud agent");
+	const { reviewerMode: mode, reviewerEffort: effort } = values;
+	if (mode !== "" && mode !== "plan" && mode !== "ask") throw new Error("Unsupported Cloud mode");
+	if (effort !== "" && effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max") throw new Error("Unsupported Cloud effort");
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, sessionPrefix: values.sessionPrefix, autoReview: values.autoReview,
 		workersRequestReview: values.workersRequestReview ?? false,
 		intake: { enabled: values.intakeEnabled, repo: values.intakeRepo, assignee: values.intakeAssignee },
-		worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer"),
+		workerPermissions: permissions(values.workerPermissions), orchestratorPermissions: permissions(values.orchestratorPermissions),
+		reviewer: { agent: provider, agentConfig: { model: values.reviewerModel, mode, effort, permissions: permissions(values.reviewerPermissions) } },
 	};
 }
 
