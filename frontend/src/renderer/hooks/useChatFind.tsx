@@ -368,7 +368,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const bar = open ? <div ref={barRef} role="search" onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
 		if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
 		else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
-	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="absolute top-3 right-3 z-20 flex w-[320px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm leading-5 shadow-sm focus-within:ring-1 focus-within:ring-ring/40">
+	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="z-overlay absolute top-3 right-3 flex w-[320px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-lg border border-(--color-border-overlay) bg-overlay px-3 py-2 text-sm leading-5 shadow-(--shadow-popover) focus-within:ring-1 focus-within:ring-ring/40">
 		<Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 		<input ref={input} type="search" aria-label={t("shortcut.find-in-chat")} placeholder={t("shortcut.find-in-chat")} value={query} className="min-w-0 flex-1 bg-transparent px-1 outline-none [&::-webkit-search-cancel-button]:hidden" onChange={(event) => {
 			const value = event.target.value;
