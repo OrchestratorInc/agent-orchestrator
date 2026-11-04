@@ -203,6 +203,7 @@ func copyTree(ctx context.Context, source, destination string) error {
 	if err != nil {
 		return errors.Join(err, sourceRoot.Close())
 	}
+	var vanished vanishedLegacyEntries
 	walkErr := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -213,7 +214,7 @@ func copyTree(ctx context.Context, source, destination string) error {
 		}
 		if walkErr != nil {
 			if relative != "." && errors.Is(walkErr, os.ErrNotExist) {
-				skipVanishedLegacyEntry(ctx, relative)
+				vanished.add(relative)
 				return nil
 			}
 			return walkErr
@@ -236,7 +237,7 @@ func copyTree(ctx context.Context, source, destination string) error {
 		}
 		input, err := sourceRoot.Open(relative)
 		if errors.Is(err, os.ErrNotExist) {
-			skipVanishedLegacyEntry(ctx, relative)
+			vanished.add(relative)
 			return nil
 		}
 		if err != nil {
@@ -258,6 +259,7 @@ func copyTree(ctx context.Context, source, destination string) error {
 		}
 		return closeErr
 	})
+	vanished.log(ctx)
 	closeErr := errors.Join(sourceRoot.Close(), destinationRoot.Close())
 	if walkErr != nil || closeErr != nil {
 		return errors.Join(walkErr, closeErr)
@@ -276,12 +278,31 @@ func copyTree(ctx context.Context, source, destination string) error {
 	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
 }
 
-// skipVanishedLegacyEntry records an entry that disappeared after it was listed.
+// maxVanishedLegacyExamples bounds the paths in the summary: OpenCode can prune
+// thousands of expired shell output files during one copy.
+const maxVanishedLegacyExamples = 5
+
+// vanishedLegacyEntries tallies entries that disappeared after they were listed.
 // The legacy store stays live during the migration: OpenCode prunes its own shell
 // output, so one deleted file must not abort the copy and block every OpenCode 2
 // start. The migration runs once, so a skipped entry stays out of the new store.
-func skipVanishedLegacyEntry(ctx context.Context, relative string) {
-	slog.Default().WarnContext(ctx, "opencode: legacy data entry vanished during migration; skipping it", "entry", relative)
+type vanishedLegacyEntries struct {
+	count    int
+	examples []string
+}
+
+func (v *vanishedLegacyEntries) add(relative string) {
+	v.count++
+	if len(v.examples) < maxVanishedLegacyExamples {
+		v.examples = append(v.examples, relative)
+	}
+}
+
+func (v *vanishedLegacyEntries) log(ctx context.Context) {
+	if v.count == 0 {
+		return
+	}
+	slog.Default().WarnContext(ctx, "opencode: legacy data entries vanished during migration; skipped them", "count", v.count, "examples", v.examples)
 }
 
 func copyFileContext(ctx context.Context, destination io.Writer, source io.Reader) error {

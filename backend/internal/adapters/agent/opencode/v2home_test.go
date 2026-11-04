@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -356,6 +357,46 @@ func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
 		if len(staging) != 0 {
 			t.Fatalf("deleting at context check %d: left staging behind: %v", ctx.at, staging)
 		}
+	}
+}
+
+// OpenCode can prune thousands of files during one copy, so they share one line.
+func TestCopyTreeSummarizesVanishedEntriesInOneWarning(t *testing.T) {
+	source, destination := t.TempDir(), t.TempDir()
+	const files = 8
+	name := func(index int) string { return fmt.Sprintf("sh_%d.out", index) }
+	for index := range files {
+		if err := os.WriteFile(filepath.Join(source, name(index)), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	// Checks run in a fixed order: the root, sh_0.out and its two chunk reads.
+	// The assertions below fail if check 4 stops landing before the rest are read.
+	ctx := &removeAtCheckContext{
+		Context: context.Background(),
+		at:      4,
+		remove: func() {
+			for index := 1; index < files; index++ {
+				_ = os.Remove(filepath.Join(source, name(index)))
+			}
+		},
+	}
+	if err := copyTree(ctx, source, destination); err != nil {
+		t.Fatalf("copyTree: %v", err)
+	}
+	output := logs.String()
+	if lines := strings.Count(output, "vanished during migration"); lines != 1 {
+		t.Fatalf("logged %d vanished-entry warnings, want one summary: %s", lines, output)
+	}
+	if !strings.Contains(output, "count=7") {
+		t.Fatalf("summary lacks the full count: %s", output)
+	}
+	if !strings.Contains(output, name(1)) || strings.Contains(output, name(6)) {
+		t.Fatalf("summary should name the first %d entries only: %s", maxVanishedLegacyExamples, output)
 	}
 }
 
