@@ -29,6 +29,8 @@ type AgentAccountService interface {
 	ConsumeResetCredit(context.Context, string, string) (domain.CodexResetCreditOutcome, error)
 	Usage(context.Context, int) ([]agentaccounts.AccountUsage, error)
 	SessionAccounts(context.Context, domain.SessionID) (map[domain.AgentAccountProvider]string, error)
+	SessionStaysOnAccount(context.Context, domain.SessionID) (bool, error)
+	SetSessionStaysOnAccount(context.Context, domain.SessionID, bool) error
 }
 
 // AgentAccountSessionMover moves a session's agent to another account.
@@ -52,6 +54,7 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/login/{operationId}/cancel", c.cancelLogin)
 	r.Get("/agents/accounts/sessions/{sessionId}", c.sessionAccounts)
 	r.Put("/agents/accounts/sessions/{sessionId}", c.switchSession)
+	r.Put("/agents/accounts/sessions/{sessionId}/stay", c.setSessionStay)
 	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
 	r.Post("/agents/accounts/{accountId}/default", c.setDefault)
 	r.Post("/agents/accounts/{accountId}/reset-credit", c.consumeResetCredit)
@@ -239,14 +242,41 @@ func (c *AgentAccountsController) sessionAccounts(w http.ResponseWriter, r *http
 		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/accounts/sessions/{sessionId}")
 		return
 	}
-	accounts, err := c.Svc.SessionAccounts(r.Context(), domain.SessionID(strings.TrimSpace(chi.URLParam(r, "sessionId"))))
+	c.writeSessionAccounts(w, r, domain.SessionID(strings.TrimSpace(chi.URLParam(r, "sessionId"))))
+}
+
+func (c *AgentAccountsController) writeSessionAccounts(w http.ResponseWriter, r *http.Request, id domain.SessionID) {
+	accounts, err := c.Svc.SessionAccounts(r.Context(), id)
+	if err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	stay, err := c.Svc.SessionStaysOnAccount(r.Context(), id)
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionAgentAccountsResponse{
-		Claude: accounts[domain.AgentAccountProviderClaude], Codex: accounts[domain.AgentAccountProviderCodex],
+		Claude: accounts[domain.AgentAccountProviderClaude], Codex: accounts[domain.AgentAccountProviderCodex], StayOnAccount: stay,
 	})
+}
+
+func (c *AgentAccountsController) setSessionStay(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/agents/accounts/sessions/{sessionId}/stay")
+		return
+	}
+	var in SetSessionStayOnAccountRequest
+	if err := decodeJSONStrict(r, &in); err != nil || in.Stay == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "stay must be true or false", nil)
+		return
+	}
+	id := domain.SessionID(strings.TrimSpace(chi.URLParam(r, "sessionId")))
+	if err := c.Svc.SetSessionStaysOnAccount(r.Context(), id, *in.Stay); err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	c.writeSessionAccounts(w, r, id)
 }
 
 func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.Request) {

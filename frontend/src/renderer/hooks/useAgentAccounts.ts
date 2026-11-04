@@ -98,7 +98,7 @@ export function useSessionAgentAccounts(sessionId: string | undefined) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? ""),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: async () => unwrap(await apiClient.GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
 	});
 }
 
@@ -141,5 +141,10 @@ export function useAgentAccountActions() {
 			return result.transition;
 		},
 		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId) }),
+		/** Keeps a usage limit from moving the session to another account automatically. */
+		setStayOnAccount: async (sessionId: string, stay: boolean) =>
+			queryClient.setQueryData(sessionAccountsKey(sessionId), unwrap(await apiClient.PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
+				params: { path: { sessionId } }, body: { stay },
+			}))),
 	};
 }

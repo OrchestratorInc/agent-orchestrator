@@ -697,6 +697,9 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
+		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
+	}
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -1506,6 +1509,12 @@ func Run(buildVersion string) (retErr error) {
 					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
+				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
+					if err := chatSvc.HandoffUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit account handoff failed", "err", err)
 					}
 				})
 				select {
