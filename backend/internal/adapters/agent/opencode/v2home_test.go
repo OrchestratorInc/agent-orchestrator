@@ -1,11 +1,14 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -290,12 +293,17 @@ func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
 		at:      7,
 		remove:  func() { _ = os.Remove(filepath.Join(shell, "sh_1.out")) },
 	}
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	home, err := PrepareV2DataHome(ctx)
 	if err != nil {
 		t.Fatalf("PrepareV2DataHome: %v", err)
 	}
-	if ctx.calls < ctx.at {
-		t.Fatalf("made %d context checks, so the deletion at check %d never ran", ctx.calls, ctx.at)
+	// Only the skip logs this. A deletion before the listing would pass unnoticed.
+	if !strings.Contains(logs.String(), "sh_1.out") {
+		t.Fatalf("the deletion at check %d did not hit the vanished-entry skip; logs: %s", ctx.at, logs.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, "opencode", "shell", "project", "sh_0.out")); err != nil {
 		t.Fatalf("surviving entry was not migrated: %v", err)
