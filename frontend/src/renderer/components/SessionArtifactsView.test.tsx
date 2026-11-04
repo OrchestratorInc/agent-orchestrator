@@ -347,24 +347,24 @@ describe("SessionArtifactsView", () => {
 
 	it("follows an open local file's changes on disk only while it is open", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
-		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
-		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", true);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
-		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 	});
 
-	it("does not follow a remote host's or a cloud session's files through the local daemon", async () => {
+	it("follows an open cloud file through its session, and a remote host's files not at all", async () => {
 		const { rerender } = renderView(<SessionArtifactsView hostId="host-1" session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
-		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 
 		rerender(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
-		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("cloud-1", false);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "cloud-1", cloud: { orgId: "org-1" } }), true);
 	});
 
 	it("lists every artifact newest first", () => {

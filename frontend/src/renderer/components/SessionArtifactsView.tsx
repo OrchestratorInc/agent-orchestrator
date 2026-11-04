@@ -467,8 +467,8 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A local file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session.id, Boolean(selected) && !cloud && !hostId);
+	// A file the agent rewrites while it is open shows the new content.
+	useArtifactFileChanges(session, Boolean(selected) && !hostId);
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file, which for a
 	// cloud file also shows when its access link was refused.
