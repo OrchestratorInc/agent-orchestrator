@@ -12,6 +12,18 @@ import { font, iconSize } from "./tokens";
 // the keyboard away; the menus leave it with the field, so it stays up.
 export const KEEP_KEYBOARD = { focusable: false } as const;
 
+/**
+ * A submenu's popup, which a second tap on the row that opened it closes. A
+ * submenu that dismissed itself on an outside click closed on that tap's down,
+ * and the row's click then opened it again. Its parent menu still hears an
+ * outside tap and closes everything.
+ *
+ * Only for a submenu that opens clear of its row: Compose places a tall one
+ * low in its parent over the row instead, and there an outside tap is the only
+ * way back to the parent, so it keeps KEEP_KEYBOARD.
+ */
+export const SUBMENU = { ...KEEP_KEYBOARD, dismissOnClickOutside: false } as const;
+
 /** A menu that does not take focus never hears back, so the screen closes it. */
 export function useCloseMenuOnBack(open: boolean, close: () => void) {
 	useEffect(() => {

@@ -215,6 +215,22 @@ describe("Android spawn model", () => {
 	});
 
 	// Each agent opens one level down onto its models, so an agent and its model
+	// A second tap on the open agent's row closes its models; the submenu must
+	// not close itself on that tap's down, or the row's click reopened it.
+	it("closes an agent's models when its row is tapped again", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2 }, aider: { models: [], total: 0 } } });
+		const root = await render(props);
+		await act(async () => trigger(root, "spawn-harness").props.onClick());
+		const codex = () => menuOf(trigger(root, "spawn-model-codex"));
+		expect(codex().props.properties).toMatchObject({ focusable: false, dismissOnClickOutside: false });
+		await act(async () => trigger(root, "spawn-model-codex").props.onClick());
+		expect(codex().props.expanded).toBe(true);
+		await act(async () => trigger(root, "spawn-model-codex").props.onClick());
+		expect(codex().props.expanded).toBe(false);
+		// The menu above stays open to pick another agent.
+		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(true);
+	});
+
 	// are picked in one step.
 	it("nests each agent's models under it and picks both at once", async () => {
 		const props = baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false });

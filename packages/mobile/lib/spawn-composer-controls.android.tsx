@@ -17,7 +17,7 @@ import { fillMaxWidth, height, padding, semantics, testID, weight } from "@expo/
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { COMPOSER_DISC } from "./chat/composerStyles";
-import { HarnessMark, KEEP_KEYBOARD, MenuRow, useCloseMenuOnBack } from "./composeMenu.android";
+import { HarnessMark, KEEP_KEYBOARD, MenuRow, SUBMENU, useCloseMenuOnBack } from "./composeMenu.android";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
@@ -190,9 +190,9 @@ export function SpawnComposerControls({
 									</DropdownMenu.Trigger>
 									<DropdownMenu.Items>
 										{agents.map((agent) => (
-											<DropdownMenu key={agent.id} expanded={openAgent === agent.id} properties={KEEP_KEYBOARD} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
+											<DropdownMenu key={agent.id} expanded={openAgent === agent.id} properties={SUBMENU} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
 												<DropdownMenu.Trigger>
-													<DropdownMenuItem onClick={() => setOpenAgent(agent.id)} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
+													<DropdownMenuItem onClick={() => { setOlderOpen(null); setOpenAgent((current) => current === agent.id ? null : agent.id); }} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
 														<DropdownMenuItem.Text>
 															<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
 														</DropdownMenuItem.Text>
