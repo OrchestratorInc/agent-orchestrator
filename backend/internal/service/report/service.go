@@ -33,6 +33,13 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
+// ThreadRecorder shows an ingested report in the orchestrator's chat thread at
+// report time. It is best effort: it skips what it cannot show and never fails
+// the report.
+type ThreadRecorder interface {
+	RecordReportThreadEntry(ctx context.Context, rec domain.ReportRecord)
+}
+
 // Service validates and creates durable worker reports.
 type Service struct {
 	store     Store
@@ -40,15 +47,17 @@ type Service struct {
 	newID     func() string
 	onCreated func(domain.ReportRecord)
 	artifacts ArtifactRecorder
+	threads   ThreadRecorder
 }
 
-// Deps configures a Service. Artifacts is optional.
+// Deps configures a Service. Artifacts and Threads are optional.
 type Deps struct {
 	Store     Store
 	Now       func() time.Time
 	NewID     func() string
 	OnCreated func(domain.ReportRecord)
 	Artifacts ArtifactRecorder
+	Threads   ThreadRecorder
 }
 
 // New constructs a report Service.
@@ -59,7 +68,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts, threads: d.Threads}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -148,6 +157,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 				s.artifacts.RecordReportedArtifact(ctx, created.SessionID, output.Reference)
 			}
 		}
+	}
+	// Synchronous too: the thread row is what makes an open orchestrator chat
+	// render the report live, so it must exist before this call returns.
+	if s.threads != nil {
+		s.threads.RecordReportThreadEntry(ctx, created)
 	}
 	return created, nil
 }
