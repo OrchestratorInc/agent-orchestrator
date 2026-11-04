@@ -16,7 +16,9 @@ var pinMu sync.Mutex
 
 // pinDirectory uses the install directory only when it contains no sibling
 // executables. Shared installs get a shim so pinning ao cannot promote node,
-// git, or other tools ahead of the agent's selected runtime.
+// git, or other tools ahead of the agent's selected runtime. Windows also
+// prefers a shim for a single-executable install so the pinned directory has
+// the user profile's ACLs rather than a per-user install's owner-only ones.
 func pinDirectory(exe, dataDir string) (string, error) {
 	dir := pinnedDirForExecutable(exe)
 	if dir == "" {
@@ -50,9 +52,32 @@ func pinDirectory(exe, dataDir string) (string, error) {
 			shared = true
 		}
 	}
-	if !shared {
+	// Windows prefers a shim even when the install directory holds no sibling
+	// executables. A per-user install lives under %LOCALAPPDATA%\Programs, whose
+	// ACLs grant only the installing user, so a harness that runs agent commands
+	// as another local identity (Codex's Windows sandbox) cannot read or execute
+	// that directory. A shim under the data directory inherits the profile's
+	// ACLs, which those sandboxes can read (issue #7171).
+	if !shared && runtime.GOOS != "windows" {
 		return dir, nil
 	}
+	shimDir, err := ensureShimDir(exe, dataDir)
+	if err != nil {
+		if shared {
+			// A shared install must not be pinned directly: its siblings would
+			// land ahead of the agent's own runtime on PATH.
+			return "", err
+		}
+		// A single-executable install directory is still a usable pin for any
+		// caller that can read it, and losing the pin breaks `ao hooks`.
+		return dir, nil
+	}
+	return shimDir, nil
+}
+
+// ensureShimDir creates (or refreshes) the directory holding the pinned ao shim
+// and returns its path.
+func ensureShimDir(exe, dataDir string) (string, error) {
 	if !filepath.IsAbs(dataDir) {
 		return "", fmt.Errorf("AO shim data directory must be absolute, got %q", dataDir)
 	}
@@ -66,7 +91,10 @@ func pinDirectory(exe, dataDir string) (string, error) {
 	script := "#!/bin/sh\nexec '" + strings.ReplaceAll(absolute, "'", `'"'"'`) + "' \"$@\"\n"
 	if runtime.GOOS == "windows" {
 		name = "ao.cmd"
-		script = "@echo off\r\n\"" + strings.ReplaceAll(absolute, "%", "%%") + "\" %*\r\n"
+		// The batch sibling runs the copy beside it rather than the install
+		// path: %PATHEXT% prefers ao.exe, but Git Bash and `call ao` reach this
+		// file, and the install directory stays unreadable to sandboxes.
+		script = "@echo off\r\n\"%~dp0ao.exe\" %*\r\n"
 	}
 	pinMu.Lock()
 	defer pinMu.Unlock()
@@ -109,19 +137,19 @@ func pinDirectory(exe, dataDir string) (string, error) {
 	return shimDir, nil
 }
 
+// ensureWindowsAOExecutable installs the shim's ao.exe as a copy of the daemon
+// executable. It copies rather than hard-links because a hard link shares its
+// target's security descriptor: linking into the shim directory would keep the
+// install directory's ACLs, which sandboxes that run agent commands as another
+// local identity cannot read (issue #7171). A fresh copy inherits the shim
+// directory's profile-derived ACLs instead.
 func ensureWindowsAOExecutable(shimDir, executable string) error {
-	return ensureWindowsAOExecutableWithLink(shimDir, executable, os.Link)
-}
-
-func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(string, string) error) error {
 	target := filepath.Join(shimDir, "ao.exe")
 	sourceInfo, err := os.Stat(executable)
 	if err != nil {
 		return fmt.Errorf("stat AO executable: %w", err)
 	}
-	if targetInfo, targetErr := os.Stat(target); targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
-		return nil
-	} else if targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) {
+	if targetInfo, targetErr := os.Stat(target); targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) {
 		return nil
 	}
 	temp, err := os.CreateTemp(shimDir, ".ao-exe-*")
@@ -136,10 +164,8 @@ func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(str
 	if err := os.Remove(tempPath); err != nil {
 		return err
 	}
-	if err := link(executable, tempPath); err != nil {
-		if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
-			return fmt.Errorf("copy AO executable after link failed: %w", err)
-		}
+	if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
+		return fmt.Errorf("copy AO executable: %w", err)
 	}
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("replace AO executable shim: %w", err)
