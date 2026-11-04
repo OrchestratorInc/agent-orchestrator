@@ -2073,6 +2073,7 @@ func TestOpenCodeFamilyUsageEventRoundTrip(t *testing.T) {
 	}{
 		{domain.HarnessOpenCode, domain.UsageSourceOpenCodeDB, "/tmp/opencode/opencode.db"},
 		{domain.HarnessKilocode, domain.UsageSourceKiloDB, "/tmp/kilo/kilo.db"},
+		{domain.HarnessGrok, domain.UsageSourceGrokUsage, "/tmp/grok/sessions/repo/ses_root/usage.json"},
 	} {
 		t.Run(string(tt.harness), func(t *testing.T) {
 			s := newTestStore(t)

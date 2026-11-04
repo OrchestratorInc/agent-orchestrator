@@ -16,8 +16,9 @@ const (
 	piPricingVersion = "pi:reported"
 	// ompPricingVersion and kimchiPricingVersion label a cost the Pi fork
 	// computed with its own model registry.
-	ompPricingVersion    = "omp:reported"
-	kimchiPricingVersion = "kimchi:reported"
+	ompPricingVersion        = "omp:reported"
+	kimchiPricingVersion     = "kimchi:reported"
+	primeAgentPricingVersion = "prime-agent:reported"
 )
 
 // piDialect is what differs between Pi and the forks that write its session
@@ -45,6 +46,8 @@ var (
 		eventKeyPrefix: "kimchi", pricingVersion: kimchiPricingVersion,
 		gatewayProviders: []string{"kimchi", "kimchi-dev"},
 	}
+	// prime-agent writes Pi's session format unchanged.
+	primeAgentSessionDialect = piDialect{eventKeyPrefix: "prime-agent", pricingVersion: primeAgentPricingVersion}
 )
 
 type piSessionRecord struct {

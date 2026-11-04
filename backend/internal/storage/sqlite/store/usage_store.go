@@ -1076,7 +1076,9 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 	}
 	validProvider := event.ProviderID == expectedProvider
 	if harness == domain.HarnessPi || harness == domain.HarnessOMP || harness == domain.HarnessKimchi ||
-		harness == domain.HarnessGoose || harness == domain.HarnessOpenCode || harness == domain.HarnessKilocode {
+		harness == domain.HarnessPrimeAgent ||
+		harness == domain.HarnessGoose || harness == domain.HarnessOpenCode || harness == domain.HarnessKilocode ||
+		harness == domain.HarnessGrok {
 		validProvider = event.ProviderID == domain.UsageProviderOpenAI ||
 			event.ProviderID == domain.UsageProviderAnthropic
 	}

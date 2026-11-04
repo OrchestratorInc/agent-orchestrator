@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -60,10 +61,103 @@ func TestDefaultSourceRootsResolvesOMPAndKimchiAgentDirs(t *testing.T) {
 }
 
 func TestSupportedHarnessIncludesPiForks(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessOMP, domain.HarnessKimchi} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent} {
 		if !SupportedHarness(harness) {
 			t.Fatalf("SupportedHarness(%q) = false", harness)
 		}
+	}
+}
+
+// Break caught: looking for prime-agent transcripts anywhere but the
+// --session-dir AO starts it with, so its binding never found a source.
+func TestCollectorDiscoversPrimeAgentSessionInSessionDir(t *testing.T) {
+	const nativeID = "01a0ae4c-6550-718c-86e5-6e83f11144a6"
+	dataDir := t.TempDir()
+	roots, err := DefaultSourceRoots(context.Background(), dataDir)
+	mustNoError(t, err)
+	if roots.PrimeAgentSessions != filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions") {
+		t.Fatalf("prime-agent root = %q", roots.PrimeAgentSessions)
+	}
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessPrimeAgent, nativeID, false)
+	path := filepath.Join(roots.PrimeAgentSessions, nativeID+".jsonl")
+	writeUsageFixture(t, path, piFamilyTestHeader(nativeID))
+	collector := NewCollector(store, SourceRoots{PrimeAgentSessions: roots.PrimeAgentSessions}, nil)
+
+	mustNoError(t, collector.RecordHook(context.Background(), session.ID, HookSignal{
+		Harness: domain.HarnessPrimeAgent, Event: "session-start", NativeSessionID: nativeID,
+	}))
+	bindings, err := store.ListUsageBindingsForSession(context.Background(), session.ID)
+	if err != nil || len(bindings) != 1 {
+		t.Fatalf("bindings=%+v err=%v", bindings, err)
+	}
+	sources, err := store.ListUsageSourcesForBinding(context.Background(), bindings[0].ID)
+	if err != nil || len(sources) != 1 || sources[0].Kind != domain.UsageSourcePrimeAgentSession ||
+		sources[0].ArtifactPath != canonicalUsagePath(t, path) {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+}
+
+// Break caught: prime-agent sessions never binding. prime-agent 0.10 has no
+// --extension flag, so no hook names its native ID; the transcript in AO's own
+// --session-dir binds to the one live session in its cwd instead, but never to
+// a session that started after it or shares the workspace with another.
+func TestCollectorBindsPrimeAgentTranscriptByWorkspace(t *testing.T) {
+	const nativeID = "01a1a5fd-b108-772d-b336-2f25529fe6fb"
+	started := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	header := func(at time.Time, cwd string) string {
+		return `{"type":"session","version":3,"id":"` + nativeID + `","timestamp":"` +
+			at.Format(time.RFC3339Nano) + `","cwd":"` + cwd + `"}` + "\n"
+	}
+	tests := []struct {
+		name        string
+		transcript  time.Time
+		sessions    int
+		wantBinding bool
+	}{
+		{name: "one session in the cwd", transcript: started.Add(2 * time.Second), sessions: 1, wantBinding: true},
+		{name: "transcript older than the session", transcript: started.Add(-time.Hour), sessions: 1},
+		{name: "two sessions share the cwd", transcript: started.Add(2 * time.Second), sessions: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := collectorTestStore(t)
+			workspace := t.TempDir()
+			var sessions []domain.SessionRecord
+			for range tt.sessions {
+				session, err := store.CreateSession(ctx, domain.SessionRecord{
+					ProjectID: "usage-test", Kind: domain.KindWorker, Harness: domain.HarnessPrimeAgent,
+					Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: started},
+					Metadata:  domain.SessionMetadata{WorkspacePath: workspace},
+					CreatedAt: started, UpdatedAt: started,
+				})
+				mustNoError(t, err)
+				sessions = append(sessions, session)
+			}
+			root := t.TempDir()
+			path := filepath.Join(root, nativeID+".jsonl")
+			writeUsageFixture(t, path, header(tt.transcript, workspace))
+			collector := NewCollector(store, SourceRoots{PrimeAgentSessions: root}, nil)
+
+			mustNoError(t, collector.BackfillActive(ctx))
+			bindings, err := store.ListUsageBindingsForSession(ctx, sessions[0].ID)
+			mustNoError(t, err)
+			if !tt.wantBinding {
+				if len(bindings) != 0 {
+					t.Fatalf("bindings = %+v, want none", bindings)
+				}
+				return
+			}
+			if len(bindings) != 1 || bindings[0].NativeRootID != nativeID {
+				t.Fatalf("bindings = %+v", bindings)
+			}
+			sources, err := store.ListUsageSourcesForBinding(ctx, bindings[0].ID)
+			if err != nil || len(sources) != 1 || sources[0].Kind != domain.UsageSourcePrimeAgentSession ||
+				sources[0].ArtifactPath != canonicalUsagePath(t, path) {
+				t.Fatalf("sources = %+v, err=%v", sources, err)
+			}
+		})
 	}
 }
 

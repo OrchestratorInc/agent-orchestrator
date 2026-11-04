@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -40,8 +41,22 @@ var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
 	domain.UsageSourceKiloDB:      readOpenCodeSteps,
 }
 
+// snapshotUsageReader returns up to limit usage records after the cursor from
+// a file the agent rewrites whole rather than appends to. It shares the row
+// cursor contract of sqliteUsageReader.
+type snapshotUsageReader func(ctx context.Context, path, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
+
+var snapshotUsageReaders = map[domain.UsageSourceKind]snapshotUsageReader{
+	domain.UsageSourceGrokUsage: readGrokTurns,
+}
+
+// sqliteUsageSource reports whether the source is read by row cursor (a
+// SQLite database, or a rewritten snapshot file) rather than byte offset.
 func sqliteUsageSource(kind domain.UsageSourceKind) bool {
 	_, ok := sqliteUsageReaders[kind]
+	if !ok {
+		_, ok = snapshotUsageReaders[kind]
+	}
 	return ok
 }
 
@@ -78,39 +93,56 @@ func (i *Ingestor) ingestSQLite(
 		SyncWatch: source.Source.State == domain.UsageSourceError &&
 			source.Source.LastErrorCode == domain.UsageErrorArtifactMissing,
 	}
-	read := sqliteUsageReaders[source.Source.Kind]
 	path := source.Source.ArtifactPath
-	identity, err := usagesvc.SourceIdentity(ctx, path)
-	if err != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
-	}
-	if identity != source.Source.FileIdentity {
-		return i.replaceSource(ctx, source, identity, now)
-	}
-	db, err := openSQLiteUsageDB(ctx, path)
-	if err != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("open usage database: %w", err))
-	}
-	defer func() { _ = db.Close() }()
 	limit := i.sqliteChunkRows
-	records, err := read(ctx, db, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
-	if err != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
+	var records []jsonlRecord
+	if readSnapshot, snapshot := snapshotUsageReaders[source.Source.Kind]; snapshot {
+		// The agent replaces the whole file after each turn, so its identity
+		// changes by design; the turn cursor alone says what is new.
+		var err error
+		records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			if errors.Is(err, os.ErrNotExist) {
+				return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
 		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage database: %w", err))
-	}
-	if after, err := usagesvc.SourceIdentity(ctx, path); err != nil || after != identity {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
+	} else {
+		read := sqliteUsageReaders[source.Source.Kind]
+		identity, err := usagesvc.SourceIdentity(ctx, path)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
 		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, errors.New("usage database replaced during ingestion"))
+		if identity != source.Source.FileIdentity {
+			return i.replaceSource(ctx, source, identity, now)
+		}
+		db, err := openSQLiteUsageDB(ctx, path)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("open usage database: %w", err))
+		}
+		defer func() { _ = db.Close() }()
+		records, err = read(ctx, db, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
+		if err != nil {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage database: %w", err))
+		}
+		if after, err := usagesvc.SourceIdentity(ctx, path); err != nil || after != identity {
+			if ctx.Err() != nil {
+				return result, ctx.Err()
+			}
+			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, errors.New("usage database replaced during ingestion"))
+		}
 	}
 	nextOffset := source.Source.ByteOffset
 	for _, record := range records {

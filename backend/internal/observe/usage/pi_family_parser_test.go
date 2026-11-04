@@ -166,9 +166,10 @@ func TestParseKimchiSessionRecordsEveryProvider(t *testing.T) {
 func TestParsePiFamilySharesNormalizationButNotIdentity(t *testing.T) {
 	record := jsonlRecord{Data: []byte(ompZaiCachedReply)}
 	kinds := map[domain.UsageSourceKind]string{
-		domain.UsageSourcePiSession:     piPricingVersion,
-		domain.UsageSourceOMPSession:    ompPricingVersion,
-		domain.UsageSourceKimchiSession: kimchiPricingVersion,
+		domain.UsageSourcePiSession:         piPricingVersion,
+		domain.UsageSourceOMPSession:        ompPricingVersion,
+		domain.UsageSourceKimchiSession:     kimchiPricingVersion,
+		domain.UsageSourcePrimeAgentSession: primeAgentPricingVersion,
 	}
 	keys := make(map[string]domain.UsageSourceKind)
 	for kind, version := range kinds {
