@@ -154,6 +154,25 @@ describe("session presentation", () => {
 		).toEqual({ className: "bg-status-ready", breathe: true });
 	});
 
+	it("colours the dot from the PR the card's phrase describes, not the worst PR", () => {
+		// Two PRs: the card reads "Mergeable" from one while the other fails CI,
+		// so scmStatus aggregates to ci_failed. The dot must agree with the card.
+		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", displayStatus: "Mergeable" });
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+	});
+
+	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {
+		const session = sessionWith({
+			status: "working",
+			scmStatus: "mergeable",
+			displayStatus,
+			activity: { state: "active", lastActivityAt: "" },
+		});
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: true });
+	});
+
 	it("uses a blinking blue dot when an idle-section session starts working", () => {
 		expect(
 			getSessionStatusDotView(
