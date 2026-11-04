@@ -154,7 +154,9 @@ func TestLANManagerServesHTTP2WithoutTLS(t *testing.T) {
 
 	protocols := new(http.Protocols)
 	protocols.SetUnencryptedHTTP2(true)
-	client := &http.Client{Transport: &http.Transport{Protocols: protocols}}
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}, Timeout: 2 * time.Second}
+	// Close the HTTP/2 connection before the deferred server shutdown drains it.
+	defer client.CloseIdleConnections()
 	base := fmt.Sprintf("http://127.0.0.1:%d/anything", port)
 	resp, err := client.Get(base)
 	if err != nil {
