@@ -79,11 +79,11 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	if tool.status == acpsdk.ToolCallStatusFailed {
 		state = "failed"
 	}
-	if nativeID != "" {
-		switch reported := stringField(output, "state", "status"); reported {
-		case "running", "paused", "completed", "failed", "stopped":
-			state = reported
-		}
+	// Explicit job state applies to tool-ID tasks too. The ACP tool status
+	// alone still cannot settle an independently running background launch.
+	switch reported := stringField(output, "state", "status"); reported {
+	case "running", "paused", "completed", "failed", "stopped":
+		state = reported
 	}
 
 	description := stringField(input, "description", "command", "prompt")
