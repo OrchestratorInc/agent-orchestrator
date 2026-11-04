@@ -605,8 +605,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
 	--size-inspector-tabs: var(--floating-topbar-height);
 	--spacing-inspector-tabs: var(--floating-topbar-height);
-	/* Controls fill the band with the panel's own inset above and below them. */
-	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--size-center-panel-inset-mac));
+	/* Controls sit centered in the band with equal space above and below. */
+	--floating-topbar-gap: var(--space-2);
+	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--floating-topbar-gap));
 	padding-top: 0;
 }
 
