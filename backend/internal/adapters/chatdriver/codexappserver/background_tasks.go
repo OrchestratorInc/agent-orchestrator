@@ -84,7 +84,9 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 	var params struct {
 		ThreadID string `json:"threadId"`
 		Item     struct {
+			ID           string `json:"id"`
 			Type         string `json:"type"`
+			Tool         string `json:"tool"`
 			ProcessID    string `json:"processId"`
 			ExitCode     *int   `json:"exitCode"`
 			AgentsStates map[string]struct {
@@ -104,10 +106,17 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		c.backgroundObserved.Finish(params.Item.ProcessID, state, now)
 	}
 	if params.Item.Type == "collabAgentToolCall" {
+		// A child thread can execute more than once. Only calls that dispatch
+		// work supply a new run identity; wait/status observations keep it.
+		runID := ""
+		switch params.Item.Tool {
+		case "spawnAgent", "sendInput", "resumeAgent":
+			runID = params.Item.ID
+		}
 		for id, agent := range params.Item.AgentsStates {
 			switch agent.Status {
 			case "running", "pendingInit":
-				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, Kind: "agent", Description: "Subagent " + id, State: "running"}, now)
+				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, RunID: runID, Kind: "agent", Description: "Subagent " + id, State: "running"}, now)
 			case "completed":
 				c.backgroundObserved.Finish("agent:"+id, "completed", now)
 			case "errored":
