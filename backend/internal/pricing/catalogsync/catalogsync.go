@@ -695,6 +695,12 @@ func canonicalModel(providerID, value string) (string, error) {
 	if modelID == "" {
 		return "", fmt.Errorf("%s: empty model identifier", providerID)
 	}
+	// The runtime strips one prefix from a stored row too, so a key that
+	// still carries one (perplexity/perplexity/...) is a row no lookup can
+	// reach, and one the runtime rejects along with the whole catalog.
+	if pricing.CanonicalModelID(providerID, modelID) != modelID {
+		return "", fmt.Errorf("%s: model identifier %q is not canonical", providerID, modelID)
+	}
 	return modelID, nil
 }
 
