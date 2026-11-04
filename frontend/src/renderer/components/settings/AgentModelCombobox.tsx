@@ -11,6 +11,7 @@ import { ToggleRow } from "../chat/AgentSwitchPicker";
 import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
+import { Pressable } from "../ui/pressable";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -298,10 +299,9 @@ export function AgentModelCombobox({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<button
-					type="button"
+				<Pressable
 					className={cn(
-						"group/agent-model-trigger settings-option-trigger max-w-full min-w-0 hover:text-settings-label focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0",
+						"group/agent-model-trigger settings-option-trigger max-w-full min-w-0 hover:text-settings-label",
 						disabled && "cursor-not-allowed opacity-50",
 						triggerClassName,
 					)}
@@ -319,7 +319,7 @@ export function AgentModelCombobox({
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
 						aria-hidden="true"
 					/>
-				</button>
+				</Pressable>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent
 				align={menuAlign}

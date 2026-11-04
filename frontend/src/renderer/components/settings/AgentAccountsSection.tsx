@@ -163,7 +163,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
 					? cliLogin?.canLogout && account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
-					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
+					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="destructive-ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
@@ -235,7 +235,7 @@ function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 	return <div className="overflow-hidden rounded-md border border-border bg-terminal" data-settings-inline-edit="" data-testid="agent-account-login-terminal">
 		<div className="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3 py-2">
 			<p className="truncate text-xs font-medium text-foreground">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</p>
-			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.codexAccounts.loginClose")} className="shrink-0 text-muted-foreground" onClick={() => onClose(login)}><X aria-hidden="true" /></Button>
+			<Button type="button" size="icon-sm" variant="quiet" aria-label={t("settings.codexAccounts.loginClose")} className="shrink-0" onClick={() => onClose(login)}><X aria-hidden="true" /></Button>
 		</div>
 		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
 		<div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">

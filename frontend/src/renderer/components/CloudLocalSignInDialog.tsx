@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	centeredOnboardingDialogClass,
@@ -12,6 +11,7 @@ import { cn } from "../lib/utils";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -122,14 +122,7 @@ export function CloudLocalSignInDialog() {
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogContent className={centeredOnboardingDialogClass} showCloseButton={false}>
 				<DialogClose asChild>
-					<button
-						type="button"
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("common.close")}
-						disabled={busy}
-					>
-						<X className="size-icon-base" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("common.close")} disabled={busy} />
 				</DialogClose>
 
 				<div className="flex items-center gap-2 px-4 pr-12 pt-3">

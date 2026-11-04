@@ -172,12 +172,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
 					<Button
-						className="text-settings-muted hover:text-settings-label"
 						disabled={!bridge}
 						onClick={() => setImportOpen(true)}
 						size="sm"
 						type="button"
-						variant="ghost"
+						variant="quiet"
 					>
 						<Import aria-hidden="true" className="size-icon-base" />
 						{t("settings.browserImport.action")}
@@ -206,11 +205,11 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 						/>
 						<Button
 							aria-label={t("settings.browserProfiles.create")}
-							className="size-control-sm text-settings-muted hover:text-settings-label"
+							className="size-control-sm"
 							disabled={!name.trim() || !bridge || loading}
 							size="none"
 							type="submit"
-							variant="ghost"
+							variant="quiet"
 						>
 							<Plus aria-hidden="true" className="size-icon-base" />
 						</Button>
@@ -373,14 +372,16 @@ function BrowserProfileRow({
 			</div>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<button
+					<Button
 						aria-label={t("settings.browserProfiles.actions", { profile: profile.name })}
-						className="settings-close-button shrink-0 focus-visible:bg-(--color-bg-settings-row-hover) focus-visible:text-settings-title data-[state=open]:bg-(--color-bg-settings-row-hover) data-[state=open]:text-settings-title"
+						className="shrink-0"
 						ref={triggerRef}
+						size="icon"
 						type="button"
+						variant="quiet"
 					>
 						<MoreHorizontal aria-hidden="true" className="size-4" />
-					</button>
+					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent
 					align="end"

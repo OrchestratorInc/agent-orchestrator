@@ -39,9 +39,13 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
+import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
+import { takeCloudShellInput } from "../lib/cloud-shell-input";
 import { LazyChunkBoundary } from "./LazyChunkBoundary";
 
 // xterm and its WebGL addon (~700 KB) load on first terminal render instead of
@@ -55,6 +59,8 @@ export function preloadXtermTerminal(): void {
 	void loadXtermTerminal().catch(() => undefined);
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type TerminalPaneProps = {
@@ -400,12 +406,18 @@ export function TerminalCacheProvider({
 			// terminal settles instead of flickering. A different pane gets a
 			// different factory and therefore its own cursor starting at 0.
 			const cursor = { value: 0 };
-			const factory = () =>
-				createCloudTerminalMux({
+			const shellHandle = terminalTarget?.kind === "shell" ? terminalTarget.handleId : undefined;
+			const factory = () => {
+				// A shell a command cue opened types the cue's command once it is
+				// up. It is taken when the connection is made, not when this
+				// factory is, so a command queued after the tab rendered still goes.
+				const input = shellHandle ? takeCloudShellInput(shellHandle) : undefined;
+				return createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
 					terminalId: reviewerTerminalID,
 					cursor,
+					initialInput: input,
 					// Both kinds open their socket directly; the CP's find-or-create
 					// OpenTerminal + starting/ready messages drive readiness. There is
 					// no agent-ready SSE wait (#4960 flashed the workspace shell only
@@ -420,6 +432,7 @@ export function TerminalCacheProvider({
 						return response.ticket;
 					},
 				});
+			};
 			cloudMuxFactoriesRef.current.set(factoryKey, factory);
 			return factory;
 		},
@@ -1110,6 +1123,27 @@ function AttachedTerminal({
 	onTerminalReady?: (terminal: AttachableTerminal) => void;
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudBaseUrlRef = useRef(cloudBaseUrl);
+	cloudBaseUrlRef.current = cloudBaseUrl;
+	// A file dropped on a cloud terminal is uploaded to the session and placed
+	// in its sandbox, so the path typed at the prompt is one the agent can open.
+	// Only while the control plane takes files (attachments in the session
+	// organization's offering): otherwise a cloud terminal takes no drops, since
+	// a path on this machine means nothing in the sandbox.
+	const cloudSessionId = session?.cloud ? session.id : undefined;
+	const cloudOrgId = session?.cloud?.orgId;
+	const cloudAttachmentMaxBytes = useCloudOffering(Boolean(cloudSessionId), cloudOrgId).maxAttachmentBytes;
+	const cloudDropsAccepted = cloudAttachmentMaxBytes !== undefined;
+	const saveCloudDrop = useMemo(() => {
+		if (!cloudSessionId || !cloudOrgId) return undefined;
+		if (!cloudDropsAccepted) return null;
+		return async (file: { name: string; bytes: Uint8Array }) => {
+			const baseUrl = cloudBaseUrlRef.current;
+			const attachment = await uploadCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, file);
+			return placeCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, attachment.id);
+		};
+	}, [cloudDropsAccepted, cloudOrgId, cloudSessionId]);
 	const attachSession =
 		terminalTarget?.kind === "shell"
 			? undefined
@@ -1392,13 +1426,19 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting && !coverLabel;
+	// A Cloud session's terminated row is explained by the session view's own
+	// Cloud notice, and its socket also closes for a pause, a handoff or a
+	// reviewer whose verdict is still landing, so the strip shows there only
+	// for the exit the control plane recorded: the agent process gone in a
+	// live session.
+	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
+	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
 			{showEndedState && (
 				<TerminalEndedStrip
-					canRestore={canRestoreSession}
+					canRestore={canRestoreSession && !session?.cloud}
 					error={restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}
@@ -1418,6 +1458,8 @@ function AttachedTerminal({
 				<Suspense fallback={null}>
 				<XtermTerminal
 					ariaLabel={terminalTarget?.kind === "shell" ? t("terminal.shellAria") : t("terminal.sessionAria")}
+					saveDroppedFile={saveCloudDrop}
+					droppedFileMaxBytes={saveCloudDrop && cloudAttachmentMaxBytes !== undefined ? Math.min(cloudAttachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) : undefined}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
 					isFullscreen={isFullscreen}
@@ -1430,6 +1472,9 @@ function AttachedTerminal({
 					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
+					// Only session panes, where new shell tabs open. Settings login and
+					// onboarding terminals have other sizes and must not set the hint.
+					onGridChange={session ? rememberPaneTerminalGrid : undefined}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
@@ -1442,7 +1487,7 @@ function AttachedTerminal({
 							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
-								<div className="text-terminal">{"Agent Orchestrator"}</div>
+								<div className="text-terminal">{"Orchestrator"}</div>
 								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
 							</div>
 						)}
@@ -1491,15 +1536,17 @@ function CloudConnectError({ onRetry }: { onRetry: () => void }) {
 			<div className="flex max-w-sm flex-col items-center gap-4 rounded-lg border border-border bg-surface p-6 text-center shadow-lg">
 				<div className="font-mono text-sm font-medium text-foreground">{t("terminal.cloudConnectTitle")}</div>
 				<div className="text-xs leading-relaxed text-muted-foreground">{t("terminal.cloudConnectDescription")}</div>
-				<button
+				<Button
 					type="button"
 					id="cloud-terminal-retry"
-					className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-border bg-raised px-3 py-1.5 font-mono text-xs text-foreground transition hover:bg-interactive-hover"
+					className="font-mono"
 					onClick={onRetry}
+					size="sm"
+					variant="secondary"
 				>
 					<RotateCcw className="size-3" aria-hidden="true" />
 					{t("terminal.cloudConnectRetry")}
-				</button>
+				</Button>
 			</div>
 		</div>
 	);
@@ -1577,16 +1624,16 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<span className="inline-flex">
-								<button
+								<Button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
+									variant="secondary"
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
 									{t("terminal.restoreSession")}
-								</button>
+								</Button>
 							</span>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("terminal.restoreSession")}</TooltipContent>

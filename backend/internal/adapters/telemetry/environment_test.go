@@ -16,27 +16,28 @@ import (
 func TestDetectCI(t *testing.T) {
 	none := func(string) bool { return false }
 	cases := []struct {
-		name   string
-		env    map[string]string
-		exists func(string) bool
-		want   bool
-		signal string
+		name          string
+		env           map[string]string
+		exists        func(string) bool
+		wantCI        bool
+		wantContainer bool
 	}{
 		{name: "plain", env: nil, exists: none},
-		{name: "CI=true", env: map[string]string{"CI": "true"}, exists: none, want: true, signal: "ci_env"},
-		{name: "CI=1", env: map[string]string{"CI": "1"}, exists: none, want: true, signal: "ci_env"},
+		{name: "CI=true", env: map[string]string{"CI": "true"}, exists: none, wantCI: true},
+		{name: "CI=1", env: map[string]string{"CI": "1"}, exists: none, wantCI: true},
 		{name: "CI=false", env: map[string]string{"CI": "false"}, exists: none},
-		{name: "github actions", env: map[string]string{"GITHUB_ACTIONS": "true"}, exists: none, want: true, signal: "ci_env"},
-		{name: "jenkins", env: map[string]string{"JENKINS_URL": "http://ci"}, exists: none, want: true, signal: "ci_env"},
-		{name: "kubernetes", env: map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}, exists: none, want: true, signal: "container"},
-		{name: "podman", env: map[string]string{"container": "podman"}, exists: none, want: true, signal: "container"},
-		{name: "docker", exists: func(p string) bool { return p == "/.dockerenv" }, want: true, signal: "container"},
+		{name: "github actions", env: map[string]string{"GITHUB_ACTIONS": "true"}, exists: none, wantCI: true},
+		{name: "jenkins", env: map[string]string{"JENKINS_URL": "http://ci"}, exists: none, wantCI: true},
+		{name: "kubernetes", env: map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}, exists: none, wantContainer: true},
+		{name: "podman", env: map[string]string{"container": "podman"}, exists: none, wantContainer: true},
+		{name: "docker", exists: func(p string) bool { return p == "/.dockerenv" }, wantContainer: true},
+		{name: "ci in docker", env: map[string]string{"CI": "true"}, exists: func(p string) bool { return p == "/.dockerenv" }, wantCI: true, wantContainer: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, signal := detectCI(func(k string) string { return tc.env[k] }, tc.exists)
-			if got != tc.want || signal != tc.signal {
-				t.Fatalf("detectCI = %t, %q; want %t, %q", got, signal, tc.want, tc.signal)
+			gotCI, gotContainer := detectCI(func(k string) string { return tc.env[k] }, tc.exists)
+			if gotCI != tc.wantCI || gotContainer != tc.wantContainer {
+				t.Fatalf("detectCI = %t, %t; want %t, %t", gotCI, gotContainer, tc.wantCI, tc.wantContainer)
 			}
 		})
 	}
@@ -176,6 +177,9 @@ func TestPostHogPropertiesCarrySegmentation(t *testing.T) {
 	if _, ok := props["is_ci"].(bool); !ok {
 		t.Fatalf("is_ci = %#v, want a bool", props["is_ci"])
 	}
+	if _, ok := props["is_container"].(bool); !ok {
+		t.Fatalf("is_container = %#v, want a bool", props["is_container"])
+	}
 	if props["install_source"] != "dmg" || props["installed_at"] != "2026-10-01" || props["release_channel"] != "unknown" {
 		t.Fatalf("install context = %#v", props)
 	}
@@ -185,7 +189,7 @@ func TestPayloadCannotOverrideSegmentation(t *testing.T) {
 	// Common properties are not in any per-event allowlist, so an event payload
 	// cannot smuggle a different install_source or is_ci past the sanitizer.
 	for name, allowed := range remotePayloadAllowlist {
-		for _, key := range []string{"install_source", "installed_at", "is_ci", "ci_signal", "arch", "platform", "$os", "$os_version", "release_channel", "experiment_cohort"} {
+		for _, key := range []string{"install_source", "installed_at", "is_ci", "is_container", "ci_signal", "arch", "platform", "$os", "$os_version", "release_channel", "experiment_cohort"} {
 			if _, ok := allowed[key]; ok {
 				t.Errorf("%s allowlists common property %s", name, key)
 			}

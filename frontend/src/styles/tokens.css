@@ -112,7 +112,12 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	--color-status-validating: #facc15;
+	/* Validating is pink with the new sidebar design and yellow without it
+	   (`data-legacy-status-colors`, below). Themes set the two candidates;
+	   only this block and the legacy one pick between them. */
+	--color-status-validating-new: #e58bb5;
+	--color-status-validating-legacy: #facc15;
+	--color-status-validating: var(--color-status-validating-new);
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -283,10 +288,12 @@
 	--size-topbar-primary: 36px;
 	--size-topbar-secondary: 36px;
 	--size-topbar-control: 28px;
+	--gap-topbar-control: var(--space-1);
 	--size-toolbar: var(--size-topbar-primary);
-	/* ShellTopbar (.dashboard-app-header) on Win/Linux — the full-width bar
-	   the sidebar hangs below. Distinct from --size-toolbar (36px) because
-	   the shell header is taller (56px) to accommodate the project crumb. */
+	/* Controls center above the shared header's one-pixel bottom divider. */
+	--size-topbar-content: calc(var(--size-toolbar) - 1px);
+	/* Top offset for the Win/Linux browser and files pop-outs.
+	   Distinct from --size-toolbar (36px). */
 	--size-shell-topbar: 56px;
 	/* Windows custom title bar (.window-titlebar). */
 	--size-window-titlebar: 36px;
@@ -666,6 +673,11 @@
 		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
 }
 
+/* The new sidebar design switched off in Developer mode: the old yellow Validating. */
+:root[data-legacy-status-colors] {
+	--color-status-validating: var(--color-status-validating-legacy);
+}
+
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {
@@ -748,7 +760,8 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating: #ca8a04;
+	--color-status-validating-new: #9b4871;
+	--color-status-validating-legacy: #ca8a04;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;

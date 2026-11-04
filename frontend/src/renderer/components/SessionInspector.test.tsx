@@ -780,7 +780,7 @@ describe("SessionInspector PR section", () => {
         (client) => {
           client.setQueryData(settingsQueryKey, {
             defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
-            cloudOffering: true, cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
+            cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
           });
           client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
         },
@@ -1759,6 +1759,46 @@ describe("SessionInspector Activity section", () => {
       .getByText("Idle")
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+  });
+
+  it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5134, state, { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Conflict")).not.toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
+  it.each(["open", "draft"] as const)("keeps a %s PR's conflict and requested changes beside a clean closed PR", (state) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(7, state, { mergeability: "conflicting", review: "changes_requested" }), pr(8, "closed", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+    expect(within(activityRow).getByText("Changes Requested")).toBeInTheDocument();
   });
 
   it("timestamps the live Activity state so it participates in chronological ordering", () => {
@@ -4267,6 +4307,27 @@ describe("SessionInspector summary reviews", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(
       'Auto review Failed: reviewer preflight: reviewer harness "kimi" is unauthorized',
+    );
+  });
+
+  it("surfaces the stored reason of a failed manual review", async () => {
+    const failedManualReview = {
+      ...failedReview,
+      triggerSource: "manual",
+      body: "launch reviewer: reviewer replace stale pane: no such session",
+    };
+    mockCommonGets([], "", [
+      {
+        ...reviewState(3, "needs_review", "abc123"),
+        latestRun: failedManualReview,
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
     );
   });
 

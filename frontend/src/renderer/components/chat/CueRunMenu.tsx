@@ -4,9 +4,9 @@ import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
 import { apiErrorMessage } from "../../lib/api-client";
-import { useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
-import { fetchProjectCues, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
-import { shellTerminalsQueryKey, toShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
+import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
+import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
+import { shellTerminalsQueryKey, toShellTerminal, useOpenShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
 import { markTerminalHandleFresh } from "../../lib/fresh-terminal-handles";
 import { terminalShellRequestValue, useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { TopbarButton } from "../TopbarButton";
@@ -30,17 +30,21 @@ const CUE_MENU_CLOSE_MS = 150;
 export function CueRunMenu({
 	projectId,
 	sessionId,
+	cloudOrgId,
 	disabled = false,
 }: {
 	projectId: string;
 	sessionId: string;
+	/** A Cloud session's organization: its project's cues live on the control plane. */
+	cloudOrgId?: string;
 	disabled?: boolean;
 }) {
 	return (
 		<CueRunMenuTrigger
-			key={JSON.stringify([projectId, sessionId ?? null])}
+			key={JSON.stringify([projectId, sessionId ?? null, cloudOrgId ?? null])}
 			projectId={projectId}
 			sessionId={sessionId}
+			cloudOrgId={cloudOrgId}
 			disabled={disabled}
 		/>
 	);
@@ -49,10 +53,12 @@ export function CueRunMenu({
 function CueRunMenuTrigger({
 	projectId,
 	sessionId,
+	cloudOrgId,
 	disabled,
 }: {
 	projectId: string;
 	sessionId: string;
+	cloudOrgId?: string;
 	disabled: boolean;
 }) {
 	const { t } = useTranslation();
@@ -72,6 +78,8 @@ function CueRunMenuTrigger({
 	const pointerInsideControl = useRef(false);
 	const escapeRequested = useRef(false);
 	const invokeMutation = useInvokeCueMutation();
+	const cloud = useCueHost(cloudOrgId);
+	const openShellTerminal = useOpenShellTerminal();
 	const [invokingId, setInvokingId] = useState<string | null>(null);
 	const busy = invokingId !== null;
 	const spinner = busy || runningLastCue;
@@ -134,6 +142,20 @@ function CueRunMenuTrigger({
 		const origin = generation.current;
 		setInvokingId(cue.id);
 		try {
+			if (cloud) {
+				// A Cloud agent cue was sent to the session; a command cue runs in a
+				// new shell of its sandbox, which types the command once it is up.
+				// The command is queued as the shell is created, before its tab
+				// appears and its terminal connects.
+				const result = await invokeCloudCue(cloud, cue.id, sessionId);
+				rememberLastRunCue(projectId, cue.id);
+				if (result.kind !== "command" || !result.command) return;
+				const shell = await openShellTerminal.mutateAsync({ projectId, sessionId, cloud: { orgId: cloud.orgId }, initialInput: `${result.command}\r` });
+				if (!shell) return;
+				if (origin !== generation.current) return;
+				setActiveShellTerminal(shell.handleId);
+				return;
+			}
 			await useTerminalShellStore.getState().load();
 			if (origin !== generation.current) return;
 			const shell = terminalShellRequestValue(useTerminalShellStore.getState().preference);
@@ -175,7 +197,7 @@ function CueRunMenuTrigger({
 		try {
 			const cues = await queryClient.fetchQuery({
 				queryKey: projectCuesQueryKey(projectId),
-				queryFn: () => fetchProjectCues(projectId),
+				queryFn: () => cloud ? fetchProjectCues(projectId, cloud) : fetchProjectCues(projectId),
 				staleTime: 0,
 			});
 			if (origin !== generation.current) return;
@@ -203,9 +225,6 @@ function CueRunMenuTrigger({
 						ref={buttonRef}
 						type="button"
 						aria-label={t("cues.run")}
-						// The menu is anchored to this button: pressing must not scale it,
-						// or the open menu shifts with the trigger.
-						className="topbar-control--static-press"
 						data-priority="secondary"
 						disabled={disabled || spinner}
 						variant="icon"
@@ -229,6 +248,7 @@ function CueRunMenuTrigger({
 				{open ? (
 					<CueMenuItems
 						projectId={projectId}
+						cloudOrgId={cloudOrgId}
 						busy={spinner}
 						onInvoke={handleInvoke}
 						onCreate={() => {
@@ -245,7 +265,7 @@ function CueRunMenuTrigger({
 					/>
 				) : null}
 			</DropdownMenu>
-			<CreateCueDialog projectId={projectId} open={creating} onOpenChange={setCreating}
+			<CreateCueDialog projectId={projectId} cloudOrgId={cloudOrgId} open={creating} onOpenChange={setCreating}
 				onClosed={() => buttonRef.current?.focus()} />
 		</>
 	);
@@ -253,6 +273,7 @@ function CueRunMenuTrigger({
 
 function CueMenuItems({
 	projectId,
+	cloudOrgId,
 	busy,
 	onInvoke,
 	onCreate,
@@ -261,6 +282,7 @@ function CueMenuItems({
 	onEscapeKeyDown,
 }: {
 	projectId: string;
+	cloudOrgId?: string;
 	busy: boolean;
 	onInvoke: (cue: CueDTO) => Promise<void>;
 	onCreate: () => void;
@@ -269,7 +291,7 @@ function CueMenuItems({
 	onEscapeKeyDown: () => void;
 }) {
 	const { t } = useTranslation();
-	const query = useProjectCuesQuery(projectId);
+	const query = useProjectCuesQuery(projectId, true, cloudOrgId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	useEffect(() => {
 		if (query.isError && !query.isFetching) {

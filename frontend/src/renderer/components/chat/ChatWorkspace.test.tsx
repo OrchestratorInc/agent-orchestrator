@@ -4,7 +4,7 @@ import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -38,6 +38,8 @@ import {
 } from "../../lib/chat-draft-boundary";
 import { renderChat as render } from "../../test/render-chat";
 import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
+
+vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -887,7 +889,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Chat")).toHaveAttribute("data-session-role", "orchestrator");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
 		const actionRegion = screen.getByTestId("session-action-region");
-		expect(actionRegion).toHaveClass("pl-2", "pr-3");
+		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
 		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 
@@ -1168,12 +1170,12 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		// Nothing to fold, so no "Worked for": the time ends the answer's action row instead.
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
 		const duration = screen.getByText("1m");
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
 		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -1480,7 +1482,7 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
 		selection.addRange(range); fireEvent.pointerUp(document.body);
 		button = screen.getByRole("button", { name: "Add to chat" });
-		expect(button).toHaveClass("hover:bg-interactive-hover");
+		expect(button).toHaveClass("text-muted-foreground", "hover:text-foreground");
 		expect(button.querySelector("svg")).toBeNull();
 		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
 		fireEvent.mouseDown(button);
@@ -1546,6 +1548,34 @@ describe("ChatWorkspace timeline", () => {
 		} finally {
 			geometry.mockRestore();
 		}
+	});
+
+	it("applies a navigation request once, so another session's chat never replays it", () => {
+		type Request = { id: string; text: string; messageId?: string };
+		// A surface that stays mounted across sessions, as the Cloud one does,
+		// and drops a request once its chat reports it applied.
+		function Host({ snapshot, initial }: { snapshot: ConversationSnapshot; initial: Request }) {
+			const [request, setRequest] = useState<Request | undefined>(initial);
+			return (
+				<ChatWorkspace
+					snapshot={snapshot}
+					annotationNavigationRequest={request}
+					onAnnotationNavigationHandled={(id) => setRequest((current) => current?.id === id ? undefined : current)}
+				/>
+			);
+		}
+		const other = {
+			...chatFixtureSettled,
+			sessionId: "other-session",
+			items: chatFixtureSettled.items.map((item) => ({ ...item, id: `other-${item.id}` })),
+		} as ConversationSnapshot;
+		const messageId = chatFixtureSettled.items.find((item) => item.kind === "message")!.id;
+		const request = { id: "palette:1", text: "line", messageId };
+		const { rerender } = render(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		rerender(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		expect(screen.queryByText("The referenced message is no longer available in this chat.")).not.toBeInTheDocument();
 	});
 
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
@@ -2417,6 +2447,26 @@ describe("ChatWorkspace timeline", () => {
 		// A Coder orchestrator still opens its composer only once it is up.
 		render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} session={cloudSession("orchestrator", "provisioning", "coder")} />);
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("says the sandbox is starting under the brief a Freestyle session was started with, until its worker connects", () => {
+		const startedAt = new Date().toISOString();
+		const cloudSession = (observedState: string, runtimeConnected = false, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		const echo = [{ clientMessageId: "req-1", text: "Fix the login bug", createdAt: startedAt, opening: true }];
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		expect(screen.getByText("Starting sandbox")).toBeInTheDocument();
+		// Connected: the row under the brief goes back to timing the reply.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("running", true)} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		view.unmount();
+		// A Coder session starts behind its own startup screen: the chat names no sandbox start.
+		render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning", false, "coder")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
 	});
 
 	it.each([
