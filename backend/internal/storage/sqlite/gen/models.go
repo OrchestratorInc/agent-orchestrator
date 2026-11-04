@@ -173,6 +173,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	AccountHandoff       bool
 }
 
 type Automation struct {
@@ -763,6 +764,11 @@ type Session struct {
 	BranchNaming                     bool
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
+}
+
+type SessionAccountPin struct {
+	SessionID string
+	PinnedAt  time.Time
 }
 
 type SessionAgentAccount struct {
