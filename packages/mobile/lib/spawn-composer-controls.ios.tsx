@@ -25,7 +25,7 @@ import { useEffortSliderOpen } from "./useEffortSlider";
 import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
-import { defaultModelChoice } from "./spawnModel";
+import { defaultModelChoice, listedModels } from "./spawnModel";
 import { approvalSymbol } from "./approvalSymbol";
 import type { IOSSymbol } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -85,18 +85,25 @@ export function SpawnComposerControls({
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
 	// An agent's models as menu choices: the default first, named when the
-	// catalog says which it is; then the first few models; then the whole catalog.
+	// catalog says which it is; then the newest of each family, older versions
+	// one level down as in chat; then the whole catalog.
+	const modelChoice = (agentId: string) => (model: { id: string; label: string }) => (
+		<Choice
+			key={model.id}
+			label={model.label}
+			selected={agentId === harness && model.id === modelSelection}
+			onChoose={() => onSelectAgentModel(agentId, model.id)}
+		/>
+	);
 	const modelChoices = (agentId: string) => (
 		<>
-			{[{ id: "__auto__", label: defaultModelChoice(agentModels[agentId]?.defaultLabel) }, ...(agentModels[agentId]?.models ?? [])].map((model) => (
-				<Choice
-					key={model.id}
-					label={model.label}
-					selected={agentId === harness && model.id === modelSelection}
-					onChoose={() => onSelectAgentModel(agentId, model.id)}
-				/>
-			))}
-			{(agentModels[agentId]?.total ?? 0) > (agentModels[agentId]?.models.length ?? 0) ? (
+			{[{ id: "__auto__", label: defaultModelChoice(agentModels[agentId]?.defaultLabel) }, ...(agentModels[agentId]?.models ?? [])].map(modelChoice(agentId))}
+			{agentModels[agentId]?.older?.length ? (
+				<Menu label="Older models" systemImage="clock.arrow.circlepath">
+					{agentModels[agentId]!.older!.map(modelChoice(agentId))}
+				</Menu>
+			) : null}
+			{(agentModels[agentId]?.total ?? 0) > listedModels(agentModels[agentId]) ? (
 				<Button label={`All models (${agentModels[agentId]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agentId)} />
 			) : null}
 		</>

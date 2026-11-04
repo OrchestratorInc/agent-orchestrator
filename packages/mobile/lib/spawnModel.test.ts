@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { claudeAliasModel, defaultEffortModel, listedModels, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {
@@ -110,10 +110,11 @@ describe("menuModels", () => {
 		];
 		expect(menuModels(claude, "__auto__").models.map((model) => model.label)).toEqual(["Fable 5.1"]);
 		expect(menuModels(claude, "__auto__").defaultLabel).toBe("Opus 5.5");
-		expect(menuModels(claude, "claude-opus-5-5").models.map((model) => model.id)).toEqual(["claude-opus-5-5", "claude-fable-5-1"]);
+		expect(menuModels(claude, "claude-opus-5-5").models.map((model) => model.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5"]);
 	});
 
-	// New task and chat name and order one model the same way (#7419 review).
+	// New task and chat name and order one model the same way (#7419 review):
+	// by family as Claude Code lists them, newest first within one.
 	it("names and orders Claude's models as the chat's menu does", () => {
 		const alphabetical = [
 			{ id: "claude-fable-5", label: "Claude Fable 5" },
@@ -122,9 +123,32 @@ describe("menuModels", () => {
 			{ id: "claude-opus-4-8", label: "Claude Opus 4.8" },
 			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
 		];
-		expect(menuModels(alphabetical, "__auto__").models.map((model) => model.label)).toEqual(["Sonnet 5.5", "Fable 5.1", "Fable 5", "Opus 4.8", "Haiku 4.5"]);
+		expect(menuModels(alphabetical, "__auto__").models.map((model) => model.label)).toEqual(["Fable 5.1", "Fable 5", "Opus 4.8", "Sonnet 5.5", "Haiku 4.5"]);
+		expect(menuModels(alphabetical, "__auto__").older).toEqual([]);
 		expect(menuModelName("Claude Opus 5.5")).toBe("Opus 5.5");
 		expect(menuModelName("Claude Code")).toBe("Claude Code");
+	});
+
+	// The live catalog round 4 saw: chat folds the older versions away, and so does New task.
+	it("puts each family's older versions under Older models in a long menu, as chat does", () => {
+		const catalog = [
+			{ id: "opus", label: "Opus 5.5", isDefault: true },
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+			{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+			{ id: "claude-fable-5", label: "Claude Fable 5" },
+			{ id: "claude-opus-5", label: "Claude Opus 5" },
+			{ id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+			{ id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+			{ id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+		];
+		const menu = menuModels(catalog, "__auto__");
+		// The default row is Opus's newest, as chat's default choice is, so Opus 5 is an older one.
+		expect(menu.models.map((model) => model.label)).toEqual(["Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
+		expect(menu.older.map((model) => model.label)).toEqual(["Fable 5", "Opus 5", "Opus 4.8", "Sonnet 5", "Haiku 4.5"]);
+		// A picked older version stays on top, where the menu shows it ticked.
+		expect(menuModels(catalog, "claude-opus-4-8").models.map((model) => model.label)).toEqual(["Fable 5.1", "Opus 4.8", "Sonnet 5.5", "Haiku 5.5"]);
+		expect(listedModels(menu)).toBe(8);
 	});
 
 	it("leaves other providers' catalogs in their own order and names", () => {

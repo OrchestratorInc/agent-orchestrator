@@ -204,6 +204,20 @@ describe("iOS spawn selectors", () => {
 		expect(identified(root, "spawn-model-aider").findAll((node) => hostType(node) === "Button")).toHaveLength(0);
 	});
 
+	// As in chat: each family's newest at the top, older versions one level down.
+	it("folds older models one level down under Older models", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2 }, aider: { models: [], total: 0 } } });
+		const root = await render(props);
+		const codex = identified(root, "spawn-harness").findAll((node) => hostType(node) === "Section" && node.props.title === "Codex")[0];
+		const older = codex.findAll((node) => hostType(node) === "Menu" && node.props.label === "Older models")[0];
+		expect(choices(older).map(choiceLabel)).toEqual(["Fable 5"]);
+		expect(choices(codex).map(choiceLabel)).toEqual(["Default model", "Fable 5.1", "Fable 5"]);
+		await act(async () => choices(older)[0].props.onIsOnChange(true));
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "fable-5");
+		// Every model is listed, so there is no "All models".
+		expect(codex.findAll((node) => hostType(node) === "Button" && String(node.props.label).startsWith("All models"))).toHaveLength(0);
+	});
+
 	it("picks the approval mode from its own symbol at the controls row's end", async () => {
 		const props = baseProps({ approvalMode: "bypass-permissions" });
 		const root = await render(props);

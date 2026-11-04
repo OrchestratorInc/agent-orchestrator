@@ -24,7 +24,7 @@ import { useEffortSliderOpen } from "./useEffortSlider";
 import { haptics } from "./haptics";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
-import { defaultModelChoice } from "./spawnModel";
+import { defaultModelChoice, listedModels } from "./spawnModel";
 import type { Theme } from "./theme";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -79,9 +79,11 @@ export function SpawnComposerControls({
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
-	// The agent whose models are open, one level down the agent menu.
+	// The agent whose models are open, one level down the agent menu, and the
+	// agent whose older models are open one level further.
 	const [openAgent, setOpenAgent] = useState<string | null>(null);
-	const close = () => { setOpenMenu(null); setOpenAgent(null); };
+	const [olderOpen, setOlderOpen] = useState<string | null>(null);
+	const close = () => { setOpenMenu(null); setOpenAgent(null); setOlderOpen(null); };
 	const effortSlider = useEffortSliderOpen(effortChoices, busy);
 	const [composerHeight, setComposerHeight] = useState(0);
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
@@ -95,6 +97,20 @@ export function SpawnComposerControls({
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
+	// One model in an agent's menu, ticked when it is the one the task runs.
+	const modelRow = (agentId: string) => (model: { id: string; label: string }) => (
+		<MenuRow
+			key={model.id}
+			label={model.label}
+			selected={agentId === harness && model.id === modelSelection}
+			onClick={() => {
+				close();
+				if (agentId === harness && model.id === modelSelection) return;
+				haptics.select();
+				onSelectAgentModel(agentId, model.id);
+			}}
+		/>
+	);
 	// Only a real change is worth a tick; the owner ignores a repeat anyway.
 	const choose = (current: string | null, apply: (id: string) => void) => (id: string) => {
 		close();
@@ -188,21 +204,27 @@ export function SpawnComposerControls({
 												</DropdownMenu.Trigger>
 												<DropdownMenu.Items>
 													{/* The default first, named when the catalog says which it is;
-													    then the first few models; then the whole catalog. */}
-													{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
-														<MenuRow
-															key={model.id}
-															label={model.label}
-															selected={agent.id === harness && model.id === modelSelection}
-															onClick={() => {
-																close();
-																if (agent.id === harness && model.id === modelSelection) return;
-																haptics.select();
-																onSelectAgentModel(agent.id, model.id);
-															}}
-														/>
-													))}
-													{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
+													    then the newest of each family, older versions one level
+													    down as in chat; then the whole catalog. */}
+													{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map(modelRow(agent.id))}
+													{agentModels[agent.id]?.older?.length ? (
+														<>
+															<HorizontalDivider color={t.borderDefault} />
+															<DropdownMenu expanded={olderOpen === agent.id} properties={KEEP_KEYBOARD} onDismissRequest={() => setOlderOpen(null)} color={t.bgElevated}>
+																<DropdownMenu.Trigger>
+																	<MenuRow
+																		label="Older models"
+																		trailing={<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />}
+																		onClick={() => setOlderOpen(agent.id)}
+																	/>
+																</DropdownMenu.Trigger>
+																<DropdownMenu.Items>
+																	{agentModels[agent.id]!.older!.map(modelRow(agent.id))}
+																</DropdownMenu.Items>
+															</DropdownMenu>
+														</>
+													) : null}
+													{(agentModels[agent.id]?.total ?? 0) > listedModels(agentModels[agent.id]) ? (
 														<>
 															<HorizontalDivider color={t.borderDefault} />
 															<MenuRow

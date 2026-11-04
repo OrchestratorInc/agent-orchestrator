@@ -17,7 +17,10 @@ export type SpawnComposerOption = {
  * one kept in), how many there are in all, and the catalog's own default.
  */
 export type SpawnAgentModels = {
+	/** The newest of each family, as the chat's menu lists them first. */
 	models: readonly SpawnComposerOption[];
+	/** Older versions, one level down under "Older models", as in chat; may be empty. */
+	older?: readonly SpawnComposerOption[];
 	total: number;
 	/** The model the catalog marks as its default, when it names one. */
 	defaultLabel?: string;

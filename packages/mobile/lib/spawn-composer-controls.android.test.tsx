@@ -274,6 +274,16 @@ describe("Android spawn model", () => {
 		expect(gaugeOf(root)).toBeUndefined();
 	});
 
+	// As in chat: each family's newest at the top, older versions one level down.
+	it("folds older models one level down under Older models", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "fable-5-1", label: "Fable 5.1" }], older: [{ id: "fable-5", label: "Fable 5" }], total: 2 }, aider: { models: [], total: 0 } } });
+		const root = await render(props);
+		const models = menuOf(trigger(root, "spawn-model-codex")).findByType("DropdownMenuItems" as never);
+		expect(items(models).map(text)).toEqual(["Default model", "Fable 5.1", "Older models", "Fable 5"]);
+		await act(async () => item(models, "Fable 5").props.onClick());
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "fable-5");
+	});
+
 	it("opens a catalog too long for its menu whole", async () => {
 		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
 		const root = await render(props);

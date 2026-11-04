@@ -1,3 +1,4 @@
+import { splitModelChoices, type TurnSettingChoice } from "./chat/turnSettingsModel";
 import type { AgentModelInfo } from "./api";
 
 export type SpawnModelDefaults = {
@@ -68,25 +69,43 @@ export const MENU_MODEL_LIMIT = 12;
  * lists the first few and the whole catalog opens in a sheet. The picked model
  * is always among them, so the menu can show it checked.
  *
- * Named and ordered as the chat's menu lists them, so one model reads the same
- * on both pages: Claude's models without the maker's name ("Fable 5.1", not
- * "Claude Fable 5.1") and newest first, where the catalog comes alphabetical.
+ * Named, ordered and grouped as the chat's menu lists them, so one model reads
+ * the same on both pages: Claude's models without the maker's name ("Fable
+ * 5.1", not "Claude Fable 5.1"), by family as Claude Code lists them and newest
+ * first within one, where the catalog comes alphabetical; and in a long menu,
+ * each family's older versions one level down (`older`), as chat does.
  */
-export function menuModels(models: readonly AgentModelInfo[], selected: string, limit = MENU_MODEL_LIMIT): { models: { id: string; label: string }[]; total: number; defaultLabel?: string } {
+export function menuModels(models: readonly AgentModelInfo[], selected: string, limit = MENU_MODEL_LIMIT): { models: { id: string; label: string }[]; older: { id: string; label: string }[]; total: number; defaultLabel?: string } {
 	const fallback = models.find((model) => model.isDefault);
 	// The default row stands for the catalog's default, so no other row repeats
 	// it: Claude Code's catalog lists the newest Opus by alias ("Opus 5.5") and by
 	// id ("Claude Opus 5.5"). A pinned copy stays, so the menu can tick it.
-	const listed = newestClaudeFirst(fallback
+	const listed = claudeByFamily(fallback
 		? models.filter((model) => model.id === selected || !sameModelName(model.label, fallback.label))
 		: models);
 	const shown = listed.slice(0, limit);
 	const picked = selected && !shown.some((model) => model.id === selected) ? models.find((model) => model.id === selected) : undefined;
+	const named = [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: menuModelName(model.label) }));
+	// Split as chat's menu, which lists the default among its choices: the
+	// default row is its family's newest, so that family's other versions are
+	// older ones ("Opus 5" under the default "Opus 5.5"). It leads the split and
+	// is left out of the rows, which the default row already stands for.
+	const split = splitModelChoices([
+		...(fallback ? [{ value: "__auto__", label: menuModelName(fallback.label), selected: false }] : []),
+		...named.map((model) => ({ value: model.id, label: model.label, selected: model.id === selected })),
+	]);
+	const back = (choices: readonly TurnSettingChoice[]) => choices.filter((choice) => choice.value !== "__auto__").map((choice) => ({ id: choice.value, label: choice.label }));
 	return {
-		models: [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: menuModelName(model.label) })),
+		models: back(split.latest),
+		older: back(split.older),
 		total: models.length,
 		defaultLabel: fallback ? menuModelName(fallback.label) : undefined,
 	};
+}
+
+/** How many of an agent's models its menu lists, older ones included: past that, "All models" opens the rest. */
+export function listedModels(menu: { models: readonly unknown[]; older?: readonly unknown[] } | undefined): number {
+	return (menu?.models.length ?? 0) + (menu?.older?.length ?? 0);
 }
 
 /** A model's name as the chat's menu shows it: "Claude Opus 5.5" reads "Opus 5.5". */
@@ -95,26 +114,26 @@ export function menuModelName(label: string): string {
 }
 
 /**
- * Claude's models newest first, by version across the families, as Claude
- * Code's own picker lists them. A model with no Claude version (any other
- * provider's) keeps its catalog place after them, so other catalogs are left
- * as they come.
+ * Claude's models as Claude Code's own picker, and so the chat's menu, lists
+ * them: by family (Fable, Opus, Sonnet, Haiku), newest first within one. A
+ * model with no Claude version (any other provider's) keeps its catalog place
+ * after them, so other catalogs are left as they come.
  */
-function newestClaudeFirst(models: readonly AgentModelInfo[]): AgentModelInfo[] {
-	const versioned = models.map((model, index) => ({ model, index, version: claudeVersion(model) }));
-	return versioned
+function claudeByFamily(models: readonly AgentModelInfo[]): AgentModelInfo[] {
+	const ranked = models.map((model, index) => ({ model, index, ...claudeRank(model) }));
+	return ranked
 		.sort((a, b) => {
-			if (a.version && b.version) return compareVersions(b.version, a.version) || a.index - b.index;
+			if (a.version && b.version) return a.family - b.family || compareVersions(b.version, a.version) || a.index - b.index;
 			if (a.version || b.version) return a.version ? -1 : 1;
 			return a.index - b.index;
 		})
 		.map((entry) => entry.model);
 }
 
-function claudeVersion(model: AgentModelInfo): number[] | undefined {
+function claudeRank(model: AgentModelInfo): { family: number; version?: number[] } {
 	const text = `${model.label} ${model.id}`.toLowerCase();
-	const family = CLAUDE_FAMILIES.find((name) => text.includes(name));
-	return family ? claudeFamilyVersion(model, family) : undefined;
+	const family = CLAUDE_FAMILIES.findIndex((name) => text.includes(name));
+	return family < 0 ? { family } : { family, version: claudeFamilyVersion(model, CLAUDE_FAMILIES[family]) };
 }
 
 /** "Opus 5.5" and "Claude Opus 5.5": one model, with and without its maker's name. */
