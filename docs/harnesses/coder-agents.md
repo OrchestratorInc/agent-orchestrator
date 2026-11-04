@@ -1,139 +1,48 @@
-# Coder Agents Adapter
+# Coder Agents setup
 
-## Current availability
+AO supports installing the official Coder CLI, signing in to a Coder deployment,
+checking the native account, and discovering enabled Coder Agents models.
+**Coder Agents sessions are unavailable in both Chat and Terminal UI.**
+Coder Agents is excluded from advertised Chat capabilities, New Task choices
+and defaults, and agent-switch targets.
 
-Install, login and native model discovery are available. **Chat is not registered**:
-Coder Agents is excluded from the advertised Chat harnesses, New Task choices
-and agent-switch targets. Connected account status remains setup evidence only.
-The public adapter also rejects start and resume before any provider request.
 Coder v2.37.9 adds client-executed dynamic tools alongside built-in server-side
-workspace tools; it offers no server-enforced local-only tool policy. An
-asynchronous interrupt cannot guarantee that those tools have not already acted.
-This applies to every approval mode, including bypass, read-only and text-only
-conversations. Connected account status does not imply Chat compatibility.
+workspace tools. It offers no server-enforced local-only tool policy, and an
+asynchronous interrupt cannot prevent those tools' side effects. A Chat driver
+can ship separately once that boundary can be enforced. No dormant conversation,
+tool execution, approval or replay implementation is included here.
 
-The adapter internals and contract tests below are retained for future native
-compatibility work. They do not enable Chat in the shipped driver. Chat must stay
-blocked until the deployment can enforce the local-only tool boundary.
+## Install and sign in
 
-AO runs [Coder Agents](https://coder.com/docs/ai-coder/agents) — the agent
-built into a Coder deployment — as a structured Chat harness. Inference and the
-chat loop run in your Coder deployment. Every file and command tool is a
-client-executed tool that AO runs in the session's local worktree, behind AO's
-own approvals. There is no Terminal UI mode.
+Use Settings > Harness > Coder Agents to install the official CLI:
+Homebrew or install.sh on macOS, install.sh into ~/.local/bin on Linux, or
+winget install Coder.Coder on Windows.
 
-## Requirements
+Select **Log in**. The AO login terminal explicitly prompts for the deployment
+URL (for example https://coder.example.com), validates it, and passes it as a
+separate argument to the native coder login command. Finish Coder's browser
+and session-token flow in the same terminal. Coder owns credential storage.
+No previous login or saved URL is required.
 
-- A Coder deployment at **v2.37 or newer** (the stable `/api/v2/chats` API),
-  with Coder Agents enabled, an AI provider configured by an administrator, and
-  at least one enabled model you can use.
-- The official `coder` CLI, signed in to that deployment. Settings → Harness
-  installs it (Homebrew or `install.sh` on macOS, `install.sh` into
-  `~/.local/bin` on Linux, `winget install Coder.Coder` on Windows).
+The equivalent manual command is:
 
-## Sign in
+    coder login https://coder.example.com
 
-Use **Log in** on the Coder Agents row in Settings → Harness, or run:
+## Account checks and models
 
-```bash
-coder login https://coder.example.com
-```
+AO reads CODER_URL or the URL in the native CLI config directory
+(CODER_CONFIG_DIR, otherwise Coder's platform default). CODER_SESSION_TOKEN
+takes precedence; otherwise AO runs coder login token, including native keyring
+support. CODER_AGENTS_ORGANIZATION selects an organization when necessary.
 
-AO reads the session the way the CLI does:
+Connected means the deployment accepted GET /api/v2/users/me and the selected
+organization has an enabled Coder Agents model. It is account/setup evidence,
+not evidence that AO can launch a session. A credential that cannot be verified
+is Configured; a missing or rejected credential is Not set up.
 
-| Source | Used for |
-| --- | --- |
-| `CODER_URL` | Deployment URL; otherwise the `url` file in the CLI config directory (`CODER_CONFIG_DIR`, default `~/.config/coderv2` on Linux, `~/Library/Application Support/coderv2` on macOS, `%APPDATA%\coderv2` on Windows) |
-| `CODER_SESSION_TOKEN` | Session token; otherwise AO runs `coder login token`, so a token in the OS keyring works without AO reading the keyring itself |
-| `CODER_AGENTS_ORGANIZATION` | Organization ID or name, when you belong to several and none is the default |
+Models come from GET /api/v2/organizations/{org}/chats/models on a Coder v2.37+
+deployment with Coder Agents enabled and administrator-configured models.
+AO displays only enabled model configurations and their native reasoning efforts.
 
-The token stays in the AO daemon's memory. It is never written by AO, never
-logged, and removed from the environment of every command the agent runs.
-Requests refuse redirects to another origin, so the token is never sent
-anywhere except the deployment.
-
-Harness Settings shows **Connected** only after a round trip: the deployment
-accepted the session (`GET /api/v2/users/me`) **and** your organization offers
-at least one enabled Coder Agents model. A session that exists but cannot be
-verified, or a deployment without an enabled model, reads as **Configured**.
-A missing or rejected session reads as **Not set up**.
-
-## Models
-
-The model list is the deployment's enabled model configs
-(`GET /api/v2/organizations/{org}/chats/models`). AO stores the model config
-ID, offers each model's own reasoning efforts, and rejects a model or effort
-the deployment does not offer.
-
-## How tools run
-
-AO creates the chat **without a Coder workspace** and declares five
-client-executed tools (`unsafe_dynamic_tools`, a Coder API marked
-experimental):
-
-| Tool | Effect |
-| --- | --- |
-| `ao_read_file`, `ao_list_directory` | Read inside the worktree |
-| `ao_write_file`, `ao_edit_file` | Change files inside the worktree |
-| `ao_execute` | Run a shell command with the worktree as working directory |
-
-Paths are confined to the worktree (and any additional workspace roots), with
-symlinks resolved, so a tool cannot read or write outside them. Commands run on
-your machine as your user.
-
-AO's approval modes apply to these tools:
-
-| Mode | Asks before |
-| --- | --- |
-| Ask first (default) | File changes and commands |
-| Accept edits | Commands |
-| Bypass permissions | Nothing |
-
-Auto mode is not offered: AO has no sandbox to run commands unasked. A
-read-only (reviewer) conversation declares only the read tools.
-
-AO never lets the conversation use a Coder workspace. If the agent calls
-`create_workspace`, `start_workspace` or `spawn_agent`, or Coder binds a
-workspace to the chat, AO interrupts the run, fails the turn, and refuses
-further turns in that session. Start a new session to continue.
-
-Each tool call is journaled under the AO data directory before it runs. A call
-that Coder replays after a reconnect or restart is answered from the journal
-and never run twice; a call that was interrupted mid-run is reported to the
-agent as having an unknown effect instead of being re-run.
-
-Once a native turn ends or termination is accepted, completed tool outputs are
-discarded after the local tool batch settles. Idle resume also discards stale
-outputs from ended native turns. Detaching an active run retains the result it
-still needs. Small execution tombstones remain because terminated AO sessions
-can be restored; removing those records would permit duplicate side effects.
-
-## Lifecycle
-
-- **Start:** AO creates the Coder chat with your first message, AO's system
-  prompt as Coder's hidden per-chat system prompt, and the labels
-  `ao.conversation` and `ao.session`.
-- **Stop:** AO interrupts the run (`POST /api/v2/chats/{id}/interrupt`).
-- **Kill:** interrupts any run, then detaches. Coder keeps the chat history.
-- **Restore:** AO finds the chat by its `ao.conversation` label and checks the
-  owner, the session label and that no workspace is bound. A missing,
-  archived, foreign or workspace-bound chat is a typed resume failure, never a
-  silent new chat. A run that continued in Coder while AO was away is adopted
-  as a turn. Every native history page is captured before the live stream
-  cursor advances, and AO imports user messages, assistant replies, reasoning,
-  tool results and usage through its typed history boundary. Stable native
-  message identities make repeated imports idempotent. Output completed while
-  AO was detached is recovered; importing history never executes its tools.
-
-## Limitations
-
-- Ephemeral background tasks are refused before provider requests. Prompt
-  suggestions and delegated titles cannot create persistent Coder chats.
-- Image and resource attachments are not sent.
-- AO's own MCP tools (`ao mcp`) are not offered, because Coder cannot start a
-  local stdio server; the agent can still run `ao` commands through
-  `ao_execute`.
-- Coder's built-in server-side tools that do not need a workspace (for example
-  template listing or web tools an administrator enabled) still run in Coder.
-- A Coder Community license allows a limited number of concurrently active
-  agents; Coder's own limits apply.
+Session tokens stay in daemon memory and are not persisted by AO. API requests
+refuse redirects to another origin, so tokens are not forwarded off-deployment.

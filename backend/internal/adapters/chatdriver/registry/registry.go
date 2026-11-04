@@ -83,7 +83,7 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // Coder Agents is not registered until its deployment can enforce a local-only
 // tool policy. Its setup adapter remains available independently of Chat.
 //
-// Every other harness stays TUI-only until the same is true of it. The driver
+// Chat is offered only after a harness has a qualified driver here. The driver
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".
 func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {

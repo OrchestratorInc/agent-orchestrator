@@ -308,6 +308,20 @@ func TestStartFallsBackToAgentResolvedBinaryOutsidePATH(t *testing.T) {
 	}
 }
 
+func TestStartOpensCoderDeploymentPrompt(t *testing.T) {
+	t.Parallel()
+	opener := &recordingTerminalOpener{}
+	resolver := managedExecutableResolver{agentID: "coder-agents", path: "/managed/bin/coder"}
+	svc := NewWithAgentResolver(resolver, resolver, opener, "")
+	svc.selfExecutable = func() (string, error) { return "/ao/bin/ao", nil }
+	if _, err := svc.Start(context.Background(), "coder-agents"); err != nil {
+		t.Fatal(err)
+	}
+	if got := opener.input.Argv; !reflect.DeepEqual(got, []string{"/ao/bin/ao", "coder-login", "--executable", "/managed/bin/coder"}) {
+		t.Fatalf("terminal argv = %q; want deployment prompt with resolved native CLI", got)
+	}
+}
+
 func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	t.Parallel()
 

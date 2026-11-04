@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
+
 	"strings"
 	"time"
 )
@@ -62,7 +62,7 @@ type Client struct {
 	http  *http.Client
 }
 
-// NewClient builds a client whose HTTP and WebSocket requests never leave the
+// NewClient builds a client whose HTTP requests never leave the
 // deployment's origin. transport may be nil for the default transport.
 func NewClient(creds Credentials, transport http.RoundTripper) *Client {
 	if transport == nil {
@@ -76,12 +76,6 @@ func NewClient(creds Credentials, transport http.RoundTripper) *Client {
 			CheckRedirect: sameOriginRedirects(&base),
 		},
 	}
-}
-
-// BaseURL returns a copy of the deployment URL (no secrets).
-func (c *Client) BaseURL() *url.URL {
-	u := *c.base
-	return &u
 }
 
 func sameOriginRedirects(base *url.URL) func(*http.Request, []*http.Request) error {
@@ -126,32 +120,13 @@ func originOf(u *url.URL) string {
 	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
-func (c *Client) endpoint(path string, query url.Values) *url.URL {
-	u := c.base.JoinPath(path)
-	if len(query) > 0 {
-		u.RawQuery = query.Encode()
-	}
-	return u
-}
-
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any, want ...int) error {
-	var reader io.Reader
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("encode coder request: %w", err)
-		}
-		reader = bytes.NewReader(encoded)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path, query).String(), reader)
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base.JoinPath(path).String(), http.NoBody)
 	if err != nil {
 		return err
 	}
 	req.Header.Set(SessionTokenHeader, c.token)
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
 	res, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, ErrCrossOriginRedirect) {
@@ -159,25 +134,21 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		}
 		// url.Error carries the request URL; it holds no secret because the
 		// token travels only in a header.
-		return fmt.Errorf("coder %s %s: %w", method, path, err)
+		return fmt.Errorf("coder GET %s: %w", path, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes))
 	if err != nil {
 		return fmt.Errorf("read coder response: %w", err)
 	}
-	ok := false
-	for _, code := range want {
-		ok = ok || res.StatusCode == code
-	}
-	if !ok {
+	if res.StatusCode != http.StatusOK {
 		return decodeAPIError(res.StatusCode, data)
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("decode coder %s %s response: %w", method, path, err)
+		return fmt.Errorf("decode coder GET %s response: %w", path, err)
 	}
 	return nil
 }
@@ -191,24 +162,17 @@ func decodeAPIError(status int, data []byte) error {
 	return &APIError{StatusCode: status, Message: body.Message, Detail: body.Detail}
 }
 
-// BuildInfo reads the deployment version.
-func (c *Client) BuildInfo(ctx context.Context) (BuildInfo, error) {
-	var info BuildInfo
-	err := c.do(ctx, http.MethodGet, "/api/v2/buildinfo", nil, nil, &info, http.StatusOK)
-	return info, err
-}
-
 // Me returns the signed-in user. A 401 means the session is invalid.
 func (c *Client) Me(ctx context.Context) (User, error) {
 	var user User
-	err := c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, nil, &user, http.StatusOK)
+	err := c.get(ctx, "/api/v2/users/me", &user)
 	return user, err
 }
 
 // Organizations lists the signed-in user's organizations.
 func (c *Client) Organizations(ctx context.Context) ([]Organization, error) {
 	var orgs []Organization
-	err := c.do(ctx, http.MethodGet, "/api/v2/users/me/organizations", nil, nil, &orgs, http.StatusOK)
+	err := c.get(ctx, "/api/v2/users/me/organizations", &orgs)
 	return orgs, err
 }
 
@@ -218,99 +182,11 @@ func (c *Client) ChatModels(ctx context.Context, organizationID string) ([]ChatM
 	var res struct {
 		Models []ChatModel `json:"models"`
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v2/organizations/"+url.PathEscape(organizationID)+"/chats/models", nil, nil, &res, http.StatusOK)
+	err := c.get(ctx, "/api/v2/organizations/"+url.PathEscape(organizationID)+"/chats/models", &res)
 	return res.Models, err
 }
 
-// CreateChat creates a chat with its first user message.
-func (c *Client) CreateChat(ctx context.Context, req CreateChatRequest) (Chat, error) {
-	var chat Chat
-	err := c.do(ctx, http.MethodPost, "/api/v2/chats", nil, req, &chat, http.StatusCreated)
-	return chat, err
-}
-
-// GetChat reads one chat.
-func (c *Client) GetChat(ctx context.Context, chatID string) (Chat, error) {
-	var chat Chat
-	err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID), nil, nil, &chat, http.StatusOK)
-	return chat, err
-}
-
-// ListChatsByLabels lists the user's chats carrying every given label,
-// including archived ones so a lookup can never miss an existing chat.
-func (c *Client) ListChatsByLabels(ctx context.Context, labels map[string]string) ([]Chat, error) {
-	query := url.Values{}
-	for key, value := range labels {
-		query.Add("label", key+":"+value)
-	}
-	var chats []Chat
-	err := c.do(ctx, http.MethodGet, "/api/v2/chats", query, nil, &chats, http.StatusOK)
-	return chats, err
-}
-
-// CreateChatMessage sends a user message to an existing chat.
-func (c *Client) CreateChatMessage(ctx context.Context, chatID string, req CreateChatMessageRequest) (CreateChatMessageResponse, error) {
-	var res CreateChatMessageResponse
-	err := c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", nil, req, &res, http.StatusOK)
-	return res, err
-}
-
-// ChatMessages returns messages after afterID (0 for all).
-func (c *Client) ChatMessages(ctx context.Context, chatID string, afterID int64) (ChatMessagesResponse, error) {
-	query := url.Values{}
-	if afterID > 0 {
-		query.Set("after_id", strconv.FormatInt(afterID, 10))
-	}
-	var res ChatMessagesResponse
-	err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", query, nil, &res, http.StatusOK)
-	return res, err
-}
-
-// ChatHistory reads every history page, newest first. A resume cannot use just
-// the default newest 50 messages: older output may never have reached AO.
-func (c *Client) ChatHistory(ctx context.Context, chatID string) ([]ChatMessage, error) {
-	var messages []ChatMessage
-	var before int64
-	for {
-		query := url.Values{"limit": {"200"}}
-		if before > 0 {
-			query.Set("before_id", strconv.FormatInt(before, 10))
-		}
-		var page ChatMessagesResponse
-		if err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", query, nil, &page, http.StatusOK); err != nil {
-			return nil, err
-		}
-		messages = append(messages, page.Messages...)
-		if !page.HasMore {
-			return messages, nil
-		}
-		next := before
-		for _, message := range page.Messages {
-			if next == 0 || message.ID < next {
-				next = message.ID
-			}
-		}
-		if next <= 0 || before > 0 && next >= before {
-			return nil, errors.New("coder history pagination did not advance")
-		}
-		before = next
-	}
-}
-
-// InterruptChat cancels the chat's in-flight run.
-func (c *Client) InterruptChat(ctx context.Context, chatID string) (Chat, error) {
-	var chat Chat
-	err := c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/interrupt", nil, nil, &chat, http.StatusOK)
-	return chat, err
-}
-
-// SubmitToolResults answers the chat's pending client-executed tool calls.
-func (c *Client) SubmitToolResults(ctx context.Context, chatID string, results []ToolResult) error {
-	return c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/tool-results", nil,
-		SubmitToolResultsRequest{Results: results}, nil, http.StatusNoContent)
-}
-
-// requestTimeout bounds one REST round trip; streams have no deadline.
+// requestTimeout bounds one REST round trip.
 const requestTimeout = 30 * time.Second
 
 // WithRequestTimeout returns ctx bounded for one REST call.

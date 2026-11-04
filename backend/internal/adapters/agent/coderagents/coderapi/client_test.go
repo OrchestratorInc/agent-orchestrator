@@ -2,7 +2,7 @@ package coderapi
 
 import (
 	"context"
-	"encoding/json"
+
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,38 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 )
 
 const testToken = "test-session-token-value"
-
-func TestChatHistoryDoesNotReturnPartialHistoryOnPageFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("before_id") == "" {
-			_, _ = w.Write([]byte(`{"messages":[{"id":200,"role":"assistant"}],"has_more":true}`))
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-	messages, err := testClient(t, server).ChatHistory(context.Background(), "chat")
-	if len(messages) != 0 || StatusCode(err) != http.StatusServiceUnavailable {
-		t.Fatalf("ChatHistory = %v, %v; must not publish an incomplete snapshot", messages, err)
-	}
-}
-
-func TestChatHistoryRejectsPaginationWithoutProgress(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"messages":[{"id":200,"role":"assistant"}],"has_more":true}`))
-	}))
-	defer server.Close()
-	messages, err := testClient(t, server).ChatHistory(context.Background(), "chat")
-	if len(messages) != 0 || err == nil || !strings.Contains(err.Error(), "pagination did not advance") {
-		t.Fatalf("ChatHistory = %v, %v; want a failed snapshot", messages, err)
-	}
-}
 
 func testClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
@@ -140,78 +111,6 @@ func TestClientDecodesErrorsWithoutRequestSecrets(t *testing.T) {
 	}
 }
 
-func TestCreateChatSendsHiddenSystemPromptToolsAndLabels(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/chats" {
-			http.NotFound(w, r)
-			return
-		}
-		var body map[string]any
-		if err := decodeJSON(r, &body); err != nil {
-			t.Error(err)
-		}
-		if _, hasWorkspace := body["workspace_id"]; hasWorkspace {
-			t.Error("create chat sent a workspace_id")
-		}
-		if body["system_prompt"] != "hidden" || body["client_type"] != "api" {
-			t.Errorf("create body = %v", body)
-		}
-		if tools, _ := body["unsafe_dynamic_tools"].([]any); len(tools) != 1 {
-			t.Errorf("dynamic tools = %v", body["unsafe_dynamic_tools"])
-		}
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":"c1","status":"pending","labels":{"ao.conversation":"k"}}`))
-	}))
-	defer server.Close()
-	chat, err := testClient(t, server).CreateChat(context.Background(), CreateChatRequest{
-		OrganizationID: "o1", Content: TextInput("hi"), SystemPrompt: "hidden", ClientType: "api",
-		Labels:             map[string]string{"ao.conversation": "k"},
-		UnsafeDynamicTools: []DynamicTool{{Name: "ao_read_file", InputSchema: []byte(`{"type":"object"}`)}},
-	})
-	if err != nil || chat.ID != "c1" || chat.HasWorkspace() {
-		t.Fatalf("CreateChat = %+v, %v", chat, err)
-	}
-}
-
-func TestStreamChatReadsBatchesWithTokenAndAfterID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(SessionTokenHeader) != testToken || r.URL.Query().Get("after_id") != "7" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.CloseNow()
-		_ = wsjson.Write(r.Context(), conn, []StreamEvent{
-			{Type: EventStatus, Status: &StreamStatus{Status: ChatStatusRunning}},
-			{Type: EventMessagePart, MessagePart: &StreamMessagePart{Role: RoleAssistant, Part: ChatMessagePart{Type: PartText, Text: "hi"}}},
-		})
-	}))
-	defer server.Close()
-	stream, err := testClient(t, server).StreamChat(context.Background(), "c1", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	batch, err := stream.Next(context.Background())
-	if err != nil || len(batch) != 2 || batch[1].MessagePart.Part.Text != "hi" {
-		t.Fatalf("Next() = %+v, %v", batch, err)
-	}
-}
-
-func TestStreamChatReportsHandshakeStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-	_, err := testClient(t, server).StreamChat(context.Background(), "missing", 0)
-	if StatusCode(err) != http.StatusNotFound {
-		t.Fatalf("StreamChat error = %v, want 404", err)
-	}
-}
-
 func TestResolveCredentialsPrefersEnvironment(t *testing.T) {
 	env := map[string]string{EnvURL: "https://coder.example.com/", EnvSessionToken: "env-token"}
 	creds, err := ResolveCredentials(context.Background(), mapEnv(env), func(context.Context, map[string]string) ([]byte, error) {
@@ -292,8 +191,4 @@ func TestResolveOrganization(t *testing.T) {
 
 func mapEnv(env map[string]string) func(string) string {
 	return func(name string) string { return env[name] }
-}
-
-func decodeJSON(r *http.Request, out any) error {
-	return json.NewDecoder(r.Body).Decode(out)
 }

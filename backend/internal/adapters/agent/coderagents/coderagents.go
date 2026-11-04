@@ -1,6 +1,6 @@
 // Package coderagents exposes Coder Agents (the agent built into a Coder
-// deployment) as a Chat-only AO harness. AO reaches it through the
-// deployment's REST/WebSocket API with the session the native `coder` CLI
+// deployment) for setup and native model discovery. AO reaches it through the
+// deployment's REST API with the session the native `coder` CLI
 // holds; the CLI is used for login and for reading that session.
 package coderagents
 
@@ -34,8 +34,8 @@ const probeTimeout = 10 * time.Second
 // coder cannot pass as the Coder CLI.
 var versionPattern = regexp.MustCompile(`\ACoder v(2)\.(\d+)\.(\d+)`)
 
-// Plugin is the Coder Agents harness. It has no terminal interface: Coder
-// Agents runs inside the deployment and is driven only through its chat API.
+// Plugin provides Coder Agents setup. Neither session interface is available
+// until Coder can enforce a local-only tool policy.
 type Plugin struct {
 	agentbase.Base
 
@@ -61,7 +61,7 @@ var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: adapterID, Name: "Coder Agents",
-		Description:  "Coder Agents from your Coder deployment, with tools AO runs in the session worktree.",
+		Description:  "Coder Agents installation, sign-in and model discovery. Sessions are unavailable until Coder supports a local-only tool policy.",
 		Version:      "0.1.0",
 		Capabilities: []adapters.Capability{adapters.CapabilityAgent},
 	}
@@ -74,12 +74,12 @@ func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 		"Reasoning effort the selected Coder model accepts.")
 }
 
-// GetLaunchCommand rejects terminal launches: Coder Agents is Chat-only.
+// GetLaunchCommand rejects launches: only setup and model discovery are shipped.
 func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, errors.New("coder agents is available in chat mode only")
+	return nil, errors.New("coder agents sessions are unavailable until Coder supports a local-only tool policy")
 }
 
 // ResolveBinary finds the official coder CLI and confirms its identity.
