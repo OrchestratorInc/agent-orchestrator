@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat covers
@@ -302,10 +302,10 @@ func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *tra
 	created, err := store.CreateSession(ctx, domain.SessionRecord{
 		ProjectID: "proj", Kind: domain.KindWorker, Harness: domain.HarnessHermes, Mode: domain.SessionModeChat,
 		Metadata: domain.SessionMetadata{
-			WorkspacePath:         t.TempDir(),
-			Branch:                "ao/session",
+			WorkspacePath:          t.TempDir(),
+			Branch:                 "ao/session",
 			ProviderConversationID: "reserved-chat-id",
-			ControllerGeneration:  "chat-generation",
+			ControllerGeneration:   "chat-generation",
 		},
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		CreatedAt: now, UpdatedAt: now,
@@ -390,7 +390,7 @@ func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *tes
 		t.Fatalf("controller order = %s", got)
 	}
 	// The messaged Chat conversation stays archived untouched: same root
-	// branch, same provider binding, still owned by the session.
+	// branch, same provider binding, its turn history intact.
 	conversation, err := store.ConversationForSession(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -402,7 +402,9 @@ func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *tes
 	if after.ProviderConversationID != "reserved-chat-id" || after.ProviderScopeID == "" {
 		t.Fatalf("archived Chat root was disturbed: %+v", after)
 	}
-	if conversation.LatestSequence == 0 {
-		t.Fatalf("archived Chat lost its history: latest sequence %d", conversation.LatestSequence)
+	if hasTurns, err := store.HasConversationTurns(ctx, conversation.ID); err != nil {
+		t.Fatal(err)
+	} else if !hasTurns {
+		t.Fatal("archived Chat lost its turn history")
 	}
 }

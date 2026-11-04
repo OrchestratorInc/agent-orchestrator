@@ -73,6 +73,63 @@ func TestFreshInterfaceEpochReleasesOnlyUntouchedRootProvider(t *testing.T) {
 	}
 }
 
+// A degraded identity-reset fresh TUI keeps a Chat that already carries real
+// messages archived exactly as it is, provider binding included, instead of
+// failing the untouched-Chat release proof (upstream issue #7724). The strict
+// commit keeps requiring the untouched proof.
+func TestArchivedChatInterfaceEpochKeepsMessagedChatArchived(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "archived-chat")
+	now := time.Now()
+	rec := sampleRecord("archived-chat")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ProviderConversationID = "reserved-chat-id"
+	rec.Metadata.ControllerGeneration = "chat-generation"
+	sess, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := st.CreateConversation(ctx, "chat-conversation", domain.ConversationScopeSession,
+		sess.ProjectID, sess.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AdoptProviderTurn(ctx, conversation.ID, sess.ID, "chat-generation", "turn-1", "provider-turn-1", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// The strict commit still refuses to discard a Chat with history.
+	if changed, err := st.CommitSessionControllerEpoch(ctx, sess.ID, domain.SessionModeChat, domain.SessionModeTUI, "", now); changed || err == nil {
+		t.Fatalf("strict commit with a messaged Chat changed=%v err=%v", changed, err)
+	}
+
+	// The degraded archived-chat commit succeeds and archives the Chat as-is.
+	changed, err := st.CommitSessionControllerEpochArchivedChat(ctx, sess.ID, domain.SessionModeChat, domain.SessionModeTUI, "", now)
+	if err != nil || !changed {
+		t.Fatalf("archived-chat epoch changed=%v err=%v", changed, err)
+	}
+	after, err := st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ProviderConversationID != "reserved-chat-id" || after.ProviderScopeID == "" {
+		t.Fatalf("archived Chat root was disturbed: %+v", after)
+	}
+	if hasTurns, err := st.HasConversationTurns(ctx, conversation.ID); err != nil {
+		t.Fatal(err)
+	} else if !hasTurns {
+		t.Fatal("archived Chat lost its turn history")
+	}
+	current, _, err := st.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Mode != domain.SessionModeTUI {
+		t.Fatalf("mode = %s, want tui", current.Mode)
+	}
+}
+
 // Orchestrator conversations are project-owned: session_id is empty and the
 // active orchestrator is recorded only as current_session_id.
 func TestFreshInterfaceEpochReleasesUntouchedProjectConversation(t *testing.T) {

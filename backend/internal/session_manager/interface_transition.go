@@ -617,7 +617,13 @@ func (m *Manager) runInterfaceTransition(
 			fail("LIFECYCLE_UNAVAILABLE", fmt.Errorf("lifecycle manager is unavailable"))
 			return
 		}
-		changed, err := m.lcm.CommitControllerEpoch(ctx, rec.ID, transition.SourceMode,
+		// A degraded identity-reset handoff may leave the source Chat archived
+		// with its messages; the strict path must still prove the root untouched.
+		commitEpoch := m.lcm.CommitControllerEpoch
+		if transition.DegradedKind != "" {
+			commitEpoch = m.lcm.CommitControllerEpochArchivedChat
+		}
+		changed, err := commitEpoch(ctx, rec.ID, transition.SourceMode,
 			transition.TargetMode, transition.NativeConversationID, transition.NativeConversationID == "")
 		if err != nil || !changed {
 			if err == nil {

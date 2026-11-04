@@ -66,6 +66,14 @@ type controllerEpochStore interface {
 		string,
 		time.Time,
 	) (bool, error)
+	CommitSessionControllerEpochArchivedChat(
+		context.Context,
+		domain.SessionID,
+		domain.SessionMode,
+		domain.SessionMode,
+		string,
+		time.Time,
+	) (bool, error)
 	RestoreSessionControllerEpoch(
 		context.Context,
 		domain.SessionID,
@@ -1573,7 +1581,22 @@ func (m *Manager) CommitControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, false,
+		ctx, id, source, target, nativeConversationID, startFresh, false, false,
+	)
+}
+
+// CommitControllerEpochArchivedChat is CommitControllerEpoch for a degraded
+// identity-reset handoff: the source Chat may carry real messages and stays
+// archived instead of proving its root untouched (upstream issue #7724).
+func (m *Manager) CommitControllerEpochArchivedChat(
+	ctx context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	startFresh bool,
+) (bool, error) {
+	return m.changeControllerEpoch(
+		ctx, id, source, target, nativeConversationID, startFresh, false, true,
 	)
 }
 
@@ -1588,7 +1611,7 @@ func (m *Manager) RestoreControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, true,
+		ctx, id, source, target, nativeConversationID, startFresh, true, false,
 	)
 }
 
@@ -1597,7 +1620,7 @@ func (m *Manager) changeControllerEpoch(
 	id domain.SessionID,
 	source, target domain.SessionMode,
 	nativeConversationID string,
-	startFresh, restore bool,
+	startFresh, restore, archivedChat bool,
 ) (bool, error) {
 	if !source.Valid() || !target.Valid() || source == target {
 		return false, fmt.Errorf("lifecycle: invalid controller epoch %q -> %q", source, target)
@@ -1632,6 +1655,10 @@ func (m *Manager) changeControllerEpoch(
 	var changed bool
 	if restore {
 		changed, err = writer.RestoreSessionControllerEpoch(
+			ctx, id, source, target, nativeConversationID, now,
+		)
+	} else if archivedChat {
+		changed, err = writer.CommitSessionControllerEpochArchivedChat(
 			ctx, id, source, target, nativeConversationID, now,
 		)
 	} else {
