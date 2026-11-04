@@ -2727,9 +2727,37 @@ export interface components {
              */
             permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
         };
+        /** @description Role settings. Only agentConfig.permissions is meaningful; the agent and the role model, mode and effort are deprecated and ignored by new clients. */
         ProjectRoleConfig: {
-            agent: components["schemas"]["CloudAgentHarness"];
-            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+            /**
+             * @deprecated
+             * @description Deprecated and ignored. A session owns its agent.
+             */
+            agent?: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: {
+                /**
+                 * @deprecated
+                 * @description Deprecated and ignored. A session owns its model.
+                 */
+                model?: string;
+                /**
+                 * @deprecated
+                 * @description Deprecated and ignored. A session owns its mode.
+                 * @enum {string}
+                 */
+                mode?: "" | "plan" | "ask";
+                /**
+                 * @deprecated
+                 * @description Deprecated and ignored. A session owns its effort.
+                 * @enum {string}
+                 */
+                effort?: "" | "low" | "medium" | "high" | "xhigh" | "max";
+                /**
+                 * @description Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+                 * @enum {string}
+                 */
+                permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
+            };
         };
         ProjectRoleConfigPatch: {
             agent?: components["schemas"]["CloudAgentHarness"];
@@ -2739,7 +2767,7 @@ export interface components {
             harness: components["schemas"]["CloudAgentHarness"];
             agentConfig?: components["schemas"]["ProjectAgentConfig"];
         };
-        /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
+        /** @description Canonical nested role settings. Role agents and role model settings are deprecated and ignored by new clients; role permissions still apply. Legacy workerAgent and orchestratorAgent are still tolerated on reads and removed on the next settings write. */
         ProjectConfig: {
             /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
             sessionPrefix?: string;
