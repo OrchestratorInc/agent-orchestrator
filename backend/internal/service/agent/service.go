@@ -817,8 +817,15 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			binary = resolved
 		}
 	}
+	persistCtx := s.ctx
+	if persistCtx == nil {
+		persistCtx = context.Background()
+	}
 	request, err := s.modelDiscoveryRequest(ctx, agentID, projectID, binary)
 	if err != nil {
+		if errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+			return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, cached.BinaryVersion, generation), nil
+		}
 		return ports.AgentModelCatalog{}, err
 	}
 	// Fingerprints the same inputs the discovery run would read, so a change to
@@ -872,10 +879,6 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
-	persistCtx := s.ctx
-	if persistCtx == nil {
-		persistCtx = context.Background()
-	}
 	if errors.Is(discoverErr, ports.ErrAgentModelDiscoverySignInRequired) {
 		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, version, generation), nil
 	}
