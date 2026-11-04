@@ -3722,7 +3722,6 @@
 	"settings.agentAccounts.checkSignIn": "サインインを確認",
 	"settings.agentAccounts.loginWaiting": "まだサインインしていません。ターミナルで完了してから、もう一度確認してください。",
 	"settings.agentAccounts.loginDuplicate": "{{email}} は追加済みです。",
-	"settings.agentAccounts.alsoCliLogin": "このコンピューターの {{provider}} CLI もこのアカウントでサインインしています。",
 	"settings.agentAccounts.loginMismatch": "このアカウントは {{email}} です。そのログインでもう一度サインインしてください。",
 	"settings.agentAccounts.signInAgain": "もう一度サインイン",
 	"settings.agentAccounts.aoUsage": "Orchestrator で {{tokens}} トークン（過去 30 日）",

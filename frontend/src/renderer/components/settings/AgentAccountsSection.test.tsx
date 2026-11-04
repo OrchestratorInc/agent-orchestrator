@@ -204,7 +204,6 @@ it("lists a login the CLI and a saved account share once", async () => {
 	expect(document.querySelector('[data-agent-account="device-claude"]')).not.toBeInTheDocument();
 	expect(screen.getAllByText("a@example.com")).toHaveLength(1);
 	expect(screen.queryByText("Claude Code CLI login")).not.toBeInTheDocument();
-	expect(within(row).getByText("The Claude Code CLI on this computer is signed in to this account too.")).toBeInTheDocument();
 	// Its usage in AO is the login's, through either folder.
 	await waitFor(() => expect(within(row).getByText(/3K tokens in AO/)).toBeInTheDocument());
 	expect(within(row).getByRole("button", { name: "Remove account" })).toBeInTheDocument();

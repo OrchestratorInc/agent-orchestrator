@@ -3722,7 +3722,6 @@
 	"settings.agentAccounts.checkSignIn": "Anmeldung prüfen",
 	"settings.agentAccounts.loginWaiting": "Noch nicht angemeldet. Im Terminal abschließen und erneut prüfen.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} ist bereits hinzugefügt.",
-	"settings.agentAccounts.alsoCliLogin": "Die {{provider}}-CLI auf diesem Computer ist ebenfalls mit diesem Konto angemeldet.",
 	"settings.agentAccounts.loginMismatch": "Dieses Konto ist {{email}}. Melde dich erneut mit diesem Login an.",
 	"settings.agentAccounts.signInAgain": "Erneut anmelden",
 	"settings.agentAccounts.aoUsage": "{{tokens}} Tokens in Orchestrator, letzte 30 Tage",

@@ -3789,7 +3789,6 @@
 	"settings.agentAccounts.checkSignIn": "Vérifier la connexion",
 	"settings.agentAccounts.loginWaiting": "Pas encore connecté. Terminez dans le terminal, puis vérifiez à nouveau.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} est déjà ajouté.",
-	"settings.agentAccounts.alsoCliLogin": "La CLI {{provider}} de cet ordinateur est aussi connectée à ce compte.",
 	"settings.agentAccounts.loginMismatch": "Ce compte est {{email}}. Reconnectez-vous avec cet identifiant.",
 	"settings.agentAccounts.signInAgain": "Se reconnecter",
 	"settings.agentAccounts.aoUsage": "{{tokens}} jetons dans Orchestrator, 30 derniers jours",
