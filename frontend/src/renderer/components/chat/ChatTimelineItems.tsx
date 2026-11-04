@@ -997,7 +997,7 @@ export function HumanMessage({
 	);
 	return (
 		<div
-			className="group/message flex flex-col items-end gap-1"
+			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
@@ -1070,7 +1070,9 @@ export function HumanMessage({
 				</div>
 			)}
 			{editing ? null : (
-				<div className="mt-1 flex h-7 items-center gap-1">
+				// Hover-only actions float under the bubble instead of reserving a blank row;
+				// a branch navigator is always visible, so it keeps its place in the flow.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
