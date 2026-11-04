@@ -42,6 +42,8 @@ export function CenterPanelShell({
 			className={cn(
 				"center-panel-shell",
 				align && "center-panel-shell--mac",
+				// The top bar floats on the window chrome; the panel starts below it.
+				align && !isFullScreen && "center-panel-shell--floating-topbar",
 				titlebarClearance && "center-panel-shell--titlebar-clearance",
 				titlebarClearance && isFullScreen && "center-panel-shell--titlebar-clearance-fullscreen",
 				linuxTitlebarClearance && "center-panel-shell--titlebar-clearance-linux",
