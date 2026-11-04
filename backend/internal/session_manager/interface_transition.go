@@ -299,7 +299,7 @@ func (m *Manager) launchInterfaceTransition(ctx context.Context, transition doma
 		}
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	run := &interfaceTransitionRun{cancel: cancel, done: make(chan struct{})}
 	m.transitionMu.Lock()
 	m.transitions[transition.SessionID] = run
@@ -456,7 +456,7 @@ func (m *Manager) runInterfaceTransition(
 				"TRANSITION_CANCELLED", transitionDetail(transition, "TRANSITION_CANCELLED", "The interface switch was cancelled."))
 			return
 		}
-		captureBackgroundFault(context.Background(), cause, "interface_transition", "")
+		captureBackgroundFault(context.WithoutCancel(ctx), cause, "interface_transition", "")
 		if sourceStopped {
 			m.rollbackInterfaceTransition(transition, sourceRuntimeHandle, modeChanged, accountStarting, code, cause)
 			return
@@ -702,7 +702,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed
 		// to advance; mark recovery so a user is never left with no controller.
-		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
+		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "state_record")
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"TRANSITION_STATE_FAILED", err.Error())
 		return
@@ -710,7 +710,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionCompleted, "", ""); err != nil {
 		m.logger.Error("interface transition completed but durable completion failed",
 			"sessionID", rec.ID, "transitionID", transition.ID, "error", err)
-		captureBackgroundFault(context.Background(), err, "interface_transition", "durable_completion")
+		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "durable_completion")
 		return
 	}
 }
