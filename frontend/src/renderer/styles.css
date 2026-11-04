@@ -3583,7 +3583,7 @@ html.sidebar-reordering * {
 	height: var(--space-5);
 	flex: 0 0 auto;
 	margin-inline: var(--space-1);
-	background: var(--color-border);
+	background: color-mix(in srgb, var(--color-border) 50%, transparent);
 }
 
 /* With the inspector open, the session column draws the line between it and
