@@ -1,7 +1,28 @@
-session repo-1
-MAIN  api turn: {"providerTurnId": "codex:41:28a0ec5b-6fe0-4a14-a361-464c9afcbb0e:rootfake-turn-4716facf", "state": "failed", "errorMessage": null}
-MAIN  error activities: ["stream disconnected before completion (SIMULATED by fake app-server for #5289)"]
-SIDE  api turn: {"state": "failed", "errorMessage": null}
-SIDE  error activities: []
-DB    conversation_turns: ('codex:41:28a0ec5b-6fe0-4a14-a361-464c9afcbb0e:rootfake-turn-4716facf', 'failed', "''")
-SID repo-1 SIDE 972a733e-9d36-4ccc-b71f-1cf671aaf7c4
+build: before   codex: codex-cli 0.164.0   ao: 4dead6a5f120
+SID repo-1
+turn running codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27
+
+== turn in progress
+API   turn: {"providerTurnId": "codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27", "state": "running", "errorMessage": null}
+API   error activities: []
+DB    conversation_turns: ('codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27', 'running', "''")
+
+== kill -9 chat host pid 63060
+
+== after crash
+API   turn: {"providerTurnId": "codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27", "state": "failed", "errorMessage": "controller ended before the turn completed"}
+API   error activities: []
+DB    conversation_turns: ('codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27', 'failed', "'controller ended before the turn completed'")
+UI    turn outcome: ["interrupted: The agent was interrupted by you | Worked for | 9s"]
+
+== POST /sessions/repo-1/resume-agent
+HTTP 409
+
+== after resume
+API   turn: {"providerTurnId": "codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27", "state": "interrupted", "errorMessage": null}
+API   error activities: []
+DB    conversation_turns: ('codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:root01a1a84c-7342-7bc2-ad95-4f281ad6bc27', 'interrupted', "''")
+EVENT turn.started||
+EVENT turn.started||codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:rootcodex-history:01a1a84c-72e0-7600-b147-dedb72700491:01a1a84c-
+EVENT turn.completed|interrupted|codex:41:f6582df2-1e6d-4d24-8ec9-59c402c66720:rootcodex-history:01a1a84c-72e0-7600-b147-dedb72700
+UI    turn outcome: ["interrupted: The agent was interrupted by you | Worked for | 9s"]

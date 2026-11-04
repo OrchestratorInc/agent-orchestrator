@@ -1,9 +1,35 @@
-session repo-3
-MAIN  api turn: {"providerTurnId": "codex:41:acfaab6e-a43c-4c87-ae11-3d6965a523fb:rootfake-turn-2b5bbc60", "state": "failed", "errorMessage": "stream disconnected before completion (SIMULATED by fake app-server for #5289)"}
-MAIN  error activities: ["stream disconnected before completion (SIMULATED by fake app-server for #5289)"]
-SIDE  api turn: {"state": "failed", "errorMessage": "stream disconnected before completion (SIMULATED by fake app-server for #5289)"}
-SIDE  error activities: []
-DB    conversation_turns: ('codex:41:2758a742-52de-47a5-b3c1-dcbaf1f62b16:rootfake-turn-31fe94b8', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
-DB    conversation_turns: ('codex:41:ba87e20b-b9bc-41fd-bcd5-c27f4d2c654e:rootfake-turn-ec3b254a', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
-DB    conversation_turns: ('codex:41:acfaab6e-a43c-4c87-ae11-3d6965a523fb:rootfake-turn-2b5bbc60', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
-SID repo-3 SIDE 6e207c2a-78b4-4f24-88da-00481fe77d2c
+build: after   codex: codex-cli 0.164.0   ao: 3e40d386c36b
+SID repo-1
+turn running codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222
+
+== turn in progress
+API   turn: {"providerTurnId": "codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222", "state": "running", "errorMessage": null}
+API   error activities: []
+DB    conversation_turns: ('codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222', 'running', "''")
+
+== kill -9 chat host pid 70448
+
+== after crash
+API   turn: {"providerTurnId": "codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222", "state": "failed", "errorMessage": "controller ended before the turn completed"}
+API   error activities: []
+DB    conversation_turns: ('codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222', 'failed', "'controller ended before the turn completed'")
+UI    turn outcome: ["failed: The agent ran into a problem | controller ended before the turn completed | Retry | Worked for | 9s"]
+
+== POST /sessions/repo-1/resume-agent
+HTTP 409
+
+== after resume
+API   turn: {"providerTurnId": "codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222", "state": "failed", "errorMessage": "controller ended before the turn completed"}
+API   error activities: []
+DB    conversation_turns: ('codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:root01a1a84e-6917-79a1-bd73-b0f3624d5222', 'failed', "'controller ended before the turn completed'")
+EVENT turn.started||
+EVENT turn.started||codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:rootcodex-history:01a1a84e-684a-7793-b9e5-22eb46e54866:01a1a84e-
+EVENT turn.completed|interrupted|codex:41:939e25ce-7d2a-4f06-aeda-c5913e1d94e6:rootcodex-history:01a1a84e-684a-7793-b9e5-22eb46e54
+UI    turn outcome: ["failed: The agent ran into a problem | controller ended before the turn completed | Retry | Worked for | 9s"]
+
+== regression: real user Stop on a second turn
+API   turn: {"providerTurnId":1-bd73-b0f3624d5222", "state": "failed", "errorMessage": "controller ended before the turn completed"}
+API   turn: {"providerTurnId":3-9bf4-fafa3dab8a70", "state": "interrupted", "errorMessage": null}
+DB    conversation_turns: ('co73-b0f3624d5222', 'failed', "'controller ended before the turn completed'")
+DB    conversation_turns: ('cof4-fafa3dab8a70', 'interrupted', "''")
+UI    turn outcome: ["failed: The agent ran into a problem | controller ended before the turn completed | Retry | Worked for | 9s","interrupted: The agent was interrupted by you | Worked for | 8s"]
