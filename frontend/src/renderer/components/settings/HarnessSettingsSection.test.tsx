@@ -1813,8 +1813,8 @@ describe("HarnessSettingsSection", () => {
 		expect(await screen.findByText("Codex chat")).toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Import" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.queryByText("Claude chat")).not.toBeInTheDocument();
-		const cursor = await findAgentRow("cursor");
-		expect(within(cursor).queryByRole("tab", { name: "Import" })).not.toBeInTheDocument();
+		const goose = await findAgentRow("goose");
+		expect(within(goose).queryByRole("tab", { name: "Import" })).not.toBeInTheDocument();
 	});
 
 	// A login fixed here must clear a stale model-discovery error in an open
