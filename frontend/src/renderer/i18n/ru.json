@@ -2177,6 +2177,7 @@
 	"settings.updates.updateTo": "Обновить до {{version}}",
 	"settings.updates.updateToLatest": "Обновить до последней версии",
 	"session.notFound": "Сессия не найдена. Возможно, она была очищена — выберите другую на боковой панели.",
+	"session.noLongerShared": "Этот сеанс больше не открыт для вас. Выберите другой на боковой панели.",
 	"session.actionsMenu": "Действия сессии",
 	"settings.updates.updateFailed": "Не удалось обновить.",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",

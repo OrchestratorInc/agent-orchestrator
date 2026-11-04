@@ -1785,6 +1785,7 @@
 	"settings.updates.updateTo": "{{version}}(으)로 업데이트",
 	"settings.updates.updateToLatest": "최신 버전으로 업데이트",
 	"session.notFound": "세션을 찾을 수 없습니다. 정리되었을 수 있습니다 — 사이드바에서 다른 세션을 선택하세요.",
+	"session.noLongerShared": "이 세션은 더 이상 공유되지 않습니다. 사이드바에서 다른 세션을 선택하세요.",
 	"session.actionsMenu": "세션 작업",
 	"settings.updates.updateFailed": "업데이트에 실패했습니다.",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",

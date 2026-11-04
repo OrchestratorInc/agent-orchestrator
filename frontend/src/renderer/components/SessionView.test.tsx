@@ -83,7 +83,10 @@ const cloudSessionQueryState = vi.hoisted(() => ({
 	data: undefined as WorkspaceSession | undefined,
 	isLoading: false,
 	isError: false,
+	error: null as unknown,
 }));
+// The person's own Cloud workspace.
+const ownCloudOrgState = vi.hoisted(() => ({ org: { id: "cloud-org", slug: "mine", displayName: "Mine", role: "owner" } as { id: string; slug: string; displayName: string; role: string } | undefined }));
 const cloudSessionLookup = vi.hoisted(() => vi.fn());
 const cloudSessionPoll = vi.hoisted(() => vi.fn());
 const cloudGateState = vi.hoisted(() => ({ cloudEnabled: true }));
@@ -137,6 +140,9 @@ vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
 		},
 	};
 });
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: ownCloudOrgState.org, isLoading: false, error: null, refetch: vi.fn(), ready: true }),
+}));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
@@ -1039,6 +1045,7 @@ describe("SessionView", () => {
 		cloudSessionQueryState.data = undefined;
 		cloudSessionQueryState.isLoading = false;
 		cloudSessionQueryState.isError = false;
+		cloudSessionQueryState.error = null;
 		settingsState.chatHarnesses = undefined;
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
@@ -1334,6 +1341,25 @@ describe("SessionView", () => {
 		expect(screen.queryByText(/Session not found/)).not.toBeInTheDocument();
 		workspaceQueryState.directLoading = false;
 		view.rerender(<SessionView projectId="proj-1" sessionId="starting-orchestrator" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
+	});
+
+	it("says a session from another workspace is no longer shared, not that it was cleaned up", async () => {
+		const { CloudCpError } = await vi.importActual<typeof import("../lib/cloud-cp")>("../lib/cloud-cp");
+		workspaceQueryState.data = [];
+		cloudSessionQueryState.isError = true;
+		cloudSessionQueryState.error = new CloudCpError("You do not have access to this session.", { status: 403, code: "forbidden" });
+		render(<SessionView cloudOrgId="owners-org" projectId="shared-project" sessionId="unshared" />);
+		expect(screen.getByText("This session is no longer shared with you. Pick another from the sidebar.")).toBeInTheDocument();
+		expect(screen.queryByText(/cleaned up/)).not.toBeInTheDocument();
+	});
+
+	it("still says not found for a missing session in the person's own workspace", async () => {
+		const { CloudCpError } = await vi.importActual<typeof import("../lib/cloud-cp")>("../lib/cloud-cp");
+		workspaceQueryState.data = [];
+		cloudSessionQueryState.isError = true;
+		cloudSessionQueryState.error = new CloudCpError("Not found.", { status: 404, code: "not_found" });
+		render(<SessionView cloudOrgId="cloud-org" projectId="my-project" sessionId="deleted" />);
 		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 	});
 

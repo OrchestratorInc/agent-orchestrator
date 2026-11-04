@@ -62,7 +62,8 @@ import { conversationQueryKey, conversationSettled } from "../hooks/useConversat
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import type { CloudCpAOReviewRun, CloudCpClientEvent, CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import {
 	refetchCloudProjectsForUnknownSessions,
 	refreshCloudSessionLifecycle,
@@ -468,6 +469,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudLookupEnabled,
 		!listedSession,
 	);
+	// The person's own workspace: a missing session in another one was shared
+	// with them, so it is gone because it no longer is.
+	const { org: ownCloudOrg } = useCloudOrg(Boolean(routeCloudOrgId) && !hostId);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
 		Boolean(routedWorkspace) || cloudRouteSession.isError ||
@@ -2011,11 +2015,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
+		const routeError = cloudRouteSession.error;
+		const noLongerShared = !hostId && Boolean(routeCloudOrgId) && (
+			(ownCloudOrg !== undefined && routeCloudOrgId !== ownCloudOrg.id) ||
+			(routeError instanceof CloudCpError && routeError.status === 403)
+		);
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
 				<PageTopbar />
 				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-					{remoteError ?? t("session.notFound")}
+					{remoteError ?? t(noLongerShared ? "session.noLongerShared" : "session.notFound")}
 				</div>
 			</div>
 		);

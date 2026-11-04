@@ -1785,6 +1785,7 @@
 	"settings.updates.updateTo": "{{version}} に更新",
 	"settings.updates.updateToLatest": "最新版に更新",
 	"session.notFound": "セッションが見つかりません。クリーンアップされた可能性があります — サイドバーから別のセッションを選んでください。",
+	"session.noLongerShared": "このセッションはもう共有されていません。サイドバーから別のセッションを選んでください。",
 	"session.actionsMenu": "セッション操作",
 	"settings.updates.updateFailed": "アップデートに失敗しました。",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",

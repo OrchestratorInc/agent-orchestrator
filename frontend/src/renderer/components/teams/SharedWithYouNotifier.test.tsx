@@ -141,30 +141,57 @@ describe("workspaceShareOf", () => {
 });
 
 describe("SessionAccessTag", () => {
+	const SHARED_LIST = ["cloud-shared-workspaces", "https://cp.test"];
+	let queryClient: QueryClient;
+	const tag = (session: Parameters<typeof SessionAccessTag>[0]["session"]) => (
+		<QueryClientProvider client={queryClient}><SessionAccessTag session={session} /></QueryClientProvider>
+	);
 	beforeEach(() => {
 		mocks.liveCalls = 0;
 		mocks.live = undefined;
+		queryClient = new QueryClient();
+		queryClient.setQueryData(SHARED_LIST, []);
 	});
 
 	it("does nothing, and asks for nothing, on the person's own sessions", () => {
-		const { container } = render(<SessionAccessTag session={{ id: "s1", cloud: { orgId: "org" } as never }} />);
+		const { container } = render(tag({ id: "s1", cloud: { orgId: "org" } as never }));
 		expect(container.textContent).toBe("");
 		expect(mocks.liveCalls).toBe(0);
 	});
 
 	it("asks for nothing on a session that has ended", () => {
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
-		const { container } = render(<SessionAccessTag session={{ id: "s1", isTerminated: true, cloud: { orgId: "org", shared: true } as never }} />);
+		const { container } = render(tag({ id: "s1", isTerminated: true, cloud: { orgId: "org", shared: true } as never }));
 		expect(container.textContent).toBe("");
 		expect(mocks.liveCalls).toBe(0);
 	});
 
 	it("shows the live role and the team it came through", () => {
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
-		const { container, rerender } = render(<SessionAccessTag session={{ id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Platform" } as never }} />);
+		const { container, rerender } = render(tag({ id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Platform" } as never }));
 		expect(container.textContent).toBe("Watch · via Platform");
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "editor" }] };
-		rerender(<SessionAccessTag session={{ id: "s1", cloud: { orgId: "org", shared: true } as never }} />);
+		rerender(tag({ id: "s1", cloud: { orgId: "org", shared: true } as never }));
 		expect(container.textContent).toBe("Write to the agent");
+	});
+
+	it("names no team while the shared list catches up with a role change, and asks it at once", async () => {
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
+		const session = { id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Recipient QA" } as never };
+		const { container, rerender } = render(tag(session));
+		expect(container.textContent).toBe("Watch · via Recipient QA");
+		// A direct share raises the role above the team's; the list still says
+		// the team until it is read again.
+		mocks.live = { you: "me", viewers: [{ userId: "me", role: "editor" }] };
+		rerender(tag(session));
+		expect(container.textContent).toBe("Write to the agent");
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-shared-workspaces"] });
+		// Once the list answers after the change, its team shows again.
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			queryClient.setQueryData(SHARED_LIST, []);
+		});
+		expect(container.textContent).toBe("Write to the agent · via Recipient QA");
 	});
 });

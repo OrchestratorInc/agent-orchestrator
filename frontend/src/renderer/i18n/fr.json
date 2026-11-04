@@ -1814,6 +1814,7 @@
 	"settings.updates.updateTo": "Mettre à jour vers {{version}}",
 	"settings.updates.updateToLatest": "Mettre à jour vers la dernière",
 	"session.notFound": "Session introuvable. Elle a peut-être été nettoyée — choisissez-en une autre dans la barre latérale.",
+	"session.noLongerShared": "Cette session n'est plus partagée avec vous. Choisissez-en une autre dans la barre latérale.",
 	"session.actionsMenu": "Actions de session",
 	"settings.updates.updateFailed": "Échec de la mise à jour.",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",

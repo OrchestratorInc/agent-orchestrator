@@ -1814,6 +1814,7 @@
 	"settings.updates.updateTo": "Atualizar para {{version}}",
 	"settings.updates.updateToLatest": "Atualizar para a mais recente",
 	"session.notFound": "Sessão não encontrada. Ela pode ter sido limpa — escolha outra na barra lateral.",
+	"session.noLongerShared": "Esta sessão não está mais compartilhada com você. Escolha outra na barra lateral.",
 	"session.actionsMenu": "Ações da sessão",
 	"settings.updates.updateFailed": "Falha na atualização.",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",

@@ -1785,6 +1785,7 @@
 	"settings.updates.updateTo": "Auf {{version}} aktualisieren",
 	"settings.updates.updateToLatest": "Auf neueste Version aktualisieren",
 	"session.notFound": "Sitzung nicht gefunden. Sie wurde möglicherweise bereinigt — wählen Sie eine andere in der Seitenleiste.",
+	"session.noLongerShared": "Diese Sitzung wird nicht mehr mit Ihnen geteilt. Wählen Sie in der Seitenleiste eine andere aus.",
 	"session.actionsMenu": "Sitzungsaktionen",
 	"settings.updates.updateFailed": "Update fehlgeschlagen.",
 	"settings.updates.error.withReason": "{{lead}} — {{reason}}",
