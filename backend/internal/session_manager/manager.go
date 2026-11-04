@@ -3828,11 +3828,17 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// resumes do not necessarily emit SessionStart until the next user turn, and
 	// Claude emits SessionStart after its resume process is already running, but
 	// both adapters' explicit resume commands name the exact stored conversation.
+	// Hermes qualifies for the same reason — its restore command resumes the
+	// exact recorded native conversation and that restore path proves the
+	// identity before this launch exists — and the alternative proof (the /proc
+	// lease chain in readSessionInfo) is Linux-only, so on darwin a hermes TUI
+	// relaunched outside a transition (daemon restart + resume) could never
+	// re-confirm and every later TUI→Chat handoff failed NATIVE_SESSION_UNVERIFIED.
 	// The interface coordinator provides the same guarantee after it freezes Chat
 	// and transfers the required native history. Fresh and fallback launches
 	// still require current-generation identity proof from their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
-		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
+		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessHermes || rec.Harness == domain.HarnessAgy || m.terminalVersionRefreshSupported(rec.Harness))
 	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
