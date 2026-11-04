@@ -197,15 +197,16 @@ func validateRuntimeManifest(manifest catalogManifest) error {
 	if manifest.Source.Repository != "BerriAI/litellm" || manifest.Source.Path != "model_prices_and_context_window.json" || !sha40Pattern.MatchString(manifest.Source.Revision) {
 		return errors.New("invalid pricing manifest source")
 	}
-	wantProviders := []string{"anthropic", "openai", "zai"}
-	if len(manifest.Providers) != len(wantProviders) {
-		return fmt.Errorf("pricing manifest has %d providers, want %d", len(manifest.Providers), len(wantProviders))
-	}
-	for index, providerID := range wantProviders {
-		ref := manifest.Providers[index]
-		if ref.ProviderID != providerID || !sha256Pattern.MatchString(ref.SHA256) || ref.ModelCount < 1 {
+	listed := make(map[string]bool, len(manifest.Providers))
+	for index, ref := range manifest.Providers {
+		providerID := ref.ProviderID
+		if !ValidProviderID(providerID) || (index > 0 && providerID <= manifest.Providers[index-1].ProviderID) {
+			return fmt.Errorf("pricing manifest provider %q is invalid, duplicated, or out of order", providerID)
+		}
+		if !sha256Pattern.MatchString(ref.SHA256) || ref.ModelCount < 1 {
 			return fmt.Errorf("invalid pricing manifest provider %q", providerID)
 		}
+		listed[providerID] = true
 		wantPath := "providers/" + providerID + "/" + ref.SHA256 + ".json"
 		if ref.Path != wantPath || !safeProviderPath(ref.Path) {
 			return fmt.Errorf("provider %q has unsafe or invalid path %q", providerID, ref.Path)
@@ -213,6 +214,11 @@ func validateRuntimeManifest(manifest catalogManifest) error {
 		wantVersion := "ao-catalog:" + providerID + ":sha256:" + ref.SHA256
 		if ref.Version != wantVersion {
 			return fmt.Errorf("provider %q has invalid version", providerID)
+		}
+	}
+	for _, providerID := range RequiredProviderIDs {
+		if !listed[providerID] {
+			return fmt.Errorf("pricing manifest is missing provider %q", providerID)
 		}
 	}
 	return nil
@@ -294,6 +300,19 @@ func parseRate(value string) (*big.Rat, error) {
 	return rate, nil
 }
 
+// ProviderIDs lists the providers this snapshot prices, in order.
+func (s *Snapshot) ProviderIDs() []string {
+	if s == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(s.providers))
+	for providerID := range s.providers {
+		ids = append(ids, providerID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // ProviderVersion returns the exact active catalog version for a provider.
 func (s *Snapshot) ProviderVersion(providerID string) string {
 	if s == nil {
@@ -318,12 +337,21 @@ func (s *Snapshot) ProviderVersion(providerID string) string {
 // Ambiguity resolves to "". Sentinels like "unknown" and "<synthetic>" appear in
 // no catalog and fall out here for free, as does any model AO has no rates for,
 // which is exactly the event that must stay unpriced anyway.
+//
+// Only the required providers answer. Every gateway and cloud resells the same
+// models under the same names (azure's gpt-5, github_copilot's claude models),
+// so a model's name says which lab made it, not who billed it, and counting
+// the resellers would make every such lookup ambiguous.
 func (s *Snapshot) ProviderForModel(modelID string) string {
 	if s == nil || strings.TrimSpace(modelID) == "" {
 		return ""
 	}
 	found := ""
-	for providerID, provider := range s.providers {
+	for _, providerID := range RequiredProviderIDs {
+		provider, ok := s.providers[providerID]
+		if !ok {
+			continue
+		}
 		// CanonicalModelID strips this provider's own prefix, so a stored
 		// "anthropic/claude-opus-5" still matches its unprefixed catalog entry.
 		if _, ok := provider.models[CanonicalModelID(providerID, modelID)]; !ok {
@@ -824,12 +852,16 @@ func (m *Manager) Activate(ctx context.Context, candidate *Snapshot) ([]Provider
 }
 
 func validSnapshot(snapshot *Snapshot) bool {
-	if snapshot == nil || len(snapshot.providers) != 3 {
+	if snapshot == nil {
 		return false
 	}
-	for _, providerID := range []string{"anthropic", "openai", "zai"} {
-		provider, ok := snapshot.providers[providerID]
-		if !ok || len(provider.models) == 0 {
+	for _, providerID := range RequiredProviderIDs {
+		if _, ok := snapshot.providers[providerID]; !ok {
+			return false
+		}
+	}
+	for providerID, provider := range snapshot.providers {
+		if len(provider.models) == 0 {
 			return false
 		}
 		prefix := "ao-catalog:" + providerID + ":sha256:"
@@ -842,7 +874,7 @@ func validSnapshot(snapshot *Snapshot) bool {
 
 func changedProviders(previous, next *Snapshot) []ProviderActivation {
 	activations := make([]ProviderActivation, 0, len(next.providers))
-	for _, providerID := range []string{"anthropic", "openai", "zai"} {
+	for _, providerID := range next.ProviderIDs() {
 		version := next.ProviderVersion(providerID)
 		previousVersion := previous.ProviderVersion(providerID)
 		if version != "" && version != previousVersion {
