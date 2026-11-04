@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 /** How long after the first change an open file is reread. */
@@ -92,7 +92,7 @@ function openArtifactStream(sessionId: string, queryClient: QueryClient): () => 
 		if (sourceBaseUrl === baseUrl && (source || retry)) return;
 		close();
 		sourceBaseUrl = baseUrl;
-		const next = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-events`);
+		const next = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-events`);
 		source = next;
 		// Ready also covers a write made before the watch existed.
 		next.addEventListener("ready", () => {

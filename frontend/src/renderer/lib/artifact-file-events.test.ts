@@ -1,7 +1,8 @@
 import type { Query } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, unsubscribeBaseUrlMock } = vi.hoisted(() => ({
+const { eventStreamBaseUrlMock, getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, unsubscribeBaseUrlMock } = vi.hoisted(() => ({
+	eventStreamBaseUrlMock: vi.fn((baseUrl: string) => baseUrl.replace(/\/+$/, "")),
 	getApiBaseUrlMock: vi.fn(() => "http://127.0.0.1:3001"),
 	hasTrustedApiBaseUrlMock: vi.fn(() => true),
 	subscribeApiBaseUrlMock: vi.fn(),
@@ -9,6 +10,7 @@ const { getApiBaseUrlMock, hasTrustedApiBaseUrlMock, subscribeApiBaseUrlMock, un
 }));
 
 vi.mock("./api-client", () => ({
+	eventStreamBaseUrl: eventStreamBaseUrlMock,
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
@@ -71,6 +73,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	EventSourceStub.instances = [];
 	baseUrlListener = undefined;
+	eventStreamBaseUrlMock.mockReset().mockImplementation((baseUrl: string) => baseUrl.replace(/\/+$/, ""));
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	subscribeApiBaseUrlMock.mockReset().mockImplementation((listener: () => void) => {
@@ -102,6 +105,19 @@ describe("subscribeArtifactFileChanges", () => {
 		second();
 		expect(EventSourceStub.instances[0].closed).toBe(true);
 		expect(unsubscribeBaseUrlMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens on the event stream host, so it does not hold one of the API host's connections", () => {
+		eventStreamBaseUrlMock.mockReturnValue("http://ao-events.localhost:3001");
+		const { client } = fakeQueryClient();
+		subscribe("ao-1", client);
+
+		expect(eventStreamBaseUrlMock).toHaveBeenCalledWith("http://127.0.0.1:3001");
+		expect(EventSourceStub.instances[0].url).toBe("http://ao-events.localhost:3001/api/v1/sessions/ao-1/artifact-events");
+
+		// The same daemon address does not rebuild the stream.
+		baseUrlListener?.();
+		expect(EventSourceStub.instances).toHaveLength(1);
 	});
 
 	it("rereads only that session's artifact files when one changes", () => {
