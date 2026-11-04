@@ -151,7 +151,8 @@ import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
-import { selectNewSidebarDesign, useUiStore } from "../stores/ui-store";
+import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { applyOrder } from "../lib/sidebar-order";
@@ -1651,7 +1652,7 @@ const ProjectItem = memo(function ProjectItem({
 		).filter((session) => session.isTerminated !== true),
 		[workspace.sessions, workspace.shared],
 	);
-	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const projectNeedsInput = useMemo(
 		() => newSidebarDesign && visibleSessions.some(sessionNeedsInput),
 		[newSidebarDesign, visibleSessions],
@@ -2660,7 +2661,7 @@ const SessionRow = memo(function SessionRow({
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
-	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	// The Scratchpad's logo-only rows are part of the new design.
 	const harnessOnly = harnessOnlyRequested && newSidebarDesign;
 	const working = isSessionRowWorking(session);
@@ -3617,7 +3618,7 @@ function ProjectIcon({
 	expanded: boolean;
 	className?: string;
 }) {
-	const avatarsEnabled = useUiStore((state) => state.projectAvatars && selectNewSidebarDesign(state));
+	const avatarsEnabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {

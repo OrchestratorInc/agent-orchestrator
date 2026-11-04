@@ -23,7 +23,7 @@ import {
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
-import { selectNewSidebarDesign, useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesignActive } from "./new-sidebar-design";
 import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
 function translator(t: TFunction): ProductUITranslator {
@@ -86,7 +86,7 @@ export function getSessionStatusDotView(
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
-	if (!selectNewSidebarDesign(useUiStore.getState())) return getLegacySessionStatusDotView(session, t);
+	if (!isNewSidebarDesignActive()) return getLegacySessionStatusDotView(session, t);
 	const breathe = isAgentActivityWorking(session.activity);
 	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
 	const dot = (className: string): SessionStatusDotView => ({ className, breathe });

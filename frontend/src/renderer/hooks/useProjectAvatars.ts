@@ -2,7 +2,8 @@ import { useQueries } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { repositoryOwnerAvatar } from "../lib/repository-avatar";
-import { selectNewSidebarDesign, useUiStore } from "../stores/ui-store";
+import { useUiStore } from "../stores/ui-store";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, type WorkspaceSummary } from "../types/workspace";
 
 // Avatar URL -> the image as a data URL, so a launch paints known avatars with
@@ -70,7 +71,7 @@ const refreshedUrls = new Set<string>();
 // refresh the cache in the background. A failed refresh keeps the cached
 // image. Empty when the setting is off.
 export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, string> {
-	const enabled = useUiStore((state) => state.projectAvatars && selectNewSidebarDesign(state));
+	const enabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
 	const [cache, setCache] = useState(readCache);
 	const [knownUrls] = useState(() => readStrings(urlsKey));
 	const projects = useMemo(

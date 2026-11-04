@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
@@ -192,7 +193,7 @@ export type UiState = {
 	 * The new left sidebar design (markers, hover preview, avatars, pink
 	 * Validating, settled board loaders). Default on. The switch lives in
 	 * Developer mode, and turning it off only takes effect there: read it
-	 * through `selectNewSidebarDesign`.
+	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
 	 */
 	newSidebarDesign: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -868,16 +869,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}),
 }));
 
-/** Whether the new sidebar design is in effect: on unless switched off in Developer mode. */
-export function selectNewSidebarDesign(state: Pick<UiState, "developerMode" | "newSidebarDesign">): boolean {
-	return state.newSidebarDesign || !state.developerMode;
-}
-
 // With the new design off, status tokens fall back to the old palette
 // (yellow Validating). See --color-status-validating in tokens.css.
 function syncLegacyStatusColors(state: UiState) {
 	if (typeof document === "undefined") return;
-	document.documentElement.toggleAttribute("data-legacy-status-colors", !selectNewSidebarDesign(state));
+	document.documentElement.toggleAttribute("data-legacy-status-colors", !isNewSidebarDesign(state));
 }
 syncLegacyStatusColors(useUiStore.getState());
 useUiStore.subscribe(syncLegacyStatusColors);

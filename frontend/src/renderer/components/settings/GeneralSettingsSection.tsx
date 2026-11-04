@@ -5,7 +5,8 @@ import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
-import { selectNewSidebarDesign, useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
+import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
+import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
@@ -260,7 +261,7 @@ export function GeneralSettingsSection({
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 	const projectAvatars = useUiStore((state) => state.projectAvatars);
 	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
-	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
 	const chatSendKeyOptions = [
