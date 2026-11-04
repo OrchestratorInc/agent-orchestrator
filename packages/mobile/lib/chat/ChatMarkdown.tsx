@@ -253,7 +253,8 @@ function MarkdownTable({ headers, align, rows, selectionColor }: { headers: stri
 	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
 		<SelectableInlineText value={cells[column] ?? ""} selectionColor={selectionColor} style={[header ? styles.tableHeaderText : styles.tableText, align[column] && { textAlign: align[column] }]} styles={styles} codeStyle={styles.tableCode} />
 	</View>);
-	return <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
+	// Nested scrolling keeps a sideways drag here on Android when a parent also scrolls sideways (the artifact pager).
+	return <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
 		<View style={styles.table}>
 			<View style={[styles.tableRow, styles.tableHeader]}>{row(headers, true)}</View>
 			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
@@ -307,7 +308,7 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 					<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
 				</Pressable>
 			</View>
-			<ScrollView horizontal={!wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
+			<ScrollView horizontal={!wrap} nestedScrollEnabled showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
 				<HighlightedCodeText code={text} language={language} streaming={streaming} style={[styles.codeText, wrap && styles.codeTextWrap]} />
 			</ScrollView>
 		</View>
