@@ -66,12 +66,15 @@ describe("project page", () => {
 		expect(page).toContain("projectDetailSessions(");
 	});
 
-	// Each platform's own create action, scoped to this project: a header "+" on
-	// iOS, which has no floating button, and Material's FAB on Android, clear of
-	// the gesture bar with the list scrolling out from under it.
-	it("starts a task in this project from a header + on iOS and a FAB on Android", () => {
-		expect(page).toContain('const headerAdd = Platform.OS === "ios" && canStartTask;');
-		expect(page).toContain('{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="New task" onPress={startTask} /> : null}');
+	// Each platform's own create action, scoped to this project, at the bottom
+	// right: on iOS the compose button the board's tab bar sets apart, as a bottom
+	// toolbar's trailing item; on Android Material's FAB, clear of the gesture
+	// bar with the list scrolling out from under it.
+	it("starts a task in this project from a bottom-right compose button on iOS and a FAB on Android", () => {
+		expect(page).toContain('const bottomCompose = Platform.OS === "ios" && canStartTask ? (');
+		expect(page).toMatch(/<Stack\.Toolbar placement="bottom">\s*<Stack\.Toolbar\.Spacer \/>/);
+		expect(page).toContain('<Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New task" onPress={startTask}>New task</Stack.Toolbar.Button>');
+		expect(page).not.toContain('toolbarIcon("add")');
 		expect(page).toContain('<AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
 		expect(page).toContain('params: { projectId: id, hostId: routeHostId }');
 	});

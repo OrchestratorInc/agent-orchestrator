@@ -10,7 +10,6 @@ import { StaleBanner } from "../../lib/StaleBanner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { toolbarIcon } from "../../lib/toolbarIcon";
 import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
@@ -95,11 +94,21 @@ function ProjectScreenContent() {
 	// With one machine paired, every project is on it: naming it says nothing.
 	const machineName = hostStates.length > 1 ? machine?.name : undefined;
 	const machineSymbol = machine?.appearance.symbol;
-	// iOS has no floating action button; its create action is a header "+".
-	// Android floats Material's FAB below instead.
-	const headerAdd = Platform.OS === "ios" && canStartTask;
+	// iOS has no floating action button. New task is the compose button at the
+	// bottom right, as the board's tab bar sets it apart and as Notes and Mail
+	// place it: a bottom toolbar's trailing item, on the system's glass. Android
+	// floats Material's FAB there instead.
+	const bottomCompose = Platform.OS === "ios" && canStartTask ? (
+		<Stack.Toolbar placement="bottom">
+			<Stack.Toolbar.Spacer />
+			{/* The label is VoiceOver's name for it: beside an icon, a bottom
+			    toolbar shows no title and ignores accessibilityLabel, so the
+			    symbol's own "compose" was read instead. */}
+			<Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New task" onPress={startTask}>New task</Stack.Toolbar.Button>
+		</Stack.Toolbar>
+	) : null;
 	const headerItems = useMemo(
-		() => machineName || headerAdd ? (
+		() => machineName ? (
 			<Stack.Toolbar placement="right">
 				{/* Which machine this project is on: a label, not a control, so it
 				    stays off the bar items' shared glass. */}
@@ -108,16 +117,16 @@ function ProjectScreenContent() {
 						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
 					</Stack.Toolbar.View>
 				) : null}
-				{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="New task" onPress={startTask} /> : null}
 			</Stack.Toolbar>
 		) : null,
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- the indicator reads only the machine's name and symbol from hostStates
-		[currentHostId, headerAdd, machineName, machineSymbol, startTask],
+		[currentHostId, machineName, machineSymbol],
 	);
 
 	return (
 		<View style={styles.screen}>
 			{headerItems}
+			{bottomCompose}
 			{hostMatches ? <View pointerEvents="box-none" style={glassInset ? [styles.floatingBanner, { top: glassInset }] : undefined}><StaleBanner error={!!error} onRetry={onRefresh} /></View> : null}
 
 			{!hostMatches ? (
