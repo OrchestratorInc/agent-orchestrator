@@ -607,6 +607,11 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-radius: 0;
 }
 
+/* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
+.center-panel-surface .new-chat-topbar .session-topbar-surface {
+	border-bottom: none;
+}
+
 /* A persistent edge fade signals that the tab strip can scroll horizontally. */
 .session-tab-scroll-fade {
 	pointer-events: none;
