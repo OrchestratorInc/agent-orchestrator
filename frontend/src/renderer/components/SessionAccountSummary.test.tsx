@@ -61,6 +61,6 @@ it.each([
 	stubDaemon(accountHandoff);
 	renderSummary(session);
 	await screen.findByTestId("session-account-summary");
-	await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/settings"));
+	await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/settings", { signal: expect.any(AbortSignal) }));
 	expect(screen.queryByRole("switch", { name: "Stay on this account" })).not.toBeInTheDocument();
 });
