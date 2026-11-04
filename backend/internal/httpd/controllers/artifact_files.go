@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
 )
 
@@ -153,7 +154,7 @@ func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *htt
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_DIR_NOT_FOUND", "artifact directory not found", nil)
 		return
 	}
-	changes, err := workspacewatch.Watch(r.Context(), dir)
+	changes, err := workspacewatch.WatchSkipping(r.Context(), dir, sessionartifacts.Skips)
 	if err != nil {
 		envelope.WriteError(w, r, fmt.Errorf("watch artifact directory: %w", err))
 		return

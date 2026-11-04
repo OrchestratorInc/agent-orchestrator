@@ -87,6 +87,32 @@ func TestArtifactEventsReportANewFile(t *testing.T) {
 	awaitArtifactEvent(t, events, "artifacts_changed")
 }
 
+func TestArtifactEventsLeaveOutWhatTheListSkips(t *testing.T) {
+	srv, dir := artifactFileServer(t, map[string]string{
+		"plan.md":                    "# plan",
+		"node_modules/rxjs/index.js": "module",
+		".versions/plan.md/1":        "kept version",
+	})
+	events := openArtifactEvents(t, srv.URL)
+	awaitArtifactEvent(t, events, "ready")
+
+	for _, skipped := range []string{"node_modules/rxjs/index.js", ".versions/plan.md/2", "__pycache__"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(skipped)), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case got := <-events:
+		t.Fatalf("event %q for a change the artifact list leaves out", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("# v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	awaitArtifactEvent(t, events, "artifacts_changed")
+}
+
 func TestArtifactEventsRefuseAMissingArtifactDirectory(t *testing.T) {
 	srv, dir := artifactFileServer(t, nil)
 	if err := os.Remove(dir); err != nil {

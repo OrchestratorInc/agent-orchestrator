@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -141,6 +142,14 @@ var ignoredNames = map[string]bool{
 // macOS "._" resource-fork files.
 func ignored(name string) bool {
 	return strings.HasPrefix(name, "._") || ignoredNames[strings.ToLower(name)]
+}
+
+// Skips reports whether List leaves out the entry at rel, a slash-separated
+// path inside the artifact directory: anything under VersionsDir, or under or
+// named by an ignored name at any depth.
+func Skips(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return parts[0] == VersionsDir || slices.ContainsFunc(parts, ignored)
 }
 
 func inferKind(relPath string) domain.SessionArtifactKind {
