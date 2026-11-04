@@ -665,6 +665,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		// Require the durable current_session_id proof the coordinator observed;
 		// ControllerReady/CommitChatSpawn rechecks it after provider I/O.
 		conversation, err = s.store.ConversationForSession(ctx, cfg.SessionID)
+		if errors.Is(err, domain.ErrNoConversation) {
+			err = s.replacedProjectOwnerError(ctx, cfg.ProjectID, cfg.SessionID, err)
+		}
 	} else if cfg.ProviderConversationID != "" {
 		conversation, err = s.store.OpenNativeConversation(
 			ctx, conversationID, scope, cfg.ProjectID, cfg.SessionID, now)
@@ -3128,4 +3131,16 @@ func (s *Service) InterruptedAwakeAgents() []domain.AwakeAgentTarget {
 		}
 	}
 	return result
+}
+
+// replacedProjectOwnerError explains why session found no conversation when the
+// project's orchestrator conversation now belongs to another session. Any other
+// case, including a lookup failure, keeps the original error.
+func (s *Service) replacedProjectOwnerError(ctx context.Context, project domain.ProjectID, session domain.SessionID, err error) error {
+	current, lookupErr := s.store.ProjectConversation(ctx, project)
+	if lookupErr != nil || current.SessionID == "" || current.SessionID == session {
+		return err
+	}
+	return fmt.Errorf("project conversation %s is owned by session %s, not %s: %w",
+		current.ID, current.SessionID, session, ports.ErrProjectConversationReplaced)
 }

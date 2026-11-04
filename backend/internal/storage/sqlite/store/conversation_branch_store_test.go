@@ -1198,6 +1198,32 @@ func TestOpenNativeConversationRejectsReplacedOrchestrator(t *testing.T) {
 	}
 }
 
+func TestOpenNativeConversationWithDeletedOwnerIsNotReplaced(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "chat-orphaned")
+	old, err := s.CreateSession(ctx, sampleRecord("chat-orphaned"))
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
+	}
+	gone, err := s.CreateSession(ctx, sampleRecord("chat-orphaned"))
+	if err != nil {
+		t.Fatalf("Create owner session: %v", err)
+	}
+	if _, err := s.CreateConversation(ctx, "project-conversation",
+		domain.ConversationScopeProject, old.ProjectID, gone.ID, testNow); err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if deleted, err := s.DeleteSession(ctx, gone.ID); err != nil || !deleted {
+		t.Fatalf("DeleteSession owner: deleted=%t err=%v", deleted, err)
+	}
+
+	_, err = s.OpenNativeConversation(ctx, "unused", domain.ConversationScopeProject, old.ProjectID, old.ID, testNow)
+	if err == nil || errors.Is(err, ports.ErrProjectConversationReplaced) {
+		t.Fatalf("OpenNativeConversation error = %v, want a plain ownership error", err)
+	}
+}
+
 func TestCommitChatSpawnRejectsProjectConversationReboundToAnotherSession(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
