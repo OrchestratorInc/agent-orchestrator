@@ -1,6 +1,7 @@
 package cline
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,9 +59,9 @@ func readImportedClineJSON(ctx context.Context, root *os.Root, path string, valu
 const maxImportedClineHistoryBytes = 1 << 30
 
 // scanImportedClineHistory streams a message document and reports its
-// session id and whether it holds at least one message. Message bodies,
-// including oversized tool payloads, are skipped token by token rather than
-// buffered.
+// session id and whether it holds at least one message. It scans bytes
+// structurally and retains only the bounded session id, so message bodies and
+// oversized tool payloads, including single huge strings, are never buffered.
 func scanImportedClineHistory(ctx context.Context, root *os.Root, path string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -77,87 +78,230 @@ func scanImportedClineHistory(ctx context.Context, root *os.Root, path string) (
 		return "", false, err
 	}
 	defer func() { _ = f.Close() }()
-	dec := json.NewDecoder(io.LimitReader(f, maxImportedClineHistoryBytes))
-	if err := expectClineDelim(dec, '{'); err != nil {
-		return "", false, err
-	}
-	var id string
-	nonEmpty := false
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return "", false, err
-		}
-		key, ok := tok.(string)
-		if !ok {
-			return "", false, errors.New("cline imported history has a non-string key")
-		}
-		switch key {
-		case "sessionId":
-			id = ""
-			if err := dec.Decode(&id); err != nil {
-				return "", false, err
-			}
-		case "messages":
-			if err := expectClineDelim(dec, '['); err != nil {
-				return "", false, err
-			}
-			nonEmpty = false
-			for dec.More() {
-				nonEmpty = true
-				if err := skipClineJSONValue(ctx, dec); err != nil {
-					return "", false, err
-				}
-			}
-			if err := expectClineDelim(dec, ']'); err != nil {
-				return "", false, err
-			}
-		default:
-			if err := skipClineJSONValue(ctx, dec); err != nil {
-				return "", false, err
-			}
-		}
-	}
-	if err := expectClineDelim(dec, '}'); err != nil {
+	s := &clineHistoryScanner{r: bufio.NewReaderSize(&ctxReader{ctx: ctx, r: io.LimitReader(f, maxImportedClineHistoryBytes)}, 64<<10)}
+	id, nonEmpty, err := s.document()
+	if err != nil {
 		return "", false, err
 	}
 	return id, nonEmpty, ctx.Err()
 }
 
-func expectClineDelim(dec *json.Decoder, want json.Delim) error {
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	if got, ok := tok.(json.Delim); !ok || got != want {
-		return errors.New("cline imported history has an unexpected structure")
-	}
-	return nil
+// Identity fields are short; longer keys are treated as unknown and a longer
+// session id is reported as a mismatch.
+const maxClineHistoryFieldBytes = 256
+
+var errClineHistoryStructure = errors.New("cline imported history has an unexpected structure")
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
 }
 
-// skipClineJSONValue consumes one complete JSON value without retaining it.
-func skipClineJSONValue(ctx context.Context, dec *json.Decoder) error {
-	depth := 0
-	for n := 0; ; n++ {
-		if n%4096 == 0 {
-			if err := ctx.Err(); err != nil {
-				return err
+func (c *ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+type clineHistoryScanner struct {
+	r *bufio.Reader
+}
+
+func (s *clineHistoryScanner) document() (string, bool, error) {
+	if c, err := s.next(); err != nil || c != '{' {
+		return "", false, errors.Join(errClineHistoryStructure, err)
+	}
+	var id string
+	nonEmpty := false
+	for first := true; ; first = false {
+		c, err := s.next()
+		if err != nil {
+			return "", false, err
+		}
+		if first && c == '}' {
+			break
+		}
+		if c != '"' {
+			return "", false, errClineHistoryStructure
+		}
+		key, keyFits, err := s.str(maxClineHistoryFieldBytes)
+		if err != nil {
+			return "", false, err
+		}
+		if c, err := s.next(); err != nil || c != ':' {
+			return "", false, errors.Join(errClineHistoryStructure, err)
+		}
+		c, err = s.next()
+		if err != nil {
+			return "", false, err
+		}
+		switch {
+		case keyFits && key == "sessionId":
+			id = ""
+			if c != '"' {
+				if err := s.skip(c); err != nil {
+					return "", false, err
+				}
+				break
+			}
+			value, fits, err := s.str(maxClineHistoryFieldBytes)
+			if err != nil {
+				return "", false, err
+			}
+			if fits {
+				id = value
+			}
+		case keyFits && key == "messages":
+			nonEmpty = false
+			if c != '[' {
+				if err := s.skip(c); err != nil {
+					return "", false, err
+				}
+				break
+			}
+			if nonEmpty, err = s.array(); err != nil {
+				return "", false, err
+			}
+		default:
+			if err := s.skip(c); err != nil {
+				return "", false, err
 			}
 		}
-		tok, err := dec.Token()
+		c, err = s.next()
 		if err != nil {
-			return err
+			return "", false, err
 		}
-		if d, ok := tok.(json.Delim); ok {
-			switch d {
+		if c == '}' {
+			break
+		}
+		if c != ',' {
+			return "", false, errClineHistoryStructure
+		}
+	}
+	if _, err := s.next(); !errors.Is(err, io.EOF) {
+		return "", false, errors.Join(errClineHistoryStructure, err)
+	}
+	return id, nonEmpty, nil
+}
+
+// array consumes an array whose '[' was read and reports whether it had an
+// element.
+func (s *clineHistoryScanner) array() (bool, error) {
+	c, err := s.next()
+	if err != nil {
+		return false, err
+	}
+	if c == ']' {
+		return false, nil
+	}
+	for {
+		if err := s.skip(c); err != nil {
+			return false, err
+		}
+		if c, err = s.next(); err != nil {
+			return false, err
+		}
+		if c == ']' {
+			return true, nil
+		}
+		if c != ',' {
+			return false, errClineHistoryStructure
+		}
+		if c, err = s.next(); err != nil {
+			return false, err
+		}
+	}
+}
+
+// next returns the next non-whitespace byte; EOF is reported as io.EOF.
+func (s *clineHistoryScanner) next() (byte, error) {
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		}
+		return c, nil
+	}
+}
+
+// str consumes a string whose opening quote was read. It keeps at most limit
+// bytes and reports whether the whole raw value fit; limit 0 keeps nothing.
+func (s *clineHistoryScanner) str(limit int) (string, bool, error) {
+	var kept []byte
+	fits := true
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return "", false, errors.Join(errClineHistoryStructure, err)
+		}
+		switch {
+		case c == '"':
+			return string(kept), fits, nil
+		case c < 0x20:
+			return "", false, errClineHistoryStructure
+		case c == '\\':
+			// The escaped byte (or the first of \uXXXX) cannot end the string.
+			if _, err := s.r.ReadByte(); err != nil {
+				return "", false, errors.Join(errClineHistoryStructure, err)
+			}
+			fits = false
+		default:
+			if len(kept) < limit {
+				kept = append(kept, c)
+			} else {
+				fits = false
+			}
+		}
+	}
+}
+
+// skip consumes one complete value whose first byte is c, retaining nothing.
+func (s *clineHistoryScanner) skip(c byte) error {
+	switch c {
+	case '"':
+		_, _, err := s.str(0)
+		return err
+	case '{', '[':
+		depth := 1
+		for depth > 0 {
+			b, err := s.r.ReadByte()
+			if err != nil {
+				return errors.Join(errClineHistoryStructure, err)
+			}
+			switch b {
+			case '"':
+				if _, _, err := s.str(0); err != nil {
+					return err
+				}
 			case '{', '[':
 				depth++
-			default:
+			case '}', ']':
 				depth--
 			}
 		}
-		if depth == 0 {
+		return nil
+	case '}', ']', ',', ':':
+		return errClineHistoryStructure
+	}
+	// A scalar (number, true, false, null) ends at a delimiter or whitespace.
+	for {
+		b, err := s.r.ReadByte()
+		if errors.Is(err, io.EOF) {
 			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch b {
+		case ',', '}', ']', ' ', '\t', '\n', '\r':
+			return s.r.UnreadByte()
+		case '"', '{', '[', ':':
+			return errClineHistoryStructure
 		}
 	}
 }
