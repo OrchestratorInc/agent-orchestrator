@@ -60,7 +60,6 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 				{firstReading !== null && firstReading - since > HOUR_MS ? ` ${t("usage.windows.recordingSince", { value: dateTime.format(firstReading) })}` : null}
 			</p>
 			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={timelineEnd} now={now} dateTime={dateTime} /> : null}
-			{sessions.length > 0 ? <Fullness sessions={sessions} now={now} dateTime={dateTime} /> : null}
 			{weekly.length > 0 ? (
 				<section aria-labelledby="usage-windows-weekly" className="flex flex-col gap-4">
 					<SectionHeading id="usage-windows-weekly" title={t("usage.windows.allowance")} help={t("usage.windows.allowanceHelp")} />
@@ -241,54 +240,6 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 					<li key={state} className="inline-flex items-center gap-1.5"><LegendBlock state={state} />{t(`usage.windows.state.${state}`)}</li>
 				))}
 			</ul>
-		</section>
-	);
-}
-
-function Fullness({ sessions, now, dateTime }: { sessions: Sessions[]; now: Date; dateTime: Intl.DateTimeFormat }) {
-	const { t } = useTranslation();
-	const closed = sessions.map(({ login, spans }) => ({ login, spans: spans.filter((span) => span.state !== "open") })).filter((entry) => entry.spans.length > 0);
-	if (closed.length === 0) return null;
-	const total = closed.reduce((sum, entry) => sum + entry.spans.length, 0);
-	const hit = closed.reduce((sum, entry) => sum + entry.spans.filter((span) => span.peakUsedPercent >= 100).length, 0);
-	return (
-		<section aria-labelledby="usage-windows-fullness" className="flex flex-col gap-3">
-			<SectionHeading
-				id="usage-windows-fullness"
-				title={t("usage.windows.fullness")}
-				help={t("usage.windows.fullnessHelp")}
-				aside={t("usage.windows.hitLimit", { hit, total })}
-			/>
-			<div className="grid grid-cols-[minmax(0,13rem)_minmax(0,1fr)] items-end gap-x-4 gap-y-4">
-				{closed.map(({ login, spans }) => (
-					<div key={`${login.provider}:${login.email}:${login.accountId}`} className="contents">
-						<span className="self-center"><LoginName login={login} /></span>
-						<div className="flex h-16 items-end gap-1.5">
-							{spans.map((span) => {
-								const tone = spanTone(login, span);
-								const label = spanSummary(span, dateTime, t);
-								return (
-									<Tooltip key={span.resetsAt}>
-										<TooltipTrigger asChild>
-											<div tabIndex={0} aria-label={label} className="group flex h-full w-5 flex-col items-center justify-end gap-1 outline-none">
-												<div
-													className={cn("w-full rounded-t-sm group-focus-visible:ring-2 group-focus-visible:ring-ring", span.state === "partial" && "border border-dashed")}
-													style={{
-														height: `${Math.max(4, Math.min(100, span.peakUsedPercent))}%`,
-														backgroundColor: span.state === "partial" ? "transparent" : tone,
-														borderColor: tone,
-													}}
-												/>
-											</div>
-										</TooltipTrigger>
-										<TooltipContent><SpanDetails span={span} now={now} dateTime={dateTime} /></TooltipContent>
-									</Tooltip>
-								);
-							})}
-						</div>
-					</div>
-				))}
-			</div>
 		</section>
 	);
 }
