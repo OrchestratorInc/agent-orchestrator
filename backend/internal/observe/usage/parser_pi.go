@@ -13,6 +13,30 @@ const (
 	piUnattributedUsageModel = "Tools/summaries"
 	// piPricingVersion labels a cost AO stored as Pi computed it.
 	piPricingVersion = "pi:reported"
+	// ompPricingVersion and kimchiPricingVersion label a cost the Pi fork
+	// computed with its own model registry.
+	ompPricingVersion    = "omp:reported"
+	kimchiPricingVersion = "kimchi:reported"
+)
+
+// piDialect is what differs between Pi and the forks that write its session
+// format: the namespace of their event keys, the label on the cost they
+// report, and any extra record type that carries usage.
+type piDialect struct {
+	eventKeyPrefix string
+	pricingVersion string
+	// sideUsageType names a top-level record with Pi's "usage" shape (a
+	// provider, model and usage block) that the fork writes for a model call
+	// outside the conversation; empty when the fork writes none.
+	sideUsageType string
+}
+
+var (
+	piSessionDialect = piDialect{eventKeyPrefix: "pi", pricingVersion: piPricingVersion}
+	// OMP records each auxiliary model call (its auto-thinking judge, for
+	// one) as a model_usage entry beside the conversation.
+	ompSessionDialect    = piDialect{eventKeyPrefix: "omp", pricingVersion: ompPricingVersion, sideUsageType: "model_usage"}
+	kimchiSessionDialect = piDialect{eventKeyPrefix: "kimchi", pricingVersion: kimchiPricingVersion}
 )
 
 type piSessionRecord struct {
@@ -51,6 +75,12 @@ type piNativeCost struct {
 }
 
 func parsePi(source domain.UsageSourceContext, records []jsonlRecord, result *parseResult) {
+	parsePiFamily(source, records, piSessionDialect, result)
+}
+
+// parsePiFamily parses a Pi-format session transcript, written by Pi or by a
+// fork of it (OMP, Kimchi), which keep Pi's records and usage normalization.
+func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dialect piDialect, result *parseResult) {
 	eventsByKey := make(map[string]domain.ModelUsageEvent)
 	for _, record := range records {
 		var native piSessionRecord
@@ -73,7 +103,7 @@ func parsePi(source domain.UsageSourceContext, records []jsonlRecord, result *pa
 				recordMalformed(result)
 				continue
 			}
-		case native.Type == "usage":
+		case native.Type == "usage" || dialect.sideUsageType != "" && native.Type == dialect.sideUsageType:
 			provider = strings.TrimSpace(native.Provider)
 			model = strings.TrimSpace(native.Model)
 			usageRaw = native.Usage
@@ -140,9 +170,9 @@ func parsePi(source domain.UsageSourceContext, records []jsonlRecord, result *pa
 			ProviderUsageJSON:     boundedProviderUsage(usageRaw),
 			CreatedAt:             parseUsageTimestamp(native.Timestamp),
 			SourceEventKey: stableSourceEventKey(
-				"pi", source.NativeRootID, native.Type, identity,
+				dialect.eventKeyPrefix, source.NativeRootID, native.Type, identity,
 			),
-			Costs: piReportedCosts(usage.Cost),
+			Costs: piReportedCosts(usage.Cost, dialect.pricingVersion),
 		}
 		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
 			if !usageEventsEqual(existing, event) {
@@ -156,11 +186,11 @@ func parsePi(source domain.UsageSourceContext, records []jsonlRecord, result *pa
 	}
 }
 
-// piReportedCosts converts the cost Pi computed into AO's cost columns. Pi
-// prices providers AO's catalog does not list (a z.ai coding plan, OpenRouter),
-// so its figure is kept as stored. A missing or zero cost means Pi had no
-// price either, and the catalog is left to try.
-func piReportedCosts(cost *piNativeCost) domain.UsageEventCosts {
+// piReportedCosts converts the cost Pi computed into AO's cost columns, under
+// the dialect's pricingVersion. Pi prices providers AO's catalog does not list
+// (a z.ai coding plan, OpenRouter), so its figure is kept as stored. A missing
+// or zero cost means Pi had no price either, and the catalog is left to try.
+func piReportedCosts(cost *piNativeCost, pricingVersion string) domain.UsageEventCosts {
 	if cost == nil {
 		return domain.UsageEventCosts{}
 	}
@@ -179,7 +209,7 @@ func piReportedCosts(cost *piNativeCost) domain.UsageEventCosts {
 		CachedInputCostNanos: &cached,
 		OutputCostNanos:      &output,
 		EstimatedCostNanos:   &total,
-		PricingVersion:       piPricingVersion,
+		PricingVersion:       pricingVersion,
 	}
 }
 
