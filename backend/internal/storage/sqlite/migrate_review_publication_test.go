@@ -10,7 +10,8 @@ import (
 func TestReceiptMigrationUpgradeDownUp(t *testing.T) {
 	const previous = int64(20261101055144579)
 	const receiptVersion = int64(20261102073811895)
-	db := openMigratedDatabaseCopy(t, previous)
+	dir := t.TempDir()
+	db := openMigratedDatabaseCopyAt(t, dir, previous, pragmas)
 	if _, err := db.Exec(`
 INSERT INTO projects (id, path, registered_at) VALUES ('project', '/project', '2026-11-01T00:00:00Z');
 INSERT INTO sessions (id, num, project_id, kind, activity_last_at, created_at, updated_at)
@@ -38,6 +39,21 @@ VALUES ('run', 'review', 'session', 'codex', 'https://github.com/o/r/pull/1', 'h
 	}
 	if legacyPublication != nil {
 		t.Errorf("legacy receipt = %+v, want absent", legacyPublication)
+	}
+	s, err := OpenPreMigrated(dir)
+	if err != nil {
+		t.Fatalf("open upgraded store: %v", err)
+	}
+	legacy, found, readErr := s.GetReviewRun(t.Context(), "run")
+	closeErr := s.Close()
+	if readErr != nil || !found {
+		t.Fatalf("read upgraded legacy result: found=%v err=%v", found, readErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close upgraded store: %v", closeErr)
+	}
+	if legacy.Publication != nil || legacy.Body != "legacy body" || legacy.GithubReviewID != "legacy-review" {
+		t.Errorf("upgraded legacy result = %+v", legacy)
 	}
 	if _, err := db.Exec(`UPDATE review_run SET publication_json = '{' WHERE id = 'run'`); err == nil {
 		t.Fatal("receipt column accepted invalid JSON")
@@ -83,5 +99,20 @@ VALUES ('run', 'review', 'session', 'codex', 'https://github.com/o/r/pull/1', 'h
 	}
 	if body != "after down" || publication != "null" {
 		t.Errorf("second upgrade body=%q publication=%q, want after down/null", body, publication)
+	}
+	s, err = OpenPreMigrated(dir)
+	if err != nil {
+		t.Fatalf("open store after second upgrade: %v", err)
+	}
+	afterUp, found, readErr := s.GetReviewRun(t.Context(), "run")
+	closeErr = s.Close()
+	if readErr != nil || !found {
+		t.Fatalf("read result after second upgrade: found=%v err=%v", found, readErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close store after second upgrade: %v", closeErr)
+	}
+	if afterUp.Publication != nil || afterUp.Body != "after down" {
+		t.Errorf("result after second upgrade = %+v, want absent receipt and after down body", afterUp)
 	}
 }
