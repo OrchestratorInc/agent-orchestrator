@@ -250,6 +250,7 @@
 	--spacing-inspector-min: var(--size-inspector-min);
 	--spacing-textarea-min: var(--size-textarea-min);
 	--spacing-sidebar-project-actions: var(--size-sidebar-project-actions);
+	--spacing-sidebar-project-actions-pinned: var(--size-sidebar-project-actions-pinned);
 	--spacing-row-md: var(--size-row-md);
 	--spacing-empty-offset-y: var(--size-empty-offset-y);
 	--spacing-kv-label: var(--size-kv-label);
