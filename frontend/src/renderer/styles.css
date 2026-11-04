@@ -656,6 +656,42 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
+/* Floating session tabs read like the inspector's tabs beside them: rounded
+ * pills centered in the bar, a soft fill for the active tab, no slab
+ * background, separators, or underline. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+	height: var(--size-topbar-control);
+	align-self: center;
+	margin-inline-end: var(--space-1);
+	border-right: 0;
+	border-radius: var(--radius-topbar-control);
+	background: transparent;
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover,
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible) {
+	background: var(--color-interactive-hover);
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][aria-current="true"],
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button[aria-selected="true"]) {
+	background: var(--color-interactive-active);
+}
+
+.center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
+	display: none;
+}
+
+/* Draggable tab wrappers are opaque so a dragged tab hides the tabs it
+ * crosses; on the floating bar that fill is the chrome, and only while dragging. */
+.center-panel-shell--floating-topbar [data-terminal-tab-key] {
+	background: transparent;
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-key][data-dragging] {
+	background: var(--color-bg-sidebar);
+}
+
 /* The bars themselves carry no fill or divider: the frame's top edge is the divider. */
 .center-panel-shell--floating-topbar .center-panel-titlebar,
 .center-panel-shell--floating-topbar .session-topbar-surface,
@@ -3509,6 +3545,15 @@ html.sidebar-reordering * {
 /* Override the unlayered form-control font reset for primary topbar actions. */
 .topbar-control--primary {
 	font-weight: var(--font-weight-semibold);
+}
+
+/* Ends the session's own actions, before the inspector/global controls. */
+.workspace-topbar-actions .topbar-divider {
+	width: 1px;
+	height: var(--space-4);
+	flex: 0 0 auto;
+	margin-inline: var(--space-1);
+	background: var(--color-border);
 }
 
 /* The editor control's menu chevron belongs to its labeled button: narrow,

@@ -237,6 +237,9 @@ export function SessionTopbarActions({
 					</Tooltip>
 				</>
 			) : null}
+			{/* Separates the session's actions from the inspector and global
+			    controls that follow in the same row. */}
+			{session || startingOrchestrator ? <span aria-hidden="true" className="topbar-divider" data-testid="session-actions-divider" /> : null}
 		</PageTopbarActions>
 	);
 }
