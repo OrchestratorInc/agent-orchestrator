@@ -90,7 +90,7 @@ export function connectSheetRoute(onConnected: () => void, hostId?: string) {
 		pathname: "/sheets/connect" as const,
 		params: {
 			resultKey: parkSheetResult(onConnected),
-			...(hostId ? { hostId } : {}),
+			...(hostId !== undefined ? { hostId } : {}),
 		},
 	};
 }
