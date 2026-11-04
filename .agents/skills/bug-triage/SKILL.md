@@ -94,9 +94,16 @@ Collect only what helps explain this symptom:
 | Daemon or CLI failure | Version/status, exact command and error, relevant daemon logs |
 | Persisted state mismatch | Relevant rows and schema from a read-only SQLite query |
 
-Locate logs for the affected process rather than assuming `~/.ao/daemon.log` is current.
-Daemon output goes to stderr and may not persist; that file mostly covers keep-alive
-launches. Record missing evidence instead of enabling logging just to create it.
+Local logs live in the `logs` folder next to `running.json`: `~/.ao/logs` for the
+packaged app, `~/.ao/dev/logs` for a dev build, or beside a custom `AO_RUN_FILE`.
+**Settings → Help → Open logs folder** opens it. `daemon.log` is written by the daemon
+itself in every launch mode, including `AO_KEEP_DAEMON` and `ao daemon`, and also
+records Go crashes; `main.log` holds the desktop app's main-process console output;
+`updater.jsonl` holds update decisions. Each rotates to numbered backups (`.1`, ...),
+so check the backup when the event is older than the current file. Match timestamps
+to the reported time. `~/.ao/daemon.log` is a stale file from older keep-alive
+launches. Builds that predate these files kept no daemon or main-process log;
+record missing evidence instead of enabling logging just to create it.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
 actual database location and schema, open it read-only, and select only relevant rows

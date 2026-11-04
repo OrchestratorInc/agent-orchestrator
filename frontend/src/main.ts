@@ -3,6 +3,7 @@ import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
+import { displayLogsDirectory, installMainLog, logsDirectory } from "./main/local-logs";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
 import {
@@ -73,7 +74,7 @@ import {
 } from "./main/ui-settings";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -502,6 +503,15 @@ const isDev = !app.isPackaged;
 const DEV_DAEMON_PORT = 3002;
 const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
 
+// Logs live next to running.json: ~/.ao/logs (or ~/.ao/dev/logs). The daemon
+// writes daemon.log there itself; main.log keeps this process's console output,
+// which a packaged app otherwise loses. Installed early to keep startup warnings.
+const localLogsDir = (() => {
+	const runFile = runFilePath();
+	return runFile ? logsDirectory(path.dirname(runFile)) : null;
+})();
+const mainLog = localLogsDir ? installMainLog({ directory: localLogsDir, homeDir: os.homedir() }) : null;
+
 const RENDERER_SCHEME = "app";
 const RENDERER_HOST = "renderer";
 const RENDERER_ORIGIN = `${RENDERER_SCHEME}://${RENDERER_HOST}`;
@@ -745,6 +755,13 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 }
 
 const MAX_DAEMON_OUTPUT_CHARS = 12_000;
+
+// The daemon writes its own daemon.log, so its piped output reaches the console
+// for development but is not stored a second time in main.log.
+function echoDaemonOutput(write: () => void): void {
+	if (mainLog) mainLog.skipFile(write);
+	else write();
+}
 
 function appendDaemonOutput(text: string): void {
 	daemonOutput = (daemonOutput + text).slice(-MAX_DAEMON_OUTPUT_CHARS);
@@ -2298,63 +2315,26 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	// AO_KEEP_DAEMON: the daemon must survive this app, so it cannot inherit
 	// Electron-owned stdout/stderr pipes — when Electron exits, the pipe read
 	// ends close and the daemon's next stderr log write (SIGPIPE/EPIPE) kills it,
-	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
-	// child so the parent does not wait on it. Port discovery then relies on the
-	// running.json handshake (the log pipe scan is skipped).
+	// defeating the keep-alive. Discard its stdout/stderr instead: the daemon
+	// writes its own rotating <state dir>/logs/daemon.log (crashes included) in
+	// every launch mode. Unref the child so the parent does not wait on it. Port
+	// discovery then relies on the running.json handshake (the log pipe scan is
+	// skipped).
 	const keep = autoRestartIntent?.keepAlive ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
 	// We are about to own the daemon and hand it this launch's runtime token, so
 	// any forced replacement has been honored and must not leak into a later
 	// startup in this process.
 	forceReplaceAdoptedRequested = false;
-	let keepDaemonLogFd: number | undefined;
-	let stdio: "pipe" | "ignore" | ["pipe", number | "ignore", number | "ignore"] = "pipe";
-	if (keep) {
-		const logPath = path.join(os.homedir(), ".ao", "daemon.log");
-		try {
-			keepDaemonLogFd = openSync(logPath, "a");
-			stdio = ["pipe", keepDaemonLogFd, keepDaemonLogFd];
-		} catch {
-			// Log redirect failed (e.g. ~/.ao not creatable, permission denied):
-			// fall back to "ignore" so the daemon still runs, but warn — otherwise
-			// a long-lived keep-alive daemon would run with zero log output.
-			console.warn(`AO: keep-daemon log redirect failed; daemon will run with stdio disabled: ${logPath}`);
-			keepDaemonLogFd = undefined;
-			stdio = ["pipe", "ignore", "ignore"];
-		}
-	}
-	let child: ChildProcess;
-	try {
-		child = spawn(launch.command, launch.args, {
-			cwd: launch.cwd,
-			env: daemonEnv(keep),
-			shell: launch.shell,
-			detached: true,
-			// Hide the daemon's console on a Windows GUI launch (no flashing terminal).
-			windowsHide: true,
-			stdio,
-		});
-	} catch (err) {
-		// spawn can throw synchronously for invalid args; don't leak the log fd.
-		if (keepDaemonLogFd !== undefined) {
-			try {
-				closeSync(keepDaemonLogFd);
-			} catch {
-				// best-effort — the throw below is the real error
-			}
-		}
-		throw err;
-	}
-	// The child inherited its own copy of the log fd via stdio at spawn time;
-	// close the parent's copy now so each keep-alive start/stop cycle does not
-	// accumulate open descriptors until the process limit.
-	if (keepDaemonLogFd !== undefined) {
-		try {
-			closeSync(keepDaemonLogFd);
-		} catch {
-			// best-effort — the child still holds its inherited copy
-		}
-		keepDaemonLogFd = undefined;
-	}
+	const stdio: "pipe" | ["pipe", "ignore", "ignore"] = keep ? ["pipe", "ignore", "ignore"] : "pipe";
+	const child: ChildProcess = spawn(launch.command, launch.args, {
+		cwd: launch.cwd,
+		env: daemonEnv(keep),
+		shell: launch.shell,
+		detached: true,
+		// Hide the daemon's console on a Windows GUI launch (no flashing terminal).
+		windowsHide: true,
+		stdio,
+	});
 	// daemonEnv deliberately contains only a marker. Deliver the actual token
 	// over the inherited pipe, then close it; Go does not pass this descriptor to
 	// worker processes when it spawns them.
@@ -2421,8 +2401,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	};
 
 	// One scanner per stream: each keeps its own partial-line buffer.
-	// Skipped under AO_KEEP_DAEMON: stdio is redirected to a log file (no pipes
-	// to scan), so port discovery falls back to the running.json handshake below.
+	// Skipped under AO_KEEP_DAEMON: stdio is discarded (no pipes to scan), so
+	// port discovery falls back to the running.json handshake below. The output
+	// is echoed to the console but kept out of main.log: the daemon already
+	// writes it to daemon.log.
 	if (!keep) {
 		const scanStdout = createListenPortScanner(reportBoundPort);
 		const scanStderr = createListenPortScanner(reportBoundPort);
@@ -2430,14 +2412,14 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		child.stdout?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
-			console.log(text.trimEnd());
+			echoDaemonOutput(() => console.log(text.trimEnd()));
 			scanStdout(text);
 		});
 
 		child.stderr?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
-			console.error(text.trimEnd());
+			echoDaemonOutput(() => console.error(text.trimEnd()));
 			scanStderr(text);
 		});
 	}
@@ -2791,6 +2773,15 @@ const dictation = registerDictationIpc(
 );
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
+});
+// The logs folder for display and support templates: home shortened to "~".
+ipcMain.handle("app:getLogsDirectory", () => (localLogsDir ? displayLogsDirectory(localLogsDir, os.homedir()) : null));
+ipcMain.handle("app:openLogsFolder", async (event) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted logs folder request.");
+	if (!localLogsDir) throw new Error("AO state directory is not available.");
+	await mkdir(localLogsDir, { recursive: true, mode: 0o700 });
+	const error = await shell.openPath(localLogsDir);
+	if (error) throw new Error(error);
 });
 
 ipcMain.handle("window:getZoomFactor", () => {

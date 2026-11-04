@@ -278,6 +278,28 @@ go run ./cmd/ao --help
 | `npm install` or `npm ci` fails       | Node.js version too old | `node --version`; must be 24+ (see prerequisites above) |
 | Blank window or crash on Linux        | Broken GPU driver stack | Start with `AO_DISABLE_GPU=1` to skip hardware acceleration  |
 
+### Local logs
+
+The daemon and the desktop app keep size-capped logs in the `logs` folder next to
+`running.json`: `~/.ao/logs` for the packaged app, `~/.ao/dev/logs` for a dev
+build (or beside `AO_RUN_FILE` when it is set). **Settings → Help → Open logs
+folder** opens it.
+
+| File | Written by | Contents |
+| ---- | ---------- | -------- |
+| `daemon.log` | The Go daemon itself, in every launch mode (desktop, `AO_KEEP_DAEMON`, `ao daemon`) | Every slog record, plus Go runtime crash output. The daemon still mirrors it to stderr. |
+| `main.log` | Electron main process | `console.log`/`info`/`warn`/`error` output and uncaught exceptions. Daemon output piped through the app is not repeated here. |
+| `updater.jsonl` | Electron updater | Update decisions; see `frontend/docs/desktop-release.md`. |
+
+`daemon.log` rotates at 10 MiB and `main.log` at 5 MiB, each keeping three
+numbered backups (`daemon.log.1` is the newest). Files are created `0600`
+(directory `0700`). Before writing, both redact URL credentials, `Authorization`
+and bearer values, secret query parameters and `*_token`/`*_key`/`*secret`/`*password`
+values, and known token shapes, and shorten the home directory to `~`.
+Redaction matches known patterns only, so review a file before attaching it to a report.
+`AO_KEEP_DAEMON` launches no longer append to `~/.ao/daemon.log`; an existing
+copy of that file is stale.
+
 ### Code generation drift
 
 If CI fails on `sqlc-drift`, run the pinned generator from the repository root

@@ -218,6 +218,9 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		/** The local logs folder (daemon.log, main.log), home shortened to "~"; null when unknown. */
+		getLogsDirectory: () => ipcRenderer.invoke("app:getLogsDirectory") as Promise<string | null>,
+		openLogsFolder: () => ipcRenderer.invoke("app:openLogsFolder") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
 		checkAncestorRepo: (path: string) =>

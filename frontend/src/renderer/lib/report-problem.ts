@@ -15,6 +15,8 @@ export type ReportProblemDiagnostics = {
 	daemonMessage?: string;
 	daemonState: string;
 	generatedAt: string;
+	/** Where daemon.log and main.log live, home shortened to "~"; never their contents. */
+	logsDirectory?: string;
 	platform: string;
 	routeSurface: string;
 };
@@ -56,9 +58,10 @@ export function sanitizeReportText(value: string): string {
 }
 
 export async function collectReportProblemDiagnostics(now = new Date()): Promise<ReportProblemDiagnostics> {
-	const [versionResult, daemonResult] = await Promise.allSettled([
+	const [versionResult, daemonResult, logsResult] = await Promise.allSettled([
 		aoBridge.app.getVersion(),
 		aoBridge.daemon.getStatus(),
+		Promise.resolve().then(() => aoBridge.app.getLogsDirectory()),
 	]);
 	const daemonStatus = daemonResult.status === "fulfilled" ? daemonResult.value : undefined;
 
@@ -68,6 +71,7 @@ export async function collectReportProblemDiagnostics(now = new Date()): Promise
 		daemonMessage: daemonStatus?.message,
 		daemonState: daemonStatus?.state ?? "unknown",
 		generatedAt: now.toISOString(),
+		logsDirectory: logsResult.status === "fulfilled" ? logsResult.value ?? undefined : undefined,
 		platform: typeof navigator === "undefined" ? "unknown" : navigator.platform || "unknown",
 		routeSurface: typeof window === "undefined" ? "unknown" : routeSurface(currentRoutePath()),
 	};
@@ -224,6 +228,12 @@ function formatDiagnostics(diagnostics: ReportProblemDiagnostics): string {
 	];
 	if (diagnostics.daemonMessage?.trim()) {
 		lines.push(`Daemon message: ${sanitizeReportText(diagnostics.daemonMessage.trim())}`);
+	}
+	// Point at the local logs without including them: the reporter decides what
+	// to attach after reviewing the files.
+	const logsDirectory = sanitizeReportText(diagnostics.logsDirectory?.trim() ?? "");
+	if (logsDirectory) {
+		lines.push(`Local logs (not attached): ${logsDirectory} (daemon.log, main.log); attach them if they help`);
 	}
 	return lines.map((line) => `- ${line}`).join("\n");
 }

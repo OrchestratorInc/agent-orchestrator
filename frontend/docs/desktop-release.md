@@ -92,6 +92,8 @@ The log retains one rotated file, `updater.jsonl.1`, with each file capped at
 1 MiB and created with mode `0600` on macOS/POSIX. Network URLs and authorization
 text are redacted; native error messages, stacks, codes, and causes remain for
 diagnosis. Treat the files as local diagnostics and inspect them before sharing.
+The same folder holds `daemon.log` and `main.log` (see "Local logs" in
+`docs/development.md`) for the daemon and main-process events around an update.
 
 For a preparation failure, preserve both files before retrying. Correlate their
 timestamps, process IDs, running/target versions, and operation/request context

@@ -218,4 +218,32 @@ describe("report problem drafts", () => {
 
 		expect(nextDiagnostics.routeSurface).toBe("session_detail");
 	});
+
+	it("names the local logs folder without attaching log contents", async () => {
+		window.ao!.app.getVersion = vi.fn().mockResolvedValue("1.2.3-test");
+		window.ao!.daemon.getStatus = vi.fn().mockResolvedValue({ state: "ready" });
+		window.ao!.app.getLogsDirectory = vi.fn().mockResolvedValue("~/.ao/logs");
+
+		const collected = await collectReportProblemDiagnostics(new Date("2026-07-02T00:00:00.000Z"));
+		expect(collected.logsDirectory).toBe("~/.ao/logs");
+
+		for (const output of ["github", "discord", "email"] as const) {
+			const draft = formatReportProblemDraft(completeInput, collected, output);
+			expect(draft).toContain("Local logs (not attached): ~/.ao/logs (daemon.log, main.log)");
+		}
+		// An absolute path outside the home directory is still scrubbed.
+		const draft = formatReportProblemDraft(completeInput, { ...diagnostics, logsDirectory: "/Users/alice/.ao/logs" }, "github");
+		expect(draft).not.toContain("/Users/alice");
+		expect(formatReportProblemDraft(completeInput, diagnostics, "github")).not.toContain("Local logs");
+	});
+
+	it("still collects diagnostics when the logs folder is unavailable", async () => {
+		window.ao!.app.getVersion = vi.fn().mockResolvedValue("1.2.3-test");
+		window.ao!.daemon.getStatus = vi.fn().mockResolvedValue({ state: "ready" });
+		window.ao!.app.getLogsDirectory = vi.fn().mockRejectedValue(new Error("no state dir"));
+
+		const collected = await collectReportProblemDiagnostics(new Date("2026-07-02T00:00:00.000Z"));
+		expect(collected.appVersion).toBe("1.2.3-test");
+		expect(collected.logsDirectory).toBeUndefined();
+	});
 });

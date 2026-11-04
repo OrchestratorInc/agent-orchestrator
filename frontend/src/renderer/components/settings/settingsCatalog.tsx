@@ -14,6 +14,7 @@ import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
+import { LogsFolderSection } from "./LogsFolderSection";
 import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
@@ -166,11 +167,14 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CircleHelp,
 		label: (t) => t("settings.help"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")} grouped>
-				<div className="settings-content-row">
-					<ReportProblemContent active />
-				</div>
-			</SettingsSection>
+			<>
+				<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")} grouped>
+					<div className="settings-content-row">
+						<ReportProblemContent active />
+					</div>
+				</SettingsSection>
+				<LogsFolderSection />
+			</>
 		),
 	},
 ];
