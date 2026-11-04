@@ -15,6 +15,8 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
@@ -143,14 +145,16 @@ function QueuedMessageRowContent({
 			</div>
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 				{showHoverSteerButton ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn!(turnId));
 						}}
 						className={cn(
-							"inline-flex h-7 items-center rounded-lg px-2 text-xs leading-none text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 disabled:opacity-50 motion-reduce:transition-none",
+							"focus-visible:pointer-events-auto focus-visible:opacity-100",
 							showHoverSteer
 								? "pointer-events-none opacity-100"
 								: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
@@ -159,54 +163,56 @@ function QueuedMessageRowContent({
 						title="Steer into running turn"
 					>
 						Steer
-					</button>
+					</Button>
 				) : null}
 				{showPersistentSteer && onPromoteQueuedTurn ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn(turnId));
 						}}
-						className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs leading-none text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
 						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
-							<CornerDownLeft aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
+							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
 						</span>
 						Steer
-					</button>
+					</Button>
 				) : null}
 				{onBeginQueuedEdit && editable ? (
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="icon-sm"
 						disabled={busy}
 						onClick={() => onBeginQueuedEdit(turnId, message.text)}
-						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Edit queued message"
 						title="Edit"
 					>
-						<Pencil aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<Pencil aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+					</Button>
 				) : null}
 				{onCancelQueuedTurn ? (
-					<button
+					<Button
 						type="button"
+						variant="destructive-ghost"
+						size="icon-sm"
 						disabled={busy}
 						onClick={() => {
 							void onRunAction(turnId, () => onCancelQueuedTurn(turnId));
 						}}
-						className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-destructive active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
 						aria-label="Delete queued message"
 						title="Delete"
 					>
-						<Trash2 aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<Trash2 aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+					</Button>
 				) : null}
 				{reorderEnabled ? (
-					<button
-						type="button"
+					<Pressable
 						ref={dragHandleRef}
 						{...dragHandleProps}
 						disabled={busy}
@@ -214,8 +220,8 @@ function QueuedMessageRowContent({
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
-						<GripVertical aria-hidden="true" className="shrink-0" width={14} height={14} strokeWidth={2} />
-					</button>
+						<GripVertical aria-hidden="true" className="size-3.5 shrink-0" strokeWidth={2} />
+					</Pressable>
 				) : null}
 			</div>
 		</div>
@@ -578,8 +584,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			data-reordering={isReordering ? "true" : undefined}
 			style={{ "--queue-dock-expanded-rows": expandedRows } as CSSProperties}
 		>
-			<button
-				type="button"
+			<Pressable
 				onClick={() => hasMore && setExpanded((open) => !open)}
 				disabled={!hasMore}
 				className={cn(
@@ -612,7 +617,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 					</span>
 					{editingTurnId ? " · editing" : ""}
 				</span>
-			</button>
+			</Pressable>
 			{count > 0 ? (
 				<div
 					className="queue-dock-body bg-surface"

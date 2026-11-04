@@ -17,7 +17,11 @@ export const cloudArtifactAccessQueryKey = (baseUrl: string, orgId: string, sess
  * commit changes the files.
  */
 export const cloudArtifactFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string, version: string) =>
-	["cloud-artifact-files", baseUrl, orgId, sessionId, version] as const;
+	[...cloudArtifactSessionFilesQueryKey(baseUrl, orgId, sessionId), version] as const;
+
+/** The prefix of every version of one cloud session's artifact list, to reread whichever is current. */
+export const cloudArtifactSessionFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
+	["cloud-artifact-files", baseUrl, orgId, sessionId] as const;
 
 type CloudArtifactAccess = { root: string; expiresAt: number };
 

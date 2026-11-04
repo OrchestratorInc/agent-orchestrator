@@ -237,6 +237,114 @@ describe("PostHog identity and opt-out", () => {
 		vi.clearAllMocks();
 	});
 
+	it("reserves app open and next-day return once across renderer restarts", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			const first = await import("./telemetry");
+			await first.initTelemetry();
+			const names = posthogStub.capture.mock.calls.map(([name]) => name);
+			expect(names.filter((name) => name === "ao.app.first_opened")).toHaveLength(1);
+			expect(names.filter((name) => name === "ao.app.next_day_returned")).toHaveLength(0);
+			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
+			vi.resetModules();
+			posthogStub.capture.mockClear();
+			vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			const second = await import("./telemetry");
+			await second.initTelemetry();
+			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
+			vi.resetModules();
+			posthogStub.capture.mockClear();
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			const third = await import("./telemetry");
+			await third.initTelemetry();
+			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened" || name === "ao.app.next_day_returned")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("records a next-day return when an open renderer becomes active after midnight", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T23:50:00.000Z"));
+		const addWindowListener = vi.spyOn(window, "addEventListener");
+		try {
+			const installedAt = new Date("2026-10-20T23:40:00.000Z").getTime();
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
+			const { initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			posthogStub.capture.mockClear();
+			const focus = addWindowListener.mock.calls.findLast(([type]) => type === "focus")?.[1] as EventListener;
+
+			vi.setSystemTime(new Date("2026-10-21T00:10:00.000Z"));
+			focus(new Event("focus"));
+			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
+			focus(new Event("focus"));
+			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
+
+			vi.resetModules();
+			posthogStub.capture.mockClear();
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
+			const restarted = await import("./telemetry");
+			await restarted.initTelemetry();
+			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(0);
+		} finally {
+			addWindowListener.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not label a later return as the next-day milestone", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-30T10:00:00.000Z"));
+		try {
+			localStorage.setItem("ao.telemetry.activeSlotsByDate", JSON.stringify({ date: "2026-10-29" }));
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 10, installTimestampMs: new Date("2026-10-20T10:00:00.000Z").getTime() }));
+			const { initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.next_day_returned")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes install age on captures from a long-lived renderer", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
+		vi.setSystemTime(new Date("2026-10-20T11:00:00.000Z"));
+		try {
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
+			const { captureRendererEvent, initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 0);
+			posthogStub.capture.mockClear();
+			vi.setSystemTime(new Date("2026-10-21T11:00:00.000Z"));
+			expect(await captureRendererEvent("ao.renderer.loaded")).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stamps sign-in only after the renderer learns the account state", async () => {
+		localStorage.clear();
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).not.toHaveProperty("is_signed_in");
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", true);
+		clearCloudUser();
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", false);
+	});
+
 	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
 		const captureToMain = mockBridge(async () => bootstrap);
 		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");

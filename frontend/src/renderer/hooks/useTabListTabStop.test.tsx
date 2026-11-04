@@ -48,6 +48,11 @@ describe("useTabListTabStop", () => {
 
 	it("scrolls the selected tab into view only when the selection changes", () => {
 		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+		// The scroll runs in the next frame so it shares that frame's layout.
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			callback(0);
+			return 0;
+		});
 		const { rerender } = render(<Tabs active={0} />);
 		expect(scroll).toHaveBeenCalledTimes(1);
 		rerender(<Tabs active={0} />);
@@ -55,6 +60,22 @@ describe("useTabListTabStop", () => {
 		rerender(<Tabs active={2} />);
 		expect(scroll).toHaveBeenCalledTimes(2);
 		expect(scroll.mock.contexts[1]).toHaveTextContent("tab 2");
+	});
+
+	it("scrolls once for a burst of selection changes within a frame", () => {
+		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+		const frames: FrameRequestCallback[] = [];
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+		vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+			frames[id - 1] = () => undefined;
+		});
+		const { rerender } = render(<Tabs active={0} />);
+		rerender(<Tabs active={1} />);
+		rerender(<Tabs active={2} />);
+		expect(scroll).not.toHaveBeenCalled();
+		for (const frame of frames) frame(0);
+		expect(scroll).toHaveBeenCalledTimes(1);
+		expect(scroll.mock.contexts[0]).toHaveTextContent("tab 2");
 	});
 
 	it("does not scroll when no tab is selected", () => {

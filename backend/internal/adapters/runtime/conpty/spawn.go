@@ -16,6 +16,9 @@ type HostOptions struct {
 	StartOnAttach bool
 	// LazySurface builds the rendered surface only when it is first read.
 	LazySurface bool
+	// Cols and Rows, when both set, start the process immediately at that grid
+	// (taking precedence over StartOnAttach).
+	Cols, Rows uint16
 }
 
 // hostSpawner starts a detached pty-host for the session and returns its
@@ -29,6 +32,7 @@ type hostSpawner func(ctx context.Context, sessionID, cwd string, argv []string,
 const (
 	startOnAttachArg = "--start=attach"
 	lazySurfaceArg   = "--surface=lazy"
+	sizeArgPrefix    = "--size="
 )
 
 // ptyHostArgs builds the pty-host subcommand argv:
@@ -40,6 +44,9 @@ func ptyHostArgs(sessionID, cwd string, argv []string, opts HostOptions) []strin
 	}
 	if opts.LazySurface {
 		args = append(args, lazySurfaceArg)
+	}
+	if opts.Cols > 0 && opts.Rows > 0 {
+		args = append(args, fmt.Sprintf("%s%dx%d", sizeArgPrefix, opts.Cols, opts.Rows))
 	}
 	args = append(args, sessionID, cwd)
 	return append(args, argv...)
@@ -56,7 +63,13 @@ func splitHostOptionArgs(args []string) (HostOptions, []string) {
 		case lazySurfaceArg:
 			opts.LazySurface = true
 		default:
-			return opts, args
+			if !strings.HasPrefix(args[0], sizeArgPrefix) {
+				return opts, args
+			}
+			var cols, rows uint16
+			if _, err := fmt.Sscanf(strings.TrimPrefix(args[0], sizeArgPrefix), "%dx%d", &cols, &rows); err == nil && cols > 0 && rows > 0 {
+				opts.Cols, opts.Rows = cols, rows
+			}
 		}
 		args = args[1:]
 	}
@@ -146,4 +159,18 @@ func interactiveTerminalEnv(base []string, configured map[string]string, assignm
 	}
 	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
 	return env
+}
+
+// hostStartGrid decides how the pty-host starts its process: at an explicit
+// grid when one was given (even with StartOnAttach, since the caller already
+// knows the grid its viewer shows), deferred to the first client's grid for
+// StartOnAttach alone, and otherwise immediately at the default grid.
+func hostStartGrid(opts HostOptions) (cols, rows uint16, deferred bool) {
+	if opts.Cols > 0 && opts.Rows > 0 {
+		return opts.Cols, opts.Rows, false
+	}
+	if opts.StartOnAttach {
+		return 0, 0, true
+	}
+	return initialConPTYColumns, initialConPTYRows, false
 }

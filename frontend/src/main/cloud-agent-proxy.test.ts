@@ -126,6 +126,22 @@ describe("cloud agent proxy", () => {
 		await expect(proxy.agentBrowserUrl(baseUrl, "../x", "ses-1")).rejects.toThrow(/invalid/);
 	});
 
+	it("sends the bearer only to the configured control plane", async () => {
+		const other = await startCp();
+		const otherServer = cp;
+		const { baseUrl, seen } = await startCp();
+		try {
+			proxy = createCloudAgentProxy(() => dataDir, async () => baseUrl);
+			expect(await proxy.agentBrowserUrl(other.baseUrl, "org-1", "ses-1")).toBe("");
+			expect(other.seen).toEqual([]);
+			expect(await proxy.agentBrowserUrl(`${baseUrl}/`, "org-1", "ses-1")).not.toBe("");
+			expect(seen).toEqual([expect.objectContaining({ auth: "Bearer cloud-token" })]);
+		} finally {
+			otherServer?.closeAllConnections();
+			await new Promise<void>((resolve) => (otherServer ? otherServer.close(() => resolve()) : resolve()));
+		}
+	});
+
 	it("waits out the control plane's Retry-After for a session whose agent browser is not connected", async () => {
 		const { baseUrl, seen } = await startCp(() => 409, `{"code":"AGENT_BROWSER_UNAVAILABLE"}`, { "retry-after": "60" });
 		proxy = createCloudAgentProxy(() => dataDir);

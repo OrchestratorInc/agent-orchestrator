@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useContext, useRef, type ButtonHTMLAttributes } from "react";
+import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
@@ -23,6 +23,7 @@ export const MENU_TRIGGER_CHROME =
 	"settings-option-trigger max-w-full min-w-0 bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] hover:text-[var(--color-text-settings-trigger)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0 disabled:cursor-not-allowed disabled:opacity-50";
 
 const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
+const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Root — re-export for convenience
@@ -170,6 +171,7 @@ export function OptionMenuItem({
 	searchActive,
 	radio,
 	onPointerLeave,
+	onSelect,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	active?: boolean;
@@ -177,6 +179,7 @@ export function OptionMenuItem({
 	searchActive?: boolean;
 	radio?: boolean;
 }) {
+	const closeSubmenu = useContext(CloseSubmenu);
 	return (
 		<DropdownMenuPrimitive.Item
 			{...(radio === undefined
@@ -189,6 +192,16 @@ export function OptionMenuItem({
 				onPointerLeave?.(event);
 				skipFocusHopToSibling(event);
 			}}
+			onSelect={(event) => {
+				onSelect?.(event);
+				if (!closeSubmenu || event.defaultPrevented) return;
+				const triggerId = event.currentTarget instanceof HTMLElement
+					? event.currentTarget.closest('[role="menu"]')?.getAttribute("aria-labelledby")
+					: undefined;
+				event.preventDefault();
+				closeSubmenu();
+				if (triggerId) document.getElementById(triggerId)?.focus();
+			}}
 			{...props}
 		/>
 	);
@@ -198,7 +211,24 @@ export function OptionMenuItem({
 // Submenu — trigger row + subcontent panel
 // ---------------------------------------------------------------------------
 
-export const OptionMenuSub = DropdownMenuPrimitive.Sub;
+export function OptionMenuSub({
+	closeOnSelect = false,
+	open,
+	defaultOpen = false,
+	onOpenChange,
+	...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Sub> & { closeOnSelect?: boolean }) {
+	const [localOpen, setLocalOpen] = useState(defaultOpen);
+	const changeOpen = (next: boolean) => {
+		setLocalOpen(next);
+		onOpenChange?.(next);
+	};
+	return (
+		<CloseSubmenu.Provider value={closeOnSelect ? () => changeOpen(false) : undefined}>
+			<DropdownMenuPrimitive.Sub open={open ?? localOpen} onOpenChange={changeOpen} {...props} />
+		</CloseSubmenu.Provider>
+	);
+}
 
 export function OptionMenuSubTrigger({
 	className,

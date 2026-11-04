@@ -8,6 +8,22 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
+
+// Share is offered only where the control plane serves share links.
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+	return {
+		...actual,
+		useSettings: (...args: Parameters<typeof actual.useSettings>) => {
+			const result = actual.useSettings(...args);
+			return { ...result, settings: { ...result.settings, cloudControlPlaneUrl: "https://cp.test" } as NonNullable<typeof result.settings> };
+		},
+	};
+});
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],
 	agents: [] as Array<Record<string, unknown>>,
@@ -17,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 	capture: vi.fn(),
 	deleteCloudArtifact: vi.fn(),
 	refreshCloudAccess: vi.fn(),
+	artifactFileChanges: vi.fn(),
 	hideShellTopbar: true,
 }));
 
@@ -50,6 +67,7 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, path, rawUrl, readOnly }: { cloud?: boolean; path: string; rawUrl?: string; readOnly?: boolean }) => <div data-testid="artifact-file-preview" data-cloud={cloud} data-path={path} data-raw-url={rawUrl} data-read-only={readOnly} />,
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: mocks.artifactFileChanges }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
@@ -124,13 +142,17 @@ const withoutArtifacts: WorkspaceSummary[] = [
 
 function renderView() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const tree = () => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
 				<ArtifactsView />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const view = render(tree());
+	/** Renders again, as a workspace refresh does. */
+	const refresh = () => view.rerender(tree());
+	return { ...view, refresh };
 }
 
 describe("ArtifactsView", () => {
@@ -156,6 +178,7 @@ describe("ArtifactsView", () => {
 		mocks.get.mockReset();
 		mocks.capture.mockReset();
 		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
+		mocks.artifactFileChanges.mockReset();
 		useUiStore.setState({ settingsModal: null });
 		useUiStore.getState().clearGlobalToast();
 	});
@@ -246,13 +269,14 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 	});
 
-	it("keeps gallery cloud actions on the cloud session instead of local file actions", async () => {
+	it("keeps gallery cloud actions on the cloud session, showing its files in a folder under ~/.ao", async () => {
 		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
 		cloud.cloud = { orgId: "org-1" };
 		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: "More actions: notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: /^Show in / })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem", { name: /^Show in / })).toHaveLength(1);
+		expect(screen.queryByRole("menuitem", { name: "Show in Terminal" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Download" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Delete artifact" }));
 		const dialog = screen.getByRole("dialog");
@@ -265,11 +289,13 @@ describe("ArtifactsView", () => {
 	it.each(["html", "markdown"] as const)("previews a cloud %s artifact using cloud access", async (kind) => {
 		const name = kind === "html" ? "report.html" : "notes.md";
 		const cloud = session("cloud-1", "Cloud notes", [{ name, kind, updatedAt: "2026-10-11T10:00:00Z" }]);
-		cloud.cloud = { orgId: "org-1" };
+		cloud.cloud = { orgId: "org-1", createdByUserId: "me-1" };
 		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
 		const dialog = screen.getByRole("dialog", { name });
+		// A cloud session's file is shared as a local one is.
+		expect(within(dialog).getByRole("button", { name: `Share: ${name}` })).toBeInTheDocument();
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		} else {
@@ -278,6 +304,17 @@ describe("ArtifactsView", () => {
 			expect(preview).toHaveAttribute("data-read-only", "true");
 			expect(preview).toHaveAttribute("data-raw-url", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		}
+	});
+
+	it("offers no Share on another member's cloud session file", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", kind: "markdown", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const dialog = await screen.findByRole("dialog", { name: "notes.md" });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
@@ -488,6 +525,43 @@ describe("ArtifactsView", () => {
 		});
 	});
 
+	it("reloads an open local page when its agent rewrites it", async () => {
+		const user = userEvent.setup();
+		const page = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		page.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		page.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		vi.stubGlobal("fetch", vi.fn(async () => new Response("<h1>Design review</h1>")));
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [page] }];
+		const { refresh } = renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "AO" })).getByRole("button", { name: /^page\.html/ }));
+		const dialog = screen.getByRole("dialog", { name: "page.html" });
+		const opened = dialog.querySelector("iframe");
+		expect(opened).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "ao-html", cloud: undefined }, true);
+
+		const rewritten = structuredClone(page);
+		rewritten.artifactFiles![0].updatedAt = "2026-10-11T10:05:00Z";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [rewritten] }];
+		refresh();
+
+		const reloaded = screen.getByRole("dialog", { name: "page.html" }).querySelector("iframe");
+		expect(reloaded).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(reloaded).not.toBe(opened);
+	});
+
+	it("follows a cloud preview's changes through its cloud session", async () => {
+		const user = userEvent.setup();
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
+		mocks.workspaces = [{ id: "cloud", name: "Cloud", path: "", kind: CLOUD_PROJECT_KIND, sessions: [cloud] }];
+		renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "Cloud" })).getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByRole("dialog", { name: "notes.md" })).toBeInTheDocument();
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "cloud-1", cloud: { orgId: "org-1" } }, true);
+	});
+
 	it("opens a Scratchpad artifact on the standalone session route", async () => {
 		const user = userEvent.setup();
 		renderView();
@@ -530,7 +604,9 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
+		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
+		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));
