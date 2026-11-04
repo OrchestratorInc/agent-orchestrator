@@ -477,7 +477,8 @@ describe("TopbarOpenEditorButton", () => {
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
-			title: "Could not open Cursor. Check that it is installed and try again.",
+			title: "Open in Cursor",
+			body: "Could not open Cursor. Check that it is installed and try again.",
 			tone: "error",
 		}));
 		expect(screen.queryByRole("alert")).toBeNull();

@@ -209,11 +209,12 @@ function resolveOnPath(
 	platform: Platform,
 	env: NodeJS.ProcessEnv,
 	isExecutable: (candidatePath: string) => boolean,
+	skip?: (candidatePath: string) => boolean,
 ): string | undefined {
 	for (const directory of commandSearchDirs(platform, env)) {
 		for (const name of executableNames(command, platform, env)) {
 			const candidatePath = pathAPI(platform).join(directory, name);
-			if (isExecutable(candidatePath)) return candidatePath;
+			if (isExecutable(candidatePath) && !skip?.(candidatePath)) return candidatePath;
 		}
 	}
 	return undefined;
@@ -317,8 +318,10 @@ function resolveEditor(
 	readFileHead: (candidatePath: string) => string | undefined,
 ): ResolvedCommand | undefined {
 	for (const command of candidate.commands) {
-		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable);
-		if (resolved && !(candidate.id === "cursor" && isCursorAgentShim(resolved, readFileHead))) {
+		// Keep scanning PATH past the agent shim: a real Cursor CLI may follow it.
+		const skip = candidate.id === "cursor" ? (candidatePath: string) => isCursorAgentShim(candidatePath, readFileHead) : undefined;
+		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable, skip);
+		if (resolved) {
 			if (candidate.requiresTerminal) return resolveTerminalEditor(resolved, deps, isExecutable);
 			return {
 				command: resolved,

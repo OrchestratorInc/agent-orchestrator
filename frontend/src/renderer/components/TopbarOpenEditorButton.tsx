@@ -130,8 +130,11 @@ export function TopbarOpenEditorButton({
 		}
 	};
 	const launch = (targetId?: OpenTargetId) => {
-		open.mutate({ sessionId, projectId, ...(targetId ? { targetId } : {}) }, {
-			onError: (error) => showGlobalToast(error.message, undefined, "error"),
+		const target = targetId ? targets.find((entry) => entry.id === targetId) : preferred;
+		// Report from the promise: mutate callbacks are dropped if the button
+		// unmounts (e.g. a session switch) while the launch is in flight.
+		open.mutateAsync({ sessionId, projectId, ...(targetId ? { targetId } : {}) }).catch((error: unknown) => {
+			showGlobalToast(t("editor.openInTarget", { name: target?.name ?? "" }), error instanceof Error ? error.message : undefined, "error");
 		});
 	};
 	// ⌘O opens the workspace in the preferred editor, or in the first available
