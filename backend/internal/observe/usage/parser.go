@@ -46,6 +46,22 @@ func parseRecordsWithState(
 		result.pendingCodexSpawnCalls = len(state.Codex.PendingSpawnCallIDs)
 	case domain.UsageSourceKimiWire:
 		parseKimi(source, records, &result)
+	case domain.UsageSourcePiSession:
+		parsePi(source, records, &result)
+	case domain.UsageSourceOMPSession:
+		parsePiFamily(source, records, ompSessionDialect, &result)
+	case domain.UsageSourceKimchiSession:
+		parsePiFamily(source, records, kimchiSessionDialect, &result)
+	case domain.UsageSourcePrimeAgentSession:
+		parsePiFamily(source, records, primeAgentSessionDialect, &result)
+	case domain.UsageSourceQwenMonthly:
+		parseQwen(source, records, &result)
+	case domain.UsageSourceGooseLedger:
+		parseGoose(source, records, &result)
+	case domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB:
+		parseOpenCode(source, records, &result)
+	case domain.UsageSourceGrokUsage:
+		parseGrok(source, records, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -208,7 +224,10 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateCodexDirectParent(source, state.Codex); err != nil {
 			return nil, err
 		}
-	case domain.UsageSourceKimiWire:
+	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
+		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
+		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
+		domain.UsageSourceGrokUsage:
 		if state.Claude != nil || state.Codex != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
@@ -231,8 +250,11 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
 		}
-	case domain.UsageSourceKimiWire:
-		// Kimi records carry stable native IDs, so no provider-specific
+	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
+		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
+		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
+		domain.UsageSourceGrokUsage:
+		// These formats carry replay-stable native IDs, so no provider-specific
 		// cumulative baseline is required.
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", kind)

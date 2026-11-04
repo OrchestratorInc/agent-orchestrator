@@ -170,3 +170,39 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 		t.Fatalf("previous week ends %s, want the start of this week", store.until)
 	}
 }
+
+// Break caught: an agent that reports one cost per call (OpenCode, Kilo Code)
+// shown as not priced, its paid calls and its free gateway calls alike,
+// because the report required a per-type split.
+func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	event := func(model string, cost int64) domain.UsageReportEvent {
+		return domain.UsageReportEvent{
+			CreatedAt: now.Add(-time.Hour), ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "opencode", ModelID: model,
+			Tokens:  domain.UsageTokenMetrics{CachedInputTokens: int64p(0), UncachedInputTokens: int64p(1000), OutputTokens: int64p(10)},
+			Harness: domain.HarnessOpenCode, SessionID: "oc-1", ProjectID: "app",
+			Costs: domain.UsageEventCosts{EstimatedCostNanos: int64p(cost), PricingVersion: "opencode:reported"},
+		}
+	}
+	store := &reportStoreStub{events: []domain.UsageReportEvent{event("paid-model", 7_591_330), event("big-pickle", 0)}}
+	reader := NewReportReader(store, snapshotStub{repoCatalog(t)})
+	reader.now = func() time.Time { return now }
+
+	report, err := reader.Report(context.Background(), 1, 0, "UTC", "app")
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	costs := map[string]int64{}
+	for _, row := range report.Rows {
+		if row.PricedEvents != 1 {
+			t.Fatalf("row %s priced events = %d, want 1", row.ModelID, row.PricedEvents)
+		}
+		costs[row.ModelID] = row.CostNanos
+	}
+	if costs["paid-model"] != 7_591_330 || costs["big-pickle"] != 0 || len(costs) != 2 {
+		t.Fatalf("row costs = %v", costs)
+	}
+	if len(report.Sessions) != 1 || report.Sessions[0].PricedEvents != 2 || report.Sessions[0].CostNanos != 7_591_330 {
+		t.Fatalf("sessions = %+v", report.Sessions)
+	}
+}

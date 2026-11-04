@@ -7087,8 +7087,9 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 		ID:            string(id),
 		WorkspacePath: workspacePath,
 		Metadata: map[string]string{
-			ports.MetadataKeyAgentSessionID: meta.AgentSessionID,
-			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
+			ports.MetadataKeyAgentSessionID:       meta.AgentSessionID,
+			ports.MetadataKeyNativeTranscriptPath: meta.NativeTranscriptPath,
+			ports.MetadataKeySessionMode:          string(domain.SessionModeTUI),
 		},
 	}
 	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}

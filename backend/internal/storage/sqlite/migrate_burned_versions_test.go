@@ -244,6 +244,9 @@ var shippedMigrations = map[int64]string{
 	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",
 	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
+	20261102174444568: "20261102174444568_allow_pi_usage.sql",
+	20261102174702749: "20261102174702749_allow_qwen_usage.sql",
+	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

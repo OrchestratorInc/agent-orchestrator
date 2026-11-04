@@ -137,6 +137,29 @@ func TestActiveKimiBindingRemainsDiscoverable(t *testing.T) {
 	}
 }
 
+func TestSourceLessPiBindingRemainsDiscoverable(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessPi)
+	now := time.Unix(1700000000, 0).UTC()
+	binding := mustUpsertUsageBinding(t, s, sess, now, domain.UsageBindingRecord{
+		NativeRootID:  "pi-late-transcript",
+		State:         domain.UsageBindingActive,
+		LastErrorCode: domain.UsageErrorSourceDiscoveryPending,
+	})
+
+	pending, err := s.HasPendingUsageDiscovery(ctx)
+	mustNoError(t, err)
+	if !pending {
+		t.Fatal("source-less Pi binding did not request discovery retry")
+	}
+	discovery, err := s.ListUsageDiscoveryBindings(ctx, 8)
+	mustNoError(t, err)
+	if len(discovery) != 1 || discovery[0].ID != binding.ID {
+		t.Fatalf("discovery bindings = %+v, want Pi binding %d", discovery, binding.ID)
+	}
+}
+
 func TestListLatestRetiredCodexReplacementClaimsByPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -209,6 +232,30 @@ func TestListLatestRetiredCodexReplacementClaimsByPath(t *testing.T) {
 		State:           domain.UsageSourcePending,
 	})
 	assertClaims()
+}
+
+func TestCurrentPiNativeIdentityWithoutBindingKeepsDiscoveryPending(t *testing.T) {
+	s := newTestStore(t)
+	session := seedUsageSession(t, s, domain.HarnessPi)
+	session.Metadata.AgentSessionID = "pi-current"
+	session.Metadata.RuntimeLaunchID = "launch-current"
+	session.Metadata.AgentSessionIDLaunchID = "launch-current"
+	session.Activity.State = domain.ActivityIdle
+	mustNoError(t, s.UpdateSession(context.Background(), session))
+
+	pending, err := s.HasPendingUsageDiscovery(context.Background())
+	mustNoError(t, err)
+	if !pending {
+		t.Fatal("live Pi session with a current native identity did not request discovery")
+	}
+
+	session.Metadata.AgentSessionIDLaunchID = "launch-stale"
+	mustNoError(t, s.UpdateSession(context.Background(), session))
+	pending, err = s.HasPendingUsageDiscovery(context.Background())
+	mustNoError(t, err)
+	if pending {
+		t.Fatal("stale Pi native identity requested discovery for the current launch")
+	}
 }
 
 func TestUsageBindingUpsertDoesNotRegressSettledLifecycle(t *testing.T) {
@@ -1875,6 +1922,191 @@ func TestKimiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPiUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessPi)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "pi-session",
+		State:        domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourcePiSession,
+		NativeSessionID: "pi-session",
+		ArtifactPath:    "/tmp/pi/session.jsonl",
+		FileIdentity:    "dev:ino",
+		State:           domain.UsageSourcePending,
+	})
+	event := usageEvent("pi-event", canonicalUsageTokens(19, 5, 14, 7))
+	event.ModelID = "zai-glm/glm-4.5"
+	anthropicEvent := anthropicUsageEvent("pi-anthropic-event", 11, 3, 5, 7)
+	anthropicEvent.ModelID = "anthropic/claude-sonnet"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event, anthropicEvent}); err != nil {
+		t.Fatalf("apply Pi usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 2 || models[0].Harness != domain.HarnessPi ||
+		models[1].Harness != domain.HarnessPi {
+		t.Fatalf("Pi aggregate = %+v", models)
+	}
+}
+
+// Break caught: the store accepting only one provider vocabulary for a Pi
+// fork. OMP and Kimchi normalize Anthropic replies to Anthropic counters and
+// every other provider to OpenAI's, exactly as Pi does, so both must land.
+func TestPiForkUsageEventsRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		harness domain.AgentHarness
+		kind    domain.UsageSourceKind
+	}{
+		{harness: domain.HarnessOMP, kind: domain.UsageSourceOMPSession},
+		{harness: domain.HarnessKimchi, kind: domain.UsageSourceKimchiSession},
+	} {
+		t.Run(string(test.harness), func(t *testing.T) {
+			s := newTestStore(t)
+			now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+			session := seedUsageSession(t, s, test.harness)
+			binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+				NativeRootID: "fork-session", State: domain.UsageBindingActive,
+			})
+			source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+				BindingID: binding.ID, Kind: test.kind,
+				NativeSessionID: "fork-session", ArtifactPath: "/tmp/fork/session.jsonl",
+				FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+			})
+			event := usageEvent("fork-event", canonicalUsageTokens(41368, 40896, 472, 426))
+			event.ModelID = "glm-5.2"
+			anthropicEvent := anthropicUsageEvent("fork-anthropic-event", 11, 3, 5, 7)
+			anthropicEvent.ModelID = "claude-opus-4-8"
+			if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+				ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+			}, []domain.ModelUsageEvent{event, anthropicEvent}); err != nil {
+				t.Fatalf("apply %s usage: %v", test.harness, err)
+			}
+			models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+			mustNoError(t, err)
+			if len(models) != 2 || models[0].Harness != test.harness || models[1].Harness != test.harness {
+				t.Fatalf("%s aggregates = %+v", test.harness, models)
+			}
+		})
+	}
+}
+
+func TestQwenUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessQwen)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "qwen-session", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceQwenMonthly,
+		NativeSessionID: "qwen-session", ArtifactPath: "/tmp/qwen/token-usage-2026-08.jsonl",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	event := usageEvent("qwen-event", canonicalUsageTokens(30, 9, 21, 16))
+	event.ModelID = "qwen3-coder"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}); err != nil {
+		t.Fatalf("apply Qwen usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 1 || models[0].Harness != domain.HarnessQwen ||
+		models[0].ModelID != "qwen3-coder" ||
+		usageTokenValue(models[0].Tokens.InputTokens) != 30 ||
+		usageTokenValue(models[0].Tokens.OutputTokens) != 16 {
+		t.Fatalf("Qwen aggregate = %+v", models)
+	}
+}
+
+func TestGooseUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessGoose)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "20261103_1", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceGooseLedger,
+		NativeSessionID: "20261103_1", ArtifactPath: "/tmp/goose/sessions/sessions.db",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	reported := int64(12_500_000)
+	anthropic := usageEvent("goose-anthropic", canonicalUsageTokens(100, 30, 70, 20))
+	anthropic.ProviderID = domain.UsageProviderAnthropic
+	anthropic.ModelID = "claude-sonnet-4-5"
+	anthropic.Costs = domain.UsageEventCosts{EstimatedCostNanos: &reported, PricingVersion: "goose:provider_reported"}
+	openai := usageEvent("goose-openai", canonicalUsageTokens(50, 20, 30, 5))
+	openai.ProviderID = domain.UsageProviderOpenAI
+	openai.ModelID = "gpt-5"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 2, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{anthropic, openai}); err != nil {
+		t.Fatalf("apply Goose usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 2 {
+		t.Fatalf("Goose aggregates = %+v", models)
+	}
+	for _, model := range models {
+		if model.Harness != domain.HarnessGoose {
+			t.Fatalf("Goose aggregate harness = %+v", model)
+		}
+	}
+}
+
+// TestOpenCodeFamilyUsageEventRoundTrip catches the store rejecting OpenCode
+// and Kilo events in either token vocabulary: both route any provider, so an
+// Anthropic call and a z.ai call can land in one chunk.
+func TestOpenCodeFamilyUsageEventRoundTrip(t *testing.T) {
+	for _, tt := range []struct {
+		harness domain.AgentHarness
+		kind    domain.UsageSourceKind
+		path    string
+	}{
+		{domain.HarnessOpenCode, domain.UsageSourceOpenCodeDB, "/tmp/opencode/opencode.db"},
+		{domain.HarnessKilocode, domain.UsageSourceKiloDB, "/tmp/kilo/kilo.db"},
+		{domain.HarnessGrok, domain.UsageSourceGrokUsage, "/tmp/grok/sessions/repo/ses_root/usage.json"},
+	} {
+		t.Run(string(tt.harness), func(t *testing.T) {
+			s := newTestStore(t)
+			now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+			session := seedUsageSession(t, s, tt.harness)
+			binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+				NativeRootID: "ses_root", State: domain.UsageBindingActive,
+			})
+			source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+				BindingID: binding.ID, Kind: tt.kind,
+				NativeSessionID: "ses_root", ArtifactPath: tt.path,
+				FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+			})
+			anthropic := usageEvent("opencode-anthropic", canonicalUsageTokens(100, 20, 80, 20))
+			anthropic.ProviderID = domain.UsageProviderAnthropic
+			anthropic.ModelID = "claude-sonnet-4-5"
+			zai := usageEvent("opencode-zai", canonicalUsageTokens(50, 20, 30, 5))
+			zai.ProviderID = domain.UsageProviderOpenAI
+			zai.ModelID = "glm-4.5"
+			if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+				ByteOffset: 2, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+			}, []domain.ModelUsageEvent{anthropic, zai}); err != nil {
+				t.Fatalf("apply %s usage: %v", tt.harness, err)
+			}
+			models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+			mustNoError(t, err)
+			if len(models) != 2 {
+				t.Fatalf("%s aggregates = %+v", tt.harness, models)
+			}
+		})
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"
@@ -2217,5 +2449,28 @@ WHERE source_event_key = 'provider-promotion'`).Scan(
 	mustNoError(t, err, "check promoted attribution")
 	if open {
 		t.Fatal("observed replacement remains open for attribution repair")
+	}
+}
+
+// TestUsageStoreRejectsUnknownHarnessAndKind covers the store guard that
+// replaced the schema's enumerated harness and source-kind CHECK lists.
+func TestUsageStoreRejectsUnknownHarnessAndKind(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessCodex)
+	if _, err := s.UpsertUsageBinding(context.Background(), domain.UsageBindingRecord{
+		SessionID: session.ID, Harness: domain.AgentHarness("not-a-harness"),
+		NativeRootID: "native", State: domain.UsageBindingActive, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("UpsertUsageBinding accepted an unknown harness")
+	}
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "native", State: domain.UsageBindingActive,
+	})
+	if _, err := s.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceKind("not_a_kind"),
+		ArtifactPath: "/tmp/unknown.jsonl", State: domain.UsageSourcePending, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("InsertUsageSource accepted an unknown source kind")
 	}
 }

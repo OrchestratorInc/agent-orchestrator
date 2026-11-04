@@ -151,17 +151,22 @@ func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone st
 		}
 
 		costs := event.Costs
-		if costs.EstimatedCostNanos == nil || costs.InputCostNanos == nil || costs.CachedInputCostNanos == nil || costs.OutputCostNanos == nil {
+		if costs.EstimatedCostNanos == nil {
 			continue
 		}
 		split := splits[priceKeyOf(event)]
-		total, input := *costs.EstimatedCostNanos, *costs.InputCostNanos
-		writeCost := min(roundNanos(float64(input)*split.writeShare), input)
+		total := *costs.EstimatedCostNanos
 		row.PricedEvents++
-		row.InputCostNanos += input - writeCost
-		row.CacheWriteCostNanos += writeCost
-		row.CacheReadCostNanos += *costs.CachedInputCostNanos
-		row.OutputCostNanos += *costs.OutputCostNanos
+		// An agent that reports one figure per call (OpenCode, Kilo Code) has
+		// no per-type split; its call still counts toward the total.
+		if costs.InputCostNanos != nil && costs.CachedInputCostNanos != nil && costs.OutputCostNanos != nil {
+			input := *costs.InputCostNanos
+			writeCost := min(roundNanos(float64(input)*split.writeShare), input)
+			row.InputCostNanos += input - writeCost
+			row.CacheWriteCostNanos += writeCost
+			row.CacheReadCostNanos += *costs.CachedInputCostNanos
+			row.OutputCostNanos += *costs.OutputCostNanos
+		}
 		row.CostNanos += total
 		row.PremiumNanos += roundNanos(float64(total) * split.premiumShare)
 		row.CacheSavingsNanos += roundNanos(float64(cached) * split.savingsPerCachedToken)

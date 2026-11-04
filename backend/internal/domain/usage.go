@@ -12,11 +12,49 @@ type UsageSourceKind string
 
 // UsageSourceKind values identify certified native usage artifact shapes.
 const (
-	UsageSourceClaudeMain     UsageSourceKind = "claude_main"
-	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
-	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
-	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	UsageSourceClaudeMain        UsageSourceKind = "claude_main"
+	UsageSourceClaudeSubagent    UsageSourceKind = "claude_subagent"
+	UsageSourceCodexRollout      UsageSourceKind = "codex_rollout"
+	UsageSourceKimiWire          UsageSourceKind = "kimi_wire"
+	UsageSourcePiSession         UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly       UsageSourceKind = "qwen_monthly"
+	UsageSourceOMPSession        UsageSourceKind = "omp_session"
+	UsageSourceKimchiSession     UsageSourceKind = "kimchi_session"
+	UsageSourcePrimeAgentSession UsageSourceKind = "prime_agent_session"
+	UsageSourceGooseLedger       UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB        UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB            UsageSourceKind = "kilo_db"
+	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
 )
+
+// AllUsageSourceKinds lists every certified usage artifact shape. The schema no
+// longer enumerates source kinds, so a new usage source adds its kind here and
+// the store rejects anything else.
+var AllUsageSourceKinds = []UsageSourceKind{
+	UsageSourceClaudeMain,
+	UsageSourceClaudeSubagent,
+	UsageSourceCodexRollout,
+	UsageSourceKimiWire,
+	UsageSourcePiSession,
+	UsageSourceQwenMonthly,
+	UsageSourceOMPSession,
+	UsageSourceKimchiSession,
+	UsageSourcePrimeAgentSession,
+	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
+	UsageSourceGrokUsage,
+}
+
+// IsKnown reports whether k is a certified usage source kind.
+func (k UsageSourceKind) IsKnown() bool {
+	for _, known := range AllUsageSourceKinds {
+		if k == known {
+			return true
+		}
+	}
+	return false
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string

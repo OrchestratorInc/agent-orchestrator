@@ -17,6 +17,10 @@ import (
 // UpsertUsageBinding records or refreshes the association between an AO
 // session and a native root session/thread.
 func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingRecord) (domain.UsageBindingRecord, error) {
+	// The schema no longer enumerates usage harnesses; the store is the guard.
+	if !rec.Harness.IsKnown() {
+		return domain.UsageBindingRecord{}, fmt.Errorf("upsert usage binding: unknown harness %q", rec.Harness)
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	row, err := s.qw.UpsertUsageBinding(ctx, gen.UpsertUsageBindingParams{
@@ -146,6 +150,9 @@ func (s *Store) InsertUsageSource(ctx context.Context, rec domain.UsageSourceRec
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
+	if err := validateUsageSourceKind(rec.Kind); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	row, err := s.qw.InsertUsageSource(ctx, usageSourceInsertParams(rec))
@@ -165,6 +172,9 @@ func (s *Store) ReplaceUsageSource(
 	at time.Time,
 ) (domain.UsageSourceRecord, error) {
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
+	if err := validateUsageSourceKind(rec.Kind); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
 	s.writeMu.Lock()
@@ -933,6 +943,15 @@ func usageSourceContextFromGen(row gen.GetUsageSourceWithBindingAndSessionRow) d
 	}
 }
 
+// validateUsageSourceKind rejects source kinds the domain does not certify. The
+// schema no longer enumerates them, so this is the only guard.
+func validateUsageSourceKind(kind domain.UsageSourceKind) error {
+	if !kind.IsKnown() {
+		return fmt.Errorf("unknown usage source kind %q", kind)
+	}
+	return nil
+}
+
 func usageSourceInsertParams(rec domain.UsageSourceRecord) gen.InsertUsageSourceParams {
 	return gen.InsertUsageSourceParams{
 		BindingID:       rec.BindingID,
@@ -1052,10 +1071,18 @@ func usageAggregateFromGen(row gen.AggregateUsageBySessionHarnessModelRow) domai
 
 func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEvent) error {
 	expectedProvider := domain.UsageProviderAnthropic
-	if harness == domain.HarnessCodex {
+	if harness == domain.HarnessCodex || harness == domain.HarnessQwen {
 		expectedProvider = domain.UsageProviderOpenAI
 	}
-	if event.ProviderID != expectedProvider || event.ModelID == "" || event.SourceEventKey == "" {
+	validProvider := event.ProviderID == expectedProvider
+	if harness == domain.HarnessPi || harness == domain.HarnessOMP || harness == domain.HarnessKimchi ||
+		harness == domain.HarnessPrimeAgent ||
+		harness == domain.HarnessGoose || harness == domain.HarnessOpenCode || harness == domain.HarnessKilocode ||
+		harness == domain.HarnessGrok {
+		validProvider = event.ProviderID == domain.UsageProviderOpenAI ||
+			event.ProviderID == domain.UsageProviderAnthropic
+	}
+	if !validProvider || event.ModelID == "" || event.SourceEventKey == "" {
 		return fmt.Errorf("invalid usage event identity for %s", harness)
 	}
 	switch event.MeasurementKind {
