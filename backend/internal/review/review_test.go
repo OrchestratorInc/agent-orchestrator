@@ -3134,10 +3134,12 @@ func TestListKeepsRunningChatRunWithoutHandle(t *testing.T) {
 	}
 }
 
-// A Chat reviewer records a "review-chat:" handle, but its liveness only means
-// a controller is holding it right now. With a durable conversation the pass is
-// still recoverable, so a momentarily absent controller must not kill it.
-func TestListKeepsRunningChatRunWhoseControllerIsNotLive(t *testing.T) {
+// A Chat reviewer records a "review-chat:" handle, so the liveness probe covers
+// it like any other reviewer. Callers reach this after startup recovery, and
+// review chats are not hibernated, so a controller that is gone cannot finish
+// the pass; leaving the run "running" would wedge the head exactly as the
+// original bug did.
+func TestListFailsRunningChatRunWhoseControllerIsGone(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{
 			ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex,
@@ -3155,8 +3157,14 @@ func TestListKeepsRunningChatRunWhoseControllerIsNotLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunRunning {
-		t.Fatalf("runs = %+v, want the restorable Chat pass left running", got.Runs)
+	if len(got.Runs) != 1 || got.Runs[0].Status != domain.ReviewRunFailed {
+		t.Fatalf("runs = %+v, want the orphaned Chat pass failed", got.Runs)
+	}
+	if got.Runs[0].Body != reviewerExitedBeforeSubmission {
+		t.Fatalf("body = %q, want %q", got.Runs[0].Body, reviewerExitedBeforeSubmission)
+	}
+	if store.review.ReviewerActivityState != domain.ActivityExited {
+		t.Fatalf("activity = %q, want exited", store.review.ReviewerActivityState)
 	}
 }
 

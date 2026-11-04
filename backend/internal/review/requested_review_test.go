@@ -309,6 +309,38 @@ func TestTriggerSettlesOrphanedRunFromAnotherHarness(t *testing.T) {
 	}
 }
 
+// A Chat reviewer whose controller is gone cannot deliver a result, and nothing
+// retries it after startup, so a trigger has to settle it instead of reporting
+// REVIEW_ALREADY_RUNNING forever.
+func TestTriggerSettlesRunningChatRunWhoseControllerIsGone(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerCodex: {
+				ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+				InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1",
+				ReviewerHandleID: "review-chat:rev-codex", ReviewerActivityState: domain.ActivityActive,
+			},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 1),
+		},
+	}
+	launcher := &fakeLauncher{alive: false, handle: "claude-pane"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
+	if err != nil {
+		t.Fatalf("TriggerWithOptions: %v", err)
+	}
+	orphan := store.runs[0]
+	if orphan.Status != domain.ReviewRunFailed || orphan.Body != reviewerExitedBeforeSubmission {
+		t.Fatalf("orphaned chat run = %+v, want failed reviewer-exit result", orphan)
+	}
+	if !res.Created || res.Run.Harness != domain.ReviewerClaudeCode {
+		t.Fatalf("result = %+v, want a new claude-code pass after settling the chat orphan", res)
+	}
+}
+
 // A running pass whose reviewer handle was never recorded has no process that
 // could ever finish it, even while another reviewer's probe would report alive.
 func TestTriggerSettlesOtherHarnessRunWhoseReviewerNeverStarted(t *testing.T) {

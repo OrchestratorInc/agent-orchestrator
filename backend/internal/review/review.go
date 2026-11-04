@@ -1210,9 +1210,10 @@ func (e *Engine) restoreReviewerLocked(
 		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
 			continue
 		}
-		// A Chat reviewer has no pane by design; RecoverChatReviewers restores
-		// its durable conversation, so a missing handle is not a dead reviewer.
-		if reviewerRecoverableChat(other) {
+		// A Chat row with no handle has no controller to probe, but its durable
+		// conversation is all a restore needs, so it is left alone. Chat rows
+		// with a handle go through the probe like any other reviewer.
+		if other.ReviewerHandleID == "" && reviewerRecoverableChat(other) {
 			continue
 		}
 		if _, err := e.cancelStaleRunningRuns(ctx, workerID, other.Harness, other, true, runs); err != nil {
@@ -1687,9 +1688,10 @@ func (e *Engine) reconcileOtherHarnessReviewers(ctx stdctx.Context, reviewRows [
 	return changed, nil
 }
 
-// reviewerRecoverableChat reports whether a Chat reviewer's pass can still be
-// resumed by RecoverChatReviewers. Its pass lives in a durable provider
-// conversation, so an absent controller is not proof that the reviewer is gone.
+// reviewerRecoverableChat reports whether a Chat reviewer's pass lives in a
+// durable provider conversation that RecoverChatReviewers can restore. It is
+// only consulted for a row with no handle: once a handle exists, the liveness
+// probe decides, because startup recovery has already run by then.
 func reviewerRecoverableChat(review domain.Review) bool {
 	return review.InterfaceMode == domain.ReviewerInterfaceChat && review.ProviderConversationID != ""
 }
@@ -1698,9 +1700,10 @@ func reviewerRecoverableChat(review domain.Review) bool {
 // passes into durable failed-run facts. A missing handle is proof that no live
 // reviewer is attached: Trigger records the handle before it releases the
 // worker lock, so a running pass with no handle belongs to a launch that never
-// completed (or lost its handle) and can never report a result. Probe errors
-// are intentionally ignored: an unknown runtime state is not proof that the
-// reviewer exited.
+// completed (or lost its handle) and can never report a result. A Chat row
+// without a handle is the exception, because its durable conversation is
+// enough for a restore. Probe errors are intentionally ignored: an unknown
+// runtime state is not proof that the reviewer exited.
 func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Review, runs []domain.ReviewRun) (bool, error) {
 	if review.ID == "" {
 		return false, nil
@@ -1715,17 +1718,14 @@ func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Revi
 	if !hasRunning {
 		return false, nil
 	}
-	// A Chat reviewer keeps its pass in a durable provider conversation rather
-	// than a pane, so a controller that is momentarily not alive (daemon start,
-	// reconnect) is not a dead reviewer: RecoverChatReviewers brings it back and
-	// settles any pass it cannot recover. Decide this before probing the handle
-	// because Chat rows also record a "review-chat:" handle whose liveness only
-	// means "a controller holds it right now".
-	if reviewerRecoverableChat(*review) {
-		return false, nil
-	}
 	body := reviewerExitedBeforeSubmission
 	if review.ReviewerHandleID != "" {
+		// Chat rows record a "review-chat:" handle, so the probe covers them too.
+		// Callers reach this after waitForChatRecovery, which means a controller
+		// that is not alive now is not the startup window: RecoverChatReviewers
+		// has already run and would have settled a pass it could not restore.
+		// Review chats are not hibernated (that only stops session-owned chats),
+		// so an absent controller means the pass has no way to report a result.
 		alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
 		if err != nil {
 			// An unavailable probe is unknown, not evidence that the reviewer died.
@@ -1734,6 +1734,11 @@ func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Revi
 		if alive {
 			return false, nil
 		}
+	} else if reviewerRecoverableChat(*review) {
+		// A Chat row without a handle predates per-harness handles; its durable
+		// conversation is all a restore needs, so it is not evidence of a launch
+		// that never attached.
+		return false, nil
 	} else {
 		body = reviewerNotAttached
 	}
