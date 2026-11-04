@@ -3892,6 +3892,7 @@
 	"share.copy": "Копировать",
 	"share.copied": "Скопировано",
 	"share.copyOnce": "Скопируйте её сейчас. Ссылка больше не будет показана.",
+	"share.activeLinks": "Активные ссылки",
 	"share.expiresOn": "Действует до {{date}}",
 	"share.revoke": "Отозвать",
 	"share.noToken": "Сервер управления не вернул ссылку.",

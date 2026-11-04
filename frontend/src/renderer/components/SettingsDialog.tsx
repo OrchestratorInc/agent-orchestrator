@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useMyTeams } from "../hooks/useTeams";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { SHARE_FEATURE } from "../lib/cloud-offering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useSectionHistory } from "../hooks/useSectionHistory";
@@ -71,7 +72,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// only when it includes coder, Upgrade only for self-serve billing.
 	const offering = useCloudOffering();
 	const { customCoder, selfServeBilling } = offering;
-	const teams = useTeamsPage(cloudEnabled && settingsModal?.scope === "global", offering.features?.includes(SHARE_FEATURE) === true, offering.org?.id);
+	// A build without Teams has no Teams page and never asks for the person's teams.
+	const teamsEnabled = useTeamsEnabled();
+	const teams = useTeamsPage(teamsEnabled && cloudEnabled && settingsModal?.scope === "global", offering.features?.includes(SHARE_FEATURE) === true, offering.org?.id);
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one

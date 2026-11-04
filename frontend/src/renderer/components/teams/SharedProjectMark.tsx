@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import { Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useTeamsEnabled } from "../../hooks/useTeamsEnabled";
 import type { WorkspaceShare } from "../../types/workspace";
 import { listNames } from "../share/accessLabels";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -30,6 +31,9 @@ export function sharedProjectLines(share: WorkspaceShare, t: TFunction, locale: 
  */
 export function SharedProjectMark({ share }: { share: WorkspaceShare }) {
 	const { t, i18n } = useTranslation();
+	// Who shared it, and through which team, is part of Teams.
+	const teams = useTeamsEnabled();
+	if (!teams) return null;
 	const lines = sharedProjectLines(share, t, i18n.language);
 	return (
 		<Tooltip>

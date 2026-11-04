@@ -115,14 +115,24 @@ vi.mock("./ProjectScriptsSettings", () => ({
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
 // mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
+// Cloud is off unless a test turns it on (then the org can share, as for Teams).
+const teamsGate = vi.hoisted(() => ({ cloudEnabled: false, teams: true, myTeamsAsked: [] as boolean[] }));
 vi.mock("../hooks/useCloudGate", () => ({
-	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
+	useCloudGate: () => ({ cloudEnabled: teamsGate.cloudEnabled, localEnabled: true }),
 }));
 
 // The dialog reads the org's offering to gate the Coder and Upgrade pages.
 // Nothing resolved here (signed out), so neither page is visible.
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false }),
+	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false, ...(teamsGate.cloudEnabled ? { features: ["share"], org: { id: "org-1" } } : {}) }),
+}));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => teamsGate.teams }));
+vi.mock("../hooks/useTeams", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useTeams")>(),
+	useMyTeams: (enabled: boolean) => {
+		teamsGate.myTeamsAsked.push(enabled);
+		return { isPending: false, error: null, data: [] };
+	},
 }));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
@@ -142,6 +152,29 @@ describe("SettingsDialog", () => {
 		cloudProjectsState.error = null;
 		cloudProjectsState.refetch.mockReset();
 		localWorkspacesState.ids = [];
+		teamsGate.cloudEnabled = false;
+		teamsGate.teams = true;
+		teamsGate.myTeamsAsked = [];
+	});
+
+	it("lists Teams where the workspace can share, in a build with Teams", async () => {
+		teamsGate.cloudEnabled = true;
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+		expect(within(nav).getByRole("button", { name: "Teams" })).toBeInTheDocument();
+		expect(teamsGate.myTeamsAsked).toContain(true);
+	});
+
+	it("has no Teams page in a build without Teams, and never asks for the person's teams", async () => {
+		teamsGate.cloudEnabled = true;
+		teamsGate.teams = false;
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
+		expect(within(nav).queryByRole("button", { name: "Teams" })).toBeNull();
+		expect(teamsGate.myTeamsAsked.length).toBeGreaterThan(0);
+		expect(teamsGate.myTeamsAsked).not.toContain(true);
 	});
 
 	function renderSettingsDialog() {

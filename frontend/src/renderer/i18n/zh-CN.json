@@ -3743,6 +3743,7 @@
 	"share.copy": "复制",
 	"share.copied": "已复制",
 	"share.copyOnce": "请立即复制。此链接无法再次显示。",
+	"share.activeLinks": "有效链接",
 	"share.expiresOn": "{{date}} 过期",
 	"share.revoke": "撤销",
 	"share.noToken": "控制平面没有返回链接。",

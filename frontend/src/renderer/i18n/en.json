@@ -3742,6 +3742,7 @@
 	"share.copy": "Copy",
 	"share.copied": "Copied",
 	"share.copyOnce": "Copy it now. The link can't be shown again.",
+	"share.activeLinks": "Active links",
 	"share.expiresOn": "Expires {{date}}",
 	"share.revoke": "Revoke",
 	"share.noToken": "The control plane did not return the link.",

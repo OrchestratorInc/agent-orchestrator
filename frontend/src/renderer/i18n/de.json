@@ -3761,6 +3761,7 @@
 	"share.copy": "Kopieren",
 	"share.copied": "Kopiert",
 	"share.copyOnce": "Kopiere ihn jetzt. Der Link kann nicht erneut angezeigt werden.",
+	"share.activeLinks": "Aktive Links",
 	"share.expiresOn": "Läuft ab am {{date}}",
 	"share.revoke": "Widerrufen",
 	"share.noToken": "Die Steuerungsebene hat keinen Link zurückgegeben.",

@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useTeamsEnabled } from "../../hooks/useTeamsEnabled";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceShareSource, WorkspaceSummary } from "../../types/workspace";
@@ -53,6 +54,10 @@ function writeSeen(storageKey: string, keys: Iterable<string>) {
 export function SharedWithYouNotifier() {
 	const { t } = useTranslation();
 	const { baseUrl, userId, ready } = useCloudCp();
+	// Shares from people and teams are part of Teams: a build without it
+	// announces nothing (and keeps no record, so turning Teams on later
+	// starts silently, as at sign-in).
+	const teams = useTeamsEnabled();
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -60,7 +65,7 @@ export function SharedWithYouNotifier() {
 	navigateRef.current = navigateToSession;
 
 	useEffect(() => {
-		if (!ready || !userId) return;
+		if (!teams || !ready || !userId) return;
 		const storageKey = `${STORAGE_PREFIX}${baseUrl}:${userId}`;
 		const announce = (workspaces: WorkspaceSummary[]) => {
 			const arrivals = shareArrivals(workspaces);
@@ -101,7 +106,7 @@ export function SharedWithYouNotifier() {
 			const data = event.query.state.data as WorkspaceSummary[] | undefined;
 			if (data) announce(data);
 		});
-	}, [baseUrl, queryClient, ready, showGlobalToast, t, userId]);
+	}, [baseUrl, queryClient, ready, showGlobalToast, t, teams, userId]);
 
 	return null;
 }

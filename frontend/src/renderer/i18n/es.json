@@ -3830,6 +3830,7 @@
 	"share.copy": "Copiar",
 	"share.copied": "Copiado",
 	"share.copyOnce": "Cópialo ahora. El enlace no se puede volver a mostrar.",
+	"share.activeLinks": "Enlaces activos",
 	"share.expiresOn": "Caduca el {{date}}",
 	"share.revoke": "Revocar",
 	"share.noToken": "El plano de control no devolvió el enlace.",

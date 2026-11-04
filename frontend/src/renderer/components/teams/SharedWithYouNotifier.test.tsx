@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	live: undefined as undefined | { you: string; viewers: Array<{ userId: string; role: string }> },
 	liveCalls: 0,
+	teams: true,
 }));
+vi.mock("../../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
 vi.mock("../../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test", userId: "me" }) }));
 vi.mock("../../lib/navigate-to-session", () => ({ useNavigateToSession: () => mocks.navigate }));
 vi.mock("../../hooks/useCloudSessionLive", () => ({
@@ -50,6 +52,19 @@ describe("SharedWithYouNotifier", () => {
 		window.localStorage.clear();
 		useUiStore.setState({ globalToasts: [] });
 		mocks.navigate.mockReset();
+		mocks.teams = true;
+	});
+
+	it("in a build without Teams announces nothing and keeps no record", async () => {
+		mocks.teams = false;
+		window.localStorage.setItem(STORAGE, JSON.stringify([]));
+		const queryClient = new QueryClient();
+		mount(queryClient);
+		await act(async () => {
+			await queryClient.fetchQuery({ queryKey: KEY, queryFn: async () => [storefront] });
+		});
+		expect(useUiStore.getState().globalToasts).toHaveLength(0);
+		expect(JSON.parse(window.localStorage.getItem(STORAGE) ?? "null")).toEqual([]);
 	});
 
 	it("remembers what's already shared silently on the first load", async () => {
@@ -149,8 +164,17 @@ describe("SessionAccessTag", () => {
 	beforeEach(() => {
 		mocks.liveCalls = 0;
 		mocks.live = undefined;
+		mocks.teams = true;
 		queryClient = new QueryClient();
 		queryClient.setQueryData(SHARED_LIST, []);
+	});
+
+	it("in a build without Teams shows no tag, and asks for nothing", () => {
+		mocks.teams = false;
+		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
+		const { container } = render(tag({ id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Platform" } as never }));
+		expect(container.textContent).toBe("");
+		expect(mocks.liveCalls).toBe(0);
 	});
 
 	it("does nothing, and asks for nothing, on the person's own sessions", () => {

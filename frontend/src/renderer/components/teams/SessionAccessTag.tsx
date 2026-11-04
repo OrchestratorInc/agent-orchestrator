@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
+import { useTeamsEnabled } from "../../hooks/useTeamsEnabled";
 import { sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
 import type { WorkspaceSession } from "../../types/workspace";
 
@@ -16,7 +17,8 @@ type TaggedSession = Pick<WorkspaceSession, "id" | "cloud" | "isTerminated">;
  * to read the role from, like the other live subscribers).
  */
 export function SessionAccessTag({ session }: { session: TaggedSession }) {
-	if (session.cloud?.shared !== true || session.isTerminated === true) return null;
+	const teams = useTeamsEnabled();
+	if (!teams || session.cloud?.shared !== true || session.isTerminated === true) return null;
 	return <SharedSessionAccessTag session={session} />;
 }
 
