@@ -194,6 +194,9 @@ export type UiState = {
 	// Full-window first-run onboarding is showing; transient shell notices wait.
 	firstRunOnboardingOpen: boolean;
 	setFirstRunOnboardingOpen: (open: boolean) => void;
+	/** Bumped by Developer mode's Replay onboarding; the flow reopens on each change. */
+	onboardingReplayRequest: number;
+	requestOnboardingReplay: () => void;
 	projectCreationPending: boolean;
 	// Freestyle cloud projects just created, whose board starts the orchestrator
 	// on its own instead of waiting for the Orchestrator button.
@@ -418,6 +421,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	provisioningProjectIds: new Set<string>(),
 	firstRunOnboardingOpen: false,
 	setFirstRunOnboardingOpen: (open) => set({ firstRunOnboardingOpen: open }),
+	onboardingReplayRequest: 0,
+	requestOnboardingReplay: () => set((state) => ({ onboardingReplayRequest: state.onboardingReplayRequest + 1 })),
 	projectCreationPending: false,
 	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},

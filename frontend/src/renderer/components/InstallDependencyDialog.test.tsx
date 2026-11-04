@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -60,10 +60,12 @@ describe("InstallDependencyDialog", () => {
 			/>,
 		);
 
-		await userEvent.click(screen.getByRole("radio", { name: /OpenCode 2/i }));
-
-		expect(await screen.findByText("The daemon says this replaces OpenCode 1.")).toHaveAttribute("role", "status");
-		await userEvent.click(screen.getByRole("button", { name: "Install selected" }));
+		const notice = await screen.findByText("The daemon says this replaces OpenCode 1.");
+		expect(notice).toHaveAttribute("role", "status");
+		// Every agent row carries its own Install; the notice sits under OpenCode 2's.
+		const row = screen.getByText("OpenCode 2").closest(".settings-row-bar")?.parentElement as HTMLElement;
+		expect(row).toContainElement(notice);
+		await userEvent.click(within(row).getByRole("button", { name: "Install" }));
 
 		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/system/install/{target}", {
 			params: { path: { target: "opencode-v2" } },

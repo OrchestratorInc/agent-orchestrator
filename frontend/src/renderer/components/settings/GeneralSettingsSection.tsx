@@ -20,6 +20,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
+import { IS_DEV } from "../../lib/is-dev";
 import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
@@ -403,6 +404,8 @@ export function GeneralSettingsSection({
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
 				{developerMode && <ChromeAgentsRow />}
+				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
+				{IS_DEV && developerMode && <ReplayOnboardingRow />}
 			</SettingsSection>
 		</>
 	);
@@ -517,6 +520,28 @@ function ChromeAgentsRow() {
 		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
 			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
 				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
+		</SettingsRow>
+	);
+}
+
+function ReplayOnboardingRow() {
+	const { t } = useTranslation();
+	const closeSettings = useUiStore((state) => state.closeSettings);
+	const requestOnboardingReplay = useUiStore((state) => state.requestOnboardingReplay);
+	return (
+		<SettingsRow label={t("settings.replayOnboarding.label")} description={t("settings.replayOnboarding.hint")}>
+			<Button
+				onClick={() => {
+					closeSettings();
+					requestOnboardingReplay();
+				}}
+				size="sm"
+				type="button"
+				variant="ghost"
+			>
+				{t("settings.replayOnboarding.open")}
 				<ArrowRight aria-hidden="true" className="size-icon-sm" />
 			</Button>
 		</SettingsRow>
