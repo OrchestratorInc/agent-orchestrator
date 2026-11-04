@@ -4021,20 +4021,18 @@ app.on("before-quit", (event) => {
 	if (!agentQuitCleanupComplete) {
 		event.preventDefault();
 		if (!agentQuitCleanupPromise) {
+			// Fail open: a crashed, hung, or taken-over daemon must never block
+			// quit or an update restart. Dropping the supervisor link and the exit
+			// handler still clean up an app-owned daemon.
 			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+				.catch((error) => {
+					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
+				})
 				.then(() => {
 					agentQuitCleanupComplete = true;
+					agentQuitCleanupPromise = null;
 					app.quit();
-				})
-				.catch((error) => {
-					console.error("AO: daemon shutdown on desktop quit failed", error);
-					preserveAgentsOnQuit = false;
-					clearUpdateRestartRequest();
-					desktopQuit.cancelQuit();
-					dialog.showErrorBox("Could not quit AO", "AO could not stop its agents. Try quitting again.");
-					focusMainWindow();
-				})
-				.finally(() => { agentQuitCleanupPromise = null; });
+				});
 		}
 		return;
 	}

@@ -1,8 +1,10 @@
 package httpd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,40 @@ func TestDesktopExitShutdownPolicy(t *testing.T) {
 				t.Fatal("desktop exit did not request daemon shutdown")
 			}
 		})
+	}
+}
+
+// A SIGTERM replacement cancels ctx while the supervisor link drops at the
+// same time. If teardown outlasts the supervisor grace, its callback must not
+// mark the replacement as a desktop exit.
+func TestSignalReplacementWinsOverLateSupervisorDrop(t *testing.T) {
+	t.Setenv("AO_OWNER", "app")
+	srv, err := NewWithDeps(config.Config{
+		Host:            "127.0.0.1",
+		ShutdownTimeout: 5 * time.Second,
+		RunFilePath:     filepath.Join(t.TempDir(), "running.json"),
+		AppRunID:        "run-1",
+	}, discardLogger(), nil, APIDeps{})
+	if err != nil {
+		t.Fatalf("NewWithDeps: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- srv.Run(ctx) }()
+	waitForHealth(t, "http://"+srv.Addr().String())
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after signal")
+	}
+	srv.RequestShutdownAfterDesktopExit()
+	if srv.StopAgentsRequested() {
+		t.Fatal("late supervisor drop stopped agents during signal replacement")
 	}
 }
 

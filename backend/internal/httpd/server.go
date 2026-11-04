@@ -196,6 +196,9 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 	case <-s.shutdownRequested:
 		s.log.Info("shutdown requested over HTTP", "timeout", s.cfg.ShutdownTimeout)
 	case <-ctx.Done():
+		// A signal means daemon replacement. Take the shutdown once so a later
+		// supervisor drop during teardown cannot turn it into an agent stop.
+		s.requestShutdown()
 		s.log.Info("shutdown signal received, draining connections", "timeout", s.cfg.ShutdownTimeout)
 	}
 
