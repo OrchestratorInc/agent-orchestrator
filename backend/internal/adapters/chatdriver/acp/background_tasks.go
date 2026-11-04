@@ -84,6 +84,13 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	switch reported := stringField(output, "state", "status"); reported {
 	case "running", "paused", "completed", "failed", "stopped":
 		state = reported
+	default:
+		// With no independent handle or reported job state, the tool call is
+		// the only lifecycle we can track. Do not keep its input flag alive
+		// after the call settles.
+		if nativeID == "" && toolTerminal(tool.status) {
+			state = backgroundToolState(tool.status)
+		}
 	}
 
 	description := stringField(input, "description", "command", "prompt")

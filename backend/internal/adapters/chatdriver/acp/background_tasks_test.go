@@ -12,7 +12,7 @@ import (
 )
 
 func TestBackgroundTasksSharedACPTracking(t *testing.T) {
-	c := &conversation{}
+	c := &conversation{tools: make(map[string]*toolState)}
 	read := func(count int) []ports.ChatBackgroundTask {
 		t.Helper()
 		tasks, err := c.BackgroundTasks(context.Background())
@@ -25,14 +25,20 @@ func TestBackgroundTasksSharedACPTracking(t *testing.T) {
 	c.observeBackgroundTool(&toolState{id: "foreground", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress})
 	read(0)
 	input := map[string]any{"command": "sleep 1800", "run_in_background": true}
-	c.observeBackgroundTool(&toolState{id: "launch", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress, rawInput: input})
+	kind, status := acpsdk.ToolKindExecute, acpsdk.ToolCallStatusInProgress
+	c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+		ToolCallId: "launch", Kind: &kind, Status: &status, RawInput: input,
+	}))
 	tasks := read(1)
 	if tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800" {
 		t.Fatal(tasks)
 	}
-	c.observeBackgroundTool(&toolState{id: "launch", status: acpsdk.ToolCallStatusCompleted})
+	status = acpsdk.ToolCallStatusCompleted
+	c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+		ToolCallId: "launch", Status: &status, RawOutput: "Background command launched",
+	}))
 	tasks = read(1)
-	if tasks[0].State != "completed" {
+	if tasks[0].State != "completed" || tasks[0].EndedAt == nil {
 		t.Fatal(tasks)
 	}
 	c.backgroundObserved.Finish("launch", "failed", time.Now().Add(-time.Minute))
@@ -130,14 +136,37 @@ func TestBackgroundTasksNativeAsyncLifecycleAcrossTurns(t *testing.T) {
 }
 
 func TestBackgroundTasksDeferACPHibernation(t *testing.T) {
-	c := &conversation{}
-	c.observeBackgroundTool(&toolState{id: "job", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress, rawInput: map[string]any{"background": true}})
-	if ready, err := c.CanHibernate(context.Background()); ready || err != nil {
-		t.Fatalf("hibernate=%v %v", ready, err)
-	}
-	c.observeBackgroundTool(&toolState{id: "job", status: acpsdk.ToolCallStatusCompleted})
-	if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
-		t.Fatalf("hibernate after completion=%v %v", ready, err)
+	for _, status := range []acpsdk.ToolCallStatus{acpsdk.ToolCallStatusCompleted, acpsdk.ToolCallStatusFailed} {
+		for _, tc := range []struct {
+			name   string
+			output any
+		}{
+			{name: "no output"},
+			{name: "prose output", output: "Background command launched"},
+			{name: "unstructured result", output: map[string]any{"output": "Background command launched"}},
+		} {
+			t.Run(string(status)+"/"+tc.name, func(t *testing.T) {
+				c := &conversation{tools: make(map[string]*toolState)}
+				kind, started := acpsdk.ToolKindExecute, acpsdk.ToolCallStatusInProgress
+				c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+					ToolCallId: "job", Kind: &kind, Status: &started,
+					RawInput: map[string]any{"command": "sleep 5", "run_in_background": true},
+				}))
+				if ready, err := c.CanHibernate(context.Background()); ready || err != nil {
+					t.Fatalf("hibernate=%v %v", ready, err)
+				}
+				c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+					ToolCallId: "job", Status: &status, RawOutput: tc.output,
+				}))
+				tasks, _ := c.BackgroundTasks(context.Background())
+				if len(tasks) != 1 || tasks[0].State != string(status) || tasks[0].EndedAt == nil {
+					t.Fatalf("tasks=%+v, want settled tool-ID task", tasks)
+				}
+				if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+					t.Fatalf("hibernate after %s=%v %v", status, ready, err)
+				}
+			})
+		}
 	}
 }
 
