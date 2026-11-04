@@ -1,6 +1,6 @@
 import { terminalCommand, LINUX_TERMINAL_LAUNCHERS } from "./terminal-command";
 import { createHash } from "node:crypto";
-import { constants, statSync } from "node:fs";
+import { closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import {
 	isEditorId,
@@ -102,6 +102,8 @@ export type EditorHandoffDeps = {
 	discoverTerminalApps?: () => Promise<MacTerminalApp[]>;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
+	/** Reads the first bytes of a file as text, or undefined when unreadable. */
+	readFileHead?: (candidatePath: string) => string | undefined;
 	logError?: (message: string, error: unknown) => void;
 };
 
@@ -121,6 +123,26 @@ function defaultIsExecutable(candidatePath: string, platform: Platform): boolean
 	} catch {
 		return false;
 	}
+}
+
+function defaultReadFileHead(candidatePath: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(candidatePath, "r");
+		const buffer = Buffer.alloc(4096);
+		return buffer.toString("utf8", 0, readSync(fd, buffer, 0, buffer.length, 0));
+	} catch {
+		return undefined;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
+}
+
+// The Cursor Agent CLI installer puts a `cursor` shim in ~/.local/bin. Without
+// the Cursor IDE it only runs `cursor agent` and exits 1 for anything else, so
+// it must not count as an installed editor.
+function isCursorAgentShim(candidatePath: string, readFileHead: (candidatePath: string) => string | undefined): boolean {
+	return readFileHead(candidatePath)?.includes("No Cursor IDE installation found") === true;
 }
 
 function defaultIsDirectory(candidatePath: string): boolean {
@@ -188,11 +210,12 @@ function resolveOnPath(
 	platform: Platform,
 	env: NodeJS.ProcessEnv,
 	isExecutable: (candidatePath: string) => boolean,
+	skip?: (candidatePath: string) => boolean,
 ): string | undefined {
 	for (const directory of commandSearchDirs(platform, env)) {
 		for (const name of executableNames(command, platform, env)) {
 			const candidatePath = pathAPI(platform).join(directory, name);
-			if (isExecutable(candidatePath)) return candidatePath;
+			if (isExecutable(candidatePath) && !skip?.(candidatePath)) return candidatePath;
 		}
 	}
 	return undefined;
@@ -242,9 +265,12 @@ function resolveEditor(
 	deps: EditorHandoffDeps,
 	isExecutable: (candidatePath: string) => boolean,
 	isDirectory: (candidatePath: string) => boolean,
+	readFileHead: (candidatePath: string) => string | undefined,
 ): ResolvedCommand | undefined {
 	for (const command of candidate.commands) {
-		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable);
+		// Keep scanning PATH past the agent shim: a real Cursor CLI may follow it.
+		const skip = candidate.id === "cursor" ? (candidatePath: string) => isCursorAgentShim(candidatePath, readFileHead) : undefined;
+		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable, skip);
 		if (resolved) {
 			if (candidate.requiresTerminal) return resolveTerminalEditor(resolved, deps, isExecutable);
 			return {
@@ -390,6 +416,7 @@ function resolveInstalledTerminals(
 export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 	const isExecutable = deps.isExecutable ?? ((candidatePath) => defaultIsExecutable(candidatePath, deps.platform));
 	const isDirectory = deps.isDirectory ?? defaultIsDirectory;
+	const readFileHead = deps.readFileHead ?? defaultReadFileHead;
 	const fileManager: OpenTarget = {
 		id: "file-manager",
 		name: deps.platform === "darwin" ? "Finder" : deps.platform === "win32" ? "File Explorer" : "File Manager",
@@ -425,7 +452,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return terminalRefresh;
 	};
 	const resolveEditors = () => EDITOR_CANDIDATES.flatMap((candidate) => {
-		const command = resolveEditor(candidate, deps, isExecutable, isDirectory);
+		const command = resolveEditor(candidate, deps, isExecutable, isDirectory, readFileHead);
 		return command ? [{ target: { id: candidate.id, name: candidate.name, kind: "editor" } as OpenTarget, command }] : [];
 	});
 	const resolveTerminals = () => {

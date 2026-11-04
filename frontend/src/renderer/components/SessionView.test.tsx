@@ -20,6 +20,7 @@ import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
+import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
@@ -83,7 +84,10 @@ const cloudSessionQueryState = vi.hoisted(() => ({
 	data: undefined as WorkspaceSession | undefined,
 	isLoading: false,
 	isError: false,
+	error: null as unknown,
 }));
+// The person's own Cloud workspace.
+const ownCloudOrgState = vi.hoisted(() => ({ org: { id: "cloud-org", slug: "mine", displayName: "Mine", role: "owner" } as { id: string; slug: string; displayName: string; role: string } | undefined }));
 const cloudSessionLookup = vi.hoisted(() => vi.fn());
 const cloudSessionPoll = vi.hoisted(() => vi.fn());
 const cloudGateState = vi.hoisted(() => ({ cloudEnabled: true }));
@@ -124,9 +128,26 @@ vi.mock("../hooks/useWindowFullScreen", () => ({
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: cloudGateState.cloudEnabled, localEnabled: true, client: "" }),
 }));
+// A test that names the session organization's features gets them; the rest
+// read the offering as the real hook does.
+const sessionOfferingFeatures = vi.hoisted(() => ({ current: undefined as string[] | undefined }));
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return {
+		...actual,
+		useCloudOffering: (...args: Parameters<typeof actual.useCloudOffering>) => {
+			const offering = actual.useCloudOffering(...args);
+			return sessionOfferingFeatures.current ? { ...offering, features: sessionOfferingFeatures.current } : offering;
+		},
+	};
+});
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: ownCloudOrgState.org, isLoading: false, error: null, refetch: vi.fn(), ready: true }),
+}));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
+		userId: "guest-user",
 		client: cloudCpClientMock,
 		ready: true,
 	}),
@@ -439,8 +460,9 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string } }) => (
+	CloudSessionChatSurface: ({ headerActions, sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string }; headerActions?: ReactNode }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
+			<div data-testid="cloud-chat-header-actions">{headerActions}</div>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
 			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
@@ -1025,6 +1047,8 @@ describe("SessionView", () => {
 		cloudSessionQueryState.data = undefined;
 		cloudSessionQueryState.isLoading = false;
 		cloudSessionQueryState.isError = false;
+		cloudSessionQueryState.error = null;
+		forgetSharedSessions();
 		settingsState.chatHarnesses = undefined;
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
@@ -1234,6 +1258,44 @@ describe("SessionView", () => {
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
 	});
 
+	it("offers Share only where the session's organization may share", async () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		try {
+			sessionOfferingFeatures.current = ["share"];
+			const shared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(within(await screen.findByTestId("cloud-chat-header-actions")).getByRole("button", { name: "Share" })).toBeInTheDocument();
+			shared.unmount();
+
+			// WorkOS has not enabled sharing for the organization.
+			sessionOfferingFeatures.current = ["attachments"];
+			const notShared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+			notShared.unmount();
+
+			// A deleted session is not shared, whatever the organization may do.
+			sessionOfferingFeatures.current = ["share"];
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [{ ...cloudSession, isTerminated: true }] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+		} finally {
+			sessionOfferingFeatures.current = undefined;
+		}
+	});
+
 	it("keeps a Cloud Chat session's shell on the Cloud surface", () => {
 		const cloudSession: WorkspaceSession = {
 			...workerSession("sess-1"),
@@ -1282,6 +1344,40 @@ describe("SessionView", () => {
 		expect(screen.queryByText(/Session not found/)).not.toBeInTheDocument();
 		workspaceQueryState.directLoading = false;
 		view.rerender(<SessionView projectId="proj-1" sessionId="starting-orchestrator" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
+	});
+
+	it("says a session from another workspace is no longer shared, not that it was cleaned up", async () => {
+		const { CloudCpError } = await vi.importActual<typeof import("../lib/cloud-cp")>("../lib/cloud-cp");
+		workspaceQueryState.data = [];
+		cloudSessionQueryState.isError = true;
+		cloudSessionQueryState.error = new CloudCpError("You do not have access to this session.", { status: 403, code: "forbidden" });
+		render(<SessionView cloudOrgId="owners-org" projectId="shared-project" sessionId="unshared" />);
+		expect(screen.getByText("This session is no longer shared with you. Pick another from the sidebar.")).toBeInTheDocument();
+		expect(screen.queryByText(/cleaned up/)).not.toBeInTheDocument();
+	});
+
+	it("says a session shared earlier is no longer shared once it drops off the list, though its route names no workspace", () => {
+		// The shared list showed it earlier in this run; now the owner removed access.
+		rememberSharedSessions("https://cloud.example.test", "guest-user", ["was-shared"]);
+		workspaceQueryState.data = [];
+		render(<SessionView projectId="shared-project" sessionId="was-shared" />);
+		expect(screen.getByText("This session is no longer shared with you. Pick another from the sidebar.")).toBeInTheDocument();
+	});
+
+	it("still says not found for a missing session that was never shared, or shared with another account", () => {
+		rememberSharedSessions("https://cloud.example.test", "another-account", ["was-shared"]);
+		workspaceQueryState.data = [];
+		render(<SessionView projectId="my-project" sessionId="was-shared" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
+	});
+
+	it("still says not found for a missing session in the person's own workspace", async () => {
+		const { CloudCpError } = await vi.importActual<typeof import("../lib/cloud-cp")>("../lib/cloud-cp");
+		workspaceQueryState.data = [];
+		cloudSessionQueryState.isError = true;
+		cloudSessionQueryState.error = new CloudCpError("Not found.", { status: 404, code: "not_found" });
+		render(<SessionView cloudOrgId="cloud-org" projectId="my-project" sessionId="deleted" />);
 		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 	});
 
@@ -4936,7 +5032,6 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-1")).toBe(false);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("inert");
-		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
 
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
@@ -4996,7 +5091,6 @@ describe("SessionView", () => {
 		expect(pane).toHaveAttribute("data-state", "collapsed");
 		expect(pane).toHaveAttribute("hidden");
 		expect(screen.getByTestId("inspector-resize-handle")).toHaveClass("hidden");
-		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
 	});
 
 	it("keeps inspector chrome visible from the first render of the opening transition", () => {
@@ -5026,7 +5120,6 @@ describe("SessionView", () => {
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(screen.getByTestId("inspector-resize-handle")).toHaveClass("hidden");
-		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("aria-hidden", "false");
 	});
 
@@ -5484,7 +5577,6 @@ describe("SessionView", () => {
 	it("starts the orchestrator Browser closed and opens it with the inspector shortcut", () => {
 		render(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.queryByTestId("inspector-collapsed-rail")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open Browser" })).toHaveAttribute("aria-pressed", "false");
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-orch")).toBe(true);

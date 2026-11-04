@@ -3402,6 +3402,29 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 }
 
+func TestStandaloneSessionTelemetryKind(t *testing.T) {
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	st := newFakeStore()
+	st.sessions[rec.ID] = rec
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
+	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
+	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := &sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("launch failed")}
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", rec.ID, cause, apierr.Conflict("AGENT_RESUME_FAILED", "Agent resume failed", nil))
+	if len(sink.events) != 3 {
+		t.Fatalf("events = %d, want three session outcomes", len(sink.events))
+	}
+	for _, ev := range sink.events {
+		if got := ev.Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v, want standalone", ev.Name, got)
+		}
+	}
+}
+
 type fakeTracker struct {
 	issue domain.Issue
 	err   error
@@ -3871,6 +3894,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
 		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
+		{"chat permission unsupported", fmt.Errorf("spawn: %w", ports.ErrChatPermissionModeUnsupported), apierr.KindInvalid, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),

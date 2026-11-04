@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
+import { artifactChangeError } from "../lib/artifacts";
 import type { CloudCpClient } from "../lib/cloud-cp";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionArtifactFileQueryOptions } from "./useSessionWorkspaceFiles";
@@ -76,10 +78,14 @@ export function useArtifactVersion({ cloud, hostId, path, sessionId, version }: 
 
 /** Rewrites the file with an earlier version; the restore becomes the newest version. */
 export function useRestoreArtifactVersion({ cloud, hostId, path, rawUrl, sessionId }: { cloud?: CloudArtifactVersions; hostId?: string; path: string; rawUrl?: string; sessionId: string }) {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async ({ version }: { version: number }) => {
-			if (cloud) return cloud.client.restoreSessionArtifactVersion(cloud.orgId, sessionId, path, version);
+			if (cloud) {
+				return cloud.client.restoreSessionArtifactVersion(cloud.orgId, sessionId, path, version)
+					.catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); });
+			}
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/artifact-versions/restore", {
 				params: { path: { sessionId } },
 				body: { path, version },

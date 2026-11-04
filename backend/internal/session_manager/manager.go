@@ -1073,6 +1073,21 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
+	if mode == domain.SessionModeChat && m.chat != nil && cfg.AgentConfig.Permissions == "" &&
+		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
+		// Auto is AO's generic default, not a provider capability. An agent
+		// with no alternate modes keeps its native approval behavior. Never
+		// select bypass implicitly for agents without an approval channel.
+		if catalog, ok := m.chat.(interface {
+			PermissionModes(context.Context, domain.AgentHarness) ([]ports.PermissionMode, error)
+		}); ok {
+			modes, err := catalog.PermissionModes(ctx, cfg.Harness)
+			if err == nil && len(modes) == 1 && modes[0] == ports.PermissionModeDefault && agentConfig.Permissions != ports.PermissionModeDefault {
+				cfg.AgentConfig.Permissions = ports.PermissionModeDefault
+				agentConfig.Permissions = ports.PermissionModeDefault
+			}
+		}
+	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -1701,7 +1716,16 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	// A catalog left stale only because the stored login's access token expired
+	// (its refresh token still in date) must not block the launch: Claude Code
+	// renews the token when it starts. The stale list still validates what it
+	// knows. Models it lacks are left to the CLI only when there is no
+	// account-scoped list (the built-in fallback); against the account's own
+	// last-known list an unlisted ID is more likely a typo than a new release.
+	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
+		cfg.Harness == domain.HarnessClaudeCode
+	unlistedToCLI := renewableLogin && catalog.LastSuccessAt == nil
+	if catalog.Stale && validateClaudeModel && !renewableLogin {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1711,7 +1735,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil {
+	if validateClaudeModel && selected == nil && !unlistedToCLI {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if selected != nil && selected.RequiresVersion != "" {
@@ -1736,7 +1760,15 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if resolved.Effort == "" {
 		return resolved, nil
 	}
-	if catalog.Stale || selected == nil {
+	if unlistedToCLI && selected == nil {
+		// The CLI owns per-model capabilities, but a level no Claude model
+		// accepts can still be refused here rather than after the session starts.
+		if !containsString(claudeEffortLevels, resolved.Effort) {
+			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
+		}
+		return resolved, nil
+	}
+	if (catalog.Stale && !renewableLogin) || selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
@@ -1747,6 +1779,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 
 var (
 	claudeFamilyAliases = []string{"fable", "opus", "sonnet", "haiku"}
+	claudeEffortLevels  = []string{"low", "medium", "high", "xhigh", "max"}
 	claudeVersionNumber = regexp.MustCompile(`\d+`)
 	claudeVersionNoise  = regexp.MustCompile(`\(.*?\)|\[.*?\]`)
 )

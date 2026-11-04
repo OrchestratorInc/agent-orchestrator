@@ -211,9 +211,10 @@ type Config struct {
 	// daemon: the cloud offering (B2B/B2C, providers, billing) is decided per
 	// organization by the cloud control plane.
 	Client string
-	// CloudOffering reports whether the cloud offering flag is switched on
-	// (AO_CLOUD_OFFERING). It forces the cloud gate on regardless of the user's
-	// toggle; the settings service still requires a configured control plane.
+	// CloudOffering reports whether the cloud offering is available
+	// (AO_CLOUD_OFFERING). It defaults to true; only an explicit false/0
+	// switches it off. The settings service still requires a configured
+	// control plane.
 	CloudOffering bool
 	// LocalOffering reports whether the local offering is available
 	// (AO_LOCAL_OFFERING). It defaults to true; only an explicit false/0
@@ -263,7 +264,7 @@ func (c Config) Addr() string {
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
-//	AO_CLOUD_OFFERING          cloud offering flag off|on (default off)
+//	AO_CLOUD_OFFERING          cloud offering off|on (default on)
 //	AO_LOCAL_OFFERING          local offering off|on (default on)
 //	AO_CLOUD_CONTROL_PLANE_URL cloud control plane base URL (trimmed, must be http(s))
 //	AO_AGENT_BROWSER_URL       the host's agent browser (loopback http URL, default none)
@@ -282,6 +283,7 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
+		CloudOffering:          true,
 		LocalOffering:          true,
 		HarnessUpdateChecks:    true,
 		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
@@ -512,8 +514,8 @@ func Load() (Config, error) {
 	}
 	// The control-plane URL is public client configuration (like the WorkOS
 	// client id), so it ships as a baked default and the env var is only a
-	// development override. Users never configure it; the Settings toggle is
-	// the sole cloud switch.
+	// development override. Users never configure it: cloud is on for everyone
+	// a control plane is configured for.
 	cfg.CloudControlPlaneURL = defaultCloudControlPlaneURL
 	if raw := os.Getenv("AO_CLOUD_CONTROL_PLANE_URL"); strings.TrimSpace(raw) != "" {
 		u, err := parseCloudControlPlaneURL(raw)

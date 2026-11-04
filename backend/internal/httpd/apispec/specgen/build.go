@@ -1172,17 +1172,6 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodPatch, path: "/api/v1/settings/cloud-offering", id: "updateCloudOffering", tag: "settings",
-			summary: "Turn the cloud offering on or off for this machine",
-			reqBody: controllers.UpdateCloudOfferingRequest{},
-			resps: []respUnit{
-				{http.StatusOK, controllers.SettingsResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
 			method: http.MethodPatch, path: "/api/v1/settings/chat-hibernation", id: "updateChatHibernation", tag: "settings",
 			summary: "Turn idle Chat hibernation on or off for this machine",
 			reqBody: controllers.UpdateChatHibernationRequest{},
@@ -3059,6 +3048,18 @@ func sessionOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
+			summary:    "Stream changes to the files in a session's artifact directory",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}/artifact-files", id: "deleteSessionArtifactFile", tag: "sessions",

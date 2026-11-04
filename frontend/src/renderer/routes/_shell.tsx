@@ -15,6 +15,7 @@ import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
+import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
@@ -336,6 +337,7 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
+	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
@@ -346,22 +348,9 @@ function ShellLayout() {
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the
-	// sidebar first applies its saved width, so measure the sidebar instead.
+	// sidebar first applies its saved width, so measure the sidebar instead
+	// (see the effect after `isStartupLoading`).
 	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
-	useEffect(() => {
-		if (!isMac || !sidebarHasLayout) return;
-		let observer: ResizeObserver | undefined;
-		const frame = requestAnimationFrame(() => {
-			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
-			if (!el) return;
-			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
-			observer.observe(el);
-		});
-		return () => {
-			cancelAnimationFrame(frame);
-			observer?.disconnect();
-		};
-	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -369,7 +358,6 @@ function ShellLayout() {
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
-	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
 	// Body-level popout portals sit outside #root; they read the platform here.
@@ -408,6 +396,7 @@ function ShellLayout() {
 		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const openShellTerminal = useOpenShellTerminal(routeParams.hostId);
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
@@ -598,15 +587,33 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// The startup loader renders no sidebar, so measure again once the shell
+	// mounts it. Otherwise the strip keeps the 240px default and its fill
+	// paints over the center panel's top-left corner beside a narrower sidebar.
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout || isStartupLoading) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout, isStartupLoading]);
 	// Session shortcuts walk the sidebar's own order (pinned, projects in the
 	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
 	// means the row below the current one on screen.
 	const sidebarSessionOrder = useCallback(() => {
-		const { projectOrder, sessionOrders } = useSidebarOrderStore.getState();
+		const { projectOrder, pinnedProjectIds, sessionOrders } = useSidebarOrderStore.getState();
 		return buildSidebarSessionOrder({
 			workspaces: workspacesRef.current,
 			remoteWorkspaces: remoteWorkspacesRef.current,
 			projectOrder,
+			pinnedProjectIds,
 			sessionOrders,
 		});
 	}, []);
@@ -1256,6 +1263,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
 	useAppShortcut("next-attention-session", () => navigateSession(1, true));
 	useAppShortcut("history-back", () => {
+		// Settings covers the current route without adding a router history entry.
+		if (settingsPage) {
+			settingsPage.close();
+			return;
+		}
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
@@ -1325,11 +1337,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(
 		() =>
 			aoBridge.app.onNewShellTerminalShortcut(() => {
-				if (!routeParams.hostId && routeParams.sessionId) {
-					requestNewShellTerminal();
-				}
+				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
-		[requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
+		[requestNewShellTerminal, routeParams.sessionId],
 	);
 
 	// The shell layout is the single consumer of that signal, because it is the
@@ -1339,9 +1349,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (routeParams.hostId || !routeParams.sessionId) return;
+		if (!routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
-			projectId: scopedProjectId,
+			projectId: routeParams.hostId ? routeParams.projectId : scopedProjectId,
 			sessionId: routeParams.sessionId,
 			cloud: scopedSession?.cloud,
 		});
@@ -1354,6 +1364,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		scopedSession?.cloud,
 		routeParams.sessionId,
 		routeParams.hostId,
+		routeParams.projectId,
 		setActiveShellTerminal,
 	]);
 
@@ -1428,8 +1439,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
+				<SharedWithYouNotifier />
 				{isDragActive ? (
 					<div
 						aria-hidden="true"
@@ -1479,7 +1491,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on
             macOS/Linux. */}
-				<WindowTitlebar />
+				<WindowTitlebar onBack={settingsPage?.close} />
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1577,6 +1589,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							<motion.div
 								animate={{ x: sidebarHasLayout ? "0%" : "-100%" }}
 								className="pointer-events-none absolute inset-y-0 left-0 w-(--ao-sidebar-w,var(--size-sidebar-default)) bg-sidebar"
+								// Same measured width as the strip: the fill overflows the strip,
+								// so a var fallback wider than the sidebar would cover the panel.
+								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
 								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
 							/>
@@ -1593,6 +1608,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
               Rendered first, real clicks get swallowed by window-drag even
               though DOM hit-testing looks correct. */}
 					<TitlebarNav
+						onBack={settingsPage?.close}
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
 						zoomFactor={windowZoomFactor}

@@ -192,6 +192,8 @@ type Automation struct {
 	Model       string
 	Mode        string
 	Effort      string
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {
@@ -820,6 +822,7 @@ type SessionInterfaceTransition struct {
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
 	SourceAccountID      string
 	TargetAccountID      string
+	DegradedKind         string
 }
 
 type SessionInterfaceTransitionMessage struct {
@@ -890,6 +893,11 @@ type TelemetryEvent struct {
 	SessionID   sql.NullString
 	RequestID   string
 	PayloadJson string
+}
+
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
 }
 
 type UsageBinding struct {

@@ -11,10 +11,10 @@ import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import type { ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
@@ -49,6 +49,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
 	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
 		mounted.current = true;
@@ -123,7 +124,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const harness = task.agent.value;
 	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
-		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings) : undefined;
+		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
 			harness,
 			projectId: task.catalogProjectId,
@@ -131,7 +132,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			models: providerOptions ? [] : task.chatModels,
 			settings,
 			configOptions: providerOptions,
-			showApprovalMode: true,
+			showApprovalMode: !task.approvalModes || task.approvalModes.length > 0,
+			approvalModes: task.approvalModes,
 			// A Cloud task with no model picked runs the project's or the agent's
 			// default, as the New Task picker words it; it needs no choice.
 			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
@@ -383,7 +385,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => void task.refreshModels().catch(() => undefined)}>
+			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
 				{t("newTask.modelNotice.retry")}
 			</Button>
 		</div>
@@ -392,8 +394,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{/* No session yet: the shared session frame with no tabs holds the header's
-			    place and surface, so nothing moves or changes colour at handoff. */}
-			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+			    place and surface, so nothing moves or changes colour at handoff. The
+			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
+			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
 			<ChatWorkspace
@@ -438,6 +441,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							onChangeConfigOption={providerOptions ? chooseProviderOption : undefined}
 							showApprovalMode={barSettings.showApprovalMode}
 							unsetModelLabel={barSettings.unsetModelLabel}
+							approvalModes={barSettings.approvalModes}
 							// The session's own picker, so the bar is the one the chat keeps. With no
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
@@ -469,7 +473,7 @@ function withReportPrompt(report: { hiddenPrompt?: string } | undefined, text: s
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
-function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings): ChatConfigOption[] | undefined {
+function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, approvalModes?: ApprovalMode[]): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
@@ -498,7 +502,7 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	// A Cloud task sends its permission choice with the opening prompt, as a local one does.
 	if (grouped.mode) {
 		// Only choices a new task can start with: those with an AO permission equivalent.
-		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode);
+		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode && (!approvalModes || approvalModes.includes(choice.permissionMode)));
 		const value = choices.find((choice) => choice.permissionMode === settings.approvalMode)?.value;
 		if (!value) return undefined;
 		out.push({ ...grouped.mode, choices, currentValue: value });
@@ -670,14 +674,16 @@ function MobileConnected() {
 	const live = data?.filter((device) => device.live) ?? [];
 	if (live.length === 0) return null;
 	return (
-		<button
+		<Button
 			type="button"
-			className={cn(TRIGGER_CLASS, "ml-auto inline-flex w-fit shrink-0 items-center gap-1.5")}
+			variant="quiet"
+			size="sm"
+			className="ml-auto w-fit"
 			title={live.map((device) => device.deviceName).filter(Boolean).join(", ") || undefined}
 			onClick={() => openGlobalSettings("mobile")}
 		>
 			<Smartphone aria-hidden="true" className="size-3.5 shrink-0" />
 			{t("newTask.phoneConnected", { count: live.length })}
-		</button>
+		</Button>
 	);
 }

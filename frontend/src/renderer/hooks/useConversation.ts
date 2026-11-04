@@ -1736,11 +1736,12 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
-		async (attachments: { mimeType: string; data: string }[]): Promise<string[]> => {
+		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
-				body: { attachments },
+				// The daemon names staged files itself; only the bytes go.
+				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
@@ -1895,6 +1896,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 							}),
 						),
 						spansTurns: turn.plan.spansTurns || undefined,
+						superseded: turn.plan.superseded || undefined,
 					}
 				: undefined,
 			rolledBack: turn.rolledBack ?? undefined,

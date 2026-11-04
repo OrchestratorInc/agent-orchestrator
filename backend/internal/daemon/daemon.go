@@ -515,6 +515,13 @@ func Run(buildVersion string) error {
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
+			"hermes": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return chatdriveracp.DiscoverConfigOptionsForHarness(listCtx, chatdriveracp.Launch{
+					Command: request.Binary,
+					Args:    []string{"acp"},
+					Env:     request.Env,
+				}, request.WorkingDir, domain.HarnessHermes, log)
+			},
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,
 		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
@@ -960,7 +967,7 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
-	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, telemetrySink, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
@@ -1132,6 +1139,7 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
+		LifetimeSessions:   store.LifetimeSessions,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
@@ -1367,7 +1375,7 @@ func Run(buildVersion string) error {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
 

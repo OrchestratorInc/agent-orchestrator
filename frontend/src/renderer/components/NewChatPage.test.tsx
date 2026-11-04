@@ -1,8 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
 import { useUiStore } from "../stores/ui-store";
+import type { ApprovalMode } from "../types/conversation";
+import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
 
@@ -17,6 +20,9 @@ const h = vi.hoisted(() => ({
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
+	harness: "codex",
+	approvalMode: "auto" as ApprovalMode,
+	approvalModes: undefined as ApprovalMode[] | undefined,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -42,13 +48,15 @@ vi.mock("./TaskComposer", () => ({
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
 		canSubmit: true,
+		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
 		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
-		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: "auto" },
+		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: h.approvalMode },
+		approvalModes: h.approvalModes,
 		chooseTurnSettings: vi.fn(),
-		agent: { value: "codex" },
+		agent: { value: h.harness },
 		model: {},
 		effort: {},
 		showEffort: false,
@@ -85,6 +93,9 @@ beforeEach(() => {
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	useUiStore.setState({ newTaskRequest: null });
+	h.harness = "codex";
+	h.approvalMode = "auto";
+	h.approvalModes = undefined;
 	window.localStorage.clear();
 });
 
@@ -417,5 +428,36 @@ describe("NewChatPage", () => {
 		expect(outcome).toMatchObject({ code: "AGENT_AUTH_REQUIRED" });
 		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1", projectId: "proj-1" });
 		expect(screen.getByRole("alert")).toHaveTextContent("Claude Code needs you to sign in again.");
+	});
+});
+
+describe("New Chat permission menu capabilities", () => {
+	it.each([false, true])("offers only Kimi's default with saved template %s", async (saved) => {
+		h.harness = "kimi";
+		h.approvalMode = "default";
+		h.approvalModes = ["default"];
+		if (saved) rememberChatSettingsTemplate("kimi", undefined, { options: [
+			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gpt-6", choices: [{ value: "gpt-6", name: "GPT-6" }] },
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "auto", choices: [
+				{ value: "default", name: "Default", permissionMode: "default" },
+				{ value: "auto", name: "Auto", permissionMode: "auto" },
+				{ value: "bypass", name: "Bypass", permissionMode: "bypass-permissions" },
+			] },
+		] });
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		await userEvent.click(screen.getByRole("button", { name: saved ? "Mode" : "Approval policy for the next turn" }));
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		expect(screen.getByRole("menuitemradio")).toHaveTextContent("Use agent permissions");
+		expect(screen.queryByRole("menuitemradio", { name: /Auto-approve/ })).toBeNull();
+		expect(screen.queryByRole("menuitemradio", { name: /Bypass/ })).toBeNull();
+	});
+	it("does not advertise generic permissions before capability discovery", () => {
+		h.harness = "kimi";
+		h.approvalModes = [];
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(screen.queryByRole("button", { name: "Approval policy for the next turn" })).toBeNull();
+		expect(screen.queryByText("Auto-approve")).toBeNull();
 	});
 });

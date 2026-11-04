@@ -6086,6 +6086,45 @@ paths:
       summary: Upload a file into the host's agent browser
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-events:
+    get:
+      operationId: streamSessionArtifactChanges
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream changes to the files in a session's artifact directory
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-files:
     delete:
       operationId: deleteSessionArtifactFile
@@ -12364,43 +12403,6 @@ paths:
       summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
-  /api/v1/settings/cloud-offering:
-    patch:
-      operationId: updateCloudOffering
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ControllersUpdateCloudOfferingRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SettingsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Turn the cloud offering on or off for this machine
-      tags:
-      - settings
   /api/v1/settings/computer-use:
     patch:
       operationId: updateComputerUse
@@ -14195,16 +14197,38 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
           type: string
         updatedAt:
           format: date-time
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - id
       - projectId
       - displayName
       - prompt
+      - useCase
+      - templateId
       - kind
       - rrule
       - timezone
@@ -16130,15 +16154,6 @@ components:
       required:
       - enabled
       type: object
-    ControllersUpdateCloudOfferingRequest:
-      properties:
-        enabled:
-          type:
-          - "null"
-          - boolean
-      required:
-      - enabled
-      type: object
     ConversationAccountPayload:
       properties:
         authFailureId:
@@ -16607,6 +16622,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
           type: array
+        superseded:
+          type: boolean
       required:
       - steps
       type: object
@@ -17022,7 +17039,27 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - projectId
@@ -20778,8 +20815,6 @@ components:
           type: string
         cloudEnabled:
           type: boolean
-        cloudOffering:
-          type: boolean
         computerUse:
           description: New chat sessions get tools to drive desktop apps through Cua
             Driver (Settings, Computer use agents).
@@ -20810,7 +20845,6 @@ components:
       - chatHarnesses
       - client
       - localEnabled
-      - cloudOffering
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
@@ -21813,6 +21847,14 @@ components:
           type: string
         installId:
           type: string
+        isSignedIn:
+          type:
+          - "null"
+          - boolean
+        lifetimeSessions:
+          type:
+          - "null"
+          - integer
         optedOut:
           type: boolean
       required:
@@ -22015,6 +22057,21 @@ components:
           - "null"
           - string
         timezone:
+          type:
+          - "null"
+          - string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type:
           - "null"
           - string

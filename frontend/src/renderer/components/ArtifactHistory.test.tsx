@@ -147,6 +147,13 @@ describe("ArtifactVersionPreview", () => {
 		expect(onBack).toHaveBeenCalledTimes(1);
 	});
 
+	it("offers no Restore to someone who only views the file", () => {
+		renderPreview({ onRestore: undefined });
+		expect(screen.getByText("the older text")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Restore this version" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Back to current" })).toBeTruthy();
+	});
+
 	it("says when only the start of a long version is shown", () => {
 		renderPreview({}, { truncated: true });
 		expect(screen.getByText("Showing the start of this version. Restoring it writes the whole file.")).toBeTruthy();

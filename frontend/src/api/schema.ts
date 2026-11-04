@@ -2307,6 +2307,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/artifact-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream changes to the files in a session's artifact directory */
+        get: operations["streamSessionArtifactChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/artifact-files": {
         parameters: {
             query?: never;
@@ -4092,23 +4109,6 @@ export interface paths {
         patch: operations["updateChatHibernation"];
         trace?: never;
     };
-    "/api/v1/settings/cloud-offering": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Turn the cloud offering on or off for this machine */
-        patch: operations["updateCloudOffering"];
-        trace?: never;
-    };
     "/api/v1/settings/computer-use": {
         parameters: {
             query?: never;
@@ -4860,9 +4860,13 @@ export interface components {
             projectId: string;
             prompt: string;
             rrule: string;
+            /** @enum {string} */
+            templateId: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
             timezone: string;
             /** Format: date-time */
             updatedAt: string;
+            /** @enum {string} */
+            useCase: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
         AutomationRunResponse: {
             /** Format: int64 */
@@ -5556,9 +5560,6 @@ export interface components {
         ControllersSetSessionAutoReviewRequest: {
             enabled: boolean;
         };
-        ControllersUpdateCloudOfferingRequest: {
-            enabled: null | boolean;
-        };
         ConversationAccountPayload: {
             authFailureId?: string;
             authMode?: string;
@@ -5742,6 +5743,7 @@ export interface components {
             explanation?: string;
             spansTurns?: boolean;
             steps: components["schemas"]["ConversationPlanStepResponse"][];
+            superseded?: boolean;
         };
         ConversationPlanStepResponse: {
             /** @enum {string} */
@@ -5905,7 +5907,11 @@ export interface components {
             projectId: string;
             prompt: string;
             rrule?: string;
+            /** @enum {string} */
+            templateId?: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
             timezone: string;
+            /** @enum {string} */
+            useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
         CreateConversationSideChatRequest: {
             forceNew?: boolean;
@@ -7365,7 +7371,6 @@ export interface components {
             client: string;
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
-            cloudOffering: boolean;
             /** @description New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents). */
             computerUse: boolean;
             /** @enum {string} */
@@ -7771,6 +7776,8 @@ export interface components {
             distinctId: string;
             githubLogin?: string;
             installId?: string;
+            isSignedIn?: null | boolean;
+            lifetimeSessions?: null | number;
             optedOut: boolean;
         };
         TrackerIntakeConfig: {
@@ -7842,6 +7849,8 @@ export interface components {
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
+            /** @enum {null|string} */
+            useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
@@ -16157,6 +16166,56 @@ export interface operations {
             };
         };
     };
+    streamSessionArtifactChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateSessionArtifactFile: {
         parameters: {
             query?: never;
@@ -23269,57 +23328,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateChatHibernationRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SettingsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    updateCloudOffering: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ControllersUpdateCloudOfferingRequest"];
             };
         };
         responses: {

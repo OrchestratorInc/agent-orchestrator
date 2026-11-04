@@ -1,4 +1,3 @@
-import { Button } from "./ui/button";
 import { AlertTriangle, Clock3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,6 +6,7 @@ import { isSlowDaemonStartupStatus } from "../../shared/daemon-startup-status";
 import { daemonFailureHint, daemonFailureMessage, daemonFailureTitle } from "../lib/daemon-failure";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
+import { Button } from "./ui/button";
 
 export function DaemonFailureBanner({ status }: { status: DaemonStatus }) {
 	if ((!status.code && !isSlowDaemonStartupStatus(status)) || status.state === "ready") return null;
@@ -103,34 +103,38 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 					</p>
 					{hint ? <p className="mt-1 text-[var(--color-text-import-muted)]">{hint}</p> : null}
 					{canRestart ? (
-						<button
+						<Button
 							type="button"
-							className="mt-2 inline-flex h-control-md items-center rounded-md bg-accent-strong px-3 font-semibold text-accent-foreground transition-[filter,opacity] hover:brightness-110 disabled:cursor-wait disabled:opacity-60"
+							className="mt-2"
 							disabled={restarting}
 							onClick={() => void restartDaemon()}
+							size="sm"
+							variant="primary"
 						>
 							{restarting ? t("daemon.restarting") : t("daemon.restart")}
-						</button>
+						</Button>
 					) : null}
 					<Button variant="ghost" size="sm" disabled={reporting} onClick={() => void report()}>{t(reporting ? "report.opening" : "report.action")}</Button>
 					{reportError ? <p className="mt-2 text-error">{reportError}</p> : null}
 					{restartError ? <p className="mt-2 text-error">{restartError}</p> : null}
 					{details ? (
 						<div className="mt-2 flex items-center gap-3">
-							<button
+							<Button
 								type="button"
-								className="text-xs text-[var(--color-text-import-title)] underline-offset-2 hover:underline"
+								className="text-xs text-[var(--color-text-import-title)]"
+								variant="link"
 								onClick={() => setDetailsOpen((open) => !open)}
 							>
 								{detailsOpen ? t("daemon.hideDetails") : t("daemon.showDetails")}
-							</button>
-							<button
+							</Button>
+							<Button
 								type="button"
-								className="text-xs text-[var(--color-text-import-title)] underline-offset-2 hover:underline"
+								className="text-xs text-[var(--color-text-import-title)]"
+								variant="link"
 								onClick={() => void copyDetails()}
 							>
 								{copied ? t("daemon.copied") : t("daemon.copyDetails")}
-							</button>
+							</Button>
 						</div>
 					) : null}
 				</div>

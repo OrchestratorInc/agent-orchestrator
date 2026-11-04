@@ -2212,6 +2212,8 @@ type CreateAutomationRequest struct {
 	ProjectID   string `json:"projectId"`
 	DisplayName string `json:"displayName"`
 	Prompt      string `json:"prompt"`
+	UseCase     string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string `json:"templateId,omitempty" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string `json:"kind" enum:"worker,orchestrator"`
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
@@ -2227,6 +2229,7 @@ type CreateAutomationRequest struct {
 type UpdateAutomationRequest struct {
 	DisplayName *string `json:"displayName,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
+	UseCase     *string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
 	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness     *string `json:"harness,omitempty"`
 	RRule       *string `json:"rrule,omitempty"`
@@ -2255,6 +2258,8 @@ type AutomationResponse struct {
 	ProjectID   string                        `json:"projectId"`
 	DisplayName string                        `json:"displayName"`
 	Prompt      string                        `json:"prompt"`
+	UseCase     string                        `json:"useCase" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string                        `json:"templateId" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
 	RRule       string                        `json:"rrule"`
@@ -2604,11 +2609,13 @@ type IdentityResponse struct {
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
-	DistinctID  string `json:"distinctId"`
-	InstallID   string `json:"installId,omitempty"`
-	CloudUserID string `json:"cloudUserId,omitempty"`
-	GitHubLogin string `json:"githubLogin,omitempty"`
-	OptedOut    bool   `json:"optedOut"`
+	DistinctID       string `json:"distinctId"`
+	InstallID        string `json:"installId,omitempty"`
+	CloudUserID      string `json:"cloudUserId,omitempty"`
+	IsSignedIn       *bool  `json:"isSignedIn,omitempty"`
+	GitHubLogin      string `json:"githubLogin,omitempty"`
+	OptedOut         bool   `json:"optedOut"`
+	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.
@@ -3186,8 +3193,11 @@ type ConversationPlanResponse struct {
 	Explanation string                         `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStepResponse `json:"steps"`
 	// SpansTurns marks a list the agent keeps across turns. Later turns carry a
-	// copy of the same list, so a client shows it once, on the latest turn.
+	// copy of the same list.
 	SpansTurns bool `json:"spansTurns,omitempty"`
+	// Superseded marks a copy of a list that spans turns which a later copy has
+	// replaced. Only the copy without it is current.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // ConversationPlanStepResponse is one step of a plan.
@@ -3628,9 +3638,6 @@ type SettingsResponse struct {
 	Client string `json:"client"`
 	// LocalEnabled reports whether the local offering is available.
 	LocalEnabled bool `json:"localEnabled"`
-	// CloudOffering is the user's persisted cloud toggle (Settings, Developer
-	// Mode). Distinct from CloudEnabled, which is the effective gate.
-	CloudOffering bool `json:"cloudOffering"`
 	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
@@ -3639,8 +3646,9 @@ type SettingsResponse struct {
 	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	// SessionRetentionDays is how long an archived session is kept.
 	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
-	// CloudEnabled reports whether the cloud offering is effectively available:
-	// the user's toggle (or the env override) plus a configured control plane.
+	// CloudEnabled reports whether the cloud offering is available: on for
+	// everyone unless AO_CLOUD_OFFERING switches it off, given a configured
+	// control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
 	// CloudControlPlaneURL is the cloud control plane base URL; empty when no
 	// control plane is configured.
@@ -3665,12 +3673,6 @@ type UpdateHarnessDefaultRequest struct {
 	// DisabledModels lists the model ids (each up to 256 characters) clients
 	// should leave out of their pickers. An empty list offers every catalog model.
 	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
-}
-
-// UpdateCloudOfferingRequest flips the user's cloud toggle.
-type UpdateCloudOfferingRequest struct {
-	// Enabled turns the cloud offering on or off for this machine's user.
-	Enabled *bool `json:"enabled"`
 }
 
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.

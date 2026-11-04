@@ -78,6 +78,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					launch: async () => ({ ok: true }),
 					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
 				},
+					dictation: {
+						start: async () => undefined,
+						stop: async () => undefined,
+						cancel: async () => undefined,
+						onEvent: unsubscribe,
+					},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
@@ -87,7 +93,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
-						getCachedGitHubOwners: async () => [],
+						listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
@@ -136,6 +143,15 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudShare: {
+					available: async () => true,
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
 				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
@@ -316,6 +332,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				appState: {
 					getMigration: async () => ({ status: "completed" }),
 					setMigration: async () => undefined,
+					getExperimentCohort: async () => null,
+					claimFirstRunExperimentExposure: async () => false,
+					getFirstRunProjectPrompt: async () => "seen",
+					markFirstRunProjectPromptSeen: async () => undefined,
 				},
 				cliLink: {
 					setEnabled: async () => undefined,
@@ -400,6 +420,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
+					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+					cancelBinary: () => undefined,
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
@@ -989,6 +1011,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					launch: async () => ({ ok: true }),
 					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
 				},
+					dictation: {
+						start: async () => undefined,
+						stop: async () => undefined,
+						cancel: async () => undefined,
+						onEvent: unsubscribe,
+					},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
@@ -998,7 +1026,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
-						getCachedGitHubOwners: async () => [],
+						listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
@@ -1043,6 +1072,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudShare: {
+					available: async () => true,
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
 				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
@@ -1218,7 +1256,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					reportSoundFailure: () => undefined,
 				},
 				tray: { setAttentionState: () => undefined, onOpenSession: unsubscribe },
-				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined },
+				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined, getExperimentCohort: async () => null, claimFirstRunExperimentExposure: async () => false, getFirstRunProjectPrompt: async () => "seen", markFirstRunProjectPromptSeen: async () => undefined },
 				cliLink: {
 					setEnabled: async () => undefined,
 					inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
@@ -1299,6 +1337,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
+					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+					cancelBinary: () => undefined,
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
