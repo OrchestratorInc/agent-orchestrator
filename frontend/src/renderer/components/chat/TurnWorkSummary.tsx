@@ -24,7 +24,7 @@ export function TurnWorkSummary({
 		<Accordion
 			type="single"
 			collapsible
-			className="-mx-1"
+			className="relative -mx-1 pb-1 after:absolute after:inset-x-1 after:bottom-0 after:h-px after:bg-border/70"
 			value={open ? "worked" : ""}
 			onValueChange={(value) => onOpenChange?.(value === "worked")}
 		>
