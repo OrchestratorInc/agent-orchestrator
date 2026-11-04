@@ -3959,5 +3959,7 @@
 	"automations.template.daily_pr_review_v1.description": "Найдите запросы на слияние, которым нужно ваше внимание, с приоритетами ревью и рекомендуемыми действиями.",
 	"automations.template.daily_issue_triage_v1.description": "Составьте краткий список новых и недавно обновлённых задач с конкретными дальнейшими действиями.",
 	"automations.template.weekly_release_notes_v1.description": "Подготовьте заметки о выпуске из объединённых запросов на слияние, сгруппировав их по новым возможностям, исправлениям и другим изменениям.",
-	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта."
+	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта.",
+	"chat.find.incomplete": "Поиск не завершён",
+	"shortcut.find-in-chat": "Найти в чате"
 }

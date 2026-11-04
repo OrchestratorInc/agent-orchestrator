@@ -3828,5 +3828,7 @@
 	"automations.template.daily_pr_review_v1.description": "対応が必要なプルリクエストを見つけ、レビューの優先度と次のステップを整理します。",
 	"automations.template.daily_issue_triage_v1.description": "新規・更新された課題を、次のアクションが明確なトリアージリストにまとめます。",
 	"automations.template.weekly_release_notes_v1.description": "マージされたプルリクエストから、機能・修正・その他の変更別にリリースノートを下書きします。",
-	"automations.templates.setup": "選択したプロジェクトへの GitHub 読み取りアクセスが必要です。"
+	"automations.templates.setup": "選択したプロジェクトへの GitHub 読み取りアクセスが必要です。",
+	"shortcut.find-in-chat": "チャット内を検索",
+	"chat.find.incomplete": "検索は未完了です"
 }

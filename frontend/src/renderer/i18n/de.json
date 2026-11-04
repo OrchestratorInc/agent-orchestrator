@@ -3828,5 +3828,7 @@
 	"automations.template.daily_pr_review_v1.description": "Finde Pull Requests, die deine Aufmerksamkeit brauchen, mit Prioritäten und nächsten Schritten.",
 	"automations.template.daily_issue_triage_v1.description": "Erstelle aus neuen und aktualisierten Issues eine übersichtliche Liste mit nächsten Schritten.",
 	"automations.template.weekly_release_notes_v1.description": "Entwirf Release Notes aus zusammengeführten Pull Requests, gruppiert nach Funktionen und Korrekturen.",
-	"automations.templates.setup": "Benötigt GitHub-Lesezugriff für das gewählte Projekt."
+	"automations.templates.setup": "Benötigt GitHub-Lesezugriff für das gewählte Projekt.",
+	"shortcut.find-in-chat": "Im Chat suchen",
+	"chat.find.incomplete": "Suche unvollständig"
 }

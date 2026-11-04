@@ -150,6 +150,9 @@ export function attachAppShortcuts(
 		const match = appShortcutMatch(chord, isMac, getOverrides());
 		if (!match) return;
 		const { id, channel, payload } = match;
+		// Find is owned by the focused surface, on every platform. Let the
+		// renderer route it after inspecting dialogs, editors and chat focus.
+		if (id === "find-in-chat") return;
 		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell

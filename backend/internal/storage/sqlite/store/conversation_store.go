@@ -4120,6 +4120,10 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	return s.loadConversationSnapshotPage(ctx, conversationID, beforeSequence, limit, true)
+}
+
+func (s *Store) loadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, limit int64, reconcile bool) (ConversationSnapshot, error) {
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4130,7 +4134,7 @@ func (s *Store) LoadConversationSnapshotPage(
 
 	// Targeted lazy reconciliation of legacy demands, using durable provider
 	// evidence. Ordinary snapshots remain read-only and avoid the writer lock.
-	if account := conversationToDomain(conv).Account; account != nil && account.ReauthRequiredAt != nil {
+	if account := conversationToDomain(conv).Account; reconcile && account != nil && account.ReauthRequiredAt != nil {
 		reconciled, reconcileErr := s.ReconcileConversationAuthentication(ctx, conversationID, "", "", time.Now())
 		if reconcileErr != nil {
 			return ConversationSnapshot{}, reconcileErr

@@ -1150,6 +1150,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversationId}/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find literal occurrences in the active conversation branch */
+        get: operations["findConversation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversationId}/find-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Load a read-only transcript page around a find result */
+        get: operations["findConversationWindow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/search": {
         parameters: {
             query?: never;
@@ -5683,6 +5717,27 @@ export interface components {
             source: components["schemas"]["ChatFileReferenceSource"];
             truncated: boolean;
             workspaceVersion?: string;
+        };
+        ConversationFindOccurrence: {
+            block: number;
+            end: number;
+            messageId: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: int64 */
+            sequence: number;
+            start: number;
+        };
+        ConversationFindResponse: {
+            conversationId: string;
+            initialIndex: number;
+            lastCursor?: string;
+            nextCursor?: string;
+            occurrences: components["schemas"]["ConversationFindOccurrence"][];
+            offset: number;
+            previousCursor?: string;
+            total: number;
+            transcriptRevision: string;
         };
         ConversationImageContentRequest: {
             data: string;
@@ -11867,6 +11922,137 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    findConversation: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive literal substring in displayed message text (maximum 512 characters). */
+                query?: string;
+                /** @description Opaque continuation bound to query and transcript revision. */
+                cursor?: string;
+                /** @description Start at or after this visible message when cursor is absent. */
+                anchorMessageId?: string;
+                anchorBlock?: number;
+                anchorOffset?: number;
+                /** @description Fallback position when the anchor message was removed. */
+                anchorSequence?: number;
+                /** @description Choose the preceding match if a removed anchor has no following match. */
+                fallbackToPrevious?: boolean;
+            };
+            header?: never;
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationFindResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    findConversationWindow: {
+        parameters: {
+            query: {
+                sequence: number;
+            };
+            header?: never;
+            path: {
+                conversationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSnapshotResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

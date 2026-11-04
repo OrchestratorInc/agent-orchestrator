@@ -104,6 +104,8 @@ type ConversationsController struct {
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Get("/conversations/{conversationId}/find", c.findConversation)
+	r.Get("/conversations/{conversationId}/find-window", c.findConversationWindow)
 	r.Get("/conversations/search", c.searchConversations)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)

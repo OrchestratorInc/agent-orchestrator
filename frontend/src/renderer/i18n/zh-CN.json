@@ -3810,5 +3810,7 @@
 	"automations.template.daily_pr_review_v1.description": "找出需要关注的拉取请求，整理审查优先级和建议的后续步骤。",
 	"automations.template.daily_issue_triage_v1.description": "将新建和最近更新的议题整理成重点明确的分类列表，并给出清晰的后续行动。",
 	"automations.template.weekly_release_notes_v1.description": "根据已合并的拉取请求起草发布说明，按功能、修复和其他更改分组。",
-	"automations.templates.setup": "需要所选项目的 GitHub 读取权限。"
+	"automations.templates.setup": "需要所选项目的 GitHub 读取权限。",
+	"shortcut.find-in-chat": "在聊天中查找",
+	"chat.find.incomplete": "搜索未完成"
 }

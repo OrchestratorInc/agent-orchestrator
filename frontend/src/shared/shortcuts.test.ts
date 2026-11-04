@@ -126,6 +126,7 @@ describe("default shortcuts", () => {
 	// [id, chord] pairs a user can press on macOS. ⌘⇧[ reports key "{" with
 	// code BracketLeft, so those chords carry the physical code like Electron does.
 	it.each([
+		["find-in-chat", chord({ key: "f", meta: true })],
 		["new-session", chord({ key: "n", meta: true })],
 		["new-shell-terminal", chord({ key: "t", meta: true })],
 		["close-shell-terminal", chord({ key: "w", meta: true })],
@@ -319,7 +320,7 @@ describe("shortcut binding matching and validation", () => {
 
 	it("keeps Windows/Linux defaults off bare terminal-owned chords other than the yielding ones", () => {
 		const readline = ["a", "e", "k", "u", "w", "r", "p", "n", "b", "f", "l", "y", "t", "d", "c", "z"];
-		const yielding = new Set(["k", "p", "w", "t", "b"]);
+		const yielding = new Set(["k", "p", "w", "t", "b", "f"]);
 		for (const key of readline) {
 			if (yielding.has(key)) continue;
 			for (const { id } of APP_SHORTCUTS) {

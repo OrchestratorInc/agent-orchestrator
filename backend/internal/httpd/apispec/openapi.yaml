@@ -2784,6 +2784,145 @@ paths:
         background service, and macOS permissions
       tags:
       - computer-use
+  /api/v1/conversations/{conversationId}/find:
+    get:
+      operationId: findConversation
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - description: Case-insensitive literal substring in displayed message text
+          (maximum 512 characters).
+        in: query
+        name: query
+        schema:
+          description: Case-insensitive literal substring in displayed message text
+            (maximum 512 characters).
+          type: string
+      - description: Opaque continuation bound to query and transcript revision.
+        in: query
+        name: cursor
+        schema:
+          description: Opaque continuation bound to query and transcript revision.
+          type: string
+      - description: Start at or after this visible message when cursor is absent.
+        in: query
+        name: anchorMessageId
+        schema:
+          description: Start at or after this visible message when cursor is absent.
+          type: string
+      - in: query
+        name: anchorBlock
+        schema:
+          minimum: 0
+          type: integer
+      - in: query
+        name: anchorOffset
+        schema:
+          minimum: 0
+          type: integer
+      - description: Fallback position when the anchor message was removed.
+        in: query
+        name: anchorSequence
+        schema:
+          description: Fallback position when the anchor message was removed.
+          format: int64
+          minimum: 0
+          type: integer
+      - description: Choose the preceding match if a removed anchor has no following
+          match.
+        in: query
+        name: fallbackToPrevious
+        schema:
+          description: Choose the preceding match if a removed anchor has no following
+            match.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationFindResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Find literal occurrences in the active conversation branch
+      tags:
+      - conversations
+  /api/v1/conversations/{conversationId}/find-window:
+    get:
+      operationId: findConversationWindow
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: sequence
+        required: true
+        schema:
+          format: int64
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSnapshotResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Load a read-only transcript page around a find result
+      tags:
+      - conversations
   /api/v1/conversations/search:
     get:
       operationId: searchConversations
@@ -16472,6 +16611,60 @@ components:
       - endLine
       - lines
       - truncated
+      type: object
+    ConversationFindOccurrence:
+      properties:
+        block:
+          type: integer
+        end:
+          type: integer
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sequence:
+          format: int64
+          type: integer
+        start:
+          type: integer
+      required:
+      - messageId
+      - revision
+      - sequence
+      - block
+      - start
+      - end
+      type: object
+    ConversationFindResponse:
+      properties:
+        conversationId:
+          type: string
+        initialIndex:
+          type: integer
+        lastCursor:
+          type: string
+        nextCursor:
+          type: string
+        occurrences:
+          items:
+            $ref: '#/components/schemas/ConversationFindOccurrence'
+          type: array
+        offset:
+          type: integer
+        previousCursor:
+          type: string
+        total:
+          type: integer
+        transcriptRevision:
+          type: string
+      required:
+      - conversationId
+      - transcriptRevision
+      - occurrences
+      - total
+      - offset
+      - initialIndex
       type: object
     ConversationImageContentRequest:
       properties:

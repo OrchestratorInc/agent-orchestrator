@@ -2403,6 +2403,7 @@
 	"shortcut.keyboard-shortcuts": "Show keyboard shortcuts",
 	"shortcut.model-picker": "Choose model",
 	"shortcut.dictate": "Dictate",
+	"shortcut.find-in-chat": "Find in chat",
 	"shortcut.modified": "Modified",
 	"shortcut.moreBindings_one": "{{count}} alternative shortcut. Choose Customize to view all bindings.",
 	"shortcut.moreBindings_other": "{{count}} alternative shortcuts. Choose Customize to view all bindings.",
@@ -3809,5 +3810,6 @@
 	"automations.template.daily_pr_review_v1.description": "Find the pull requests that need your attention, with review priorities and suggested next steps.",
 	"automations.template.daily_issue_triage_v1.description": "Turn new and recently updated issues into a focused triage list with clear next actions.",
 	"automations.template.weekly_release_notes_v1.description": "Draft release notes from merged pull requests, grouped into features, fixes, and other changes.",
-	"automations.templates.setup": "Requires GitHub read access for the selected project."
+	"automations.templates.setup": "Requires GitHub read access for the selected project.",
+	"chat.find.incomplete": "Search incomplete"
 }
