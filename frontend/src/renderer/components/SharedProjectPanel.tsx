@@ -5,7 +5,7 @@ import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import type { CloudCpMergeRequest } from "../lib/cloud-cp";
-import { sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prDisplayKey, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { PRSummaryCard } from "./SessionInspector";
@@ -41,8 +41,10 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const guest = orchestrator.cloud?.shared === true;
 	const ownerName = participants.find((person) => person.role === "owner")?.name;
 	const workers = sessions.filter((session) => !isOrchestratorSession(session) && session.cloud);
-	const listedURLs = new Set(workers.flatMap((session) => session.prs.map((pr) => pr.url)));
-	const elsewhere = (projectPRs.data?.prs ?? []).filter((pr) => !listedURLs.has(pr.url));
+	// Each pull request shows once: under the session that opened it when this
+	// person was given it, else under the project.
+	const listed = new Set(workers.flatMap((session) => session.prs.map(prDisplayKey)));
+	const elsewhere = (projectPRs.data?.prs ?? []).filter((pr) => !listed.has(prDisplayKey(pr)));
 	const prCount = workers.reduce((count, session) => count + session.prs.length, 0) + elsewhere.length;
 	const pending = (requests.data ?? []).filter((request) => request.status === "pending");
 	const summary = [
@@ -122,7 +124,10 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 }) {
 	const { t } = useTranslation();
 	const scm = useSessionScmSummary(session.id, true, orgId, session.autoInjectCI === true, hostId);
-	const prs = sessionPRDisplaySummaries(session, scm.data?.prs);
+	// Only the ones this session opened: a pull request it claimed shows under
+	// the session that opened it, or under the project.
+	const own = new Set(session.prs.map(prDisplayKey));
+	const prs = sessionPRDisplaySummaries(session, scm.data?.prs).filter((pr) => own.has(prDisplayKey(pr)));
 	return (
 		<section className="flex flex-col gap-1.5 py-1.5" data-shared-project-session={session.id}>
 			<p className="truncate px-1 text-2xs text-muted-foreground">
