@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import {
 	asksUser,
+	deliveredUpdatesOnly,
 	isWorkerLead,
+	isWorkerReportActivity,
 	isDuplicateSpawnAction,
 	piggybackedUpdates,
 	quietWorkerReply,
 	renamedTitle,
+	reportUpdateIdentity,
 	spawnedSessionIds,
 	splitHeadline,
+	indexWorkerUpdates,
+	WORKER_REPORT_ACTION,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 
@@ -20,6 +25,26 @@ function message(overrides: Partial<ConversationMessage>): ConversationMessage {
 
 function command(command: string, output = ""): ConversationActivity {
 	return { kind: "activity", id: command, sequence: 2, revision: 0, activityKind: "command", status: "completed", summary: command, detail: { command, output }, createdAt };
+}
+
+/** What the daemon writes for one ingested report: an ao_action the thread draws live. */
+function reportActivity(overrides: Partial<ConversationActivity> = {}): ConversationActivity {
+	return {
+		kind: "activity", id: "ao-action:worker.report:rpt_1", sequence: 2, revision: 0,
+		activityKind: "ao_action", status: "completed", summary: "Worker report", createdAt,
+		detail: {
+			action: WORKER_REPORT_ACTION, operationId: "rpt_1", targetSessionId: "proj-288",
+			projectId: "proj", displayName: "Check regressions", href: "ao://sessions/proj/proj-288", state: "done",
+			text: "One strong candidate: #7043",
+			outputs: [{ kind: "artifact", reference: "/home/u/.ao/data/artifacts/proj-288/check.md" }],
+		},
+		...overrides,
+	};
+}
+
+/** A delivery copy carries how the batch renderer wrote the report, so its thread twin is recognizable. */
+function delivered(update: ReturnType<typeof workerUpdatesOf>[number]) {
+	return { ...update, source: "delivery" as const, identity: reportUpdateIdentity(update) };
 }
 
 const batch = [
@@ -36,12 +61,37 @@ const batch = [
 describe("worker updates", () => {
 	it("splits a report batch into one update per worker", () => {
 		expect(workerUpdatesOf(message({ text: batch }))).toEqual([
-			{ key: "m1:0", state: "needs_input", name: "Load chat [iOS] pages", projectId: "proj", sessionId: "proj-286", body: "Tunnel or loopback?", createdAt },
-			{
+			delivered({ key: "m1:0", state: "needs_input", name: "Load chat [iOS] pages", projectId: "proj", sessionId: "proj-286", body: "Tunnel or loopback?", createdAt }),
+			delivered({
 				key: "m1:1", state: "done", name: "Check regressions", projectId: "proj", sessionId: "proj-288",
 				body: "One strong candidate: #7043\nartifact: /home/u/.ao/data/artifacts/proj-288/check.md", createdAt,
+			}),
+		]);
+	});
+
+	it("draws the daemon's ingestion-time thread row as the worker's report", () => {
+		const activity = reportActivity();
+		expect(isWorkerReportActivity(activity)).toBe(true);
+		expect(workerUpdatesOf(activity)).toEqual([
+			{
+				key: activity.id, state: "done", name: "Check regressions", sessionId: "proj-288", projectId: "proj",
+				body: "One strong candidate: #7043\nartifact: /home/u/.ao/data/artifacts/proj-288/check.md",
+				createdAt, source: "thread",
+				identity: reportUpdateIdentity({ sessionId: "proj-288", state: "done", body: "One strong candidate: #7043\nartifact: /home/u/.ao/data/artifacts/proj-288/check.md" }),
 			},
 		]);
+		expect(isWorkerReportActivity(command("ao spawn"))).toBe(false);
+	});
+
+	it("drops a delivered copy of a report the thread already showed live, keeps the rest", () => {
+		const threadRow = reportActivity();
+		const deliveredBatch = workerUpdatesOf(message({ id: "m2", text: batch }));
+		const threaded = indexWorkerUpdates([threadRow]);
+		// The batch's proj-288 entry names the same report the thread row drew; proj-286's does not.
+		expect(deliveredUpdatesOnly(deliveredBatch, threaded).map((update) => update.sessionId)).toEqual(["proj-286"]);
+		// Without a thread row the delivered copy still draws, as older transcripts always did.
+		expect(deliveredUpdatesOnly(deliveredBatch, indexWorkerUpdates([message({ id: "m2", text: batch })]))).toEqual(deliveredBatch);
+		expect(deliveredUpdatesOnly(deliveredBatch, null)).toEqual(deliveredBatch);
 	});
 
 	it("reads the older report format that linked the session without a name", () => {

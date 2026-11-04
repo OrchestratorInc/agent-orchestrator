@@ -33,6 +33,10 @@ export interface WorkerUpdate {
 	projectId?: string;
 	body: string;
 	createdAt: string;
+	/** `thread`: the daemon drew this row live at report ingestion time. `delivery`: parsed back out of a later batch or envelope. */
+	source?: "thread" | "delivery";
+	/** What the daemon's renderer wrote for the report; a delivery copy whose identity was threaded is not drawn again. */
+	identity?: string;
 }
 
 const REPORTS_HEADER = "Reports since your previous turn:";
@@ -58,6 +62,29 @@ const STATES: Record<string, { label: string; attention?: boolean }> = {
 	done: { label: "done" },
 };
 
+// The action name on an ao_action activity the daemon writes when a report is
+// ingested, so the thread shows the report live at report time. Its detail
+// carries the same fields the batch renderer writes for an entry, so a later
+// delivered copy of the same report can be recognized and not drawn twice.
+export const WORKER_REPORT_ACTION = "worker.report";
+
+export function isWorkerReportActivity(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "ao_action" && item.detail?.action === WORKER_REPORT_ACTION;
+}
+
+/** The body text the daemon's batch renderer writes for one report: the note (or message), then one `kind: reference` line per output. */
+function reportEntryBody(detail: { text?: string; outputs?: { kind: string; reference: string }[] }): string {
+	const parts: string[] = [];
+	if (detail.text && detail.text.trim() !== "") parts.push(detail.text);
+	for (const output of detail.outputs ?? []) parts.push(`${output.kind}: ${output.reference}`);
+	return parts.join("\n").trim();
+}
+
+/** What identifies one report across its thread row and its later delivered copy. */
+export function reportUpdateIdentity(update: Pick<WorkerUpdate, "sessionId" | "state" | "body">): string {
+	return `${update.sessionId ?? ""}\n${update.state ?? ""}\n${update.body}`;
+}
+
 function decode(value: string): string {
 	try {
 		return decodeURIComponent(value);
@@ -71,7 +98,7 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 	const entries = [...text.matchAll(REPORT_ENTRY)];
 	return entries.map((entry, index) => {
 		const sessionId = decode(entry[4] ?? entry[6]!);
-		return {
+		const update: WorkerUpdate = {
 			key: `${keyPrefix}:${index}`,
 			state: entry[1],
 			name: entry[2]?.replace(/\\(.)/g, "$1") ?? sessionId,
@@ -79,7 +106,9 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 			sessionId,
 			body: text.slice(entry.index! + entry[0].length, entries[index + 1]?.index ?? text.length).trim(),
 			createdAt,
+			source: "delivery",
 		};
+		return { ...update, identity: reportUpdateIdentity(update) };
 	});
 }
 
@@ -98,6 +127,19 @@ export function cachedBy<T>(read: (item: ConversationItem) => T): (item: Convers
  */
 export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 	if (item.kind === "activity") {
+		if (isWorkerReportActivity(item)) {
+			const update: WorkerUpdate = {
+				key: item.id,
+				state: item.detail?.state,
+				name: item.detail?.displayName?.trim() || item.detail?.targetSessionId || "",
+				sessionId: item.detail?.targetSessionId,
+				projectId: item.detail?.projectId,
+				body: reportEntryBody(item.detail ?? {}),
+				createdAt: item.createdAt,
+				source: "thread",
+			};
+			return [{ ...update, identity: reportUpdateIdentity(update) }];
+		}
 		const sender = isSteer(item) ? item.detail?.senderSessionId?.trim() : undefined;
 		if (!sender) return [];
 		return [{
@@ -202,18 +244,33 @@ export interface WorkerUpdateIndex {
 	latestKeys: ReadonlySet<string>;
 	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
+	/** Reports the daemon already drew live as an ingestion-time thread row. */
+	threadedIdentities: ReadonlySet<string>;
 }
 
 export const WorkerUpdateIndexContext = createContext<WorkerUpdateIndex | null>(null);
 
 export function indexWorkerUpdates(items: readonly ConversationItem[]): WorkerUpdateIndex {
 	const latest = new Map<string, WorkerUpdate>();
+	const threadedIdentities = new Set<string>();
 	for (const item of items) {
 		for (const update of [...piggybackedUpdates(item), ...workerUpdatesOf(item)]) {
 			latest.set(update.sessionId ?? update.key, update);
+			if (update.source === "thread" && update.identity) threadedIdentities.add(update.identity);
 		}
 	}
-	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)) };
+	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)), threadedIdentities };
+}
+
+/**
+ * Delivered copies of reports the thread already drew live: a batch or envelope
+ * entry the daemon threaded at ingestion keeps its own row above, so the copy
+ * that arrived later is dropped rather than drawn twice. Reports with no
+ * ingestion-time row (older transcripts, a mid-upgrade batch) still draw.
+ */
+export function deliveredUpdatesOnly(updates: readonly WorkerUpdate[], index: WorkerUpdateIndex | null): WorkerUpdate[] {
+	if (!index || index.threadedIdentities.size === 0) return [...updates];
+	return updates.filter((update) => update.source !== "delivery" || !index.threadedIdentities.has(update.identity ?? ""));
 }
 
 /**
