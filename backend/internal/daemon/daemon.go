@@ -42,6 +42,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonlog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -131,7 +132,17 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run(buildVersion string) error {
+func Run(buildVersion string) (err error) {
+	log, closeLog := newLogger()
+	defer closeLog()
+	// Unconverted packages log through slog.Default(); route them to the same
+	// stderr + daemon.log sink instead of the log package's bare stderr.
+	slog.SetDefault(log)
+	defer func() {
+		if err != nil {
+			log.Error("daemon exited with error", "err", err)
+		}
+	}()
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -147,7 +158,6 @@ func Run(buildVersion string) error {
 	}
 	ignoreBrokenPipeSignal()
 
-	log := newLogger()
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -1584,10 +1594,32 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newLogger returns the daemon's slog logger and the func that closes its file.
+// It writes to stderr so supervisors can capture it separately from any
+// structured stdout protocol added later, and to the size-capped, redacted
+// <state dir>/logs/daemon.log so a packaged app, whose stderr nobody reads,
+// still leaves a record. Without a writable log file it logs to stderr alone.
+func newLogger() (*slog.Logger, func()) {
+	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	file, fileErr := openLogFile()
+	if fileErr != nil {
+		log := slog.New(slog.NewTextHandler(os.Stderr, opts))
+		log.Warn("daemon log file unavailable; logging to stderr only", "err", fileErr)
+		return log, func() {}
+	}
+	log := slog.New(slog.NewTextHandler(daemonlog.Tee(file, os.Stderr), opts))
+	if err := file.SetCrashOutput(); err != nil {
+		log.Warn("daemon crash output not redirected to the log file", "err", err)
+	}
+	return log, func() { _ = file.Close() }
+}
+
+func openLogFile() (*daemonlog.File, error) {
+	runFile, err := config.RunFilePath()
+	if err != nil {
+		return nil, err
+	}
+	return daemonlog.Open(filepath.Join(daemonlog.Dir(runFile), daemonlog.FileName), daemonlog.MaxBytes, daemonlog.Backups)
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary

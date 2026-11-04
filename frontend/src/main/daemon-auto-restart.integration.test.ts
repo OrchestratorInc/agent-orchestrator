@@ -66,7 +66,6 @@ function setup() {
 	const env: Record<string, string | undefined> = {};
 	const context = vm.createContext({
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
-		openSync: vi.fn(() => 73), closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
@@ -373,7 +372,9 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.daemonEnv.mock.calls.map(([value]) => value)).toEqual([keep, keep]);
 		for (const [, , options] of h.spawn.mock.calls) {
 			expect(options.env.AO_OWNER).toBe(keep ? "persistent" : "app");
-			expect(options.stdio).toEqual(keep ? ["pipe", 73, 73] : "pipe");
+			// A kept daemon outlives this app, so it gets no output pipes; it
+			// writes its own daemon.log.
+			expect(options.stdio).toEqual(keep ? ["pipe", "ignore", "ignore"] : "pipe");
 		}
 		for (const child of h.children) expect(child.unref).toHaveBeenCalledTimes(keep ? 1 : 0);
 		expect(h.establishSupervisorLink).toHaveBeenCalledTimes(keep ? 0 : 2);

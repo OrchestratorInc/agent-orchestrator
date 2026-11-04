@@ -711,6 +711,13 @@ func newAppRunID() string {
 	return "apprun-" + hex.EncodeToString(buf)
 }
 
+// RunFilePath resolves where running.json lives from the environment alone,
+// by the same rule Load uses. The daemon calls it before Load so its log file
+// (next to the run-file) can record a configuration error too.
+func RunFilePath() (string, error) {
+	return resolveRunFilePath()
+}
+
 // resolveRunFilePath picks where running.json lives. An explicit AO_RUN_FILE
 // wins; otherwise it sits under the canonical AO home directory so the CLI and
 // Electron supervisor share one handshake location.
