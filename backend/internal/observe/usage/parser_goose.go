@@ -155,7 +155,7 @@ func gooseUsageEvent(source domain.UsageSourceContext, row gooseLedgerRow, model
 		}
 		tokens.OutputTokens = row.OutputTokens
 	}
-	billingProvider := gooseBillingProvider(provider)
+	billingProvider := canonicalBillingProvider(provider)
 	event := domain.ModelUsageEvent{
 		ProviderID:            providerID,
 		BillingProviderID:     billingProvider,
@@ -181,19 +181,6 @@ func gooseUsageEvent(source domain.UsageSourceContext, row gooseLedgerRow, model
 		}
 	}
 	return event, true
-}
-
-// gooseBillingProvider records the provider Goose's session was configured
-// with, renaming Goose's ids for the two cloud routes the catalog names
-// differently.
-func gooseBillingProvider(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "aws_bedrock":
-		return "bedrock"
-	case "gcp_vertex_ai":
-		return "vertex_ai"
-	}
-	return canonicalBillingProvider(provider)
 }
 
 func valueOrZero(value *int64) int64 {

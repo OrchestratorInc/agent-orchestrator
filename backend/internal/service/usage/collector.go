@@ -270,15 +270,8 @@ func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, er
 	if runtimeDir := strings.TrimSpace(os.Getenv("QWEN_RUNTIME_DIR")); runtimeDir != "" {
 		return resolveQwenStoragePath(runtimeDir, home, workspace), nil
 	}
-	qwenHome := filepath.Join(home, ".qwen")
-	if configuredHome := strings.TrimSpace(os.Getenv("QWEN_HOME")); configuredHome != "" {
-		qwenHome = resolveQwenStoragePath(configuredHome, home, workspace)
-	}
+	qwenHome, settingsPaths := qwenSettingsPaths(home, workspace)
 	runtimeDir := ""
-	settingsPaths := []string{filepath.Join(qwenHome, "settings.json")}
-	if workspace != "" {
-		settingsPaths = append(settingsPaths, filepath.Join(workspace, ".qwen", "settings.json"))
-	}
 	for _, path := range settingsPaths {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -306,6 +299,21 @@ func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, er
 		return resolveQwenStoragePath(runtimeDir, home, workspace), nil
 	}
 	return qwenHome, nil
+}
+
+// qwenSettingsPaths returns Qwen's home (QWEN_HOME, default ~/.qwen) and its
+// settings files in the order Qwen applies them: user settings, then the
+// workspace's, which override them.
+func qwenSettingsPaths(home, workspace string) (qwenHome string, paths []string) {
+	qwenHome = filepath.Join(home, ".qwen")
+	if configured := strings.TrimSpace(os.Getenv("QWEN_HOME")); configured != "" {
+		qwenHome = resolveQwenStoragePath(configured, home, workspace)
+	}
+	paths = []string{filepath.Join(qwenHome, "settings.json")}
+	if workspace != "" {
+		paths = append(paths, filepath.Join(workspace, ".qwen", "settings.json"))
+	}
+	return qwenHome, paths
 }
 
 func resolveQwenStoragePath(path, home, workspace string) string {
@@ -2298,24 +2306,14 @@ func (c *Collector) registerDiscoveredQwenMonths(
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(root) == "" {
-		return nil
-	}
-	paths, err := filepath.Glob(filepath.Join(root, "token-usage-*.jsonl"))
+	months, err := qwenMonthFiles(ctx, root)
 	if err != nil {
 		return err
 	}
-	sort.Strings(paths)
 	var errs []error
-	for _, path := range paths {
+	for _, path := range months {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if !qwenUsageFilename(filepath.Base(path)) {
-			continue
-		}
-		if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
-			continue
 		}
 		if _, err := c.registerSource(
 			ctx,
@@ -2964,14 +2962,26 @@ func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.Sessi
 	if err != nil {
 		return "", err
 	}
+	months, err := qwenMonthFiles(ctx, root)
+	if err != nil || len(months) == 0 {
+		return "", err
+	}
+	return months[len(months)-1], nil
+}
+
+// qwenMonthFiles lists Qwen's monthly usage files under root, oldest first.
+func qwenMonthFiles(ctx context.Context, root string) ([]string, error) {
+	if strings.TrimSpace(root) == "" {
+		return nil, nil
+	}
 	paths, err := filepath.Glob(filepath.Join(root, "token-usage-*.jsonl"))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	valid := paths[:0]
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
 		if !qwenUsageFilename(filepath.Base(path)) {
 			continue
@@ -2980,11 +2990,8 @@ func (c *Collector) discoverQwenPath(ctx context.Context, sessionID domain.Sessi
 			valid = append(valid, path)
 		}
 	}
-	if len(valid) == 0 {
-		return "", nil
-	}
 	sort.Strings(valid)
-	return valid[len(valid)-1], nil
+	return valid, nil
 }
 
 type kimiIndexRecord struct {

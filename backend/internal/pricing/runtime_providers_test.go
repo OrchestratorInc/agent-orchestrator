@@ -51,6 +51,7 @@ func TestCanonicalProviderIDMapsHarnessSpellings(t *testing.T) {
 	for raw, want := range map[string]string{
 		"Z.AI": "zai", "google": "gemini", "google-vertex": "vertex_ai", "amazon-bedrock": "bedrock",
 		"github-copilot": "github_copilot", "moonshotai": "moonshot", "minimax": "minimax",
+		"aws_bedrock": "bedrock", "gcp_vertex_ai": "vertex_ai", // Goose's ids
 		// Regional and plan endpoints bill at rates the catalog does not carry.
 		"minimax-cn": "minimax-cn", "zai-coding-cn": "zai-coding-cn",
 	} {

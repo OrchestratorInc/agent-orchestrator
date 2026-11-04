@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,15 +24,7 @@ func (c *Collector) qwenProviderHint(ctx context.Context, session domain.Session
 	if err != nil {
 		return ""
 	}
-	workspace := strings.TrimSpace(session.Metadata.WorkspacePath)
-	qwenHome := filepath.Join(home, ".qwen")
-	if configuredHome := strings.TrimSpace(os.Getenv("QWEN_HOME")); configuredHome != "" {
-		qwenHome = resolveQwenStoragePath(configuredHome, home, workspace)
-	}
-	paths := []string{filepath.Join(qwenHome, "settings.json")}
-	if workspace != "" {
-		paths = append(paths, filepath.Join(workspace, ".qwen", "settings.json"))
-	}
+	_, paths := qwenSettingsPaths(home, strings.TrimSpace(session.Metadata.WorkspacePath))
 	var route qwenRoute
 	for _, path := range paths {
 		if ctx.Err() != nil {
@@ -262,12 +253,7 @@ var qwenHostRules = []struct{ host, provider string }{
 	// Cloudflare's gateway forwards to any upstream; Workers AI is its own.
 	{"gateway.ai.cloudflare.com", "cloudflare-ai-gateway"},
 	{"api.cloudflare.com", "cloudflare"},
-	{"cohere.com", "cohere_chat"},
-	{"cohere.ai", "cohere_chat"},
-	{"friendli.ai", "friendliai"},
-	{"lambda.ai", "lambda_ai"},
 	{"lambdalabs.com", "lambda_ai"},
-	{"ollama.com", "ollama"},
 }
 
 // registrableLabel returns the name a host registers under (fireworks for
