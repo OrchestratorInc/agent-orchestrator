@@ -66,10 +66,11 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	useEffect(() => {
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, [workflow.terminal.handleId]);
-	// While the login runs, the terminal speaks for itself. Guidance is shown only
-	// when it tells the user to act outside the terminal (the Open login button).
+	// DeepSeek's terminal starts a web UI; account actions happen in that browser
+	// rather than in the terminal, so its navigation guidance must remain visible.
+	const browserAccountFlow = workflow.agentId === "deepseek-harness";
 	const status = workflow.phase === "running"
-		? workflow.terminalInput ? workflow.guidance : ""
+		? workflow.terminalInput || browserAccountFlow ? workflow.guidance : ""
 		: workflow.phase === "verifying" ? t(workflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")
 			: workflow.phase === "closing" ? t("settings.harness.authClosing")
 				: workflow.reason ?? t("settings.harness.loginUnknown");
@@ -91,7 +92,7 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	return (
 		<div ref={panelRef} className="mt-1 scroll-my-3 overflow-hidden rounded-md border border-(--color-border-settings-input) bg-terminal" data-testid="harness-auth-terminal">
 			<div className="flex min-h-10 items-center justify-between gap-3 border-b border-(--color-border-settings-input) bg-surface/90 px-3 py-2">
-				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p>{status ? <p className="truncate text-caption text-settings-muted" aria-live="polite" role="status">{status}</p> : null}</div>
+				<div className="min-w-0"><p className="truncate text-xs font-medium text-settings-label">{workflow.terminal.title}</p>{status ? <p className={`${browserAccountFlow ? "whitespace-normal" : "truncate"} text-caption text-settings-muted`} aria-live="polite" role="status">{status}</p> : null}</div>
 				<div className="flex shrink-0 items-center gap-2">
 					{workflow.terminalInput && workflow.phase === "running" ? <Button type="button" size="sm" variant="outline" disabled={terminalState !== "attached" || commandPending || commandSent} onClick={openAuthAction}>{commandSent ? <Check aria-hidden="true" /> : <LogIn aria-hidden="true" />}{workflow.action === "setup" ? commandSent ? t("settings.harness.setupOpened") : t("settings.harness.openSetup") : commandSent ? t("settings.harness.loginOpened") : t("settings.harness.openLogin")}</Button> : null}
 					<CloseButton aria-label={t("settings.close")} size="icon-sm" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose} />

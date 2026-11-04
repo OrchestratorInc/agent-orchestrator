@@ -175,6 +175,9 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	plan.Action = ActionLogout
 	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
 	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
+	if agentID == "deepseek-harness" {
+		plan.Guidance = "In DeepSeek's web UI, open the sidebar account menu and choose Sign out, then confirm. Leave this terminal running until you finish. API keys are separate and remain configured; manage them in Settings → Models. Close the terminal to check authentication again."
+	}
 	plan.launcher, plan.terminalInput, plan.initialInput = "", "", ""
 	plan.launcherArgs, plan.initialInputReadyStates = nil, nil
 	plan.prepareWorkspace = nil

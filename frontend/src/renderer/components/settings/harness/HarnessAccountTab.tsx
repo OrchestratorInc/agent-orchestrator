@@ -85,9 +85,12 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="outline" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
+	// DeepSeek has no definitive signed-out probe. Unknown readiness must still
+	// let the user open its native account UI without claiming they are logged out.
+	const canOpenDeepSeekLogin = details.agentId === "deepseek-harness" && authPlan?.action === "login" && authPlan.available && details.authStatus === "unknown";
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
-		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="default" className="min-w-20" disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
+		: details.needsLogin || details.showSetup || canOpenDeepSeekLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="default" className="min-w-20" disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
 		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="outline" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>

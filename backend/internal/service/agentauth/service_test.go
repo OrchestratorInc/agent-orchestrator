@@ -543,3 +543,25 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 		})
 	}
 }
+
+func TestDeepSeekLogoutOpensNativeAccountUI(t *testing.T) {
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "deepseek-harness", path: "/managed/dsh"}, opener, "")
+	plan, err := svc.Plan(context.Background(), "deepseek-harness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.LogoutCommand != "dsh --profile web" || plan.Action != ActionLogin {
+		t.Fatalf("DeepSeek account controls unavailable: %+v", plan)
+	}
+	result, err := svc.Logout(context.Background(), "deepseek-harness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(opener.input.Argv, []string{"/managed/dsh", "--profile", "web"}) || opener.input.Title != "Log out of DeepSeek" || result.Action != ActionLogout {
+		t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
+	}
+	if !strings.Contains(result.Guidance, "sidebar account menu") || !strings.Contains(result.Guidance, "API keys") {
+		t.Fatalf("logout must explain the native sign-out and separate API keys: %q", result.Guidance)
+	}
+}
