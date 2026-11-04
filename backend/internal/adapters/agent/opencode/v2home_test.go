@@ -188,6 +188,133 @@ func TestPrepareV2DataHomeStopsWaitingForMigrationLockOnCancel(t *testing.T) {
 	}
 }
 
+// removeAtCheckContext runs remove on the Nth ctx.Err() call. copyTree checks its
+// context at every walked entry and copied chunk, so raising N moves the deletion
+// across each point of the copy without relying on timing.
+type removeAtCheckContext struct {
+	context.Context
+	at     int
+	calls  int
+	remove func()
+}
+
+func (c *removeAtCheckContext) Err() error {
+	c.calls++
+	if c.calls == c.at {
+		c.remove()
+	}
+	return c.Context.Err()
+}
+
+// A live OpenCode prunes its shell output while the migration copies the store.
+func TestCopyTreeToleratesEntriesVanishingAtAnyPoint(t *testing.T) {
+	const project = "9b29c8a3ea477dcfbde51766b401cd337ce370e8"
+	tests := []struct {
+		name         string
+		remove       func(source string)
+		wantVanished string
+	}{
+		{
+			name: "file",
+			remove: func(source string) {
+				_ = os.Remove(filepath.Join(source, "shell", project, "sh_1.out"))
+			},
+			wantVanished: filepath.Join("shell", project, "sh_1.out"),
+		},
+		{
+			name: "directory",
+			remove: func(source string) {
+				_ = os.RemoveAll(filepath.Join(source, "shell", project))
+			},
+			wantVanished: filepath.Join("shell", project),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for at := 1; ; at++ {
+				source, destination := t.TempDir(), t.TempDir()
+				for _, entry := range []string{
+					filepath.Join("shell", project, "sh_0.out"),
+					filepath.Join("shell", project, "sh_1.out"),
+					filepath.Join("storage", "session.json"),
+				} {
+					if err := os.MkdirAll(filepath.Join(source, filepath.Dir(entry)), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(source, entry), []byte("data"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx := &removeAtCheckContext{
+					Context: context.Background(),
+					at:      at,
+					remove:  func() { tt.remove(source) },
+				}
+				if err := copyTree(ctx, source, destination); err != nil {
+					t.Fatalf("deleting at context check %d: copyTree: %v", at, err)
+				}
+				if _, err := os.Stat(filepath.Join(destination, "storage", "session.json")); err != nil {
+					t.Fatalf("deleting at context check %d: lost unrelated data: %v", at, err)
+				}
+				if at > ctx.calls {
+					// Every check has been exercised; this run deleted nothing,
+					// so it must have copied the entry under test.
+					if _, err := os.Stat(filepath.Join(destination, tt.wantVanished)); err != nil {
+						t.Fatalf("copy without a deletion lost %s: %v", tt.wantVanished, err)
+					}
+					return
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	legacy := filepath.Join(parent, "opencode")
+	shell := filepath.Join(legacy, "shell", "project")
+	if err := os.MkdirAll(shell, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sh_0.out", "sh_1.out"} {
+		if err := os.WriteFile(filepath.Join(shell, name), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Checks run in a fixed order: PrepareV2DataHome, the root, shell,
+	// shell/project, sh_0.out and its two chunk reads. Check 7 is therefore the
+	// last one before the walk reaches sh_1.out, which it has already listed.
+	ctx := &removeAtCheckContext{
+		Context: context.Background(),
+		at:      7,
+		remove:  func() { _ = os.Remove(filepath.Join(shell, "sh_1.out")) },
+	}
+	home, err := PrepareV2DataHome(ctx)
+	if err != nil {
+		t.Fatalf("PrepareV2DataHome: %v", err)
+	}
+	if ctx.calls < ctx.at {
+		t.Fatalf("made %d context checks, so the deletion at check %d never ran", ctx.calls, ctx.at)
+	}
+	if _, err := os.Stat(filepath.Join(home, "opencode", "shell", "project", "sh_0.out")); err != nil {
+		t.Fatalf("surviving entry was not migrated: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "opencode", "shell", "project", "sh_1.out")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("vanished entry state: %v", err)
+	}
+}
+
+func TestCopyTreeStillFailsOnOtherErrors(t *testing.T) {
+	source, destination := t.TempDir(), t.TempDir()
+	if err := os.Symlink("missing-target", filepath.Join(source, "dangling")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := copyTree(context.Background(), source, destination); err == nil {
+		t.Fatal("copyTree accepted a dangling symlink, want the unsupported-entry error")
+	}
+}
+
 func TestCopyTreeStopsOnCancel(t *testing.T) {
 	source, destination := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(source, "auth.json"), []byte("secret"), 0o600); err != nil {

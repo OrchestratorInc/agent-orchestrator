@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -206,12 +207,16 @@ func copyTree(ctx context.Context, source, destination string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if walkErr != nil {
-			return walkErr
-		}
 		relative, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
+		}
+		if walkErr != nil {
+			if relative != "." && errors.Is(walkErr, os.ErrNotExist) {
+				skipVanishedLegacyEntry(ctx, relative)
+				return nil
+			}
+			return walkErr
 		}
 		if info.IsDir() {
 			if relative == "." {
@@ -230,6 +235,10 @@ func copyTree(ctx context.Context, source, destination string) error {
 			return fmt.Errorf("unsupported legacy data entry %q", path)
 		}
 		input, err := sourceRoot.Open(relative)
+		if errors.Is(err, os.ErrNotExist) {
+			skipVanishedLegacyEntry(ctx, relative)
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -260,6 +269,14 @@ func copyTree(ctx context.Context, source, destination string) error {
 		return err
 	}
 	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
+}
+
+// skipVanishedLegacyEntry records an entry that disappeared after it was listed.
+// The legacy store stays live during the migration: OpenCode prunes its own shell
+// output, so one deleted file must not abort the copy and block every OpenCode 2
+// start. The migration runs once, so a skipped entry stays out of the new store.
+func skipVanishedLegacyEntry(ctx context.Context, relative string) {
+	slog.Default().WarnContext(ctx, "opencode: legacy data entry vanished during migration; skipping it", "entry", relative)
 }
 
 func copyFileContext(ctx context.Context, destination io.Writer, source io.Reader) error {
