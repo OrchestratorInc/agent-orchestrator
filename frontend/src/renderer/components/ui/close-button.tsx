@@ -20,7 +20,7 @@ export const CloseButton = React.forwardRef<
 		variant="quiet"
 		{...props}
 	>
-		<X aria-hidden="true" className="size-4" />
+		<X aria-hidden="true" className={size === "icon-xs" ? "size-3" : size === "icon-sm" ? "size-3.5" : "size-4"} />
 	</Button>
 ));
 

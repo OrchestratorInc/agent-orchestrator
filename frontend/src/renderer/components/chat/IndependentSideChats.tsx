@@ -1421,17 +1421,15 @@ export function useIndependentSideChats(
 				) : null}
 				{showRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 			</div>
-			<Button
+			<Pressable
 				type="button"
-				variant="ghost"
-				size="icon-sm"
 				className="browser-panel__tab-new"
 				disabled={!canCreate || pending}
 				aria-label={t("sideChat.newSideChat")}
 				onClick={() => void create(undefined, true).catch(() => undefined)}
 			>
 				<Plus className="size-3.5" />
-			</Button>
+			</Pressable>
 		</header>
 	) : null;
 	const closeDialog = (

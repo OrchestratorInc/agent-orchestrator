@@ -145,9 +145,7 @@ export function SessionInterfaceSwitchButton({
 					/>
 				)}
 				{cancellable ? (
-					<Button
-						variant="quiet"
-						size="none"
+					<Pressable
 						type="button"
 						aria-label={cancelLabel}
 						title={cancelling ? "Cancelling…" : cancelLabel}
@@ -157,8 +155,8 @@ export function SessionInterfaceSwitchButton({
 							onCancel?.();
 						}}
 						className={cn(
-							"absolute inset-0 opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
-							cancelling && "opacity-100 disabled:opacity-100",
+							"absolute inset-0 inline-flex items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100",
+							cancelling && "opacity-100",
 						)}
 					>
 						{cancelling ? (
@@ -166,7 +164,7 @@ export function SessionInterfaceSwitchButton({
 						) : (
 							<X aria-hidden="true" className="size-3.5" />
 						)}
-					</Button>
+					</Pressable>
 				) : null}
 			</div>
 		);
