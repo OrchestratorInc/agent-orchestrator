@@ -52,8 +52,8 @@ var (
 	// adapter. The API maps it to a 400 so a typo'd `--harness` is a validation
 	// error, not an opaque 500.
 	ErrUnknownHarness = errors.New("session: unknown agent harness")
-	// ErrMissingHarness means neither the spawn request nor the project's role
-	// config selected an agent. Worker/orchestrator spawns must be explicit.
+	// ErrMissingHarness means the spawn reached the manager without a harness.
+	// The session service resolves one before calling it.
 	ErrMissingHarness = errors.New("session: agent harness required")
 	// ErrArtifactOutputUnavailable rejects an artifact-output spawn when the
 	// daemon has no data dir to hold the session's artifact directory.
@@ -1024,11 +1024,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		cfg.AgentConfig.Permissions = permissions
 	}
-	// A per-project role override picks the harness when the spawn names none,
-	// so a project can default workers to one agent and orchestrators to another.
-	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
+	// The caller resolves the harness (explicit, parent, predecessor, or the
+	// default priority); a session owns its harness from here on.
 	if cfg.Harness == "" {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrMissingHarness)
 	}
 	releaseHarness, err := m.beginHarnessUse(cfg.Harness)
 	if err != nil {
@@ -2333,47 +2332,30 @@ func (m *Manager) preserveFailedSpawnWorkspace(ctx context.Context, id domain.Se
 	}
 }
 
-// effectiveHarness resolves the harness for a spawn: an explicit harness wins;
-// otherwise the project's role override for the session kind applies. Empty is
-// invalid for new worker/orchestrator launches and is rejected by Spawn.
-func effectiveHarness(explicit domain.AgentHarness, kind domain.SessionKind, cfg domain.ProjectConfig) domain.AgentHarness {
-	if explicit != "" {
-		return explicit
-	}
-	if role := roleOverride(kind, cfg).Harness; role != "" {
-		return role
-	}
-	return ""
-}
-
-func roleConfigName(kind domain.SessionKind) string {
-	if kind == domain.KindOrchestrator {
-		return "orchestrator"
-	}
-	return "worker"
-}
-
 // effectiveAgentConfig merges the role override's agent config over the
 // project's base agent config; set override fields win.
 //
-// Model/Mode are inherited only when the launch harness matches the role's
-// configured harness — otherwise they were tuned for a different agent and
-// would leak a provider-specific alias onto the wrong harness. An empty role
-// harness means "not pinned" and always matches. Permissions is
-// harness-neutral and is always inherited.
+// Model, effort and mode are inherited only when the launch harness is the one
+// the role's settings were tuned for (role.Harness). Any other launch, such as
+// a session switched to another agent or a default pick, starts from that
+// agent's own defaults, so a provider-specific alias never reaches the wrong
+// harness. Permissions is harness-neutral and is always inherited.
 func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, cfg domain.ProjectConfig) ports.AgentConfig {
 	merged := cfg.AgentConfig
 	role := roleOverride(kind, cfg)
 	override := role.AgentConfig
-	harnessMatches := role.Harness == "" || role.Harness == harness
-	if harnessMatches && override.Model != "" {
-		merged.Model = override.Model
-	}
-	if harnessMatches && override.Effort != "" {
-		merged.Effort = override.Effort
-	}
-	if harnessMatches && override.Mode != "" {
-		merged.Mode = override.Mode
+	if role.Harness != harness {
+		merged.Model, merged.Effort, merged.Mode = "", "", ""
+	} else {
+		if override.Model != "" {
+			merged.Model = override.Model
+		}
+		if override.Effort != "" {
+			merged.Effort = override.Effort
+		}
+		if override.Mode != "" {
+			merged.Mode = override.Mode
+		}
 	}
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions

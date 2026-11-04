@@ -156,7 +156,7 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 						if err := lcm.MarkTerminated(ctx, sess.ID); err != nil {
 							t.Fatal(err)
 						}
-						sess, _, _, err = m.Spawn(ctx, ports.SpawnConfig{ProjectID: domain.ProjectID(project.ID), Kind: domain.KindOrchestrator, RequestedMode: domain.SessionModeTUI})
+						sess, _, _, err = m.Spawn(ctx, ports.SpawnConfig{ProjectID: domain.ProjectID(project.ID), Kind: domain.KindOrchestrator, Harness: harness, RequestedMode: domain.SessionModeTUI})
 						if err != nil {
 							t.Fatal(err)
 						}

@@ -140,6 +140,7 @@ func TestStatusReadinessFreshSpawnAfterDiscoveryFailureIsReady(t *testing.T) {
 	}
 	st.listAllErr = nil
 	rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
+		Harness:   domain.HarnessClaudeCode,
 		ProjectID: "mer",
 		Kind:      domain.KindWorker,
 	})
@@ -158,6 +159,7 @@ func TestStatusReadinessFreshSpawnAfterSuccessfulRecoveryDoesNotChangeRevision(t
 	}
 	revision := m.StatusRecoveryRevision()
 	rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
+		Harness:   domain.HarnessClaudeCode,
 		ProjectID: "mer",
 		Kind:      domain.KindWorker,
 	})

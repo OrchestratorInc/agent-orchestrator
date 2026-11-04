@@ -106,7 +106,7 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 					}
 					manager := newManager()
 					rec, _, _, err := manager.Spawn(ctx, ports.SpawnConfig{
-						ProjectID: domain.ProjectID(project.ID), Kind: kind, Prompt: "continue the task", RequestedMode: mode,
+						ProjectID: domain.ProjectID(project.ID), Kind: kind, Harness: harness, Prompt: "continue the task", RequestedMode: mode,
 						AgentConfig: ports.AgentConfig{Model: selection.spawnModel, Effort: selection.spawnEffort},
 					})
 					if err != nil {

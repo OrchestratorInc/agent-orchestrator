@@ -397,6 +397,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
 	var project domain.ProjectRecord
 	var err error
+	cfg.Harness = s.resolveSpawnHarness(ctx, cfg)
 	if cfg.ProjectID != "" {
 		project, err = s.requireProject(ctx, cfg.ProjectID)
 		if err != nil {
@@ -405,9 +406,6 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	} else {
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {
 			return domain.Session{}, 0, 0, apierr.Invalid("STANDALONE_PROJECT_FEATURE_UNSUPPORTED", "Standalone sessions do not support issues or branches", nil)
-		}
-		if cfg.Harness == "" {
-			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
 	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
@@ -439,6 +437,32 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.Session{}, 0, 0, err
 	}
 	return sess, promptBytes, systemPromptBytes, nil
+}
+
+// resolveSpawnHarness picks the agent a new session starts on. An explicit
+// choice wins, then the spawning session's agent so workers follow a switched
+// orchestrator, then the default priority among agents that are ready. The
+// project never decides: once created, the session's own harness is the truth.
+func (s *Service) resolveSpawnHarness(ctx context.Context, cfg ports.SpawnConfig) domain.AgentHarness {
+	if cfg.Harness != "" {
+		return cfg.Harness
+	}
+	if cfg.ParentSessionID != "" {
+		if parent, ok, err := s.store.GetSession(ctx, cfg.ParentSessionID); err == nil && ok &&
+			parent.Harness.IsKnown() && parent.Harness != domain.HarnessFake {
+			return parent.Harness
+		}
+	}
+	return domain.ChooseDefaultHarness(func(h domain.AgentHarness) domain.AgentEffectiveReadiness {
+		if s.agentReadiness == nil {
+			return domain.AgentReadinessUnknown
+		}
+		snapshot, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(h), domain.AgentReadinessPurposeDisplay)
+		if err != nil {
+			return domain.AgentReadinessUnknown
+		}
+		return domain.EffectiveAgentReadiness(snapshot.Installation.State, snapshot.Authentication.State)
+	})
 }
 
 // spawnWithTelemetry is the only path from the service into manager.Spawn, so
@@ -807,8 +831,11 @@ func (s *Service) SpawnOrchestrator(
 		}
 	}
 	sess, _, _, err := s.spawn(ctx, ports.SpawnConfig{
-		ProjectID:     projectID,
-		Kind:          domain.KindOrchestrator,
+		ProjectID: projectID,
+		Kind:      domain.KindOrchestrator,
+		// The project's latest orchestrator keeps its agent across a replacement
+		// or a restart, so a switched orchestrator is not sent back to a default.
+		Harness:       s.lastOrchestratorHarness(ctx, projectID),
 		Async:         true,
 		RequestedMode: mode,
 		AgentConfig: ports.AgentConfig{
@@ -822,6 +849,20 @@ func (s *Service) SpawnOrchestrator(
 		return domain.Session{}, err
 	}
 	return sess, nil
+}
+
+// lastOrchestratorHarness is the agent of the project's newest orchestrator in
+// any state, or empty when it never had one.
+func (s *Service) lastOrchestratorHarness(ctx context.Context, projectID domain.ProjectID) domain.AgentHarness {
+	all, err := s.List(ctx, ListFilter{ProjectID: projectID, OrchestratorOnly: true})
+	if err != nil || len(all) == 0 {
+		return ""
+	}
+	harness := newestSession(all).Harness
+	if !harness.IsKnown() || harness == domain.HarnessFake {
+		return ""
+	}
+	return harness
 }
 
 func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.ProjectID) ([]domain.Session, error) {
@@ -844,9 +885,6 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 	}
 	if sess.Kind != domain.KindOrchestrator {
 		return orchestratorReplacementUnverified("new session %s has kind %q", sess.ID, sess.Kind)
-	}
-	if expected := project.Config.Orchestrator.Harness; expected != "" && sess.Harness != expected {
-		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
 	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {

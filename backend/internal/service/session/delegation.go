@@ -100,7 +100,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		ClientRequestHash: in.ClientRequestHash,
 		ProjectID:         in.ProjectID,
 		Kind:              domain.KindWorker,
-		Harness:           in.RequestedAgent,
+		Harness:           s.resolveSpawnHarness(ctx, ports.SpawnConfig{Harness: in.RequestedAgent}),
 		Branch:            in.Branch,
 		RequireNewBranch:  in.Branch != "",
 		Prompt:            prompt,

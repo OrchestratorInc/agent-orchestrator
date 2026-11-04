@@ -1973,7 +1973,7 @@ func (e *Engine) projectReviewerSelection(
 	if len(cfg.Reviewers) > 0 {
 		return cfg.Reviewers[0].Harness, cfg.Reviewers[0].AgentConfig, nil
 	}
-	harness, config := cfg.DefaultWorkerReviewer()
+	harness, config := cfg.DefaultWorkerReviewer(worker.Harness)
 	if harness != "" {
 		return harness, config, nil
 	}

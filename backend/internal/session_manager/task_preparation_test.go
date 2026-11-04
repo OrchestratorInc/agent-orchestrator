@@ -31,6 +31,7 @@ func TestTaskPreparationIsClaimedWithoutCreatingAnotherWorktree(t *testing.T) {
 	}
 
 	spawned, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
+		Harness:         domain.HarnessClaudeCode,
 		ProjectID:       "mer",
 		Kind:            domain.KindWorker,
 		TaskPreparation: token,
@@ -295,6 +296,7 @@ func TestRecoveredPreparationCreationSHAMatchesExactWorktreeIdentity(t *testing.
 				}},
 			}
 			root, info, err := m.createSessionWorkspace(context.Background(), project, ports.SpawnConfig{
+				Harness:   domain.HarnessClaudeCode,
 				ProjectID: "mer", Kind: domain.KindWorker, TaskPreparation: "mer-1",
 			}, "mer-1", tc.branch, nil)
 			if err != nil {

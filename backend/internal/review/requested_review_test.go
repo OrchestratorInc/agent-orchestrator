@@ -280,9 +280,9 @@ func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 	}
 }
 
-func TestReviewerDefaultsToTheProjectDefaultWorkerConfig(t *testing.T) {
+func TestReviewerDefaultsToTheWorkersOwnAgentAndTunedConfig(t *testing.T) {
 	worker := liveWorker()
-	worker.Harness = domain.HarnessClaudeCode
+	worker.Harness = domain.HarnessCodex
 	projects := fakeProjects{cfg: domain.ProjectConfig{
 		AgentConfig: domain.AgentConfig{Permissions: "bypass-permissions"},
 		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5.5", Effort: "high", Permissions: "bypass-permissions"}},
@@ -295,7 +295,7 @@ func TestReviewerDefaultsToTheProjectDefaultWorkerConfig(t *testing.T) {
 		t.Fatalf("TriggerWithOptions: %v", err)
 	}
 	if res.Run.Harness != domain.ReviewerCodex {
-		t.Fatalf("harness = %q, want the project's default worker agent", res.Run.Harness)
+		t.Fatalf("harness = %q, want the worker's own codex agent", res.Run.Harness)
 	}
 	if got := launcher.gotSpec.AgentConfig; got.Model != "gpt-5.5" || got.Effort != "high" || got.Permissions != "" {
 		t.Fatalf("reviewer config = %+v, want worker model/effort and never worker permissions", got)

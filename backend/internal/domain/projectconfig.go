@@ -134,18 +134,18 @@ func (c ProjectConfig) ResolveReviewerHarness(worker AgentHarness) ReviewerHarne
 	return FallbackReviewerHarness
 }
 
-// DefaultWorkerReviewer is the reviewer a project gets when it configures no
-// reviewer: the project's default worker agent, with that worker's model and
-// effort. It returns an empty harness when the project pins no worker agent,
-// or when that agent has no unattended-safe reviewer (see
-// ResolveReviewerHarness), so callers keep their existing fallback.
+// DefaultWorkerReviewer is the reviewer a worker gets when the project
+// configures none: the worker's own agent, with the model and effort the project
+// tuned for that agent. It returns an empty harness when the worker is not the
+// harness the project's worker settings were tuned for, or when that agent has
+// no unattended-safe reviewer (see ResolveReviewerHarness), so callers keep
+// their existing fallback.
 //
 // Only model and effort carry over. Permissions and mode are worker settings;
 // a reviewer's sandbox is owned by its adapter and must never inherit a
 // worker's bypass permissions.
-func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
-	worker := c.Worker.Harness
-	if worker == "" {
+func (c ProjectConfig) DefaultWorkerReviewer(worker AgentHarness) (ReviewerHarness, AgentConfig) {
+	if worker == "" || c.Worker.Harness != worker {
 		return "", AgentConfig{}
 	}
 	harness := c.ResolveReviewerHarness(worker)
@@ -162,7 +162,10 @@ func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
 	return harness, config
 }
 
-// RoleOverride overrides the harness and/or agent config for a session role.
+// RoleOverride holds the model settings a project tuned for one role. Harness
+// names the agent those settings belong to; it no longer chooses which agent a
+// session runs (a session owns its harness), it only scopes the settings so a
+// model alias never reaches a different agent.
 type RoleOverride struct {
 	Harness     AgentHarness `json:"agent,omitempty"`
 	AgentConfig AgentConfig  `json:"agentConfig,omitempty"`

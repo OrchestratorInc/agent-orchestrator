@@ -24,7 +24,7 @@ func TestRuntimeLaunchEnvironmentAcrossSpawnAndRestore(t *testing.T) {
 				LookPath: func(string) (string, error) { return "/bin/true", nil }, NewLaunchID: func() string { return "launch-new" }, Executable: func() (string, error) { return "/opt/ao", nil }})
 			var id domain.SessionID
 			if operation == "spawn" {
-				rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+				rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{Harness: domain.HarnessClaudeCode, ProjectID: "mer", Kind: domain.KindWorker})
 				if err != nil {
 					t.Fatal(err)
 				}

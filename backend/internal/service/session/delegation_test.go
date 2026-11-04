@@ -21,7 +21,7 @@ func TestDelegateTaskSpawnsWorkerAndRefinesTitleThroughBackgroundHarness(t *test
 		mode      domain.SessionMode
 		wantAgent domain.AgentHarness
 	}{
-		{name: "project default"},
+		{name: "default priority", wantAgent: domain.HarnessClaudeCode},
 		{name: "requested agent model and mode", agent: domain.HarnessCursor, model: "  sonnet-custom  ", effort: " high ", mode: domain.SessionModeChat, wantAgent: domain.HarnessCursor},
 	}
 
