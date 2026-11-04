@@ -916,11 +916,6 @@ func (c *conversation) finishPrompt(
 				turnErr = failure
 			}
 		}
-		if state == domain.TurnStateFailed && turnErr == nil {
-			// The completion is the only event that sets the turn's stored
-			// error_message, so a failing stop reason must explain itself here.
-			turnErr = stopReasonFailure(resp.StopReason)
-		}
 		if resp.Usage != nil {
 			cached := 0
 			if resp.Usage.CachedReadTokens != nil {
@@ -1132,25 +1127,6 @@ func formatTokens(tokens int64) string {
 		return fmt.Sprintf("%d tokens", tokens)
 	}
 	return fmt.Sprintf("%.1fk tokens", float64(tokens)/1000)
-}
-
-// stopReasonFailure explains a turn the provider ended on a failing stop reason
-// that no provider binding interpreted.
-func stopReasonFailure(reason acpsdk.StopReason) error {
-	title := "The agent stopped before finishing"
-	switch reason {
-	case acpsdk.StopReasonMaxTokens:
-		title = "The agent reached its output token limit"
-	case acpsdk.StopReasonMaxTurnRequests:
-		title = "The agent reached its limit of model requests for one turn"
-	case acpsdk.StopReasonRefusal:
-		title = "The agent refused to continue"
-	}
-	detail := ""
-	if reason != "" {
-		detail = fmt.Sprintf("Stop reason: %s", reason)
-	}
-	return ports.NewChatProviderFailure(title, detail, nil)
 }
 
 func turnState(reason acpsdk.StopReason) domain.TurnState {

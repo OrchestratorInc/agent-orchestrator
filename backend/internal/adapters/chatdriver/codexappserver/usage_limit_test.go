@@ -182,7 +182,7 @@ func TestCodexUsageLimitTerminalFallbackSafety(t *testing.T) {
 		{"another turn cannot inherit quota", `{"threadId":"thread-1","turn":{"id":"turn-2","status":"failed"}}`, "", ""},
 		{"child completion with same ID cannot inherit quota", `{"threadId":"child-thread","turn":{"id":"turn-1","status":"failed"}}`, "", ""},
 		{"attached failure remains authoritative", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"Network failed."}}}`, "", "Network failed."},
-		{"later unrelated error replaces quota fallback", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed"}}`, `{"threadId":"thread-1","turnId":"turn-1","error":{"message":"Network failed."}}`, "Network failed."},
+		{"later unrelated error clears quota fallback", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed"}}`, `{"threadId":"thread-1","turnId":"turn-1","error":{"message":"Network failed."}}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tracker := usageLimitTracker{threadID: "thread-1", turnID: "turn-1"}

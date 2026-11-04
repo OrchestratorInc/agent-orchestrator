@@ -68,10 +68,9 @@ func TestProviderFailureSequences(t *testing.T) {
 
 					case ports.ChatEventTurnCompleted:
 						completions++
-						// The completion repeats a separately reported terminal error so the
-						// turn stores it; that is the same failure, not a second one.
 						if event.Err != nil {
 							message = event.Err.Error()
+							errorsSeen++
 						}
 						if event.TurnState != tc.state || message != tc.message {
 							t.Fatalf("outcome = %s, %q; want %s, %q", event.TurnState, message, tc.state, tc.message)
@@ -91,21 +90,6 @@ func TestProviderFailureSequences(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Codex can report a terminal failure as a separate error notification and then
-// complete the turn as failed with no attached error. The completion is the only
-// event the controller stores on the turn, so it must carry that failure (#5289).
-func TestTerminalProviderErrorReachesBareFailedCompletion(t *testing.T) {
-	conv, srv := openProviderFailureConversation(t)
-	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
-	srv.push(`{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":false,"error":{"message":"stream disconnected before completion"}}}`)
-	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","items":[]}}}`)
-	completed := nextEvent(t, conv.Events(), ports.ChatEventTurnCompleted)
-	if completed.TurnState != domain.TurnStateFailed || completed.Err == nil ||
-		completed.Err.Error() != "stream disconnected before completion" {
-		t.Fatalf("failed completion lost the provider error: state=%s err=%v", completed.TurnState, completed.Err)
 	}
 }
 

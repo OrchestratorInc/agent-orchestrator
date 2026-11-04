@@ -21,8 +21,7 @@ type usageLimitTracker struct {
 	resetAt   time.Time
 	ambiguous bool
 	// Codex can report a terminal error separately, then complete without an
-	// attached error. Preserve that failure on the durable failed turn: the
-	// completion is the only event that sets the turn's stored error_message.
+	// attached error. Preserve that quota refusal on the durable failed turn.
 	failureTurnID string
 	failure       error
 }
@@ -100,7 +99,10 @@ func (u *usageLimitTracker) decorate(ev ports.ChatEvent, now time.Time) ports.Ch
 		ev.Err = ports.NewChatProviderFailure("Usage limit exceeded; resets "+u.resetAt.UTC().Format(time.RFC3339), ev.Err.Error(), ev.Err)
 	}
 	if ev.Kind == ports.ChatEventError {
-		u.failureTurnID, u.failure = ev.ProviderTurnID, ev.Err
+		u.failureTurnID, u.failure = "", nil
+		if errors.Is(ev.Err, errCodexUsageLimitExceeded) {
+			u.failureTurnID, u.failure = ev.ProviderTurnID, ev.Err
+		}
 	}
 	if ev.Kind == ports.ChatEventTurnCompleted {
 		if ev.Err == nil && ev.TurnState == domain.TurnStateFailed && ev.ProviderTurnID == u.failureTurnID {
