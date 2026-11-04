@@ -17,6 +17,7 @@ import {
 	type ChatDraftExcerptReference,
 	activateChatDraftScope,
 	markChatComposerDeliveryAccepted,
+	parkChatComposerDelivery,
 	prepareChatComposerDelivery,
 	readChatSessionDraft,
 	writeChatComposerText,
@@ -3438,6 +3439,38 @@ describe("unsent message strip", () => {
 		expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled();
 		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
 		expect(readChatSessionDraft("unsent-second-loss").unsent?.clientMessageId).toBe("unsent-second-loss-old");
+	});
+
+	function restoreTwoUnsent(sessionId: string) {
+		const first = { kind: "send" as const, composerText: "first message", attachments: [], requestText: "first message", clientMessageId: `${sessionId}-a` };
+		if (!prepareChatComposerDelivery(sessionId, first).ok || !parkChatComposerDelivery(sessionId, first.clientMessageId).ok) throw new Error("Failed to park A");
+		writeChatComposerText(sessionId, "second message");
+		if (!prepareChatComposerDelivery(sessionId, { ...first, composerText: "second message", requestText: "second message", clientMessageId: `${sessionId}-b` }).ok) throw new Error("Failed to prepare B");
+	}
+
+	it("restores a second unsent send into the box with its notice while one is parked", async () => {
+		restoreTwoUnsent("unsent-two-restored");
+		render(<ChatComposer draftSessionId="unsent-two-restored" onSend={vi.fn()} />);
+		const field = screen.getByLabelText("Message the agent");
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("first message");
+		expect(await screen.findByRole("alert")).toHaveTextContent(/wasn.t confirmed/);
+		await waitFor(() => expect(field.textContent).toBe("second message"));
+		expect(readChatSessionDraft("unsent-two-restored").composer.delivery?.clientMessageId).toBe("unsent-two-restored-b");
+	});
+
+	it("moves the second send to the strip once the first clears", async () => {
+		restoreTwoUnsent("unsent-two-clears");
+		const onSend = vi.fn();
+		const view = render(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+		await screen.findByTestId("unsent-message-strip");
+		view.rerender(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} acceptedClientMessageIds={new Set(["unsent-two-clears-a"])} />);
+		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("second message"));
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(readChatSessionDraft("unsent-two-clears").unsent?.clientMessageId).toBe("unsent-two-clears-b");
+		expect(onSend).not.toHaveBeenCalled();
 	});
 
 	it("keeps a lost excerpt send in the box with its notice", async () => {

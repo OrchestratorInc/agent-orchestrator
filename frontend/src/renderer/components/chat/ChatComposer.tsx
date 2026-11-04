@@ -1186,6 +1186,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// submitInFlight is a ref still set on the failed send's last render; the
 		// pending runtime mutation in parksDelivery already guards a live send.
 		if (submitting || composerMutation.accepted) return;
+		// The slot frees for this send only once a discarded one can no longer be undone.
+		if (unsent || discardedUnsent) return;
 		// The daemon took it; only the local record failed, so it isn't unsent.
 		if (textDraftPersistenceError === "chat.draft.recordMessageFailed") return;
 		// The effect above clears a send the chat already holds.
@@ -1216,6 +1218,7 @@ export const ChatComposer = memo(function ChatComposer({
 		acceptedClientMessageIds,
 		composerMutation.accepted,
 		composerMutation.pending,
+		discardedUnsent,
 		draftScope,
 		durableDelivery,
 		fileAttachments.reconcilePersistedAttachments,
@@ -1223,6 +1226,7 @@ export const ChatComposer = memo(function ChatComposer({
 		retryingUnsent,
 		submitting,
 		textDraftPersistenceError,
+		unsent,
 	]);
 
 	// The chat holds the unsent message after all: its answer was lost, not the message.
