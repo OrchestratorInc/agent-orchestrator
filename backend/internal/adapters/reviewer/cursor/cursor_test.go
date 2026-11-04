@@ -499,6 +499,7 @@ func TestMCPDisableCommandPointsAtReviewerProfileAndWorkspace(t *testing.T) {
 	workspace := filepath.Join("ws", "checkout")
 	profile := filepath.Join("data", "cursor-reviewers", "abc")
 	t.Setenv(cursorDataDirEnv, filepath.Join("hijacked", "profile"))
+	t.Setenv(cursorConfigDirEnv, filepath.Join("hijacked", "config"))
 
 	binary := filepath.Join("bin", "cursor-agent")
 	cmd := mcpDisableCommand(context.Background(), binary, "srv", workspace, profile)
@@ -510,14 +511,16 @@ func TestMCPDisableCommandPointsAtReviewerProfileAndWorkspace(t *testing.T) {
 	if cmd.Dir != workspace {
 		t.Fatalf("dir = %q, want %q", cmd.Dir, workspace)
 	}
-	var dataDirs []string
-	for _, entry := range cmd.Env {
-		if strings.HasPrefix(entry, cursorDataDirEnv+"=") {
-			dataDirs = append(dataDirs, entry)
+	for _, name := range []string{cursorDataDirEnv, cursorConfigDirEnv} {
+		var entries []string
+		for _, entry := range cmd.Env {
+			if strings.HasPrefix(entry, name+"=") {
+				entries = append(entries, entry)
+			}
 		}
-	}
-	if want := cursorDataDirEnv + "=" + profile; !reflect.DeepEqual(dataDirs, []string{want}) {
-		t.Fatalf("CURSOR_DATA_DIR entries = %#v, want exactly [%q]", dataDirs, want)
+		if want := name + "=" + profile; !reflect.DeepEqual(entries, []string{want}) {
+			t.Fatalf("%s entries = %#v, want exactly [%q]", name, entries, want)
+		}
 	}
 }
 
