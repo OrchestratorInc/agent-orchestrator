@@ -17,11 +17,16 @@ function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
 	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
-function safeRendererFrames(error: unknown): Array<{ function: string; filename?: string; lineno?: number; colno?: number }> {
+// A V8 stack line; `asyncFrames` also reads the "at async fn (...)" lines V8
+// adds for the awaits that led to the failure.
+const STACK_FRAME = /^\s*at\s+([^\s()]+)\s+\(([^)]+)\)\s*$/;
+const STACK_FRAME_OR_ASYNC = /^\s*at\s+(?:async\s+)?([^\s()]+)\s+\(([^)]+)\)\s*$/;
+
+function safeRendererFrames(error: unknown, asyncFrames = false): Array<{ function: string; filename?: string; lineno?: number; colno?: number }> {
 	if (!(error instanceof Error) || !error.stack) return [];
 	const frames: Array<{ function: string; filename?: string; lineno?: number; colno?: number }> = [];
 	for (const line of error.stack.split("\n")) {
-		const match = /^\s*at\s+([^\s()]+)\s+\(([^)]+)\)\s*$/.exec(line);
+		const match = (asyncFrames ? STACK_FRAME_OR_ASYNC : STACK_FRAME).exec(line);
 		if (!match || !SAFE_FUNCTION.test(match[1]) || match[1].length > 128) continue;
 		const location = match[2];
 		if (!location.startsWith("app://renderer/") && !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\//.test(location)) continue;
@@ -54,24 +59,26 @@ export function captureApiErrorToSentry(operation: string, category: string, sta
 	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: { ...tagsFor(meta, triage), origin: "daemon" } });
 }
 
-export type CloudFailureCategory = "http_5xx" | "network_error" | "malformed_response";
+export type CloudFailureCategory = "http_5xx" | "malformed_response";
 
 /**
- * An unexpected AO Cloud failure (cloud-error-report.ts decides which are).
- * Tagged with where it came from, its status, the control plane's code and the
- * request id its logs carry; never its message, path or body.
+ * AO Cloud failing (cloud-error-report.ts decides which failures are), sent as
+ * an exception with the error's own stack (the app frames that made the
+ * request, async ones included) and tagged origin cloud, its route without
+ * ids, status, the control plane's code and the request id its logs carry;
+ * never its message, path or body.
  */
 export function captureCloudErrorToSentry(
 	category: CloudFailureCategory,
-	failure: { origin: "cloud" | "network"; status: number; code?: string; requestId?: string },
+	error: Error,
+	failure: { status: number; code?: string; requestId?: string; route?: string },
 ): void {
-	const triage = classifyError({ category, httpStatus: failure.status || undefined, code: failure.code });
-	// The shared triage keeps network errors as breadcrumbs; reaching here means
-	// AO Cloud was unreachable while this computer was online, which is worth one.
-	const report = category === "http_5xx" ? triage.report : true;
-	const level = category === "network_error" ? "warning" : category === "malformed_response" ? "error" : triage.level;
+	const triage = classifyError({ category, httpStatus: failure.status, code: failure.code });
+	// The shared triage has no rule for an unreadable response; it is AO Cloud failing.
+	const report = category === "malformed_response" || triage.report;
+	const level = category === "malformed_response" ? "error" : triage.level;
 	void aoBridge.telemetry?.capture({
-		kind: report ? "message" : "breadcrumb",
+		kind: report ? "exception" : "breadcrumb",
 		message: `AO Cloud ${category}`,
 		level,
 		tags: {
@@ -80,10 +87,12 @@ export function captureCloudErrorToSentry(
 			category,
 			...(failure.code ? { code: failure.code } : {}),
 			http_status: String(failure.status),
-			origin: failure.origin,
+			origin: "cloud",
+			...(failure.route ? { route: failure.route } : {}),
 			...(failure.requestId ? { request_id: failure.requestId } : {}),
 			severity: triage.severity,
 			owner: triage.owner,
 		},
+		...(report ? { exception: { type: safeSentryExceptionType(error.name), frames: safeRendererFrames(error, true) } } : {}),
 	});
 }

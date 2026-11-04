@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
-import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE } from "../../../shared/cloud-cp-errors";
+import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE, cloudRoute } from "../../../shared/cloud-cp-errors";
 import { createCloudCpClient } from "./client";
 import { CloudCpAuthError, CloudCpError, cloudCpErrorFromFailure } from "./errors";
 import { cloudCpFetch } from "./renderer-client";
@@ -30,7 +30,22 @@ describe("cloud error origin in the client", () => {
 		const { client: cp, onFailure } = client(vi.fn(async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch);
 		const error = await failure(cp.me());
 		expect(error).toMatchObject({ status: 0, code: CLOUD_UNREACHABLE, origin: "network" });
-		expect(onFailure).toHaveBeenCalledWith(error);
+		expect(onFailure).toHaveBeenCalledWith(error, "GET /me");
+	});
+
+	it("names the failed request's route without its ids", async () => {
+		const { client: cp, onFailure } = client(vi.fn(async () => new Response("{}", { status: 500 })) as unknown as typeof fetch);
+		await failure(cp.getSession("0f8fad5b-d9cb-469f-a165-70867728950e", "abcdefab-abcd-abcd-abcd-abcdefabcdef"));
+		expect(onFailure).toHaveBeenCalledWith(expect.any(CloudCpError), "GET /orgs/{id}/sessions/{id}");
+	});
+
+	it("keeps ids, numbers, names and the query out of a route", () => {
+		expect(cloudRoute("post", "/orgs/org_1/sessions/s-9/pull-requests/42/merge")).toBe("POST /orgs/{id}/sessions/{id}/pull-requests/{id}/merge");
+		expect(cloudRoute("GET", "/api/cloud/v1/orgs/acme/sessions/abcdefab-abcd-abcd-abcd-abcdefabcdef/events?live=1&types=session.live")).toBe("GET /orgs/{id}/sessions/{id}/events");
+		expect(cloudRoute("POST", "/orgs/o1/projects/standalone")).toBe("POST /orgs/{id}/projects/standalone");
+		expect(cloudRoute("GET", "/orgs/o1/providers/claude-code/models")).toBe("GET /orgs/{id}/providers/{id}/models");
+		expect(cloudRoute("DELETE", "/orgs/o1/sessions/s1/artifacts?path=%2FUsers%2Fme%2Fsecret.txt")).toBe("DELETE /orgs/{id}/sessions/{id}/artifacts");
+		expect(cloudRoute("TRACE", "/me")).toBeUndefined();
 	});
 
 	it("reads the request id from the envelope, else the X-Request-ID header", async () => {
@@ -114,7 +129,7 @@ describe("cloud error origin on bridged streams", () => {
 			bridge: bridge(async () => ({ error: { status: 503, code: "WORKER_UNAVAILABLE", message: "down", requestId: REQUEST_ID } })),
 		});
 		expect(onError.mock.calls[0][0]).toMatchObject({ status: 503, code: "WORKER_UNAVAILABLE", requestId: REQUEST_ID, message: "down", origin: "cloud" });
-		expect(noteCloudFailure).toHaveBeenCalledWith(onError.mock.calls[0][0]);
+		expect(noteCloudFailure).toHaveBeenCalledWith(onError.mock.calls[0][0], { route: "GET /orgs/{id}/sessions/{id}/events" });
 	});
 
 	it("keeps a sign-in refusal a CloudCpAuthError", async () => {

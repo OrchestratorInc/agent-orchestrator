@@ -45,12 +45,33 @@ export function safeErrorCode(value: unknown): string | undefined {
 /** Failures Sentry drops as expected noise: an abort, or Chromium reporting the network changed or gone. */
 export const EXPECTED_NETWORK_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 
-/** Node's names for this computer having no DNS answer or no route: offline, not AO Cloud down. */
-const OFFLINE_CAUSES = new Set(["ENOTFOUND", "EAI_AGAIN", "ENETDOWN", "ENETUNREACH", "EHOSTUNREACH", "EHOSTDOWN"]);
+// A path segment the control plane's routes spell literally ("sessions",
+// "agent-browser"). Anything else is an id, a number or a name.
+const ROUTE_WORD = /^[a-z]+(?:-[a-z]+)*$/;
+// The segment after these is always an id or a name, even one that reads like a
+// route word (an org slug, a provider such as "codex").
+const ID_AFTER = new Set([
+	"orgs", "sessions", "cues", "shares", "coder-templates", "providers", "reviewer-harnesses",
+	"approvals", "turns", "pull-requests", "merge-requests",
+]);
+const CLOUD_API_PREFIX = "/api/cloud/v1";
 
-/** A fetch failure cause that is offline noise, never a Sentry issue. */
-export function isOfflineNetworkCause(cause: string | undefined): boolean {
-	return cause !== undefined && (OFFLINE_CAUSES.has(cause) || EXPECTED_NETWORK_NOISE.test(cause));
+/** A cloud request's method and route, as cloudRoute writes them. */
+export const CLOUD_ROUTE = /^(?:GET|POST|PUT|PATCH|DELETE) \/[a-z{}/-]{0,120}$/;
+
+/**
+ * "POST /orgs/{id}/sessions/{id}/messages": which AO Cloud endpoint a request
+ * hit, without its ids, names or query, so a failure can say where it happened
+ * without saying whose data it was. Undefined when the result is not such a route.
+ */
+export function cloudRoute(method: string, path: string): string | undefined {
+	let pathname = path.split("?")[0];
+	if (pathname.startsWith(CLOUD_API_PREFIX)) pathname = pathname.slice(CLOUD_API_PREFIX.length);
+	const segments = pathname.split("/").filter(Boolean);
+	const route = segments.map((segment, index) =>
+		ROUTE_WORD.test(segment) && !UUID.test(segment) && !ID_AFTER.has(segments[index - 1] ?? "") ? segment : "{id}");
+	const result = `${method.toUpperCase()} /${route.join("/")}`;
+	return CLOUD_ROUTE.test(result) ? result : undefined;
 }
 
 /** A failure cause token (a Node or undici error code, or an error name), never a message. */

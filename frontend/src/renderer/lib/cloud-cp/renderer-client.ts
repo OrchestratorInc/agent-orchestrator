@@ -62,7 +62,7 @@ export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 			void queryClient.invalidateQueries({ queryKey: cloudMeQueryKey });
 		},
 		onPlanRefused: (code) => reportPlanRefusal(code, openUpgradeAfterPlanRefusal()),
-		onFailure: noteCloudFailure,
+		onFailure: (error, route) => noteCloudFailure(error, { route }),
 	}));
 }
 

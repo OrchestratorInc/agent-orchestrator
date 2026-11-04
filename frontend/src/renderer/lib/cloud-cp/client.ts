@@ -9,7 +9,7 @@
 // and code CLOUD_UNREACHABLE; a body that cannot be read is
 // CLOUD_MALFORMED_RESPONSE. No retries in v0: callers own retry policy.
 
-import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE, REQUEST_ID_HEADER, isOpaqueRequestId } from "../../../shared/cloud-cp-errors";
+import { CLOUD_MALFORMED_RESPONSE, CLOUD_UNREACHABLE, REQUEST_ID_HEADER, cloudRoute, isOpaqueRequestId } from "../../../shared/cloud-cp-errors";
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
@@ -136,8 +136,11 @@ export interface CloudCpClientOptions {
 	onForbidden?: () => void;
 	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
 	onPlanRefused?: (code: string) => void;
-	/** Called with every failed request's error (never an abort), before it is thrown. */
-	onFailure?: (error: CloudCpError) => void;
+	/**
+	 * Called with every failed request's error (never an abort), before it is
+	 * thrown, and the request's route without ids (cloudRoute).
+	 */
+	onFailure?: (error: CloudCpError, route?: string) => void;
 }
 
 export interface CloudCpRequestOptions {
@@ -709,7 +712,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			// An abort stays the caller's own AbortError; anything else never got an
 			// answer from the control plane.
 			if (isAbortError(error) || init.signal?.aborted === true) throw error;
-			throw failed(toCloudCpError(error));
+			throw failed(toCloudCpError(error), method, path);
 		}
 		if (!response.ok) {
 			// A 403 means the selected org is stale (membership changed) — notify so
@@ -718,14 +721,14 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			if (response.status === 403) onForbidden?.();
 			const error = await errorFromResponse(response);
 			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
-			throw failed(error);
+			throw failed(error, method, path);
 		}
 		return response;
 	}
 
-	function failed(error: CloudCpError): CloudCpError {
+	function failed(error: CloudCpError, method: string, path: string): CloudCpError {
 		try {
-			onFailure?.(error);
+			onFailure?.(error, cloudRoute(method, path));
 		} catch {
 			// Diagnostics never change what the caller sees.
 		}
@@ -736,12 +739,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		const response = await send(method, path, init);
 		const text = await response.text().catch((error: unknown) => {
 			if (isAbortError(error) || init.signal?.aborted === true) throw error;
-			throw failed(toCloudCpError(error));
+			throw failed(toCloudCpError(error), method, path);
 		});
 		try {
 			return JSON.parse(text) as T;
 		} catch (error) {
-			throw failed(malformedResponse(response, error));
+			throw failed(malformedResponse(response, error), method, path);
 		}
 	}
 

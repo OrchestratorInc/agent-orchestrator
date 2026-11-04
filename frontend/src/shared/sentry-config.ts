@@ -32,6 +32,7 @@ export function safeSentryFunctionName(value: unknown, fallback: string): string
 
 const SAFE_EXCEPTION_TYPES = new Set([
 	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",
+	"CloudCpError",
 ]);
 
 export function safeSentryExceptionType(value: unknown): string {

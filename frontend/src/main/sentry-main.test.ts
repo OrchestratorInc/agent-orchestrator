@@ -334,19 +334,32 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("private session");
 	});
 
-	it("keeps an AO Cloud failure's origin, status, code and request id, apart from a daemon failure with the same code", async () => {
+	it("keeps an AO Cloud failure's origin, route, status, code, request id and stack, apart from a daemon failure with the same code", async () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const requestId = "0f8fad5b-d9cb-469f-a165-70867728950e";
-		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud http_5xx", level: "error", tags: { surface: "cloud", category: "http_5xx", code: "WORKER_UNAVAILABLE", http_status: "503", origin: "cloud", request_id: requestId } });
+		const route = "POST /orgs/{id}/sessions/{id}/messages";
+		transport.capture({
+			consentGeneration: "generation-1", kind: "exception", message: "AO Cloud http_5xx", level: "error",
+			tags: { surface: "cloud", category: "http_5xx", code: "WORKER_UNAVAILABLE", http_status: "503", origin: "cloud", route, request_id: requestId },
+			exception: { type: "CloudCpError", frames: [
+				{ function: "renderer_frame", filename: "assets/TaskComposer-EfGh5678.js", lineno: 33, colno: 9 },
+				{ function: "renderer_frame", filename: "assets/index-AbCd1234.js", lineno: 120, colno: 15 },
+			] },
+		});
 		const cloud = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
-		expect(cloud.message).toBe("Renderer AO Cloud error (WORKER_UNAVAILABLE)");
-		expect(cloud.tags).toEqual({ surface: "renderer", kind: "message", category: "http_5xx", code: "WORKER_UNAVAILABLE", origin: "cloud", http_status: "503", request_id: requestId });
+		expect(cloud.message).toBe("Renderer AO Cloud error in assets/index:120:15 (WORKER_UNAVAILABLE)");
+		expect(cloud.tags).toEqual({ surface: "renderer", kind: "exception", category: "http_5xx", code: "WORKER_UNAVAILABLE", origin: "cloud", http_status: "503", request_id: requestId, route });
+		expect(cloud.exception?.values?.[0]).toMatchObject({ type: "CloudCpError", stacktrace: { frames: [
+			{ filename: "assets/TaskComposer-EfGh5678.js", lineno: 33, colno: 9 },
+			{ filename: "assets/index-AbCd1234.js", lineno: 120, colno: 15 },
+		] } });
 
+		// AO Cloud not reached is never sent, nor is a route that still holds an id.
+		const sent = sdk.captureEvent.mock.calls.length;
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud network_error", level: "warning", tags: { category: "network_error", code: "CLOUD_UNREACHABLE", http_status: "0", origin: "network", request_id: requestId } });
-		const network = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
-		expect(network.message).toBe("Renderer AO Cloud unreachable (CLOUD_UNREACHABLE)");
-		expect(network.tags).toMatchObject({ origin: "network", http_status: "0", code: "CLOUD_UNREACHABLE", category: "network_error", request_id: requestId });
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "AO Cloud http_5xx", tags: { category: "http_5xx", origin: "cloud", route: "GET /orgs/0f8fad5b/sessions" } });
+		expect(sdk.captureEvent).toHaveBeenCalledTimes(sent);
 
 		// A daemon failure keeps its title and grouping, and its request id never leaves.
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "GET /api/v1/x http_5xx", tags: { category: "http_5xx", code: "INTERNAL_ERROR", http_status: "500", origin: "daemon" } });
@@ -356,6 +369,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(daemon.tags).not.toHaveProperty("request_id");
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "AO Cloud http_5xx", tags: { category: "http_5xx", code: "INTERNAL_ERROR", http_status: "500", origin: "cloud" } });
 		const cloudInternal = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(cloudInternal.message).toBe("Renderer AO Cloud error (INTERNAL_ERROR)");
 		expect(cloudInternal.fingerprint).not.toEqual(daemon.fingerprint);
 	});
 
@@ -456,10 +470,15 @@ describe("sanitizeRendererCapture", () => {
 		const base = { consentGeneration: "generation-1", kind: "message", message: "safe" };
 		expect(sanitizeRendererCapture({ ...base, rawError: "secret" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, tags: { request_id: "identifier" } })).toBeNull();
-		// A request id crosses only as a UUID (a daemon id names the host), and an origin only from its vocabulary.
+		// A request id crosses only as a UUID (a daemon id names the host), an origin
+		// only as cloud or daemon (AO Cloud not reached is never sent), and a route
+		// only with its ids replaced.
 		expect(sanitizeRendererCapture({ ...base, tags: { request_id: "laptop.local/AbCd-000001" } })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, tags: { origin: "elsewhere" } })).toBeNull();
-		expect(sanitizeRendererCapture({ ...base, tags: { origin: "network", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" } })?.tags).toEqual({ origin: "network", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" });
+		expect(sanitizeRendererCapture({ ...base, tags: { origin: "network" } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, tags: { route: "GET /orgs/acme-42" } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, tags: { origin: "cloud", route: "GET /orgs/{id}/sessions", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" } })?.tags).toEqual({ origin: "cloud", route: "GET /orgs/{id}/sessions", request_id: "0f8fad5b-d9cb-469f-a165-70867728950e" });
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "CloudCpError", frames: [] } })?.exception?.type).toBe("CloudCpError");
 		expect(sanitizeRendererCapture({ ...base, kind: "trace" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, level: "debug" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "ProjectError", frames: [] } })).toBeNull();

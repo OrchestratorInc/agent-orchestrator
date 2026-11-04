@@ -472,21 +472,28 @@ code, request ID and duration. It never logs the access token, a query string,
 or a request or response body.
 
 With Share error events on, Electron Sentry receives an AO Cloud failure only
-when it is unexpected: an AO Cloud 5xx response (a typed 503 stays a
-breadcrumb, as for the daemon), AO Cloud unreachable while this computer is
-online, or a response the app could not read (`CLOUD_MALFORMED_RESPONSE`).
-Expected refusals (any 4xx, such as a plan or usage limit, an expired sign-in,
-or a validation error), failures while the computer is offline, and a live
-stream dropping are not sent. One report per category, status and code is sent
-each 30 seconds at most. The event's title is fixed ("Renderer AO Cloud error"
-or "Renderer AO Cloud unreachable", with the code or category), and its tags
-are `origin` (`cloud` or `network`), `category` (`http_5xx`, `network_error` or
-`malformed_response`), `code` (from a fixed allowlist of AO Cloud and AO error
-codes, otherwise `unknown`), `http_status` (`0` when AO Cloud was not reached),
-and `request_id`, the request's random UUID. `request_id` is sent only for AO
-Cloud requests and only when it is a UUID. Renderer daemon API errors are
-tagged `origin: daemon` with their `http_status`; their request ID is not sent.
-No error message, URL, path, or body is sent.
+when AO Cloud itself failed: a 5xx response (500 to 599; a typed 503 stays a
+breadcrumb, as for the daemon) or a response the app could not read
+(`CLOUD_MALFORMED_RESPONSE`). Nothing is sent when AO Cloud could not be
+reached (that is this computer's network, or an outage AO Cloud's own uptime
+monitoring reports), for an expected refusal (any 4xx, such as a plan or usage
+limit, an expired sign-in, or a validation error), or when a live stream drops.
+One report per category, status and code is sent each 30 seconds at most.
+
+The event is an exception of type `CloudCpError` with the stack of the app
+code that made the request, including the calls it awaited: up to eight
+frames, each the app bundle file (such as `assets/index-AbCd1234.js`) with its
+line and column, and no function names. Its title is fixed ("Renderer AO Cloud
+error in" the innermost frame's file and line, with the code or category), and
+its tags are `origin: cloud`, `category` (`http_5xx` or `malformed_response`),
+`code` (from a fixed allowlist of AO Cloud and AO error codes, otherwise
+`unknown`), `http_status`, `route`, the request's method and path under
+`/api/cloud/v1` with every identifier, number and name replaced by `{id}` and
+no query (such as `POST /orgs/{id}/sessions/{id}/messages`), and
+`request_id`, the request's random UUID, sent only when it is a UUID. Renderer
+daemon API errors are tagged `origin: daemon` with their `http_status`; their
+request ID is not sent. No error message, URL, identifier, query, or body is
+sent.
 
 Report a problem drafts list the configured AO Cloud address, the AO Cloud
 release named by its last response, and up to three recent failed AO Cloud

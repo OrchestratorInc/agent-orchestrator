@@ -7,7 +7,7 @@
 // subscribeSessionEvents.
 
 import type { CloudCpOpenStreamResult, CloudCpProxyRequestInit, CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
-import { CLOUD_MALFORMED_RESPONSE } from "../../../shared/cloud-cp-errors";
+import { CLOUD_MALFORMED_RESPONSE, cloudRoute } from "../../../shared/cloud-cp-errors";
 import { aoBridge } from "../bridge";
 import { noteCloudFailure } from "../cloud-error-report";
 import { CloudCpError, cloudCpErrorFromFailure } from "./errors";
@@ -86,7 +86,7 @@ async function openBridgedStream(bridge: CloudCpStreamBridge, init: CloudCpProxy
 	}
 	if ("error" in result) {
 		const error = cloudCpErrorFromFailure(result.error);
-		noteCloudFailure(error);
+		noteCloudFailure(error, { route: cloudRoute(init.method, init.path) });
 		return { error };
 	}
 	return result;
