@@ -2634,6 +2634,8 @@
 	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
 	"settings.sideChats": "Seiten-Chats",
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
+	"settings.newSidebarDesign": "Neues Seitenleisten-Design",
+	"settings.newSidebarDesignHint": "Statussymbole, Hover-Vorschauen und Repository-Avatare in der linken Seitenleiste, mit den passenden Board-Farben. Ausschalten, um zur vorherigen Seitenleiste zurückzukehren.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
 	"settings.chromeAgents.hint": "Agenten können in deinem eigenen Chrome surfen, mit deinen Anmeldungen. Richte es in den Browser-Einstellungen ein.",
 	"settings.chromeAgents.goTo": "Öffnen",

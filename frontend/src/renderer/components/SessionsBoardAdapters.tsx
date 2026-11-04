@@ -36,6 +36,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { selectNewSidebarDesign, useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -290,6 +291,7 @@ function DesktopSessionCard({
 		</Tooltip>
 	) : undefined;
 
+	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
 	const card = (
 		<SessionCardView
 			action={action}
@@ -346,6 +348,7 @@ function DesktopSessionCard({
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
 			still={still}
+			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);

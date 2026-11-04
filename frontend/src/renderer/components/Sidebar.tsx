@@ -83,6 +83,7 @@ import {
 } from "../types/workspace";
 import {
 	getSessionRowMarker,
+	getSessionStatusDotView,
 	isAgentActivityWorking,
 	sessionNeedsInput,
 	type SessionRowMarker,
@@ -150,7 +151,7 @@ import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
-import { useUiStore } from "../stores/ui-store";
+import { selectNewSidebarDesign, useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { applyOrder } from "../lib/sidebar-order";
@@ -655,10 +656,31 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
+// The dot before the new sidebar design (switched off in Developer mode):
+// colour from the board section, breathing while the agent works.
+function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
+	const dot = getSessionStatusDotView(session);
+	return (
+		<span
+			aria-hidden="true"
+			className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5"
+		>
+			<span
+				className={cn(
+					"size-2 rounded-full",
+					dot.className,
+					dot.breathe && "animate-status-pulse",
+				)}
+				data-session-status={session.status}
+			/>
+		</span>
+	);
+}
+
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, working, harnessOnly }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean }) {
+function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean; legacy: boolean }) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
@@ -671,6 +693,7 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 		if (previous.current !== marker && marker) setPopped(true);
 		previous.current = marker;
 	}, [marker]);
+	if (legacy) return <LegacySessionStatusDot session={session} />;
 	if (harnessOnly) {
 		return (
 			// Same 14px box, 10px inset, and 8px gap as a project's avatar. A session
@@ -1628,14 +1651,18 @@ const ProjectItem = memo(function ProjectItem({
 		).filter((session) => session.isTerminated !== true),
 		[workspace.sessions, workspace.shared],
 	);
+	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
 	const projectNeedsInput = useMemo(
-		() => visibleSessions.some(sessionNeedsInput),
-		[visibleSessions],
+		() => newSidebarDesign && visibleSessions.some(sessionNeedsInput),
+		[newSidebarDesign, visibleSessions],
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
-		() => floatAttention(applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"), sessionOrder.length > 0),
-		[sessionOrder, visibleSessions],
+		() => {
+			const ordered = applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start");
+			return newSidebarDesign ? floatAttention(ordered, sessionOrder.length > 0) : ordered;
+		},
+		[newSidebarDesign, sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
@@ -2605,7 +2632,7 @@ const SessionRow = memo(function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
-	harnessOnly = false,
+	harnessOnly: harnessOnlyRequested = false,
 	layoutDependency,
 	listIsDragging = false,
 	onKilled,
@@ -2633,6 +2660,9 @@ const SessionRow = memo(function SessionRow({
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
+	const newSidebarDesign = useUiStore(selectNewSidebarDesign);
+	// The Scratchpad's logo-only rows are part of the new design.
+	const harnessOnly = harnessOnlyRequested && newSidebarDesign;
 	const working = isSessionRowWorking(session);
 	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
@@ -2641,8 +2671,8 @@ const SessionRow = memo(function SessionRow({
 		const updated = Date.parse(session.updatedAt);
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
-	const shimmer = working && !active && !harnessOnly;
-	const marker = harnessOnly || working ? null : getSessionRowMarker(session);
+	const shimmer = newSidebarDesign && working && !active && !harnessOnly;
+	const marker = !newSidebarDesign || harnessOnly || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2652,7 +2682,7 @@ const SessionRow = memo(function SessionRow({
 	const [contextMenuOpen, setContextMenuOpen] = useState(false);
 	// No preview while renaming, dragging, or with the context menu open.
 	const preview = useSessionPreviewHover(
-		Boolean(reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
+		Boolean(!newSidebarDesign || reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
 	);
 	const setSortableNode = reorder?.setNodeRef;
 	const setPreviewRow = preview.rowRef;
@@ -2705,7 +2735,7 @@ const SessionRow = memo(function SessionRow({
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot harnessOnly={harnessOnly} session={session} working={working} />
+					<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
@@ -2813,7 +2843,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot harnessOnly={harnessOnly} session={session} working={working} />
+							<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
@@ -3587,7 +3617,7 @@ function ProjectIcon({
 	expanded: boolean;
 	className?: string;
 }) {
-	const avatarsEnabled = useUiStore((state) => state.projectAvatars);
+	const avatarsEnabled = useUiStore((state) => state.projectAvatars && selectNewSidebarDesign(state));
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {
