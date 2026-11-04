@@ -26,6 +26,7 @@ import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSec
 import { useUiStore } from "../stores/ui-store";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { NewChatRecents } from "./NewChatRecents";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -34,7 +35,7 @@ import { cn } from "../lib/utils";
  * session; the page keeps the brief on screen and hands it to the session's own
  * chat, so starting a task reads as one continuous conversation.
  */
-export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?: string }) {
+export function NewChatPage({ projectId, hostId, showRecents = false }: { projectId: string; hostId?: string; showRecents?: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -390,10 +391,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId, home: showRecents || undefined }, replace: true })} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
+				emptyFooter={showRecents && !hostId ? <NewChatRecents /> : undefined}
 				onSend={send}
 				busy={pending}
 				// The Cloud session started for this task is still coming up.

@@ -605,6 +605,8 @@ export interface ChatWorkspaceProps {
 	openingStartedAt?: string;
 	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
 	composerTray?: ReactNode;
+	/** Shown under the composer and its tray while the chat is empty, e.g. recent work on the new chat page. */
+	emptyFooter?: ReactNode;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
@@ -823,6 +825,7 @@ function ChatWorkspaceContent({
 	draftNotice,
 	openingStartedAt,
 	composerTray,
+	emptyFooter,
 	centerInWindow = false,
 	showSetupStep = true,
 	holdAttachments,
@@ -2127,6 +2130,7 @@ function ChatWorkspaceContent({
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
+								{conversationEmpty ? emptyFooter : null}
 							</div>
 						</div>
 					</div>

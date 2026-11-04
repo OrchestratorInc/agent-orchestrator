@@ -25,5 +25,5 @@ function ShellIndex() {
 			workspaceQuery.isSuccess &&
 			!requirementsBlocked);
 	if (!ready) return <DaemonStartupLoader />;
-	return <Navigate to="/new" search={{ project: lastProjectId(workspaceQuery.data ?? []) }} replace />;
+	return <Navigate to="/new" search={{ project: lastProjectId(workspaceQuery.data ?? []), home: true }} replace />;
 }
