@@ -1170,12 +1170,12 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		// Nothing to fold, so no "Worked for": the time ends the answer's action row instead.
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
 		const duration = screen.getByText("1m");
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
 		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {

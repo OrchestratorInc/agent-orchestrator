@@ -687,7 +687,6 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{retry ? (
 					<Button
 						type="button"
@@ -726,12 +725,14 @@ export function TurnActions({
 								disabled={rollbackDisabled}
 								aria-label="Roll back to here"
 							>
-								<Undo2 aria-hidden="true" className="size-3" />
+								<Undo2 aria-hidden="true" className="size-3.5" />
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">Roll back to here</TooltipContent>
 					</Tooltip>
 				) : null}
+				{/* After the actions, so copy and roll back sit at the same spot on every reply. */}
+				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -1081,7 +1082,7 @@ export function HumanMessage({
 								onClick={onEditStart}
 								aria-label="Edit user message"
 							>
-								<Pencil aria-hidden="true" className="size-3" />
+								<Pencil aria-hidden="true" className="size-3.5" />
 							</Button>
 						) : null}
 						<CopyButton
