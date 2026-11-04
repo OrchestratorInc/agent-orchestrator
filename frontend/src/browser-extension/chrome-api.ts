@@ -119,6 +119,7 @@ export type ChromeApi = {
 	webNavigation: {
 		getAllFrames(details: { tabId: number }): Promise<Frame[] | null>;
 		onCommitted: Listener<[NavigationDetails]>;
+		onDOMContentLoaded: Listener<[NavigationDetails]>;
 		onCompleted: Listener<[NavigationDetails]>;
 		onErrorOccurred: Listener<[NavigationDetails]>;
 	};

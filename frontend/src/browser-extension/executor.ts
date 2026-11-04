@@ -20,6 +20,8 @@ import { normalizeAgentURL, originOf } from "./urls";
 
 const ACT_VERBS = new Set(["click", "dblclick", "focus", "hover", "fill", "type", "check", "uncheck"]);
 const NAVIGATION_TIMEOUT_MS = 30_000;
+// Heavy pages can take many seconds to fire load after they are usable.
+const LOAD_GRACE_MS = 1_500;
 const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
 export const POLICY_KEY = "aoSitePolicy";
@@ -309,7 +311,16 @@ export class Executor {
 		await this.assertFrameAllowed(ctx, page, this.frameFor(ctx, page));
 		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
 		const urls = await this.frameChainUrls(page, this.frameFor(ctx, page));
-		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
+		if (!urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url))) return false;
+		// Trusted input needs the tab in front. Never take that from the user.
+		return !(await this.userChoseAnotherTab(page));
+	}
+
+	/** The user is on a tab no agent owns in this tab's window. */
+	private async userChoseAnotherTab(page: ActiveTab): Promise<boolean> {
+		if (page.tab.active) return false;
+		const [front] = await this.deps.chrome.tabs.query({ windowId: page.tab.windowId, active: true });
+		return front?.id !== undefined && !this.deps.sessions.ownerOf(front.id);
 	}
 
 	/**
@@ -345,12 +356,18 @@ export class Executor {
 			const finish = (loaded: boolean, error?: Error) => {
 				if (done) return;
 				done = true;
+				chrome.webNavigation.onDOMContentLoaded.removeListener(onDomContentLoaded);
 				chrome.webNavigation.onCompleted.removeListener(onCompleted);
 				chrome.webNavigation.onErrorOccurred.removeListener(onError);
 				clearTimeout(timer);
+				clearTimeout(graceTimer);
 				signal.removeEventListener("abort", onAbort);
 				if (error) reject(error);
 				else resolve(loaded);
+			};
+			let graceTimer: ReturnType<typeof setTimeout> | undefined;
+			const onDomContentLoaded = (details: { tabId: number; frameId: number }) => {
+				if (details.tabId === tabId && details.frameId === 0) graceTimer ??= setTimeout(() => finish(false), LOAD_GRACE_MS);
 			};
 			const onCompleted = (details: { tabId: number; frameId: number }) => {
 				if (details.tabId === tabId && details.frameId === 0) finish(true);
@@ -362,6 +379,7 @@ export class Executor {
 			};
 			const onAbort = () => finish(false, new BridgeError("BROWSER_COMMAND_CANCELED", "Browser command was canceled"));
 			const timer = setTimeout(() => finish(false), NAVIGATION_TIMEOUT_MS);
+			chrome.webNavigation.onDOMContentLoaded.addListener(onDomContentLoaded);
 			chrome.webNavigation.onCompleted.addListener(onCompleted);
 			chrome.webNavigation.onErrorOccurred.addListener(onError);
 			signal.addEventListener("abort", onAbort, { once: true });
@@ -660,7 +678,7 @@ export class Executor {
 	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			if (!(await this.useTrustedInput(ctx, page))) {
-				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
+				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site or needs the agent's tab in front");
 			}
 			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
@@ -752,6 +770,9 @@ export class Executor {
 		const chrome = this.deps.chrome;
 		for (let attempt = 0; ; attempt++) {
 			const fresh = await this.refreshed(page);
+			if (await this.userChoseAnotherTab(fresh)) {
+				throw new BridgeError("BROWSER_TAB_BUSY", "The user is on another tab in the agent's window, and a screenshot would need to switch it. Use snapshot instead, or retry later");
+			}
 			const windowId = fresh.tab.windowId;
 			const previous = this.captureLocks.get(windowId) ?? Promise.resolve();
 			const run = previous.catch(() => undefined).then(async () => {

@@ -52,6 +52,7 @@ class FakeChrome {
 	debuggerCalls: { method: string; params?: Record<string, unknown> }[] = [];
 	attached = 0;
 	windowsCreated: string[] = [];
+	holdLoad = false;
 	windowStates = new Map<number, string>();
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
@@ -63,6 +64,7 @@ class FakeChrome {
 		windowsRemoved: event(),
 		runtimeMessage: event(),
 		navCommitted: event(),
+		navDomContentLoaded: event(),
 		navCompleted: event(),
 		navError: event(),
 		debuggerEvent: event(),
@@ -95,7 +97,8 @@ class FakeChrome {
 		this.injected.delete(tabId);
 		this.registries.set(tabId, new RefRegistry());
 		this.events.navCommitted.fire({ tabId, frameId: 0, url });
-		setTimeout(() => this.events.navCompleted.fire({ tabId, frameId: 0, url }), 0);
+		this.events.navDomContentLoaded.fire({ tabId, frameId: 0, url });
+		if (!this.holdLoad) setTimeout(() => this.events.navCompleted.fire({ tabId, frameId: 0, url }), 0);
 	}
 
 	api(): ChromeApi {
@@ -225,6 +228,7 @@ class FakeChrome {
 			webNavigation: {
 				getAllFrames: async () => self.frames,
 				onCommitted: self.events.navCommitted,
+				onDOMContentLoaded: self.events.navDomContentLoaded,
 				onCompleted: self.events.navCompleted,
 				onErrorOccurred: self.events.navError,
 			},
@@ -526,19 +530,64 @@ describe("Executor", () => {
 		await run("open", { url: "https://shop.test/" });
 		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
 		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: sessionWindow });
-		// The user switches the session's window to another tab during every capture.
+		// The user switches the session's window to another tab during the capture.
 		fake.duringCapture = () => fake.activate(personal.id!);
-		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
+		expect(fake.captures).toHaveLength(1);
+		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
+	});
 
-		// A single switch is retried and then succeeds on the session's tab.
-		let switches = 1;
-		fake.duringCapture = () => {
-			if (switches-- > 0) fake.activate(personal.id!);
-		};
-		fake.captures = [];
-		expect(await run("screenshot")).toMatchObject({ target: { url: "https://shop.test/" } });
-		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.id!;
-		expect(fake.captures).toEqual([personal.id, own]);
+	it("never switches away from a tab the user chose in the agent's window", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!;
+		await run("screenshot");
+		expect(own.active).toBe(true);
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: own.windowId });
+		fake.activate(personal.id!);
+		const inputBefore = fake.debuggerCalls.length;
+
+		// Input still works, without trusted input, which would need the tab in front.
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
+		expect(await run("press", { key: "Enter" })).toBeTruthy();
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
+		expect(fake.tabs.get(personal.id!)!.active).toBe(true);
+		expect(fake.debuggerCalls.slice(inputBefore).filter((call) => call.method.startsWith("Input."))).toEqual([]);
+
+		// Back on the agent's tab, trusted input resumes.
+		fake.activate(own.id!);
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
+	});
+
+	it("still brings an agent's own tab forward when another agent tab is in front", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await run("screenshot");
+		await run("tab-new", { url: "https://shop.test/more" });
+		const first = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/more")!;
+		await run("screenshot");
+		expect(first.active).toBe(true);
+	});
+
+	it("returns from open once the page is usable, without waiting for every resource", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		fake.holdLoad = true;
+		const started = Date.now();
+		const opened = await run("open", { url: "https://shop.test/" });
+		expect(opened).toMatchObject({ url: "https://shop.test/", isLoading: true });
+		expect(Date.now() - started).toBeLessThan(5_000);
+	});
+
+	it("reports a fully loaded page when load finishes within the grace period", async () => {
+		const { run, approve } = setup();
+		await approve();
+		expect(await run("open", { url: "https://shop.test/" })).toMatchObject({ isLoading: false });
 	});
 
 	it("applies the site policy to frames, not just the tab", async () => {

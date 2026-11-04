@@ -55,7 +55,7 @@ it("reconnects to AO when Chrome wakes the service worker with its alarm or at s
 		},
 		alarms: { create: createAlarm, onAlarm: listen("alarm") },
 		tabs: { onRemoved: listen("tabRemoved"), onUpdated: listen("tabUpdated"), onActivated: listen("tabActivated") },
-		webNavigation: { onCommitted: listen("navCommitted"), onCompleted: listen("navCompleted"), onErrorOccurred: listen("navError") },
+		webNavigation: { onCommitted: listen("navCommitted"), onDOMContentLoaded: listen("navDomContentLoaded"), onCompleted: listen("navCompleted"), onErrorOccurred: listen("navError") },
 		webRequest: { onBeforeRequest: listen("requestStarted"), onCompleted: listen("requestCompleted"), onErrorOccurred: listen("requestError") },
 		tabGroups: { onRemoved: listen("groupRemoved") },
 		windows: { onRemoved: listen("windowRemoved") },
