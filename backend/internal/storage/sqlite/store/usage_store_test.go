@@ -2021,6 +2021,50 @@ func TestGooseUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOpenCodeFamilyUsageEventRoundTrip catches the store rejecting OpenCode
+// and Kilo events in either token vocabulary: both route any provider, so an
+// Anthropic call and a z.ai call can land in one chunk.
+func TestOpenCodeFamilyUsageEventRoundTrip(t *testing.T) {
+	for _, tt := range []struct {
+		harness domain.AgentHarness
+		kind    domain.UsageSourceKind
+		path    string
+	}{
+		{domain.HarnessOpenCode, domain.UsageSourceOpenCodeDB, "/tmp/opencode/opencode.db"},
+		{domain.HarnessKilocode, domain.UsageSourceKiloDB, "/tmp/kilo/kilo.db"},
+	} {
+		t.Run(string(tt.harness), func(t *testing.T) {
+			s := newTestStore(t)
+			now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+			session := seedUsageSession(t, s, tt.harness)
+			binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+				NativeRootID: "ses_root", State: domain.UsageBindingActive,
+			})
+			source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+				BindingID: binding.ID, Kind: tt.kind,
+				NativeSessionID: "ses_root", ArtifactPath: tt.path,
+				FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+			})
+			anthropic := usageEvent("opencode-anthropic", canonicalUsageTokens(100, 20, 80, 20))
+			anthropic.ProviderID = domain.UsageProviderAnthropic
+			anthropic.ModelID = "claude-sonnet-4-5"
+			zai := usageEvent("opencode-zai", canonicalUsageTokens(50, 20, 30, 5))
+			zai.ProviderID = domain.UsageProviderOpenAI
+			zai.ModelID = "glm-4.5"
+			if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+				ByteOffset: 2, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+			}, []domain.ModelUsageEvent{anthropic, zai}); err != nil {
+				t.Fatalf("apply %s usage: %v", tt.harness, err)
+			}
+			models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+			mustNoError(t, err)
+			if len(models) != 2 {
+				t.Fatalf("%s aggregates = %+v", tt.harness, models)
+			}
+		})
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"

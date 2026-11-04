@@ -69,6 +69,8 @@ type SourceRoots struct {
 	PiSessions     string
 	QwenUsage      string
 	GooseSessions  string
+	OpenCodeData   string
+	KiloData       string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -106,6 +108,8 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		PiSessions:     filepath.Join(dataDir, "pi", "sessions"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
 		GooseSessions:  filepath.Join(gooseDataDir(home), "sessions"),
+		OpenCodeData:   openCodeFamilyDataDir(home, "OPENCODE_DATA_DIR", "opencode"),
+		KiloData:       openCodeFamilyDataDir(home, "KILO_DATA_DIR", "kilo"),
 	}, nil
 }
 
@@ -133,10 +137,36 @@ func gooseDataDir(home string) string {
 // session; per-call usage lives in its usage_ledger table.
 const gooseSessionsDBName = "sessions.db"
 
+// openCodeFamilyDataDir mirrors the data directory OpenCode and its Kilo Code
+// fork resolve, as the AO adapters do: an explicit data-dir variable, then
+// XDG_DATA_HOME, then ~/.local/share on every platform. AO launches both with
+// the daemon's environment, so the daemon resolves the same directory.
+func openCodeFamilyDataDir(home, dataDirEnv, app string) string {
+	if dataDir := strings.TrimSpace(os.Getenv(dataDirEnv)); dataDir != "" && filepath.IsAbs(dataDir) {
+		return dataDir
+	}
+	if dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dataHome != "" && filepath.IsAbs(dataHome) {
+		return filepath.Join(dataHome, app)
+	}
+	return filepath.Join(home, ".local", "share", app)
+}
+
+// openCodeDBName and kiloDBName are the one SQLite database each keeps for
+// every session on its default release channel; step-finish parts carry the
+// per-call usage.
+const (
+	openCodeDBName = "opencode.db"
+	kiloDBName     = "kilo.db"
+)
+
 // sqliteUsageHarness reports whether the harness stores usage in a SQLite
 // database read by row cursor rather than in an append-only JSONL transcript.
 func sqliteUsageHarness(harness domain.AgentHarness) bool {
-	return harness == domain.HarnessGoose
+	switch harness {
+	case domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode:
+		return true
+	}
+	return false
 }
 
 func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, error) {
@@ -500,7 +530,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessPi ||
-			session.Harness == domain.HarnessQwen || session.Harness == domain.HarnessGoose ||
+			session.Harness == domain.HarnessQwen || sqliteUsageHarness(session.Harness) ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
@@ -2509,6 +2539,16 @@ func validateSourceAttribution(
 			subagentID != "" || filepath.Base(resolved) != gooseSessionsDBName {
 			return rejected()
 		}
+	case domain.UsageSourceOpenCodeDB:
+		if binding.Harness != domain.HarnessOpenCode || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != openCodeDBName {
+			return rejected()
+		}
+	case domain.UsageSourceKiloDB:
+		if binding.Harness != domain.HarnessKilocode || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != kiloDBName {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2564,6 +2604,10 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.QwenUsage}
 	case domain.HarnessGoose:
 		return []string{c.roots.GooseSessions}
+	case domain.HarnessOpenCode:
+		return []string{c.roots.OpenCodeData}
+	case domain.HarnessKilocode:
+		return []string{c.roots.KiloData}
 	default:
 		return nil
 	}
@@ -2583,6 +2627,10 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceQwenMonthly, true
 	case domain.HarnessGoose:
 		return domain.UsageSourceGooseLedger, true
+	case domain.HarnessOpenCode:
+		return domain.UsageSourceOpenCodeDB, true
+	case domain.HarnessKilocode:
+		return domain.UsageSourceKiloDB, true
 	default:
 		return "", false
 	}
@@ -2637,7 +2685,11 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 	case domain.HarnessQwen:
 		return c.discoverQwenPath(ctx, sessionID)
 	case domain.HarnessGoose:
-		return c.discoverGoosePath(ctx)
+		return discoverDatabasePath(ctx, c.roots.GooseSessions, gooseSessionsDBName)
+	case domain.HarnessOpenCode:
+		return discoverDatabasePath(ctx, c.roots.OpenCodeData, openCodeDBName)
+	case domain.HarnessKilocode:
+		return discoverDatabasePath(ctx, c.roots.KiloData, kiloDBName)
 	}
 	type candidate struct {
 		path string
@@ -2683,14 +2735,16 @@ func qwenUsageFilename(name string) bool {
 	return err == nil
 }
 
-func (c *Collector) discoverGoosePath(ctx context.Context) (string, error) {
+// discoverDatabasePath returns the agent's one global usage database under
+// root, or "" until the agent has created it.
+func discoverDatabasePath(ctx context.Context, root, name string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(c.roots.GooseSessions) == "" {
+	if strings.TrimSpace(root) == "" {
 		return "", nil
 	}
-	path := filepath.Join(c.roots.GooseSessions, gooseSessionsDBName)
+	path := filepath.Join(root, name)
 	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 		return "", nil
 	}

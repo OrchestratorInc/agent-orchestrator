@@ -27,14 +27,17 @@ const (
 )
 
 // sqliteUsageReader returns up to limit usage rows for the bound native
-// session whose row ID is greater than after, ordered by row ID. Each row is
-// encoded as one JSON record whose Offset is its row ID, so the source's
-// durable byte_offset column doubles as the row cursor and the per-kind parser
-// reuses the JSONL parsing contract.
+// session whose row cursor is greater than after, ordered by that cursor. Each
+// row is encoded as one JSON record whose Offset is its cursor (a row ID, or
+// another strictly increasing per-row key), so the source's durable byte_offset
+// column doubles as the row cursor and the per-kind parser reuses the JSONL
+// parsing contract.
 type sqliteUsageReader func(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
 var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
 	domain.UsageSourceGooseLedger: readGooseLedgerRows,
+	domain.UsageSourceOpenCodeDB:  readOpenCodeSteps,
+	domain.UsageSourceKiloDB:      readOpenCodeSteps,
 }
 
 func sqliteUsageSource(kind domain.UsageSourceKind) bool {

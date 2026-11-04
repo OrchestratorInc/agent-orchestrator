@@ -19,6 +19,8 @@ const (
 	UsageSourcePiSession      UsageSourceKind = "pi_session"
 	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
 	UsageSourceGooseLedger    UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB     UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB         UsageSourceKind = "kilo_db"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -32,6 +34,8 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourcePiSession,
 	UsageSourceQwenMonthly,
 	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
 }
 
 // IsKnown reports whether k is a certified usage source kind.
