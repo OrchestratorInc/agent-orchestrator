@@ -3,8 +3,11 @@ package usage
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -154,6 +157,60 @@ func TestCollectorBindsPrimeAgentTranscriptByWorkspace(t *testing.T) {
 			}
 			sources, err := store.ListUsageSourcesForBinding(ctx, bindings[0].ID)
 			if err != nil || len(sources) != 1 || sources[0].Kind != domain.UsageSourcePrimeAgentSession ||
+				sources[0].ArtifactPath != canonicalUsagePath(t, path) {
+				t.Fatalf("sources = %+v, err=%v", sources, err)
+			}
+		})
+	}
+}
+
+// Break caught: DeepSeek Harness sessions never binding. Terminal sessions
+// expose no hook that names the native ID, so the session log binds to the one
+// live session in its recorded cwd; a Chat session carries the ID as its ACP
+// session and binds by it. Both logs are zstd frames two levels below the root.
+func TestCollectorBindsDeepSeekSessionLogs(t *testing.T) {
+	const nativeID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"
+	ctx := context.Background()
+	started := time.Now().UTC().Add(-time.Minute)
+	header := func(cwd string) string {
+		return `{"type":"session","version":4,"id":"` + nativeID + `","createdAt":` +
+			strconv.FormatInt(started.Add(2*time.Second).UnixMilli(), 10) + `,"cwd":"` + cwd + `"}` + "\n"
+	}
+	writeLog := func(t *testing.T, path, content string) {
+		t.Helper()
+		encoder, err := zstd.NewWriter(nil)
+		mustNoError(t, err)
+		writeUsageFixture(t, path, string(encoder.EncodeAll([]byte(content), nil)))
+	}
+	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := collectorTestStore(t)
+			workspace := t.TempDir()
+			metadata := domain.SessionMetadata{WorkspacePath: workspace}
+			if mode == domain.SessionModeChat {
+				metadata = domain.SessionMetadata{ProviderConversationID: nativeID}
+			}
+			session, err := store.CreateSession(ctx, domain.SessionRecord{
+				ProjectID: "usage-test", Kind: domain.KindWorker, Harness: domain.HarnessDeepSeek, Mode: mode,
+				Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: started},
+				Metadata: metadata, CreatedAt: started, UpdatedAt: started,
+			})
+			mustNoError(t, err)
+			root := t.TempDir()
+			dir := filepath.Join(root, "--repo--", nativeID)
+			path := filepath.Join(dir, "session.v4.jsonl.zstd")
+			writeLog(t, path, header(workspace))
+			// The older log format beside it must never become a source.
+			writeLog(t, filepath.Join(dir, "session.jsonl.zstd"), header(workspace))
+			collector := NewCollector(store, SourceRoots{DeepSeekSessions: root}, nil)
+
+			mustNoError(t, collector.BackfillActive(ctx))
+			bindings, err := store.ListUsageBindingsForSession(ctx, session.ID)
+			if err != nil || len(bindings) != 1 || bindings[0].NativeRootID != nativeID {
+				t.Fatalf("bindings = %+v, err=%v", bindings, err)
+			}
+			sources, err := store.ListUsageSourcesForBinding(ctx, bindings[0].ID)
+			if err != nil || len(sources) != 1 || sources[0].Kind != domain.UsageSourceDeepSeekSession ||
 				sources[0].ArtifactPath != canonicalUsagePath(t, path) {
 				t.Fatalf("sources = %+v, err=%v", sources, err)
 			}

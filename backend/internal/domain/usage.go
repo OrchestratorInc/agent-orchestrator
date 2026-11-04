@@ -25,6 +25,8 @@ const (
 	UsageSourceOpenCodeDB        UsageSourceKind = "opencode_db"
 	UsageSourceKiloDB            UsageSourceKind = "kilo_db"
 	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
+	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
+	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -44,6 +46,8 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceOpenCodeDB,
 	UsageSourceKiloDB,
 	UsageSourceGrokUsage,
+	UsageSourceDeepSeekSession,
+	UsageSourceAgyConversation,
 }
 
 // IsKnown reports whether k is a certified usage source kind.

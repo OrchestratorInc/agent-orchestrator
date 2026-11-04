@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -76,6 +77,11 @@ type SourceRoots struct {
 	OpenCodeData       string
 	KiloData           string
 	GrokSessions       string
+	DeepSeekSessions   string
+	// AgyCLIConversations and AgyACPConversations hold one SQLite database per
+	// Antigravity conversation, for the terminal CLI and the ACP server.
+	AgyCLIConversations string
+	AgyACPConversations string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -111,19 +117,22 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	ompAgentDir := piFamilyAgentDir(home, "PI_CODING_AGENT_DIR", ".omp", "agent")
 	kimchiAgentDir := piFamilyAgentDir(home, "KIMCHI_CODING_AGENT_DIR", ".config", "kimchi", "harness")
 	return SourceRoots{
-		ClaudeProjects:     filepath.Join(claudeHome, "projects"),
-		CodexSessions:      filepath.Join(codexHome, "sessions"),
-		CodexArchived:      filepath.Join(codexHome, "archived_sessions"),
-		KimiHome:           filepath.Join(dataDir, "kimi"),
-		PiSessions:         filepath.Join(dataDir, "pi", "sessions"),
-		QwenUsage:          filepath.Join(qwenRuntime, "usage"),
-		OMPSessions:        filepath.Join(ompAgentDir, "sessions"),
-		KimchiSessions:     filepath.Join(kimchiAgentDir, "sessions"),
-		PrimeAgentSessions: filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
-		GooseSessions:      filepath.Join(gooseDataDir(home), "sessions"),
-		OpenCodeData:       openCodeFamilyDataDir(home, "OPENCODE_DATA_DIR", "opencode"),
-		KiloData:           openCodeFamilyDataDir(home, "KILO_DATA_DIR", "kilo"),
-		GrokSessions:       filepath.Join(grokHome(home), "sessions"),
+		ClaudeProjects:      filepath.Join(claudeHome, "projects"),
+		CodexSessions:       filepath.Join(codexHome, "sessions"),
+		CodexArchived:       filepath.Join(codexHome, "archived_sessions"),
+		KimiHome:            filepath.Join(dataDir, "kimi"),
+		PiSessions:          filepath.Join(dataDir, "pi", "sessions"),
+		QwenUsage:           filepath.Join(qwenRuntime, "usage"),
+		OMPSessions:         filepath.Join(ompAgentDir, "sessions"),
+		KimchiSessions:      filepath.Join(kimchiAgentDir, "sessions"),
+		PrimeAgentSessions:  filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		GooseSessions:       filepath.Join(gooseDataDir(home), "sessions"),
+		OpenCodeData:        openCodeFamilyDataDir(home, "OPENCODE_DATA_DIR", "opencode"),
+		KiloData:            openCodeFamilyDataDir(home, "KILO_DATA_DIR", "kilo"),
+		GrokSessions:        filepath.Join(grokHome(home), "sessions"),
+		DeepSeekSessions:    filepath.Join(deepseekHome(home), "sessions"),
+		AgyCLIConversations: filepath.Join(agyGeminiHome(home), agyCLIStorageDir, "conversations"),
+		AgyACPConversations: filepath.Join(agyGeminiHome(home), agyACPStorageDir, "conversations"),
 	}, nil
 }
 
@@ -179,7 +188,7 @@ const (
 func sqliteUsageHarness(harness domain.AgentHarness) bool {
 	switch harness {
 	case domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode,
-		domain.HarnessGrok:
+		domain.HarnessGrok, domain.HarnessAgy:
 		return true
 	}
 	return false
@@ -193,6 +202,40 @@ func grokHome(home string) string {
 	}
 	return filepath.Join(home, ".grok")
 }
+
+// deepseekHome mirrors DeepSeek Harness's DSH_HOME override for its whole
+// home, as the AO adapter does; otherwise ~/.dsh.
+func deepseekHome(home string) string {
+	if dir := strings.TrimSpace(os.Getenv("DSH_HOME")); dir != "" && filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(home, ".dsh")
+}
+
+// agyGeminiHome mirrors Antigravity's GEMINI_HOME override, as the AO adapter
+// does; otherwise ~/.gemini.
+func agyGeminiHome(home string) string {
+	if dir := strings.TrimSpace(os.Getenv("GEMINI_HOME")); dir != "" && filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(home, ".gemini")
+}
+
+// The Antigravity storage roots under GEMINI_HOME for the terminal CLI and
+// the ACP server; each keeps conversations/<conversation id>.db.
+const (
+	agyCLIStorageDir = "antigravity-cli"
+	agyACPStorageDir = "antigravity-acp"
+)
+
+// deepseekSessionLogName is the session log DeepSeek Harness appends a zstd
+// frame to per flush, under sessions/<encoded cwd>/<session id>/.
+const deepseekSessionLogName = "session.v4.jsonl.zstd"
+
+// deepseekSnapshotIdentity is the fixed identity of a DeepSeek session log. The
+// log is decompressed whole on every read and its record seq is the cursor, so
+// the file's own identity decides nothing.
+const deepseekSnapshotIdentity = "deepseek-session-log"
 
 // grokUsageFileName is the per-session snapshot Grok Build rewrites after each
 // turn, under sessions/<encoded cwd>/<session id>/.
@@ -978,7 +1021,7 @@ func (c *Collector) backfillPiFamilyPaths(
 	if !hasLive || root == "" {
 		return nil
 	}
-	paths, err := newestPiPaths(ctx, root, 256)
+	paths, err := newestPiPaths(ctx, family, root, 256)
 	if err != nil {
 		return err
 	}
@@ -1210,6 +1253,9 @@ func (c *Collector) reconcilePiFamilyPath(
 	path string,
 	sessions []domain.SessionRecord,
 ) error {
+	if family.transcriptName != "" && filepath.Base(path) != family.transcriptName {
+		return nil // Another file in the session directory, such as its lock.
+	}
 	resolved, _, _, err := c.validateSourcePath(ctx, family.harness, "", path)
 	if err != nil {
 		return err
@@ -1236,7 +1282,7 @@ func (c *Collector) reconcilePiFamilyPath(
 		candidate := session
 		match = &candidate
 	}
-	if match == nil && family.aoOwnedRoot {
+	if match == nil && family.bindByWorkspace {
 		match = piFamilyWorkspaceMatch(family, meta, sessions)
 	}
 	if match == nil {
@@ -1282,8 +1328,8 @@ const piFamilyWorkspaceClockSkew = 5 * time.Second
 // The transcript must also start after the session did, so one left by an
 // earlier AO session in the same worktree is never claimed.
 func piFamilyWorkspaceMatch(family piFamilyHarness, meta piSessionMeta, sessions []domain.SessionRecord) *domain.SessionRecord {
-	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(meta.Timestamp))
-	if strings.TrimSpace(meta.CWD) == "" || err != nil {
+	started, ok := meta.startedAt()
+	if strings.TrimSpace(meta.CWD) == "" || !ok {
 		return nil
 	}
 	var match *domain.SessionRecord
@@ -2526,6 +2572,9 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if harness == domain.HarnessGrok {
 		wantExt = ".json"
 	}
+	if harness == domain.HarnessDeepSeek {
+		wantExt = ".zstd"
+	}
 	if !filepath.IsAbs(path) || strings.ToLower(filepath.Ext(path)) != wantExt {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
@@ -2572,6 +2621,9 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	}
 	if harness == domain.HarnessGrok {
 		return resolved, grokSnapshotIdentity, math.MaxInt64, nil
+	}
+	if harness == domain.HarnessDeepSeek {
+		return resolved, deepseekSnapshotIdentity, math.MaxInt64, nil
 	}
 	if sqliteUsageHarness(harness) {
 		// A SQLite source's cursor is a row ID, which the database's byte length
@@ -2637,11 +2689,12 @@ func validateSourceAttribution(
 			return rejected()
 		}
 	case domain.UsageSourcePiSession, domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession,
-		domain.UsageSourcePrimeAgentSession:
+		domain.UsageSourcePrimeAgentSession, domain.UsageSourceDeepSeekSession:
 		family, known := piFamilyForKind(kind)
 		meta, ok := readPiFamilySessionMeta(ctx, resolved, family)
 		if !known || binding.Harness != family.harness || nativeSessionID != binding.NativeRootID ||
-			subagentID != "" || !ok || meta.ID != nativeSessionID {
+			subagentID != "" || !ok || meta.ID != nativeSessionID ||
+			family.transcriptName != "" && filepath.Base(resolved) != family.transcriptName {
 			return rejected()
 		}
 	case domain.UsageSourceQwenMonthly:
@@ -2659,6 +2712,12 @@ func validateSourceAttribution(
 	case domain.UsageSourceOpenCodeDB:
 		if binding.Harness != domain.HarnessOpenCode || nativeSessionID != binding.NativeRootID ||
 			subagentID != "" || !openCodeFamilyDBName(filepath.Base(resolved), openCodeApp) {
+			return rejected()
+		}
+	case domain.UsageSourceAgyConversation:
+		// Each conversation has its own database, named for the conversation.
+		if binding.Harness != domain.HarnessAgy || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != nativeSessionID+".db" {
 			return rejected()
 		}
 	case domain.UsageSourceKiloDB:
@@ -2721,7 +2780,7 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.CodexSessions, c.roots.CodexArchived}
 	case domain.HarnessKimi:
 		return []string{c.roots.KimiHome}
-	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent:
+	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent, domain.HarnessDeepSeek:
 		family, _ := piFamilyForHarness(harness)
 		return []string{c.piFamilyRoot(family)}
 	case domain.HarnessQwen:
@@ -2732,6 +2791,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.OpenCodeData}
 	case domain.HarnessKilocode:
 		return []string{c.roots.KiloData}
+	case domain.HarnessAgy:
+		return []string{c.roots.AgyCLIConversations, c.roots.AgyACPConversations}
 	case domain.HarnessGrok:
 		return []string{c.roots.GrokSessions}
 	default:
@@ -2755,6 +2816,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceKimchiSession, true
 	case domain.HarnessPrimeAgent:
 		return domain.UsageSourcePrimeAgentSession, true
+	case domain.HarnessDeepSeek:
+		return domain.UsageSourceDeepSeekSession, true
 	case domain.HarnessQwen:
 		return domain.UsageSourceQwenMonthly, true
 	case domain.HarnessGoose:
@@ -2765,6 +2828,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceKiloDB, true
 	case domain.HarnessGrok:
 		return domain.UsageSourceGrokUsage, true
+	case domain.HarnessAgy:
+		return domain.UsageSourceAgyConversation, true
 	default:
 		return "", false
 	}
@@ -2814,7 +2879,7 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:
 		return c.discoverKimiPath(ctx, nativeID)
-	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent:
+	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent, domain.HarnessDeepSeek:
 		family, _ := piFamilyForHarness(harness)
 		return c.discoverPiFamilyPath(ctx, family, nativeID)
 	case domain.HarnessQwen:
@@ -2827,6 +2892,12 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return discoverOpenCodeFamilyDB(ctx, c.roots.KiloData, kiloApp, nativeID)
 	case domain.HarnessGrok:
 		patterns = []string{filepath.Join(c.roots.GrokSessions, "*", nativeID, grokUsageFileName)}
+	case domain.HarnessAgy:
+		for _, root := range []string{c.roots.AgyCLIConversations, c.roots.AgyACPConversations} {
+			if root != "" {
+				patterns = append(patterns, filepath.Join(root, nativeID+".db"))
+			}
+		}
 	}
 	type candidate struct {
 		path string
@@ -2974,10 +3045,17 @@ type piFamilyHarness struct {
 	// session header. OMP reserves line 1 for a padded title slot it rewrites
 	// in place, so its header is line 2; Pi and Kimchi start with the header.
 	preambleType string
-	// aoOwnedRoot marks a harness whose sessions root only AO writes (AO passes
-	// it as --session-dir), so a transcript there can bind to the live AO
-	// session in its recorded workspace when no hook ever named the native ID.
-	aoOwnedRoot bool
+	// bindByWorkspace marks a harness whose terminal sessions never report a
+	// native ID to AO, so a transcript binds to the one live AO session in its
+	// recorded workspace that started no later than it did. AO sessions run in
+	// AO-created workspaces, so a transcript there is the AO session's.
+	bindByWorkspace bool
+	// transcriptName, when set, is the fixed file name of each transcript,
+	// two levels below the root (<encoded cwd>/<session id>/); otherwise
+	// transcripts are <id>.jsonl files in the root or one level below it.
+	transcriptName string
+	// compressed marks a transcript stored as concatenated zstd frames.
+	compressed bool
 }
 
 var piFamilyHarnesses = []piFamilyHarness{
@@ -2986,7 +3064,13 @@ var piFamilyHarnesses = []piFamilyHarness{
 	{harness: domain.HarnessKimchi, kind: domain.UsageSourceKimchiSession},
 	// prime-agent releases without --extension cannot load AO's activity
 	// extension, so no hook reports their native session ID.
-	{harness: domain.HarnessPrimeAgent, kind: domain.UsageSourcePrimeAgentSession, aoOwnedRoot: true},
+	{harness: domain.HarnessPrimeAgent, kind: domain.UsageSourcePrimeAgentSession, bindByWorkspace: true},
+	// DeepSeek Harness has no lifecycle hook surface, so a terminal session's
+	// native ID is never known; Chat sessions carry it as the ACP session ID.
+	{
+		harness: domain.HarnessDeepSeek, kind: domain.UsageSourceDeepSeekSession, bindByWorkspace: true,
+		transcriptName: deepseekSessionLogName, compressed: true,
+	},
 }
 
 func piFamilyForHarness(harness domain.AgentHarness) (piFamilyHarness, bool) {
@@ -3022,6 +3106,8 @@ func (c *Collector) piFamilyRoot(family piFamilyHarness) string {
 		return c.roots.KimchiSessions
 	case domain.HarnessPrimeAgent:
 		return c.roots.PrimeAgentSessions
+	case domain.HarnessDeepSeek:
+		return c.roots.DeepSeekSessions
 	default:
 		return ""
 	}
@@ -3031,7 +3117,18 @@ type piSessionMeta struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
 	Timestamp string `json:"timestamp"`
+	// CreatedAt is DeepSeek Harness's header time, in Unix milliseconds.
+	CreatedAt int64  `json:"createdAt"`
 	CWD       string `json:"cwd"`
+}
+
+// startedAt reports when the transcript's session began.
+func (meta piSessionMeta) startedAt() (time.Time, bool) {
+	if meta.CreatedAt > 0 {
+		return time.UnixMilli(meta.CreatedAt).UTC(), true
+	}
+	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(meta.Timestamp))
+	return started, err == nil
 }
 
 // readPiFamilySessionMeta reads the session header that names a Pi-format
@@ -3046,7 +3143,16 @@ func readPiFamilySessionMeta(ctx context.Context, path string, family piFamilyHa
 		return piSessionMeta{}, false
 	}
 	defer func() { _ = file.Close() }()
-	reader := bufio.NewReader(io.LimitReader(file, 64<<10))
+	var source io.Reader = file
+	if family.compressed {
+		decoder, err := zstd.NewReader(file, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(64<<20))
+		if err != nil {
+			return piSessionMeta{}, false
+		}
+		defer decoder.Close()
+		source = decoder
+	}
+	reader := bufio.NewReader(io.LimitReader(source, 64<<10))
 	maxLines := 1
 	if family.preambleType != "" {
 		maxLines = 2
@@ -3079,7 +3185,7 @@ func (c *Collector) discoverPiFamilyPath(ctx context.Context, family piFamilyHar
 	if root == "" {
 		return "", nil // An unset root must not glob the daemon's working directory.
 	}
-	paths, err := newestPiPaths(ctx, root, 256)
+	paths, err := newestPiPaths(ctx, family, root, 256)
 	if err != nil {
 		return "", err
 	}
@@ -3094,19 +3200,29 @@ func (c *Collector) discoverPiFamilyPath(ctx context.Context, family piFamilyHar
 	return "", nil
 }
 
-func newestPiPaths(ctx context.Context, root string, limit int) ([]string, error) {
-	// AO launches Pi with --session-dir, which writes sessions directly into
-	// root; Pi's own default layout, which OMP and Kimchi keep, nests them one
-	// directory deeper per cwd.
-	paths, err := filepath.Glob(filepath.Join(root, "*.jsonl"))
-	if err != nil {
-		return nil, err
+func newestPiPaths(ctx context.Context, family piFamilyHarness, root string, limit int) ([]string, error) {
+	var paths []string
+	if family.transcriptName != "" {
+		var err error
+		paths, err = filepath.Glob(filepath.Join(root, "*", "*", family.transcriptName))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// AO launches Pi with --session-dir, which writes sessions directly into
+		// root; Pi's own default layout, which OMP and Kimchi keep, nests them one
+		// directory deeper per cwd.
+		var err error
+		paths, err = filepath.Glob(filepath.Join(root, "*.jsonl"))
+		if err != nil {
+			return nil, err
+		}
+		nested, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, nested...)
 	}
-	nested, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
-	if err != nil {
-		return nil, err
-	}
-	paths = append(paths, nested...)
 	type candidate struct {
 		path string
 		mod  time.Time

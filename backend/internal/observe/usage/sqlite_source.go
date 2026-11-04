@@ -36,9 +36,10 @@ const (
 type sqliteUsageReader func(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
 var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
-	domain.UsageSourceGooseLedger: readGooseLedgerRows,
-	domain.UsageSourceOpenCodeDB:  readOpenCodeSteps,
-	domain.UsageSourceKiloDB:      readOpenCodeSteps,
+	domain.UsageSourceGooseLedger:     readGooseLedgerRows,
+	domain.UsageSourceOpenCodeDB:      readOpenCodeSteps,
+	domain.UsageSourceKiloDB:          readOpenCodeSteps,
+	domain.UsageSourceAgyConversation: readAgyGenerations,
 }
 
 // snapshotUsageReader returns up to limit usage records after the cursor from
@@ -47,7 +48,8 @@ var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
 type snapshotUsageReader func(ctx context.Context, path, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error)
 
 var snapshotUsageReaders = map[domain.UsageSourceKind]snapshotUsageReader{
-	domain.UsageSourceGrokUsage: readGrokTurns,
+	domain.UsageSourceGrokUsage:       readGrokTurns,
+	domain.UsageSourceDeepSeekSession: readDeepSeekReplies,
 }
 
 // sqliteUsageSource reports whether the source is read by row cursor (a

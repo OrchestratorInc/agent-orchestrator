@@ -49,6 +49,7 @@ var providerAliases = map[string]string{
 	"moonshotai":             "moonshot",
 	"mistralai":              "mistral",
 	"x-ai":                   "xai",
+	"deepseek-official":      "deepseek",
 	"opencode-go":            "opencode_go",
 	"xiaomi":                 "xiaomi_mimo",
 	"cloudflare-workers-ai":  "cloudflare",

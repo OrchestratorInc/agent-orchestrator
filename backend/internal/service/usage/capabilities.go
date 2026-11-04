@@ -8,7 +8,7 @@ func SupportedHarness(h domain.AgentHarness) bool {
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi, domain.HarnessPi, domain.HarnessQwen,
 		domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent,
 		domain.HarnessGoose, domain.HarnessOpenCode, domain.HarnessKilocode,
-		domain.HarnessGrok:
+		domain.HarnessGrok, domain.HarnessDeepSeek, domain.HarnessAgy:
 		return true
 	default:
 		return false

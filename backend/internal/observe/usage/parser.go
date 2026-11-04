@@ -62,6 +62,10 @@ func parseRecordsWithState(
 		parseOpenCode(source, records, &result)
 	case domain.UsageSourceGrokUsage:
 		parseGrok(source, records, &result)
+	case domain.UsageSourceDeepSeekSession:
+		parseDeepSeek(source, records, &result)
+	case domain.UsageSourceAgyConversation:
+		parseAgy(source, records, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -227,7 +231,8 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
 		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
 		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
-		domain.UsageSourceGrokUsage:
+		domain.UsageSourceGrokUsage, domain.UsageSourceDeepSeekSession,
+		domain.UsageSourceAgyConversation:
 		if state.Claude != nil || state.Codex != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
@@ -253,7 +258,8 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
 		domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession, domain.UsageSourcePrimeAgentSession,
 		domain.UsageSourceGooseLedger, domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB,
-		domain.UsageSourceGrokUsage:
+		domain.UsageSourceGrokUsage, domain.UsageSourceDeepSeekSession,
+		domain.UsageSourceAgyConversation:
 		// These formats carry replay-stable native IDs, so no provider-specific
 		// cumulative baseline is required.
 	default:
