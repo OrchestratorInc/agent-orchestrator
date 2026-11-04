@@ -52,6 +52,34 @@ describe("editor handoff", () => {
 		expect(state.targets.map(({ id }) => id)).toEqual(["cursor", "vscode", "file-manager", "terminal"]);
 	});
 
+	it("ignores the Cursor Agent CLI shim when the Cursor IDE is not installed", async () => {
+		const shim = "/Users/tester/.local/bin/cursor";
+		const input = deps({
+			env: { PATH: "/Users/tester/.local/bin" },
+			isExecutable: (value) => value === shim,
+			isDirectory: () => false,
+			readFileHead: (value) => value === shim ? "echo \"Error: No Cursor IDE installation found.\"" : undefined,
+		});
+		const state = await createEditorHandoff(input).getState("ao-1");
+		expect(state.targets.map(({ id }) => id)).not.toContain("cursor");
+		// The IDE app bundle still wins when installed alongside the shim.
+		const withApp = await createEditorHandoff({ ...input, isDirectory: (value) => value === "/Applications/Cursor.app" }).getState("ao-1");
+		expect(withApp.targets.map(({ id }) => id)).toContain("cursor");
+	});
+
+	it("finds a real Cursor CLI later on PATH than the agent shim", async () => {
+		const shim = "/home/tester/.local/bin/cursor";
+		const input = deps({
+			platform: "linux",
+			env: { PATH: "/home/tester/.local/bin:/usr/bin" },
+			isExecutable: (value) => value === shim || value === "/usr/bin/cursor",
+			isDirectory: () => false,
+			readFileHead: (value) => value === shim ? "echo \"Error: No Cursor IDE installation found.\"" : "#!/bin/sh",
+		});
+		await createEditorHandoff(input).open({ sessionId: "ao-1", targetId: "cursor" });
+		expect(input.launch).toHaveBeenCalledWith("/usr/bin/cursor", ["/worktrees/ao-1"], "/worktrees/ao-1");
+	});
+
 	it.each(["/Applications", "/Users/tester/Applications"])("discovers Ghostty in %s without a CLI on PATH and sends the exact workspace as a folder-open event", async (root) => {
 		const workspace = "/work trees/it's $safe; $(touch nope)";
 		const input = deps({

@@ -72,6 +72,7 @@ const shellMocks = vi.hoisted(() => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
 		}),
+		openShellTerminalHost: vi.fn((_hostId?: string) => {}),
 		openShellTerminal: vi.fn((input: { projectId?: string; sessionId?: string }) => ({
 			handleId: "pending-shell:test",
 			projectId: input.projectId,
@@ -236,8 +237,11 @@ vi.mock("../hooks/useCloudOrg", () => ({
 // shortcut subscriptions, so the mutation is stubbed rather than driven.
 vi.mock("../hooks/useShellTerminals", () => ({
 	useShellTerminals: () => ({ data: [], isSuccess: true }),
-	useOpenShellTerminal: () => ({
-		open: shellMocks.openShellTerminal,
+	useOpenShellTerminal: (hostId?: string) => ({
+		open: (input: { projectId?: string; sessionId?: string }) => {
+			shellMocks.openShellTerminalHost(hostId);
+			return shellMocks.openShellTerminal(input);
+		},
 		mutate: shellMocks.openShellTerminal,
 	}),
 }));
@@ -415,6 +419,7 @@ beforeEach(() => {
 	shellMocks.onKeyboardShortcutsHelp.mockClear();
 	shellMocks.onNewShellTerminalShortcut.mockClear();
 	shellMocks.openShellTerminal.mockClear();
+	shellMocks.openShellTerminalHost.mockClear();
 	shellMocks.state.newShellTerminalListener = undefined;
 	shellMocks.onOpenSettingsShortcut.mockClear();
 	shellMocks.onPreviousSessionShortcut.mockClear();
@@ -1010,6 +1015,19 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(useUiStore.getState().newShellTerminalNonce).toBe(2);
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(2);
+	});
+
+	// Regression: ⌘T did nothing on a remote machine's session.
+	it("opens the terminal on the remote host that owns the session on screen", async () => {
+		shellMocks.state.routeParams = { hostId: "box-a", projectId: "remote-proj", sessionId: "remote-sess" };
+		await renderShell();
+
+		pressNewShellTerminal();
+
+		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
+			expect.objectContaining({ projectId: "remote-proj", sessionId: "remote-sess" }),
+		);
+		expect(shellMocks.openShellTerminalHost).toHaveBeenLastCalledWith("box-a");
 	});
 });
 

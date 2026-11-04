@@ -405,6 +405,29 @@ func TestStoredLoginCarriesExpiryAndRenewability(t *testing.T) {
 	}
 }
 
+// A refresh token carries its own expiry. Past it, Claude Code cannot renew the
+// login either, so the expired access token must be judged by the provider.
+func TestExpiredLoginIsRenewableOnlyWhileItsRefreshTokenIsInDate(t *testing.T) {
+	expiresAt := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	refreshExpiresAt := expiresAt.Add(21 * 24 * time.Hour)
+	dir := t.TempDir()
+	content := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stored","refreshToken":"sk-ant-ort01-stored","expiresAt":%d,"refreshTokenExpiresAt":%d}}`,
+		expiresAt.UnixMilli(), refreshExpiresAt.UnixMilli())
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{Env: envFrom(nil), ConfigDir: dir, GOOS: "linux"})
+	if !ok || !cred.RefreshExpiresAt.Equal(refreshExpiresAt) {
+		t.Fatalf("refresh expiry = %v ok=%v, want %v", cred.RefreshExpiresAt, ok, refreshExpiresAt)
+	}
+	if !cred.ExpiredButRenewable(refreshExpiresAt.Add(-time.Minute)) {
+		t.Fatal("an expired access token with an in-date refresh token must read as renewable")
+	}
+	if cred.ExpiredButRenewable(refreshExpiresAt) {
+		t.Fatal("an expired refresh token cannot renew the login")
+	}
+}
+
 func TestExpiredLoginWithoutRefreshTokenIsNotRenewable(t *testing.T) {
 	dir := t.TempDir()
 	content := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stored","expiresAt":1000}}`

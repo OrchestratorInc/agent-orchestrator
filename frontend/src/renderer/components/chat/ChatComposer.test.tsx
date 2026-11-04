@@ -239,6 +239,55 @@ describe("send keys", () => {
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.fileReferences).toEqual([expect.objectContaining({ id: ref.id })]));
 		expect(onSend.mock.calls[0][5]).toBeUndefined();
 	});
+	it("cancels a Cloud upload from its chip, never holds the page for it, and lets the message go", async () => {
+		const sessionId = "composer-cloud-cancel";
+		const signals: AbortSignal[] = [];
+		const stage = vi.fn((_payloads: unknown, signal?: AbortSignal) => new Promise<string[]>((_resolve, reject) => {
+			signals.push(signal!);
+			signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+		}));
+		const { onSend, field } = renderComposer({ draftSessionId: sessionId, onStageAttachments: stage, cloudAttachments: { maxBytes: 25 * 1024 * 1024 } });
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile("stalled.txt")]) });
+		expect(await screen.findByRole("status", { name: "Attaching stalled.txt" })).toBeInTheDocument();
+		await waitFor(() => expect(stage).toHaveBeenCalled());
+		// Main carries the upload: a reload must not raise a confirmation that blocks it.
+		expect(getChatDraftBoundaries(sessionId)).not.toContain("pending-attachments");
+		await userEvent.click(screen.getByRole("button", { name: "Cancel attaching stalled.txt" }));
+		expect(signals[0]?.aborted).toBe(true);
+		await waitFor(() => expect(screen.queryByRole("status", { name: "Attaching stalled.txt" })).not.toBeInTheDocument());
+		expect(screen.queryByRole("button", { name: "Remove stalled.txt" })).not.toBeInTheDocument();
+		await typeInComposer(field, "without the file");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("without the file", undefined, expect.any(String)));
+	});
+	it("still asks before leaving while a local file is staged", async () => {
+		const sessionId = "composer-local-pending";
+		const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+		const { field } = renderComposer({ draftSessionId: sessionId, onStageAttachments: stage });
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile("slow.txt")]) });
+		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toContain("pending-attachments"));
+		expect(screen.getByRole("button", { name: "Cancel attaching slow.txt" })).toBeInTheDocument();
+	});
+	it("shows the control plane's reason a Cloud file was not attached", async () => {
+		const stage = vi.fn(async (payloads: { name?: string }[]) => {
+			if (payloads[0]?.name === "gone.txt") throw new Error("This session was deleted. Restore it to continue.");
+			return ["ao-cloud-attachment:6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11/kept.txt"];
+		});
+		const { field } = renderComposer({ draftSessionId: "composer-cloud-reason", onStageAttachments: stage, cloudAttachments: { maxBytes: 25 * 1024 * 1024 } });
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile("gone.txt"), textFile("kept.txt")]) });
+		expect(await screen.findByText("Couldn’t attach gone.txt: This session was deleted. Restore it to continue.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Remove kept.txt" })).toBeInTheDocument();
+		expect(screen.queryByText(/Nothing was attached/)).not.toBeInTheDocument();
+	});
+	it("refuses a file over AO Cloud's limit before it uploads", async () => {
+		const stage = vi.fn().mockResolvedValue(["ao-cloud-attachment:a/big.bin"]);
+		const { field } = renderComposer({ draftSessionId: "composer-cloud-limit", onStageAttachments: stage, cloudAttachments: { maxBytes: 25 * 1024 * 1024 } });
+		const big = new File([new Uint8Array(25 * 1024 * 1024 + 1)], "big.bin", { type: "application/octet-stream" });
+		fireEvent.paste(field, { clipboardData: clipboardData([big]) });
+		expect(await screen.findByText("Each file must be under 25 MB.")).toBeInTheDocument();
+		expect(stage).not.toHaveBeenCalled();
+	});
 	it("lays attachments beside annotations and clears only annotation references", async () => {
 		const sessionId = "composer-shared-attachment-row";
 		writeChatExcerptReferences(sessionId, EXCERPTS);
@@ -398,7 +447,7 @@ describe("send keys", () => {
 		expect(field).toHaveClass("min-h-[4.5rem]");
 	});
 
-	it("uses a muted circular send control that lights up when armed", async () => {
+	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
 		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
@@ -406,7 +455,7 @@ describe("send keys", () => {
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("bg-foreground", "text-on-foreground");
+		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {
@@ -1299,6 +1348,19 @@ describe("sent message recall", () => {
 
 		expect(press(field, "ArrowUp")).toBe(false);
 		expect(composerWireText(field)).toBe("my draft");
+	});
+
+	it("preserves a native caret move when composer padding is pressed before selectionchange", async () => {
+		const { field } = renderComposer();
+		await typeInComposer(field, "abcdef");
+		const text = field.querySelector("[data-lexical-text]")?.firstChild;
+		const form = field.closest("form");
+		if (!text || !form) throw new Error("Expected composer text and form");
+		window.getSelection()?.collapse(text, 4);
+		expect(fireEvent.mouseDown(form, { button: 0 })).toBe(false);
+		fireEvent.click(form);
+		expect(document.activeElement).toBe(field);
+		expect(window.getSelection()?.anchorOffset).toBe(4);
 	});
 
 	it("reads the caret the browser shows before Lexical has caught up with it", async () => {
@@ -2398,7 +2460,7 @@ describe("attachments", () => {
 
 		await waitFor(() => expect(stage).toHaveBeenCalledTimes(1));
 		expect(stage.mock.calls[0]?.[0]).toEqual([
-			{ mimeType: "image/png", data: expect.any(String) },
+			{ mimeType: "image/png", data: expect.any(String), name: "shot.png" },
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
@@ -3205,7 +3267,10 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
 	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
-	expect(onSend.mock.calls[0][5]).toBeUndefined();
+	// The captures come along for the transcript only, with the message as typed;
+	// the text already carries them for the agent.
+	expect(onSend.mock.calls[0][5]?.map((item: { id: string })=>item.id)).toEqual([ref.id]);
+	expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
 	view.unmount();
 });
@@ -3229,6 +3294,51 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	expect(onSend.mock.calls[0][0]).toContain("cloud.ts#L1-L1");
 	expect(onSend.mock.calls[0][0]).not.toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][2]).toBe("legacy-receipt");
+});
+
+// A Cloud chat's composer delivers captures as text and searches files for "@";
+// the IME guard and the send-key preference hold there as in a local chat.
+describe("Cloud delivery under the send-key preference", () => {
+	it("sends a quoted selection and a capture only on Cmd/Ctrl+Enter in newline mode, never on an IME Enter", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const sessionId = "cloud-send-key-capture";
+		writeChatExcerptReferences(sessionId, EXCERPTS);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text" onFileQuery={vi.fn()} />);
+		const ref = captureFileReference({ path: "cloud.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "CLOUD_CAPTURE" }] }, sessionId);
+		act(() => { expect(sendReferenceToChat(sessionId, ref)).toBe(true); });
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "question");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: false, keyCode: 229, ctrlKey: true }); });
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); });
+		expect(onSend).not.toHaveBeenCalled();
+
+		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
+		expect(onSend.mock.calls[0][4]?.map((item: { id: string }) => item.id)).toEqual(["excerpt"]);
+		expect(onSend.mock.calls[0][5]?.map((item: { id: string }) => item.id)).toEqual([ref.id]);
+		expect(onSend.mock.calls[0][6]).toContain("question");
+		expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
+	});
+
+	it.each(["enter", "mod-enter"] as const)("in %s mode, an IME Enter leaves a searched @ file unpicked and the send key picks it", async (mode) => {
+		useUiStore.getState().setChatSendKeyMode(mode);
+		const onFileQuery = vi.fn();
+		const { onSend, field } = renderComposer({ filePaths: ["README.md"], onFileQuery, fileReferenceDelivery: "text" });
+		await typeInComposer(field, "@REA");
+		expect(onFileQuery).toHaveBeenLastCalledWith("REA");
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: true, keyCode: 13, ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).toBeNull();
+		expect(composerWireText(field)).toBe("@REA");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).not.toBeNull();
+		expect(onSend).not.toHaveBeenCalled();
+	});
 });
 
 it("retains file annotations when the connected daemon lacks support", async () => {

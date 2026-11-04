@@ -58,6 +58,7 @@ import { ProjectTerminationFeedback } from "./SessionTopbarActions";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts } from "./SessionMemoryPanel";
+import { Button } from "./ui/button";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	ArchivedSessionCardAdapter,
@@ -283,7 +284,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
 				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 					<span className="min-w-0 flex-1">{t("remote.configureOrchestratorFirst", { label: labelForHost(hostId) ?? hostId, defaultValue: "Choose an orchestrator agent on {{label}} to start one." })}</span>
-					<button type="button" className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground hover:bg-interactive-hover focus-visible:outline-2 focus-visible:outline-ring" onClick={() => shell?.openRemoteProjectSettings(hostId, projectId)}>{t("restoreUnavailable.configureOrchestrator")}</button>
+					<Button type="button" variant="ghost" size="xs" className="font-medium" onClick={() => shell?.openRemoteProjectSettings(hostId, projectId)}>{t("restoreUnavailable.configureOrchestrator")}</Button>
 				</div>
 			) : null}
 

@@ -206,6 +206,8 @@ type Automation struct {
 	Model       string
 	Mode        string
 	Effort      string
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {
@@ -653,6 +655,12 @@ type ReportWorkerInterrupt struct {
 	LastInterruptedAt time.Time
 }
 
+type RepositoryRename struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
 type Review struct {
 	ID                     string
 	SessionID              domain.SessionID
@@ -830,6 +838,7 @@ type SessionInterfaceTransition struct {
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
 	SourceAccountID      string
 	TargetAccountID      string
+	DegradedKind         string
 }
 
 type SessionInterfaceTransitionMessage struct {
@@ -900,6 +909,11 @@ type TelemetryEvent struct {
 	SessionID   sql.NullString
 	RequestID   string
 	PayloadJson string
+}
+
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
 }
 
 type UsageBinding struct {

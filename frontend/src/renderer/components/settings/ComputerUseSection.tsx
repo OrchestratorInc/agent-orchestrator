@@ -210,7 +210,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 
 			{(!installed || manualCommand) && status.isSuccess && !installing ? (
 				<div className="flex px-(--settings-row-inset)">
-					<Button type="button" size="sm" variant="ghost" className="-ml-2.5 text-settings-muted hover:text-settings-label" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
+					<Button type="button" size="sm" variant="quiet" className="-ml-2.5" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
 						<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 					</Button>
 				</div>

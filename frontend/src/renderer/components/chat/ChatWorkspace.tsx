@@ -345,6 +345,8 @@ export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
+	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -425,6 +427,8 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
 		fileReferences?: ChatFileReference[],
+		/** With text delivery, the message as typed, before its file captures were inlined into `text`. */
+		displayText?: string,
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -548,6 +552,10 @@ export interface ChatWorkspaceProps {
 	skills?: ChatSkill[];
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
+	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
+	onFileQuery?: (query: string) => void;
+	/** Something the chat will run in is still starting (a Cloud sandbox started ahead of the brief): the composer shows it. */
+	composerStarting?: boolean;
 	/** The path list was capped by the daemon rather than being all of them. */
 	filePathsTruncated?: boolean;
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
@@ -557,7 +565,9 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string }[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise<string[]>;
+	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
+	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
 	/**
@@ -688,6 +698,7 @@ function ChatWorkspaceContent({
 	onAddToSideChat,
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
+	onAnnotationNavigationHandled,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -790,8 +801,11 @@ function ChatWorkspaceContent({
 	skills,
 	filePaths,
 	filePathsTruncated,
+	onFileQuery,
+	composerStarting = false,
 	localEchos,
 	onStageAttachments,
+	cloudAttachments,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -1151,7 +1165,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1202,7 +1216,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1278,7 +1292,13 @@ function ChatWorkspaceContent({
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
-	useEffect(() => { if (annotationNavigationRequest) navigateToAnnotation(annotationNavigationRequest); }, [annotationNavigationRequest, navigateToAnnotation]);
+	// This content remounts per session (it is keyed by the draft scope), so a
+	// request still held after it applied would apply again to the next chat.
+	useEffect(() => {
+		if (!annotationNavigationRequest) return;
+		navigateToAnnotation(annotationNavigationRequest);
+		onAnnotationNavigationHandled?.(annotationNavigationRequest.id);
+	}, [annotationNavigationRequest, navigateToAnnotation, onAnnotationNavigationHandled]);
 	// Storage failures can be transient, so try again when the user comes back. Only while
 	// the composer is empty: recovering remounts it, which would drop unsaved text.
 	useEffect(() => {
@@ -1934,6 +1954,9 @@ function ChatWorkspaceContent({
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
+									// A Freestyle Chat session started from this device: the row under its
+									// brief says the sandbox is still coming up until its worker connects.
+									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
 							</ChatHostId.Provider>
@@ -2045,7 +2068,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat || cloudStarting}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
@@ -2073,7 +2096,9 @@ function ChatWorkspaceContent({
 										skills={skills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
+										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										cloudAttachments={cloudAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
@@ -2154,7 +2179,7 @@ function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: Com
 			<div role="alert" className="flex items-center gap-2">
 				<TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" />
 				<span>{t("chat.startup.failed")}</span>
-				{onRetry ? <button type="button" className="ml-auto text-foreground underline underline-offset-2" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</button> : null}
+				{onRetry ? <Button type="button" variant="link" className="ml-auto text-xs text-foreground" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</Button> : null}
 			</div>
 			{error ? <details className="mt-2"><summary className="cursor-pointer">Error details</summary><p className="mt-1 break-words">{error}</p></details> : null}
 			{retryError ? <p role="alert" className="mt-1 text-destructive">{retryError}</p> : null}
@@ -2234,6 +2259,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
  *     the end of the turn and a second rendering of the same plan in the middle of
  *     it would just be the same list twice.
+ *   - a plan row the daemon marked superseded: an older copy of a list the agent
+ *     keeps across turns, which a later turn or run carries.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2251,6 +2278,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
+		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
@@ -2676,6 +2704,7 @@ export function Timeline({
 	arriving = false,
 	workerUpdates = false,
 	openingStartedAt,
+	openingStartupLabel,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2712,13 +2741,15 @@ export function Timeline({
 	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
 	/** A session that is starting, or failed to start, and its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
+	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string; label?: string };
 	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
 	arriving?: boolean;
 	/** Orchestrator chat: draw worker messages and reports as rows, and the orchestrator's handling under them. */
 	workerUpdates?: boolean;
 	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
 	openingStartedAt?: string;
+	/** Names the opening start in place of its timer while the sandbox comes up. */
+	openingStartupLabel?: string;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3624,7 +3655,7 @@ export function Timeline({
 		const groups = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
-				? { ...group, live: true, liveStartedAt: openingStartedAt }
+				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group);
 		if (!workerUpdates) return groups;
 		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
@@ -3632,7 +3663,7 @@ export function Timeline({
 		return groups
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
@@ -3642,7 +3673,7 @@ export function Timeline({
 	// its session reports any steps, so the row keeps its label through the handoff
 	// and the steps fill in under it.
 	const openingSetup = !startup && openingPending && turn?.state !== "running"
-		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness) }
+		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness), label: openingStartupLabel }
 		: undefined;
 	const rowStartup = startup ?? openingSetup;
 	const startupGroupKey = rowStartup && (openingSetup || showStartup)
@@ -4380,10 +4411,9 @@ export function Timeline({
 							<Button
 								type="button"
 								size="sm"
-								variant="ghost"
+								variant="quiet"
 								disabled={loadingOlder}
 								onClick={onLoadOlder}
-								className="gap-1.5 text-muted-foreground"
 							>
 								{loadingOlder ? (
 									<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
@@ -4486,14 +4516,14 @@ export function Timeline({
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
 					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
-						<LiveResponseStatus startupLabel={t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
+						<LiveResponseStatus startupLabel={rowStartup.label ?? t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
 							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : openingPending && !groups.some((group) => group.live) ? (
 						// Before the brief has a turn of its own (still being created).
-						<LiveResponseStatus startedAt={openingStartedAt} />
+						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
 						<div className="flex justify-end" data-chat-scroll-anchor="">
@@ -4727,7 +4757,7 @@ const TurnGroup = memo(function TurnGroup({
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup>;
+	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
@@ -4901,7 +4931,7 @@ const TurnGroup = memo(function TurnGroup({
 		startup || group.live ? (
 			<LiveResponseStatus
 				startedAt={group.liveStartedAt}
-				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
 				task={currentTask ? liveTaskLabel(currentTask) : undefined}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
@@ -5209,8 +5239,9 @@ function TimelineItem({
 			</FromAgent>
 		);
 	}
-	// A plan whose turn AO never correlated — one from before this controller
-	// started. The turn-level checklist cannot show it, so the row carries it.
+	// A plan no turn holds: work the agent did on its own after a turn ended, or a
+	// provider turn AO never correlated. The turn-level checklist cannot show it, so
+	// the row carries it. AO cannot tell when such work stops, so its step never spins.
 	if (item.activityKind === "plan") {
 		const plan = activityPlan(item);
 		return plan ? <TurnPlan plan={plan} /> : <ActivityRow activity={item} />;
@@ -5361,6 +5392,7 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.anchor === b.anchor &&
 		a.turnId === b.turnId &&
 		a.live === b.live &&
+		a.liveStartupLabel === b.liveStartupLabel &&
 		a.rollbackable === b.rollbackable &&
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
@@ -5421,6 +5453,8 @@ type TimelineGroup = {
 	/** The turn is still running, so its diff and plan can still change. */
 	live?: boolean;
 	liveStartedAt?: string;
+	/** Names the start in place of the timer, such as a Cloud sandbox still coming up. */
+	liveStartupLabel?: string;
 	blocked?: boolean;
 	/** A live provider failure replaces the generic Working label until the turn settles. */
 	liveProviderFailure?: ConversationActivity;
@@ -5594,12 +5628,6 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
-	// A list the agent keeps across turns reaches every later turn as a copy of the
-	// same list. Only the latest copy is current, so only that turn shows it.
-	const currentSpanningPlanTurn = groups.findLast(
-		(group) => group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns,
-	)?.turnId;
-
 	for (const group of groups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
@@ -5608,8 +5636,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlanTurn;
-		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
+		// A later turn or run carries a newer copy of a list that spans turns.
+		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
 		group.blocked = group.items.some(
@@ -5796,15 +5824,17 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
 						{prompts.map(({ prompt, chip, icon: Icon }) => (
 							<li key={prompt}>
-								<button
+								<Button
 									type="button"
+									variant="quiet"
+									shape="pill"
 									title={t(prompt)}
-									className="welcome-prompt-suggestion inline-flex h-8 items-center gap-1.5 rounded-full border border-border px-3 text-control text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:border-ring focus-visible:bg-interactive-hover focus-visible:text-foreground"
+									className="welcome-prompt-suggestion border-border"
 									onClick={() => onPick(t(prompt))}
 								>
 									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
 									<span className="whitespace-nowrap">{t(chip)}</span>
-								</button>
+								</Button>
 							</li>
 						))}
 					</ul>

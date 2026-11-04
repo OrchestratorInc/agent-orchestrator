@@ -2,10 +2,18 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
+import type { PickerSource } from "./AgentSwitchPicker";
 import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
-// The agent picker is tested on its own; here only the permission control matters.
-vi.mock("./AgentSwitchPicker", async (original) => ({ ...await original<typeof import("./AgentSwitchPicker")>(), AgentModelPicker: () => null }));
+// The agent picker is tested on its own; here only what it is given matters.
+const agentPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+vi.mock("./AgentSwitchPicker", async (original) => ({
+	...await original<typeof import("./AgentSwitchPicker")>(),
+	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+		agentPicker.current = current;
+		return null;
+	},
+}));
 
 const OPTIONS: ChatConfigOption[] = [
 	{
@@ -91,10 +99,12 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			</div>,
 		);
 		const open = async () => {
-			await user.click(screen.getByRole("button", {
+			const trigger = screen.getByRole("button", {
 				name: path === "ACP standalone" ? "Model" : "Model and reasoning effort for the next turn",
-			}));
-			if (path !== "ACP standalone") await user.keyboard("{ArrowDown}{ArrowRight}");
+			});
+			const alreadyOpen = trigger.getAttribute("aria-expanded") === "true";
+			if (!alreadyOpen) await user.click(trigger);
+			if (path !== "ACP standalone") await user.keyboard(alreadyOpen ? "{ArrowRight}" : "{ArrowDown}{ArrowRight}");
 		};
 		return { user, onChange, onComposerClick, open };
 	}
@@ -129,6 +139,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			expect(onChange).toHaveBeenCalledWith("model", { value: "provider-1/model-99" });
 		}
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(path === "ACP standalone" ? 0 : 1);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -253,6 +264,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(0);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -333,6 +345,18 @@ it("keeps the Claude model menu open when expanding Other models, without an age
 	await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
 	expect(screen.queryByRole("menuitemradio", { name: "Opus 4.1" })).not.toBeInTheDocument();
 	expect(screen.getByRole("menuitem", { name: /Other models/ })).toBeInTheDocument();
+});
+
+describe("TurnSettingsBar unset model", () => {
+	it("names what no chosen model means instead of asking for one", () => {
+		const models = [{ id: "gpt-a", displayName: "GPT A", default: false }];
+		const { rerender } = render(<TurnSettingsBar models={models} settings={{}} onChange={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Choose a model");
+		rerender(<TurnSettingsBar models={models} settings={{}} onChange={vi.fn()} unsetModelLabel="Project or agent default" />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Project or agent default");
+		rerender(<TurnSettingsBar models={models} settings={{ model: "gpt-a" }} onChange={vi.fn()} unsetModelLabel="Project or agent default" />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("GPT A");
+	});
 });
 
 describe("ACP session config options", () => {
@@ -834,8 +858,27 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
-	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
+	// Hermes' default session mode governs only its file-edit tool; ordinary
+	// shell commands still run without asking, so the hint copy must not read
+	// stronger than Hermes behaves.
+	it("describes what Hermes' Default actually gates in the approval menu", async () => {
+		const user = userEvent.setup();
 		render(
+			<TurnSettingsBar
+				harness="hermes"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByText("Asks before file edits; shell commands run without asking")).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
 			<TurnSettingsBar
 				harness="codex"
 				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
@@ -1657,6 +1700,33 @@ describe("OpenCode-style execution modes", () => {
 		await user.click(approvals);
 		await user.click(screen.getByRole("menuitemradio", { name: "Use agent permissions" }));
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" }, "approvalMode");
+	});
+});
+
+describe("agent picker effort names", () => {
+	const options = (efforts: ChatConfigOption["choices"]): ChatConfigOption[] => [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "opus", choices: [{ value: "opus", name: "Opus 5.5" }] },
+		{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "xhigh", choices: efforts },
+	];
+	const efforts = (choices: ChatConfigOption["choices"]) => {
+		agentPicker.current = undefined;
+		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}} configOptions={options(choices)}
+			onChangeConfigOption={vi.fn()} agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }} />);
+		const source = agentPicker.current!;
+		return { rows: source.efforts, shown: source.efforts.find((effort) => effort.value === source.effort)?.label };
+	};
+
+	it("names levels the provider leaves unnamed, as the local chat and New Task do", () => {
+		const { rows, shown } = efforts(["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, name: "" })));
+		expect(rows.map((effort) => effort.label)).toEqual(["Low", "Medium", "High", "Extra high", "Max"]);
+		// The level the next turn runs with is the one the composer shows.
+		expect(shown).toBe("Extra high");
+	});
+
+	it("keeps the names a provider gives its levels", () => {
+		const { rows, shown } = efforts([{ value: "default", name: "Default" }, { value: "high", name: "High" }, { value: "xhigh", name: "Xhigh" }]);
+		expect(rows.map((effort) => effort.label)).toEqual(["High", "Xhigh"]);
+		expect(shown).toBe("Xhigh");
 	});
 });
 

@@ -1,10 +1,11 @@
-import { ArrowUpRight, X } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -12,12 +13,13 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	artifact: ArtifactRow | null;
@@ -32,6 +34,9 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	// Only the person who started a cloud session shares its files.
+	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	const cloudOwner = Boolean(cloudUserId) && artifact?.cloud?.createdByUserId === cloudUserId;
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -56,6 +61,18 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
+							{/* A local file's project names its document: without one, sharing
+							    it here would make a second link for the same file. Only the
+							    person who started a cloud session publishes its files. */}
+							{(artifact.cloud && (artifact.cloud.shared || !cloudOwner)) || (!artifact.cloud && !artifact.projectId) ? null : (
+								<ShareArtifactButton
+									className="transition-none"
+									file={artifact.cloud
+										? { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" }
+										: { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
+									name={artifact.name}
+								/>
+							)}
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
@@ -68,20 +85,13 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 								className="transition-none"
 							/>
 						</div>
-						<Button className="shrink-0 transition-none" onClick={openInSession} size="sm" variant="secondary">
+						<Button className="shrink-0" onClick={openInSession} size="sm" variant="secondary">
 							{t("artifacts.openInSession")}
 							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
 						</Button>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<DialogClose asChild>
-									<Button aria-label={t("common.close")} className="shrink-0 transition-none" size="icon-sm" variant="ghost">
-										<X aria-hidden="true" className="size-icon-sm" />
-									</Button>
-								</DialogClose>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("common.close")}</TooltipContent>
-						</Tooltip>
+						<DialogClose asChild>
+							<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />
+						</DialogClose>
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden bg-background">
 						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />
