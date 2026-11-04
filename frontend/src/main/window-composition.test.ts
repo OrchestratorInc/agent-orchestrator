@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWindowComposition } from "./window-composition";
 
-function setup(platform: NodeJS.Platform = "win32") {
+function setup(platform: NodeJS.Platform = "win32", allowShellDebugging = false) {
 	let bounds = { x: 0, y: 0, width: 900, height: 640 };
 	let boundsChanged: (() => void) | undefined;
 	const addChildView = vi.fn();
@@ -26,17 +26,19 @@ function setup(platform: NodeJS.Platform = "win32") {
 		},
 		isDestroyed: () => false,
 	};
-	function FakeWebContentsView() {
+	const FakeWebContentsView = vi.fn(function () {
 		return view;
-	}
+	});
 	const composition = createWindowComposition({
 		mainWindow: mainWindow as never,
 		WebContentsView: FakeWebContentsView as never,
 		preload: "/preload.js",
 		platform,
+		allowShellDebugging,
 	});
 	return {
 		addChildView,
+		FakeWebContentsView,
 		bounds: () => bounds,
 		close,
 		composition,
@@ -52,6 +54,13 @@ function setup(platform: NodeJS.Platform = "win32") {
 }
 
 describe("createWindowComposition", () => {
+	it.each([false, true])("enables shell DevTools only when explicitly allowed: %s", (allowShellDebugging) => {
+		const { FakeWebContentsView } = setup("darwin", allowShellDebugging);
+		expect(FakeWebContentsView).toHaveBeenCalledWith({
+			webPreferences: expect.objectContaining({ devTools: allowShellDebugging }),
+		});
+	});
+
 	it("creates a transparent shell at window bounds and reorders it for overlays", () => {
 		const { addChildView, composition, view } = setup();
 

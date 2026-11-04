@@ -126,12 +126,12 @@ describe("side delivery draft ownership", () => {
 		);
 	});
 
-	it.each(["btw", "side"])("/%s opens a fresh side", async (command) => {
+	it("/btw opens a fresh side", async () => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
 		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });
 		await act(async () => {
-			await hook.result.current.send("side", `/${command} first`);
+			await hook.result.current.send("side", "/btw first");
 		});
 		const creates = post.mock.calls.filter(([path]) => path.endsWith("/side-chats"));
 		expect(creates).toHaveLength(1);
@@ -473,10 +473,18 @@ describe("side panel navigation and recovery", () => {
 		);
 	});
 
-	it("shows the shorter isolation explanation without info or collapse controls", async () => {
+	it("keeps the no-open-side-chat state to one message", async () => {
+		get.mockResolvedValue({ data: { sides: [] } });
+		render(<SidePanelHarness />);
+		await screen.findByText("No side chat opened yet");
+		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
+			.not.toBeInTheDocument();
+	});
+
+	it("shows the quick-question description without info or collapse controls", async () => {
         render(<SidePanelHarness />);
         await screen.findByLabelText("Side chat question");
-        expect(screen.getByText(/Files and Git are shared/)).toBeVisible();
+        expect(screen.getByText("Explore a quick question without interrupting the main chat.")).toBeVisible();
         expect(screen.queryByRole("button", { name: "About side-chat isolation" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Hide side chat" })).not.toBeInTheDocument();
     });
@@ -541,8 +549,9 @@ describe("side panel navigation and recovery", () => {
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([
 			new DOMRect(40, 150, 100, 20),
 		] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
-		fireEvent.mouseUp(log);
+		fireEvent.pointerUp(log);
 		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
 		await waitFor(() =>
 			expect(

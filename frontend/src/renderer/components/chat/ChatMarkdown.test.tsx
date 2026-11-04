@@ -271,9 +271,10 @@ describe("ChatMarkdown", () => {
 
 	it("scopes a session preview to the chat source", async () => {
 		sessionPreview.mockClear();
+		const onSessionLinkOpen = vi.fn();
 		render(
 			<ChatLinkProvider
-				onSessionLinkOpen={vi.fn()}
+				onSessionLinkOpen={onSessionLinkOpen}
 				sessionLinkHostId="box-a"
 			>
 				<ChatMarkdown text="[Worker](ao://sessions/project/session)" />
@@ -286,7 +287,12 @@ describe("ChatMarkdown", () => {
 			href: "ao://sessions/project/session",
 			sourceHostId: "box-a",
 			sourceKind: undefined,
+			onOpen: expect.any(Function),
 		});
+
+		// The card opens the session through the same handler as the link click.
+		(sessionPreview.mock.calls.at(-1)![0] as { onOpen: () => void }).onOpen();
+		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/session");
 	});
 
 	it("renders remote workspace paths as text while keeping external links working", async () => {

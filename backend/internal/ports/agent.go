@@ -20,6 +20,9 @@ var (
 	// ErrNativeHistoryUnavailable means an interactive native restorer has no
 	// saved conversation yet; ordinary restore may launch fresh in its workspace.
 	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
+	// ErrAgentVersionTooOld means the provider rejected the selected model
+	// because the installed agent CLI predates it; updating the CLI fixes it.
+	ErrAgentVersionTooOld = errors.New("agent CLI is too old for the selected model")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -205,6 +208,15 @@ type Agent interface {
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
 }
 
+// AgentNativeRestoreCommand is an optional refinement for adapters that can
+// recover a different native session ID while building a restore command.
+// When ok is true, sessionID is the exact identity selected by cmd. The manager
+// uses it for native history validation instead of the potentially stale stored ID.
+// Implementations must return the command and identity from the same lookup.
+type AgentNativeRestoreCommand interface {
+	GetRestoreCommandWithSessionID(ctx context.Context, cfg RestoreConfig) (cmd []string, sessionID string, ok bool, err error)
+}
+
 // AgentAuthChecker is the optional capability for adapters whose native CLI has
 // a cheap local authentication status probe.
 type AgentAuthChecker interface {
@@ -383,6 +395,13 @@ type AgentModelInfo struct {
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	// RequiresVersion is the oldest agent CLI version that can use this model.
+	// It is set only when the installed CLI is older, so a picker can show the
+	// model as unavailable instead of letting a launch fail.
+	RequiresVersion string `json:"requiresVersion,omitempty"`
+	// UnavailableReason is display text explaining why the model cannot be
+	// selected right now and how to fix it.
+	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.

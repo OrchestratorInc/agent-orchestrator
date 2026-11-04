@@ -36,6 +36,15 @@ vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemedStyl
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
+// The card's tap target, without the long-press menu's modal and measuring.
+vi.mock("./long-press-menu", async () => {
+	const React = await import("react");
+	const { Pressable } = await import("react-native");
+	return {
+		LongPressMenu: ({ children, accessibilityLabel }: { children?: React.ReactNode; accessibilityLabel?: string }) =>
+			React.createElement(Pressable as unknown as React.ComponentType<{ accessibilityRole: string; accessibilityLabel?: string; children?: React.ReactNode }>, { accessibilityRole: "button", accessibilityLabel }, children),
+	};
+});
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./pr-filter-dock", () => ({ PRFilterDock: "PRFilterDock" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));

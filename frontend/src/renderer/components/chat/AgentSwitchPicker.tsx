@@ -13,7 +13,7 @@ import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/use
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
 import { useSettings } from "../../hooks/useSettings";
-import { agentModelDisplayLabel, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
+import { agentModelDisplayLabel, mergeSameNamedModels, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
 import { isLaunchableAgent } from "../../lib/agent-select-options";
 import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
@@ -95,6 +95,8 @@ export interface AgentSwitchProps {
 	autoCompact?: AutoCompactControl;
 	/** The agents to offer in place of the chat switch targets, for choosing one before a session exists. */
 	agents?: Array<{ id: string; label: string }>;
+	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
+	harnessView?: "local" | "cloud";
 }
 
 export interface PickerModel {
@@ -108,6 +110,8 @@ export interface PickerModel {
 	sendId?: string;
 	/** Other ids the agent lists this same model under, whose favourites are this row's. */
 	aliases?: string[];
+	/** Why the row cannot be picked now (the installed agent CLI is too old); shown under its name. */
+	unavailableReason?: string;
 }
 
 /** One agent's models and settings, with what each control does when used. */
@@ -245,7 +249,7 @@ export function AgentModelPicker({
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
 	], [chatUnavailable, choices, currentHarness, readiness, terminal]);
-	const management = useAgentManagementMenu(undefined, hostId);
+	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
@@ -343,14 +347,18 @@ export function AgentModelPicker({
 	const offered = (favorite: ModelFavorite) => {
 		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
 		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
-		return models.length === 0 || models.some((model) => names(model).includes(favorite.row) || names(model).includes(favorite.model));
+		// The id a favourite sends decides: a row it was folded into may be runnable while it is not.
+		if (models.some((model) => model.unavailableReason && (model.sendId ?? model.id) === favorite.model)) return false;
+		return models.length === 0 || models.some((model) => !model.unavailableReason && (names(model).includes(favorite.row) || names(model).includes(favorite.model)));
 	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !terminal || entry.harness !== currentHarness);
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	const searchRows = (open ? agents : []).flatMap((agent) => {
-		const models = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		const chosen = agent.id === currentHarness ? currentSource.modelId : pending?.harness === agent.id ? pending.model : undefined;
+		const models = agent.id === "claude-code" ? mergeSameNamedModels(listed, chosen) : listed;
 		return models.filter((model) => model.id).map((model) => ({
 			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
 		}));
@@ -413,7 +421,7 @@ export function AgentModelPicker({
 							optionId={optionID?.(row.id)}
 							active={row.harness === shownHarness && row.model.id === source.modelId}
 							searchActive={row.id === searchActiveID}
-							disabled={!pickable(row.harness)}
+							disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
 							onPick={pickFromSearch}
 						/>
 					)) : (
@@ -472,7 +480,7 @@ export function AgentModelPicker({
 									<OptionMenuSub>
 										<OptionMenuSubTrigger label={t("agentSwitch.model")} value={modelValue} />
 										<OptionMenuSubContent scrollable className={SUB_CLASS}>
-											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(source.models) } : source} harness={shownHarness} />
+											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(mergeSameNamedModels(source.models, source.modelId)) } : source} harness={shownHarness} />
 										</OptionMenuSubContent>
 									</OptionMenuSub>
 								) : null}
@@ -581,6 +589,7 @@ function otherAgentSource(
 			label: readableModelLabel(agentModelDisplayLabel(harness, model.label)),
 			group: modelGroupLabel(model.provider, harness),
 			hint: model.isDefault ? "default" : undefined,
+			unavailableReason: model.unavailableReason,
 		}));
 	// Two routes to one model read the same once shortened; their router tells them apart.
 	const shared = new Set(listed.filter((entry, index) => listed.findIndex((other) => other.label === entry.label) !== index).map((entry) => entry.label));
@@ -655,7 +664,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 			className="text-xs text-foreground"
 		>
 			<ProviderMark provider={row.harness} className="mr-2 size-3.5" />
-			<span className="min-w-0 truncate">{row.model.label}</span>
+			<span className="min-w-0 truncate" title={row.model.unavailableReason}>{row.model.label}</span>
 			<span className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(row.harness)}</span>
 		</OptionMenuItem>
 	);
@@ -666,7 +675,11 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 	const { t } = useTranslation();
 	const favorites = useModelFavorites();
 	return (
-		<ModelMenuChoices models={source.models} searchable={source.models.filter((model) => model.id).length > 10}>
+		<ModelMenuChoices
+			models={source.models}
+			selectedId={source.modelId}
+			searchable={source.models.filter((model) => model.id).length > 10}
+		>
 			{(matches, searchActiveID, optionID) => matches.map((model, index) => {
 				const active = model.id === source.modelId;
 				const key = model.id || "default";
@@ -680,7 +693,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							active={active}
 							searchActive={model.id === searchActiveID}
 							radio
-							disabled={!source.onPickModel}
+							disabled={!source.onPickModel || Boolean(model.unavailableReason)}
 							onSelect={(event) => {
 								// The menu stays open so effort and speed can be set too.
 								event.preventDefault();
@@ -688,7 +701,12 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							}}
 							className="group/model text-xs text-foreground"
 						>
-							<span className="min-w-0 truncate">{model.label}</span>
+							{model.unavailableReason ? (
+								<span className="min-w-0">
+									<span className="block truncate">{model.label}</span>
+									<span className="block whitespace-normal text-[10px] text-muted-foreground">{model.unavailableReason}</span>
+								</span>
+							) : <span className="min-w-0 truncate">{model.label}</span>}
 							{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint === "default" ? t("agentSwitch.defaultModel") : model.hint}</span> : null}
 							{model.id ? (() => {
 								const starredAs = favorites.find((entry) => entry.harness === harness && (entry.row === model.id || model.aliases?.includes(entry.row)));

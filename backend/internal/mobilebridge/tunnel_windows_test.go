@@ -49,7 +49,7 @@ func TestCloudflaredVersionHasNoConsole(t *testing.T) {
 	}
 	report := filepath.Join(t.TempDir(), "console")
 	t.Setenv("AO_TEST_CLOUDFLARED_CONSOLE", report)
-	version, ok := LocalCloudflaredLookup(t.TempDir()).Version(binary)
+	version, ok := LocalCloudflaredLookup(t.TempDir(), CloudflaredVersion{}).Version(binary)
 	if !ok || version != (CloudflaredVersion{2026, 7, 2}) {
 		t.Fatalf("version = %+v, ok = %v", version, ok)
 	}

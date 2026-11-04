@@ -271,7 +271,7 @@ func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
 
 func TestLoadOfferingDefaults(t *testing.T) {
 	// Clear the offering vars so we observe pure defaults: no client identity,
-	// cloud off, local on.
+	// cloud on, local on.
 	for _, k := range []string{"AO_CLIENT", "AO_CLOUD_OFFERING", "AO_LOCAL_OFFERING", "AO_CLOUD_CONTROL_PLANE_URL"} {
 		t.Setenv(k, "")
 	}
@@ -282,8 +282,8 @@ func TestLoadOfferingDefaults(t *testing.T) {
 	if cfg.Client != "" {
 		t.Errorf("Client = %q, want empty", cfg.Client)
 	}
-	if cfg.CloudOffering {
-		t.Error("CloudOffering = true, want false by default")
+	if !cfg.CloudOffering {
+		t.Error("CloudOffering = false, want true by default")
 	}
 	if !cfg.LocalOffering {
 		t.Error("LocalOffering = false, want true by default")
@@ -295,7 +295,7 @@ func TestLoadOfferingDefaults(t *testing.T) {
 
 func TestLoadOfferingOverrides(t *testing.T) {
 	t.Setenv("AO_CLIENT", "  eleven_x  ")
-	t.Setenv("AO_CLOUD_OFFERING", "true")
+	t.Setenv("AO_CLOUD_OFFERING", "false")
 	t.Setenv("AO_LOCAL_OFFERING", "false")
 	t.Setenv("AO_CLOUD_CONTROL_PLANE_URL", " https://cp.example.com ")
 
@@ -306,8 +306,8 @@ func TestLoadOfferingOverrides(t *testing.T) {
 	if cfg.Client != "eleven_x" {
 		t.Errorf("Client = %q, want trimmed eleven_x", cfg.Client)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want explicit false to stick")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want explicit false to stick")
@@ -318,17 +318,17 @@ func TestLoadOfferingOverrides(t *testing.T) {
 }
 
 // The offering toggles must accept the numeric spellings the supervisor may
-// hand down: 1 switches cloud on, 0 is the only way local goes off.
+// hand down: 0 is the only way either offering goes off.
 func TestLoadOfferingNumericToggles(t *testing.T) {
-	t.Setenv("AO_CLOUD_OFFERING", "1")
+	t.Setenv("AO_CLOUD_OFFERING", "0")
 	t.Setenv("AO_LOCAL_OFFERING", "0")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true for AO_CLOUD_OFFERING=1")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want false for AO_CLOUD_OFFERING=0")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want false for AO_LOCAL_OFFERING=0")

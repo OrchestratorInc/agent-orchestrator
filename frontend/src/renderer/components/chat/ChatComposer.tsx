@@ -1,3 +1,5 @@
+import { hasCodeSelection } from "../diffs/SelectionStableContent";
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -17,9 +19,9 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
  * Three completions live in the editor — `/` for AO commands and the agent's own
  * skills, `@` for worktree files, and pasted or dropped files. Completed skills
  * and paths are atomic inline chips but serialize to the plain text the agent
- * expects. The original keyboard contract remains: Enter sends, Shift+Enter makes
- * a newline, and ordinary typing stays local to the editor instead of rerendering
- * the surrounding chat surface.
+ * expects. Enter sends by default; a UI preference reserves Enter for newlines
+ * and sends with Cmd/Ctrl+Enter. Ordinary typing stays local to the editor instead
+ * of rerendering the surrounding chat surface.
  *
  * Every affordance is conditional on being able to deliver. The `/` menu only opens
  * when the provider actually reported skills, and the attach control only appears
@@ -48,7 +50,10 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { isMacPlatform } from "../../lib/platform";
+import { useDictation } from "./useDictation";
+import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -57,6 +62,7 @@ import { formatCapturedFileReferences, type ChatFileReference } from "../../../s
 import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
@@ -106,6 +112,7 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -141,7 +148,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
-	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// A /btw request the daemon refused never opened a side chat, so a
 	// retry cannot succeed; return the draft instead of locking the composer.
 	"CHAT_SIDE_UNAVAILABLE",
 	"CHAT_SIDE_UNSUPPORTED",
@@ -207,7 +214,9 @@ export const ChatComposer = memo(function ChatComposer({
 	skills = [],
 	filePaths = [],
 	filePathsTruncated,
+	onFileQuery,
 	onStageAttachments,
+	cloudAttachments,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -266,6 +275,8 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
+		/** With text delivery, the message as typed, before its captures were inlined into `text`. */
+		displayText?: string,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -299,6 +310,11 @@ export const ChatComposer = memo(function ChatComposer({
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
+	/**
+	 * Told what follows "@" as it is typed, for a workspace whose files are searched
+	 * rather than listed up front (a Cloud session's): it answers through filePaths.
+	 */
+	onFileQuery?: (query: string) => void;
 	/** The path list was capped, so the menu says so rather than implying it is all. */
 	filePathsTruncated?: boolean;
 	/**
@@ -306,7 +322,14 @@ export const ChatComposer = memo(function ChatComposer({
 	 * can open. Absent means files cannot be delivered, and no attach control is
 	 * offered at all.
 	 */
-	onStageAttachments?: (attachments: FileAttachmentPayload[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
+	 * each. Each file uploads on its own and shows its own failure, removing one
+	 * while it uploads cancels it, and an upload in flight does not hold the
+	 * page: it runs in the main process and is dropped on a reload.
+	 */
+	cloudAttachments?: { maxBytes: number };
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
 	/**
@@ -412,6 +435,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [highlighted, setHighlighted] = useState(0);
 	const highlightedRef = useRef(0);
 	const [isComposing, setIsComposing] = useState(false);
+	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
+	const enterSends = chatSendKeyMode === "enter";
 	const [dragging, setDragging] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
@@ -446,6 +471,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const dictation = useDictation({
+		onText: (text) => editor.current?.dictate(text),
+		onEnd: (keep) => editor.current?.endDictation(keep),
+	});
+	const dictating = dictation.phase !== "idle";
+	// Dictation is in preview: macOS only, behind Developer mode.
+	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -551,12 +583,13 @@ export const ChatComposer = memo(function ChatComposer({
 		[draftScope, onQueuedAttachmentsChange],
 	);
 	const prepareAttachments = useCallback(
-		async (attachments: FileAttachment[]): Promise<FileAttachment[]> => {
+		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			const paths = await onStageAttachments(
-				attachments.flatMap(({ mimeType, data }) =>
-					data ? [{ mimeType, data }] : [],
+				attachments.flatMap(({ mimeType, data, name }) =>
+					data ? [{ mimeType, data, name }] : [],
 				),
+				signal,
 			);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
@@ -591,6 +624,8 @@ export const ChatComposer = memo(function ChatComposer({
 		initialKey: attachmentScopeKey,
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
+		maxAttachmentBytes: cloudAttachments?.maxBytes,
+		prepareEach: Boolean(cloudAttachments),
 	});
 	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
@@ -627,6 +662,10 @@ export const ChatComposer = memo(function ChatComposer({
 		() => suggestionsFor(trigger),
 		[trigger, dismissedKey, suggestionsFor],
 	);
+	const fileQuery = trigger?.kind === "file" ? trigger.query : undefined;
+	useEffect(() => {
+		if (fileQuery !== undefined) onFileQuery?.(fileQuery);
+	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
@@ -638,7 +677,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+		// A cloud file's reference is no daemon path: it previews from its bytes
+		// while they are in memory, else as a file.
+		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
 	});
@@ -710,12 +751,14 @@ export const ChatComposer = memo(function ChatComposer({
 	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
 	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
-	// turn; the send button only shows it while the modifier is held.
+	// turn; the send button only shows it while the modifier is held. When Enter
+	// inserts newlines, Cmd/Ctrl+Enter is the send key, so the modifier delivers
+	// through the ordinary send/queue path instead of steering.
 	// Steering has no excerpt payload, so attached excerpts would be cleared with
 	// the accepted draft without reaching the agent. Queue those drafts instead.
 	const canSteerDraft =
 		Boolean(canSteer && onSteer) && !savingQueuedEdit && contextReferences.length === 0;
-	const steersDraft = modifierHeld && canSteerDraft;
+	const steersDraft = enterSends && modifierHeld && canSteerDraft;
 	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery && !submitting
 		? durableDelivery.state === "accepted"
@@ -747,15 +790,11 @@ export const ChatComposer = memo(function ChatComposer({
 		!hasDraft &&
 		!savingQueuedEdit &&
 		Boolean(queuedDock);
-	const sendHint = menuOpen
-		? "Enter to insert"
-		: savingQueuedEdit
-			? "⏎ save edit"
-			: showsSteer
-				? "Steer into running turn"
-				: willQueue
-					? "⏎ queue"
-					: "Enter to send";
+	const sendKeyHint = enterSends ? "Enter" : "Cmd/Ctrl+Enter";
+	const newlineHint = enterSends ? "Shift+Enter for newline" : "Enter for newline";
+	const sendHint = showsSteer && !menuOpen
+		? "Steer into running turn"
+		: `${sendKeyHint} to ${menuOpen ? "insert" : savingQueuedEdit ? "save edit" : willQueue ? "queue" : "send"}; ${newlineHint}`;
 	const persistedText = persistedDraft?.composer.text;
 	const draftSeedId = draftSeed?.id ?? (draftScopeKey ? `session:${draftScopeKey}` : undefined);
 	const draftSeedText = draftSeed?.text ?? persistedText;
@@ -776,10 +815,12 @@ export const ChatComposer = memo(function ChatComposer({
 					? (["persistence-failed"] as const)
 					: []),
 
-				...(fileAttachments.preparing ? (["pending-attachments"] as const) : []),
+				// A Cloud upload runs in the main process, which a leave
+				// confirmation would block, and is only repeated if lost.
+				...(fileAttachments.preparing && !cloudAttachments ? (["pending-attachments"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
+	}, [cloudAttachments, draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
 
 	useEffect(
 		() => () => {
@@ -803,7 +844,11 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
 
+	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
+		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
+		previousAutoFocusKey.current = autoFocusKey;
+		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
 		focusEditor();
 	}, [autoFocusKey, focusEditor]);
 
@@ -821,9 +866,12 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (!autoFocus) return;
 
-		const onWindowFocus = () => focusEditor();
+		const onWindowFocus = () => {
+			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			focusEditor();
+		};
 		const onVisibilityChange = () => {
-			if (document.visibilityState === "visible") focusEditor();
+			if (document.visibilityState === "visible") onWindowFocus();
 		};
 
 		window.addEventListener("focus", onWindowFocus);
@@ -1236,7 +1284,6 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
-			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1258,6 +1305,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending keeps what was dictated so far and stops listening.
+		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
@@ -1566,7 +1615,9 @@ export const ChatComposer = memo(function ChatComposer({
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
-      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+      // The text carries the captures for the agent; they are passed too, so the
+      // surface can show the message as typed with its captures beside it.
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText);
      } else {
       await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
      }
@@ -1646,19 +1697,23 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 
-			if (canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
+			if (enterSends && canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
 				setSteerNextRequest((request) => request + 1);
 				return true;
 			}
-			const wantsSteer = (event.metaKey || event.ctrlKey) && canSteerDraft;
+			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, enterSends, fileAttachments, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-		if (event.nativeEvent.isComposing) return;
+		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
+		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
+			dictation.detach();
+		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -1858,9 +1913,9 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-			onClick={(e) => {
-					if (controlsDisabled) return;
-					// Portal menus still bubble clicks here; focusing the editor would close them.
+				onMouseDown={(e) => {
+					if (controlsDisabled || e.button !== 0) return;
+					// Portal menus still bubble mouse events here; focusing the editor would close them.
 					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
@@ -1868,6 +1923,8 @@ export const ChatComposer = memo(function ChatComposer({
 						e.target === e.currentTarget ||
 						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
+						// Preserve the live caret before the browser selects the padding.
+						e.preventDefault();
 						editor.current?.focus();
 					}
 				}}
@@ -1953,14 +2010,28 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
 											<span className="invisible">{file.name}</span>
 											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
 										</span>
-										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+										{/* Removing a file while it attaches cancels it. */}
+										<button
+											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
+											onClick={() => {
+												fileAttachments.cancelPending(file.id);
+												editor.current?.focus();
+											}}
+											aria-label={`Cancel attaching ${file.name}`}
+											className="text-muted-foreground hover:text-foreground"
+										>
+											<X aria-hidden="true" className="size-3" />
+										</button>
 									</li>
 								))}
 							</ul>
@@ -1999,9 +2070,11 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
 					placeholder={
@@ -2043,6 +2116,11 @@ export const ChatComposer = memo(function ChatComposer({
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
+				{dictation.error ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+						{dictation.error}
+					</p>
+				) : null}
 				{steerRefusal ?? steerOutcomeNotice ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
@@ -2137,6 +2215,43 @@ export const ChatComposer = memo(function ChatComposer({
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
 								Steer
 							</Button>
+						) : null}
+						{canDictate ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="none"
+											disabled={!dictating && controlsDisabled}
+											// Keep focus in the editor, where the words appear.
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={() => {
+												editor.current?.focus();
+												dictation.toggle();
+											}}
+											data-shortcut-target="dictate"
+											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-pressed={dictating}
+											className={cn(
+												// Important: the chat surface's button rule (styles.css) would otherwise drop width from the transition.
+												"mr-1 h-7 overflow-hidden rounded-full p-0 transition-[width,background-color,color]! duration-200! ease-[cubic-bezier(0.23,1,0.32,1)]! active:translate-y-0! active:transform-none! active:scale-100! motion-reduce:transition-none!",
+												dictating
+													? "w-[76px] bg-foreground text-on-foreground hover:bg-foreground/90! hover:text-on-foreground dark:hover:bg-foreground/90!"
+													: "w-7 text-muted-foreground hover:bg-interactive-active! hover:text-foreground",
+											)}
+										>
+											{dictating ? (
+												<DictationMeter listening={dictation.phase === "listening"} />
+											) : (
+												<Mic aria-hidden="true" className="size-3.5" />
+											)}
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
+							</Tooltip>
 						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>

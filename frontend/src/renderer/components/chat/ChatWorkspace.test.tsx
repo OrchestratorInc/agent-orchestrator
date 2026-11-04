@@ -1,9 +1,10 @@
+import { isMacPlatform } from "../../lib/platform";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -36,6 +37,9 @@ import {
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
 import { renderChat as render } from "../../test/render-chat";
+import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
+
+vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -129,7 +133,7 @@ vi.mock("../TerminalPane", () => ({
 }));
 
 vi.mock("../../lib/platform", () => ({
-	isMacPlatform: () => true,
+	isMacPlatform: vi.fn(() => true),
 	isLinuxPlatform: () => false,
 	isWindowsPlatform: () => false,
 }));
@@ -885,7 +889,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Chat")).toHaveAttribute("data-session-role", "orchestrator");
 		expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
 		const actionRegion = screen.getByTestId("session-action-region");
-		expect(actionRegion).toHaveClass("pl-2", "pr-3");
+		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
 		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 
@@ -1376,6 +1380,36 @@ describe("ChatWorkspace timeline", () => {
 		expect(onInterrupt).toHaveBeenCalledOnce();
 	});
 
+	it.each(["body", "documentElement"] as const)("dismisses selection from %s before interrupting and ignores held Escape repeats", (target) => {
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items = snapshot.items.filter(item => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"));
+		const onInterrupt = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} excerptsEnabled onInterrupt={onInterrupt} />);
+		const log = screen.getByRole("log");
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange(); range.selectNodeContents(source);
+		const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+		fireEvent.pointerUp(log);
+		expect(screen.getByRole("button", { name: "Add to chat" })).toBeInTheDocument();
+		const input = document.createElement("input"); log.append(input);
+		const inputEscape = vi.fn((event: KeyboardEvent) => event.stopPropagation());
+		input.addEventListener("keydown", inputEscape);
+		expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(true);
+		expect(inputEscape).toHaveBeenCalledOnce();
+		expect(screen.getByRole("button", { name: "Add to chat" })).toBeInTheDocument();
+		input.remove();
+		fireEvent.keyDown(document[target], { key: "Escape" });
+		fireEvent.keyDown(document[target], { key: "Escape", repeat: true });
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		expect(onInterrupt).not.toHaveBeenCalled();
+		fireEvent.keyUp(log, { key: "Escape" });
+		fireEvent.keyDown(log, { key: "Escape" });
+		expect(onInterrupt).toHaveBeenCalledTimes(1);
+		selection.removeAllRanges();
+	});
+
 	it("focuses the composer from conversation whitespace but preserves button focus", async () => {
 		const user = userEvent.setup();
 		const snapshot = structuredClone(chatFixture);
@@ -1434,10 +1468,22 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 		selection.addRange(range);
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40, 150, 100, 20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
-		fireEvent.mouseUp(log);
-		const button = screen.getByRole("button", { name: "Add to chat" });
-		expect(button).toHaveClass("shrink-0", "whitespace-nowrap", "hover:bg-interactive-hover");
+		fireEvent.pointerUp(document.body);
+		let button = screen.getByRole("button", { name: "Add to chat" });
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		fireEvent.keyUp(log, { key: "Escape" });
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		fireEvent.keyUp(log, { key: "Shift" });
+		fireEvent.pointerUp(document.body);
+		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+		expect(selection.toString().trim()).toBe(selectedText);
+		selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
+		selection.addRange(range); fireEvent.pointerUp(document.body);
+		button = screen.getByRole("button", { name: "Add to chat" });
+		expect(button).toHaveClass("hover:bg-interactive-hover");
+		expect(button.querySelector("svg")).toBeNull();
 		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
 		fireEvent.mouseDown(button);
 		expect(selection.toString().trim()).toBe(selectedText);
@@ -1448,6 +1494,38 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected chat text with the platform shortcut on %s", (platform) => {
+		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
+		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;
+		render(<ChatWorkspace snapshot={chatFixtureSettled} excerptsEnabled />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange(); range.selectNodeContents(source);
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40,150,100,20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40,150,100,20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0,0,600,500));
+		fireEvent.pointerUp(log);
+		const chord = { key: "l", ctrlKey: platform !== "MacIntel", metaKey: platform === "MacIntel" };
+		expect(fireEvent.keyDown(log,{...chord, ctrlKey:!chord.ctrlKey,metaKey:!chord.metaKey})).toBe(true);
+		expect(count()).toBe(0);
+		const browserControl = document.createElement("button"); document.body.append(browserControl);
+		expect(fireEvent.keyDown(browserControl,chord)).toBe(true);
+		expect(count()).toBe(0); browserControl.remove();
+		const menu = document.createElement("div"); menu.setAttribute("role","menu"); menu.setAttribute("data-state","open"); document.body.append(menu);
+		expect(fireEvent.keyDown(log,chord)).toBe(true); expect(count()).toBe(0);
+		menu.remove();
+		const input = document.createElement("input"); document.body.append(input);
+		expect(fireEvent.keyDown(input,chord)).toBe(true); expect(count()).toBe(0); input.remove();
+		expect(fireEvent.keyDown(log,{...chord,repeat:true})).toBe(false); expect(count()).toBe(0);
+		menu.setAttribute("data-state", "closed"); document.body.append(menu);
+		expect(fireEvent.keyDown(log,chord)).toBe(false);
+		menu.remove();
+		fireEvent.keyDown(log,chord);
+		expect(count()).toBe(1);
+		expect(fireEvent.keyDown(log,chord)).toBe(true);
+		window.getSelection()!.removeAllRanges();
+	});
 	it("scrolls to and highlights a navigated message even when its text does not match the rendered body", async () => {
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixtureSettled} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
@@ -1472,6 +1550,34 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("applies a navigation request once, so another session's chat never replays it", () => {
+		type Request = { id: string; text: string; messageId?: string };
+		// A surface that stays mounted across sessions, as the Cloud one does,
+		// and drops a request once its chat reports it applied.
+		function Host({ snapshot, initial }: { snapshot: ConversationSnapshot; initial: Request }) {
+			const [request, setRequest] = useState<Request | undefined>(initial);
+			return (
+				<ChatWorkspace
+					snapshot={snapshot}
+					annotationNavigationRequest={request}
+					onAnnotationNavigationHandled={(id) => setRequest((current) => current?.id === id ? undefined : current)}
+				/>
+			);
+		}
+		const other = {
+			...chatFixtureSettled,
+			sessionId: "other-session",
+			items: chatFixtureSettled.items.map((item) => ({ ...item, id: `other-${item.id}` })),
+		} as ConversationSnapshot;
+		const messageId = chatFixtureSettled.items.find((item) => item.kind === "message")!.id;
+		const request = { id: "palette:1", text: "line", messageId };
+		const { rerender } = render(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		rerender(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		expect(screen.queryByText("The referenced message is no longer available in this chat.")).not.toBeInTheDocument();
+	});
+
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
 		render(<ChatWorkspace snapshot={chatFixtureSettled} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
@@ -1480,7 +1586,7 @@ describe("ChatWorkspace timeline", () => {
 		const selection = window.getSelection()!;
 		selection.removeAllRanges();
 		selection.addRange(range);
-		fireEvent.mouseUp(log);
+		fireEvent.pointerUp(log);
 		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
 		selection.removeAllRanges();
 	});
@@ -1538,6 +1644,45 @@ describe("ChatWorkspace timeline", () => {
 		expect(
 			within(screen.getByRole("log", { name: "Conversation" })).queryByText("Which harness?"),
 		).not.toBeInTheDocument();
+	});
+
+	it("answers a Codex structured question through the real elicitation dock instead of an empty command approval", async () => {
+		const user = userEvent.setup();
+		const onResolveInput = vi.fn();
+		const onDecide = vi.fn();
+		const snapshot = withUserInput("pending");
+		const input = snapshot.items.find((item) => item.id === "input-1");
+		if (!input || input.kind !== "activity") throw new Error("missing input activity");
+		input.summary = codexInput.detail.message;
+		input.detail = { ...codexInput.detail, inputMode: "form", schema: { ...codexInput.detail.schema, type: "object" } };
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} onResolveInput={onResolveInput} onDecide={onDecide} />);
+		const dock = within(screen.getByTestId("elicitation-composer-dock"));
+		expect(dock.getAllByText("Which direction should we take?").length).toBeGreaterThan(0);
+		expect(dock.getByText("Use the native protocol")).toBeVisible();
+		expect(dock.getByText("Keep the bridge")).toBeVisible();
+		expect(screen.queryByText("The agent offered no decisions AO can present")).not.toBeInTheDocument();
+		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
+		await user.click(dock.getByRole("radio", { name: /Native/ }));
+		await user.click(dock.getByRole("button", { name: "Continue" }));
+		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
+		expect(onDecide).not.toHaveBeenCalled();
+		input.status = "resolved";
+		input.inputResponse = { action: "accept", content: { first_value: "Native" } };
+		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
+		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
+		const history = within(screen.getByRole("region", { name: "Agent question history" }));
+		expect(history.getByText("Which direction should we take?")).toBeVisible();
+		const header = history.getByText("Direction");
+		expect(header).toBeVisible();
+		const field = header.parentElement;
+		if (!field) throw new Error("missing answered Direction field");
+		const answer = within(field).getByRole("definition");
+		expect(answer).toBeVisible();
+		expect(answer.textContent).toBe("Native");
+		expect(history.queryByText("Bridge", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Use the native protocol", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Keep the bridge", { exact: false })).not.toBeInTheDocument();
+		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 	});
 
 	it.each(["running", "completed"] as const)("keeps answered questions and feedback readable during a %s turn", async (state) => {
@@ -2302,6 +2447,26 @@ describe("ChatWorkspace timeline", () => {
 		// A Coder orchestrator still opens its composer only once it is up.
 		render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} session={cloudSession("orchestrator", "provisioning", "coder")} />);
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("says the sandbox is starting under the brief a Freestyle session was started with, until its worker connects", () => {
+		const startedAt = new Date().toISOString();
+		const cloudSession = (observedState: string, runtimeConnected = false, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		const echo = [{ clientMessageId: "req-1", text: "Fix the login bug", createdAt: startedAt, opening: true }];
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		expect(screen.getByText("Starting sandbox")).toBeInTheDocument();
+		// Connected: the row under the brief goes back to timing the reply.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("running", true)} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		view.unmount();
+		// A Coder session starts behind its own startup screen: the chat names no sandbox start.
+		render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning", false, "coder")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
 	});
 
 	it.each([
