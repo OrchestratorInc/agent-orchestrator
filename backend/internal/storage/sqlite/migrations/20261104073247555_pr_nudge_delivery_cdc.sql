@@ -10,7 +10,7 @@ BEGIN
     VALUES ((SELECT project_id FROM sessions WHERE id = NEW.session_id), NEW.session_id, 'pr_updated',
         json_object('url', NEW.url, 'session', NEW.session_id, 'state', NEW.pr_state,
                     'ci', NEW.ci_state, 'review', NEW.review_decision, 'mergeability', NEW.mergeability),
-        NEW.updated_at);
+        datetime('now'));
 END;
 -- +goose StatementEnd
 

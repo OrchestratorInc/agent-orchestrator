@@ -452,7 +452,7 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
-		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now.Add(-7 * 24 * time.Hour), ObservedAt: now,
 	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatal(err)
 	}
@@ -515,6 +515,9 @@ func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
 			for _, event := range events {
 				if string(event.Type) != "pr_updated" || event.ProjectID != "mer" || event.SessionID != string(rec.ID) {
 					t.Fatalf("receipt event = %+v, want pr_updated for %s", event, rec.ID)
+				}
+				if event.CreatedAt.Before(now) {
+					t.Fatalf("receipt event timestamp = %s, want delivery time rather than the old PR timestamp", event.CreatedAt)
 				}
 				var payload map[string]any
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
