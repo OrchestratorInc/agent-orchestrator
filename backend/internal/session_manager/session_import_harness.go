@@ -19,6 +19,9 @@ type importedHarnessHooks struct {
 }
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
+	domain.HarnessDevin:     {configEnvKey: "XDG_DATA_HOME", configValue: devinImportDataHome, ownedElsewhere: devinImportOwnedElsewhere, adoptedOwnedElsewhere: devinImportOwnedElsewhere},
+	domain.HarnessCline:     {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
+	domain.HarnessCursor:    {configEnvKey: "CURSOR_DATA_DIR", ownedElsewhere: cursorImportOwnedElsewhere, adoptedOwnedElsewhere: cursorAdoptedImportOwnedElsewhere},
 	domain.HarnessGrok:      {configEnvKey: "GROK_HOME", ownedElsewhere: grokImportOwnedElsewhere, adoptedOwnedElsewhere: grokImportOwnedElsewhere},
 	domain.HarnessGemini:    {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
 	domain.HarnessOpenHands: {configEnvKey: "OPENHANDS_CONVERSATIONS_DIR", ownedElsewhere: openHandsImportOwnedElsewhere, adoptedOwnedElsewhere: openHandsImportOwnedElsewhere},
@@ -27,4 +30,4 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "droid", "gemini", "node", "copilot", "omp", "grok", "openhands", "python"}
+var importedProcessNames = []string{"claude", "codex", "droid", "gemini", "node", "copilot", "omp", "aider", "devin", "cline", "cursor-agent", "grok", "openhands", "python"}
