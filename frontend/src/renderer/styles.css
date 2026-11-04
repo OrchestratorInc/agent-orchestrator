@@ -3575,8 +3575,10 @@ html.sidebar-reordering * {
 	font-weight: var(--font-weight-semibold);
 }
 
-/* Ends the session's own actions, before the inspector/global controls. */
+/* Ends the session's own actions where the inspector rail begins; shown only
+ * while the rail is open. */
 .workspace-topbar-actions .topbar-divider {
+	display: none;
 	width: 1px;
 	height: var(--space-5);
 	flex: 0 0 auto;
@@ -3603,6 +3605,10 @@ html.sidebar-reordering * {
 
 .center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions .topbar-divider {
 	margin-inline-end: calc(-1 * var(--gap-topbar-control));
+}
+
+.session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
+	display: block;
 }
 
 /* The editor control's menu chevron belongs to its labeled button: narrow,
