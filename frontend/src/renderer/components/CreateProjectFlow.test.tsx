@@ -1941,6 +1941,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await waitFor(() => expect(screen.getByRole("dialog", { name: "Prepare project" })).toHaveClass("modal-shake"));
 		expect(screen.getAllByText("Done")).toHaveLength(1);
 		expect(screen.getAllByText("Needs attention")).toHaveLength(1);
+		expect(screen.getByText("commit hook failed")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 
