@@ -615,6 +615,33 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	top: 1px;
 }
 
+/* One gap everywhere on the floating bar: the 4px between tabs. The tabs
+ * carry it as their end margin, so New terminal adds none of its own; the
+ * action region starts one gap after it; and the reserve for the panel's
+ * trailing controls drops the surface's 1px edge padding. */
+/* Tab-strip scroll fades blend into the window chrome the bar floats on. */
+.center-panel-shell--floating-topbar .session-tab-scroll-fade {
+	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
+}
+
+.center-panel-shell--floating-topbar .session-tab-scroll-fade--left {
+	background: linear-gradient(270deg, transparent 0%, var(--color-bg-sidebar) 82%);
+}
+
+.center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
+	padding-inline-start: 0;
+}
+
+.center-panel-shell--floating-topbar .session-topbar-actions {
+	padding-inline-start: var(--gap-topbar-control);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-inspector__trailing,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control) - 1px);
+}
+
 .center-panel-shell--floating-topbar .session-inspector__tab-button {
 	width: var(--size-topbar-control);
 	height: var(--size-topbar-control);
@@ -3604,7 +3631,13 @@ html.sidebar-reordering * {
 }
 
 .center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions .topbar-divider {
-	margin-inline-end: calc(-1 * var(--gap-topbar-control));
+	margin-inline: 0 calc(-1 * var(--gap-topbar-control));
+}
+
+/* The rail's (transparent) 1px left border sits between the divider and the
+ * inspector tabs, so their start padding gives that pixel back. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar:not(.session-inspector__topbar--browser) {
+	padding-left: calc(var(--gap-topbar-control) - 1px);
 }
 
 .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
