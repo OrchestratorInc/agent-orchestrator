@@ -58,8 +58,11 @@ jobs:
 
           # The release conductor names the assets, so a rename there can leave
           # the published download links pointing at nothing (#7726).
-          linked_assets="$(grep -ohE '[A-Za-z-]+-(darwin|win32|linux)-(arm64|x64)\.(dmg|zip|exe|AppImage|deb|rpm)' \
-            README.md translations/README.*.md frontend/src/docs/src/components/mdx.tsx | sort -u)"
+          if ! linked_assets="$(grep -ohE '[A-Za-z][A-Za-z-]*-(darwin|win32|linux)-(arm64|x64)\.(dmg|zip|exe|AppImage|deb|rpm)' \
+            README.md translations/README.*.md frontend/src/docs/src/components/mdx.tsx | sort -u)"; then
+            echo "::error::Could not read linked assets: a source file is missing or no longer matches the guard pattern."
+            exit 1
+          fi
           mapfile -t linked_assets <<<"$linked_assets"
 
           required_assets=(
