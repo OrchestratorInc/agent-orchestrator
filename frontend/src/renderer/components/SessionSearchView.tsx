@@ -7,7 +7,6 @@ import { formatTimeCompact } from "../lib/format-time";
 import { LOCAL_HOST } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
-import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -19,7 +18,8 @@ import {
 	type SessionSearchFilters,
 	type SessionSearchResult,
 } from "../hooks/useSessionSearch";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { TopbarButton } from "./TopbarButton";
 import { Input } from "./ui/input";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
@@ -50,7 +50,6 @@ export type SessionSearchOpenTarget = {
 export function SessionSearchView() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
-	const showPageTitle = hidesShellTopbar();
 	const workspaces = useWorkspaceQuery({ includeCloud: false }).data ?? [];
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState(ALL);
@@ -146,12 +145,14 @@ export function SessionSearchView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <Search className="size-icon-md" aria-hidden="true" /> : null}
-					{t("search.title")}
-				</h1>
-				<div className="workspace-topbar-actions flex shrink-0 items-center gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
+			{/* Pages own their top bar (PageTopbar), like Board, Archive and Settings. */}
+			<PageTopbar
+				lead={
+					<PageTopbarTitle as="h1" icon={<Search className="size-icon-md" aria-hidden="true" />}>
+						{t("search.title")}
+					</PageTopbarTitle>
+				}
+				actions={<>
 					{/* Relevance while searching, recency while browsing: the same
 					    two-mode control Orca and Linear offer. */}
 					<SettingsOptionMenu
@@ -168,8 +169,8 @@ export function SessionSearchView() {
 					{filtersActive ? (
 						<TopbarButton onClick={clearFilters}>{t("search.clearFilters")}</TopbarButton>
 					) : null}
-				</div>
-			</header>
+				</>}
+			/>
 
 			<div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
 				<label className="relative block">
