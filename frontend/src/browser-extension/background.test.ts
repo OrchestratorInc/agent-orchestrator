@@ -26,7 +26,7 @@ it("aborts only the revoked session's admitted commands before removing approval
 		expect(other.signal.aborted).toBe(false);
 	});
 	await expect(runtime.handleUi({ type: "ao-ui-revoke", sessionId: "s1" })).resolves.toEqual({ revoked: true });
-	expect(revoke).toHaveBeenCalledWith("s1");
+	expect(revoke).toHaveBeenCalledWith("s1", true);
 });
 
 it("reconnects to AO when Chrome wakes the service worker with its alarm or at startup", () => {

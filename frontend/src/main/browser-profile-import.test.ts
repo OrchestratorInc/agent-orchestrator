@@ -934,7 +934,7 @@ describe("BrowserProfileImportService", () => {
 		const stateDir = path.join(root, "ao-state");
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
-		const setCookie = vi.fn(async (_details: { name: string }) => undefined);
+		const setCookie = vi.fn(async (_details: Electron.CookiesSetDetails) => undefined);
 		const service = new BrowserProfileImportService({
 			stateDir,
 			profileStore,

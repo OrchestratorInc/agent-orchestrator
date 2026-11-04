@@ -182,8 +182,8 @@ export class Bridge {
 					sessions: sessions.map((session) => ({
 						sessionId: session.sessionId,
 						tabs: Object.keys(session.tabs).length,
-						approved: Boolean(approvals[session.sessionId]),
-						trusted: approvals[session.sessionId]?.trusted ?? false,
+						approved: Boolean(this.consent.approvalFor(approvals, session.sessionId)),
+						trusted: this.consent.approvalFor(approvals, session.sessionId)?.trusted ?? false,
 					})),
 				};
 			}
@@ -195,7 +195,7 @@ export class Bridge {
 				for (const entry of this.inFlight.values()) {
 					if (entry.sessionId === sessionId) entry.controller.abort();
 				}
-				await this.consent.revoke(sessionId);
+				await this.consent.revoke(sessionId, true);
 				return { revoked: true };
 			}
 			case "ao-ui-reconnect":

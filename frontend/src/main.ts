@@ -89,6 +89,7 @@ import {
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
+import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
@@ -2792,6 +2793,9 @@ const dictation = registerDictationIpc(
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
 });
+ipcMain.handle("app:openChromeExtensions", () =>
+	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
+);
 
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
