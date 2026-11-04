@@ -201,12 +201,15 @@ export function SessionTopbarActions({
 						<TooltipTrigger asChild>
 							<TopbarButton
 								aria-label={t("shell.board")}
+								className="topbar-control--labeled"
+								data-priority="secondary"
 								disabled={startingOrchestrator}
 								onClick={openBoard}
 								style={noDragStyle}
-								variant="icon"
+								variant="action"
 							>
 								<LayoutDashboard className="size-icon-md" aria-hidden="true" />
+								<span data-compact-label>{t("shell.board")}</span>
 							</TopbarButton>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("shell.board")}</TooltipContent>

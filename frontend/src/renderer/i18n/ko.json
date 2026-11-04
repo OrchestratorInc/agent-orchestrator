@@ -795,6 +795,7 @@
 	"cues.promptPlaceholder": "e.g. Summarize what changed since the last commit",
 	"cues.retry": "Try again",
 	"cues.run": "Run a cue",
+	"cues.runShort": "실행",
 	"cues.save": "Save",
 	"cues.saveFailed": "Could not save the cue.",
 	"cues.runNewSession": "새 세션에서 실행",

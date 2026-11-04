@@ -178,16 +178,18 @@ export function TopbarOpenEditorButton({
 									?? (preferred
 										? t("editor.openInAria", { name: preferred.name })
 										: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
-							className="bg-transparent hover:bg-transparent"
+							className="topbar-control--labeled bg-transparent hover:bg-transparent"
+							data-priority="secondary"
 							highlight={false}
 							disabled={mainDisabled}
 							onClick={() => {
 								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
 								launch();
 							}}
-							variant="icon"
+							variant="action"
 						>
 							<TargetIcon target={preferred} className="size-icon-md" />
+							<span data-compact-label>{t("editor.open")}</span>
 						</TopbarButton>
 					</span>
 				</TooltipTrigger>

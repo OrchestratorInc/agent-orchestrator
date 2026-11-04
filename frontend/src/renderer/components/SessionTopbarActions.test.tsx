@@ -403,12 +403,12 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		expect(navigateMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("opens the board from an icon-only Board button on orchestrator sessions", async () => {
+	it("opens the board from a labeled Board button on orchestrator sessions", async () => {
 		renderTopbar(orchestrator);
 
 		const boardButton = screen.getByRole("button", { name: "Board" });
-		expect(boardButton).toHaveTextContent("");
-		expect(boardButton).toHaveClass("topbar-control--icon");
+		expect(boardButton).toHaveTextContent("Board");
+		expect(boardButton).toHaveClass("topbar-control--action", "topbar-control--labeled");
 		expect(screen.queryByText("my-app")).not.toBeInTheDocument();
 		await userEvent.click(boardButton);
 		expect(navigateMock).toHaveBeenCalledWith({

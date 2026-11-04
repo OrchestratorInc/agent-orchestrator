@@ -191,10 +191,11 @@ describe("TopbarOpenEditorButton", () => {
 	it("uses persisted Cursor as the primary target and sends no filesystem path", async () => {
 		renderButton();
 		const button = await screen.findByRole("button", { name: "Open in Cursor" });
-		expect(button).not.toHaveAttribute("data-priority");
-		expect(button.querySelector("[data-compact-label]")).not.toBeInTheDocument();
+		// Icon + "Open", like every other top bar control; the label collapses first.
+		expect(button).toHaveAttribute("data-priority", "secondary");
+		expect(button.querySelector("[data-compact-label]")).toHaveTextContent("Open");
 		expect(button.querySelector("svg")).toBeInTheDocument();
-		expect(button).toHaveClass("topbar-control--icon");
+		expect(button).toHaveClass("topbar-control--action", "topbar-control--labeled");
 		expect(button).not.toHaveClass("border", "bg-raised");
 		const options = screen.getByRole("button", { name: "Open workspace options" });
 		expect(options).toHaveClass("topbar-control--icon", "hover:bg-transparent");
