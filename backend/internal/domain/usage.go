@@ -20,6 +20,9 @@ const (
 	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
 	UsageSourceOMPSession     UsageSourceKind = "omp_session"
 	UsageSourceKimchiSession  UsageSourceKind = "kimchi_session"
+	UsageSourceGooseLedger    UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB     UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB         UsageSourceKind = "kilo_db"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -34,6 +37,9 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceQwenMonthly,
 	UsageSourceOMPSession,
 	UsageSourceKimchiSession,
+	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
 }
 
 // IsKnown reports whether k is a certified usage source kind.
