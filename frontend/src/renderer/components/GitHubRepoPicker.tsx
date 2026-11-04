@@ -111,7 +111,7 @@ export function GitHubRepoPicker({
 					aria-haspopup="listbox"
 					aria-expanded={open}
 					disabled={disabled}
-					className="flex h-control-form w-full items-center gap-2 rounded-md border border-transparent bg-[var(--color-bg-import-card)] px-3 text-[13px] transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/10 disabled:opacity-50"
+					className="flex h-control-form w-full items-center gap-2 rounded-md border border-transparent bg-[var(--color-bg-import-card)] px-3 text-[13px] transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50"
 				>
 					<Link2 className="size-4 shrink-0 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 					<span className={`min-w-0 flex-1 truncate ${label ? "" : "text-muted-foreground"}`}>{label || t("firstRun.chooseRepo")}</span>

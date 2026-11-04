@@ -128,7 +128,7 @@ function HomeActionCard({
 }) {
 	return (
 		<Pressable
-			className={cn(HOME_BUTTON_CLASS, "disabled:opacity-50")}
+			className={cn(HOME_BUTTON_CLASS, "disabled:pointer-events-none disabled:opacity-50")}
 			disabled={disabled}
 			onClick={onClick}
 		>

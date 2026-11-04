@@ -64,7 +64,7 @@ export function ChatAnnotationSummary({
 						ref={triggerRef}
 						disabled={disabled}
 						aria-label={label}
-						className={cn("inline-flex h-7 w-full min-w-0 items-center gap-1.5 rounded px-1.5 text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50", onRemoveAll && "pr-7")}
+						className={cn("inline-flex h-7 w-full min-w-0 select-none items-center gap-1.5 rounded px-1.5 text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemoveAll && "pr-7")}
 					>
 						<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
 						<span className="truncate">{label}</span>
@@ -108,7 +108,7 @@ export function ChatAnnotationSummary({
 <FileAnnotationPreview reference={annotation.fileReference} onNavigate={() => setOpen(false)} />
        </div> : <Pressable
 	disabled={disabled}
-	className={cn("block w-full min-w-0 rounded bg-transparent px-2.5 py-1.5 text-xs leading-5 text-popover-foreground hover:text-foreground disabled:opacity-50", onRemove && "pr-7")}
+	className={cn("block w-full min-w-0 select-none rounded bg-transparent px-2.5 py-1.5 text-xs leading-5 text-popover-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemove && "pr-7")}
 								onClick={() => {
 									onSelect?.(annotation);
 									setOpen(false);

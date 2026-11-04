@@ -341,7 +341,7 @@ function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean 
 				onClick={() => setOverride(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>

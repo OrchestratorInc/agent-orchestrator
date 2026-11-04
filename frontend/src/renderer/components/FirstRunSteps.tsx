@@ -215,7 +215,7 @@ export function FirstRunSources({
 	const [url, setUrl] = useState("");
 	const tile = (icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
 		<Pressable
-			className="group flex flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 hover:bg-interactive-active disabled:opacity-50"
+			className="group flex flex-col items-start gap-5 rounded-lg bg-interactive-hover p-4 hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
 			aria-label={label}
 			disabled={disabled}
 			onClick={onClick}

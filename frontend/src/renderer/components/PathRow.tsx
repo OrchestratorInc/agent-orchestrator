@@ -13,7 +13,7 @@ export function PathRow({ action, ariaDescribedBy, ariaInvalid, ariaLabel, child
 	onClick: () => void;
 }) {
 	return (
-		<Pressable aria-describedby={ariaDescribedBy} aria-invalid={ariaInvalid} aria-label={ariaLabel} id={id} className="flex h-control-form w-full items-center overflow-hidden rounded-md border border-transparent bg-[var(--color-bg-import-card)] text-[13px] text-foreground focus-visible:border-ring disabled:opacity-50" disabled={disabled} onClick={onClick}>
+		<Pressable aria-describedby={ariaDescribedBy} aria-invalid={ariaInvalid} aria-label={ariaLabel} id={id} className="flex h-control-form w-full items-center overflow-hidden rounded-md border border-transparent bg-[var(--color-bg-import-card)] text-[13px] text-foreground focus-visible:border-ring disabled:pointer-events-none disabled:opacity-50" disabled={disabled} onClick={onClick}>
 			<span className="flex min-w-0 flex-1 items-center gap-3 px-3">
 				{icon}
 				<span className="truncate">{children}</span>

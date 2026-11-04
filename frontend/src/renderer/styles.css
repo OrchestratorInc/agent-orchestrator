@@ -1247,6 +1247,53 @@ button.settings-row-bar {
 	color: var(--color-text-settings-muted);
 }
 
+/* Footer actions for raw buttons in packages/product-ui (desktop uses Button
+   variant="footer" / "footer-primary"). */
+@utility settings-footer-button {
+	display: inline-flex;
+	height: var(--size-settings-action-height);
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	white-space: nowrap;
+	border-radius: var(--radius-settings-action);
+	border: 1px solid var(--color-border-settings-input);
+	background-color: var(--color-bg-settings-input);
+	padding-inline: var(--space-3);
+	font-size: var(--font-size-md);
+	line-height: 1.25rem;
+	color: var(--color-text-settings-row);
+	outline: none;
+	transition-property: color, background-color, border-color, opacity, box-shadow;
+	transition-duration: var(--duration-normal);
+
+	&:hover {
+		opacity: 0.9;
+	}
+
+	&:focus-visible {
+		box-shadow: none;
+	}
+}
+
+@utility settings-footer-button-primary {
+	border-color: transparent;
+	background-color: var(--color-settings-accent);
+	padding-inline: var(--size-settings-footer-button-padding-x);
+	color: var(--color-settings-footer-button-primary-fg);
+	transition-property: opacity;
+	transition-duration: var(--duration-normal);
+
+	&:hover:not(:disabled) {
+		opacity: 0.9;
+	}
+
+	&:disabled {
+		cursor: not-allowed;
+	}
+}
+
 /* Segmented control — ReportProblem destination picker, ConnectMobile LAN/Tailscale. */
 @utility settings-segment {
 	display: inline-flex;
