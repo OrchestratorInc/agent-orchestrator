@@ -39,9 +39,9 @@ function fakeSession(userAgent = ELECTRON_MAC_UA) {
 }
 
 describe("browserUserAgent", () => {
-	it("drops the app and Electron tokens and reduces the Chrome version like Chrome does", () => {
+	it("drops the app token, keeps the Electron token and reduces the Chrome version", () => {
 		expect(browserUserAgent(ELECTRON_MAC_UA)).toBe(
-			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Electron/33.4.11 Safari/537.36",
 		);
 	});
 
@@ -50,7 +50,7 @@ describe("browserUserAgent", () => {
 			browserUserAgent(
 				"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Agent Orchestrator/1.0.0 Chrome/144.0.7559.173 Electron/40.5.0 Safari/537.36",
 			),
-		).toBe("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
+		).toBe("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Electron/40.5.0 Safari/537.36");
 	});
 });
 
@@ -139,7 +139,7 @@ describe("applyBrowserIdentity", () => {
 		applyBrowserIdentity(fake.session, identity);
 		expect(fake.calls).toEqual([
 			[
-				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+				"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Electron/33.4.11 Safari/537.36",
 				"en-GB,en-IN",
 			],
 		]);
