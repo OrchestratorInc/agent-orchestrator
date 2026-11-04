@@ -1257,7 +1257,7 @@ func (c *conversation) Terminate() error {
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	if c.hibernationCheck == nil {
 		for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
-			if task.State == "running" {
+			if task.State == "running" || task.State == "paused" {
 				return false, nil
 			}
 		}

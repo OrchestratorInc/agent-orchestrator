@@ -40,16 +40,50 @@ func TestBackgroundTasksSharedACPTracking(t *testing.T) {
 }
 
 func TestBackgroundTasksACPLaunchResultIsNotJobCompletion(t *testing.T) {
-	c := &conversation{}
-	c.observeBackgroundTool(&toolState{id: "launch", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"run_in_background": true}, rawOutput: map[string]any{"task_id": "native-job"}})
+	tool := &toolState{id: "launch", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress, rawInput: map[string]any{"run_in_background": true}}
+	c := &conversation{tools: map[string]*toolState{"launch": tool}}
+	c.observeBackgroundTool(tool)
+	completed := acpsdk.ToolCallStatusCompleted
+	c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+		ToolCallId: "launch", Status: &completed, RawOutput: map[string]any{"task_id": "native-job"},
+	}))
 	tasks, _ := c.BackgroundTasks(context.Background())
 	if len(tasks) != 1 || tasks[0].ID != "native-job" || tasks[0].State != "running" {
 		t.Fatal(tasks)
 	}
-	c.observeBackgroundTool(&toolState{id: "native-job", status: acpsdk.ToolCallStatusFailed})
+	if ready, err := c.CanHibernate(context.Background()); ready || err != nil {
+		t.Fatalf("hibernate with native job=%v %v", ready, err)
+	}
+	c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+		ToolCallId: "launch", RawOutput: map[string]any{"task_id": "native-job", "status": "completed"},
+	}))
 	tasks, _ = c.BackgroundTasks(context.Background())
-	if tasks[0].State != "failed" {
+	if len(tasks) != 1 || tasks[0].ID != "native-job" || tasks[0].State != "completed" || tasks[0].EndedAt == nil {
 		t.Fatal(tasks)
+	}
+}
+
+func TestBackgroundTasksACPExplicitTerminalStateAfterMergedUpdate(t *testing.T) {
+	for _, field := range []string{"state", "status"} {
+		for _, state := range []string{"completed", "failed", "stopped"} {
+			t.Run(field+"/"+state, func(t *testing.T) {
+				tool := &toolState{id: "job", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress, rawInput: map[string]any{"background": true}}
+				c := &conversation{tools: map[string]*toolState{"job": tool}}
+				c.observeBackgroundTool(tool)
+				completed := acpsdk.ToolCallStatusCompleted
+				// The real merge preserves the original background input flag.
+				c.observeBackgroundTool(c.mergeToolUpdate(&acpsdk.SessionToolCallUpdate{
+					ToolCallId: "job", Status: &completed, RawOutput: map[string]any{field: state},
+				}))
+				tasks, _ := c.BackgroundTasks(context.Background())
+				if len(tasks) != 1 || tasks[0].ID != "job" || tasks[0].State != state || tasks[0].EndedAt == nil {
+					t.Fatalf("tasks=%+v, want settled tool-ID task in state %s", tasks, state)
+				}
+				if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+					t.Fatalf("hibernate after explicit %s=%v %v", state, ready, err)
+				}
+			})
+		}
 	}
 }
 
@@ -102,6 +136,21 @@ func TestBackgroundTasksDeferACPHibernation(t *testing.T) {
 		t.Fatalf("hibernate=%v %v", ready, err)
 	}
 	c.observeBackgroundTool(&toolState{id: "job", status: acpsdk.ToolCallStatusCompleted})
+	if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
+		t.Fatalf("hibernate after completion=%v %v", ready, err)
+	}
+}
+
+func TestBackgroundTasksPausedAsyncTaskDefersACPHibernation(t *testing.T) {
+	c := &conversation{sessionID: "native"}
+	c.observeAsyncTaskNotification([]byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_spawned","asyncTaskId":"job","taskType":"shell"}}`))
+	for _, state := range []string{"running", "paused"} {
+		c.observeAsyncTaskNotification([]byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_state_update","asyncTaskId":"job","state":"` + state + `"}}`))
+		if ready, err := c.CanHibernate(context.Background()); ready || err != nil {
+			t.Fatalf("hibernate with %s task=%v %v", state, ready, err)
+		}
+	}
+	c.observeAsyncTaskNotification([]byte(`{"sessionId":"native","update":{"sessionUpdate":"async_task_state_update","asyncTaskId":"job","state":"completed"}}`))
 	if ready, err := c.CanHibernate(context.Background()); !ready || err != nil {
 		t.Fatalf("hibernate after completion=%v %v", ready, err)
 	}
