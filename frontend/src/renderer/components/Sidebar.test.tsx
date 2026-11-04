@@ -3693,7 +3693,7 @@ describe("Sidebar", () => {
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
 	});
 
-	it("does not offer restart for a staged build without native readiness", async () => {
+	it("keeps restart available for a stalled native stage", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
@@ -3701,9 +3701,8 @@ describe("Sidebar", () => {
 		});
 		renderSidebar();
 
-		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.queryByTestId("sidebar-update-ready")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Restart to install update v9.9.9")).not.toBeInTheDocument();
+		expect(await screen.findByTestId("sidebar-update-ready")).toBeVisible();
+		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
 	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {
