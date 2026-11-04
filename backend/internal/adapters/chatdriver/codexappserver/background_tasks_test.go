@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -57,5 +58,51 @@ func TestBackgroundTasksCodexSubagentScopeAndSettlement(t *testing.T) {
 	tasks := c.backgroundObserved.Snapshot(time.Now())
 	if len(tasks) != 1 || tasks[0].Kind != "agent" || tasks[0].State != "completed" {
 		t.Fatal(tasks)
+	}
+}
+
+func TestBackgroundTasksCodexSubagentCanRunAgainAfterCompletion(t *testing.T) {
+	for _, tool := range []string{"sendInput", "resumeAgent"} {
+		t.Run(tool, func(t *testing.T) {
+			c := &conversation{threadID: "root"}
+			observe := func(method, itemID, tool, state string) {
+				t.Helper()
+				params, err := json.Marshal(map[string]any{
+					"threadId": "root",
+					"item": map[string]any{
+						"id": itemID, "type": "collabAgentToolCall", "tool": tool,
+						"agentsStates": map[string]any{"child": map[string]string{"status": state}},
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.observeBackgroundNotification(notification{Method: method, Params: params})
+			}
+			assertTask := func(runID, state string, at time.Time) {
+				t.Helper()
+				tasks := c.backgroundObserved.Snapshot(at)
+				if len(tasks) != 1 || tasks[0].ID != "agent:child" || tasks[0].RunID != runID || tasks[0].State != state || (tasks[0].EndedAt != nil) != (state == "completed") {
+					t.Fatalf("tasks = %+v, want child run %s in state %s", tasks, runID, state)
+				}
+			}
+			observe("item/completed", "spawn", "spawnAgent", "running")
+			observe("item/started", "wait-1", "wait", "running")
+			assertTask("spawn", "running", time.Now())
+			observe("item/completed", "wait-1", "wait", "completed")
+			// Replaying the old dispatch or a wait cannot restart a settled run.
+			observe("item/completed", "spawn", "spawnAgent", "running")
+			observe("item/started", "wait-1", "wait", "running")
+			assertTask("spawn", "completed", time.Now())
+
+			observe("item/started", "next-run", tool, "running")
+			observe("item/completed", "next-run", tool, "running")
+			observe("item/started", "wait-2", "wait", "running")
+			// The second run must survive expiry of the first run's recent outcome.
+			assertTask("next-run", "running", time.Now().Add(time.Minute))
+			observe("item/completed", "wait-2", "wait", "completed")
+			observe("item/completed", "next-run", tool, "running")
+			assertTask("next-run", "completed", time.Now())
+		})
 	}
 }
