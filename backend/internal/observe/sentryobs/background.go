@@ -95,7 +95,7 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		tags["area"] = area
 	}
 	for key, value := range extra {
-		if _, exists := tags[key]; !exists {
+		if safe, known := safeBackgroundTag(key, value); safe && known {
 			tags[key] = value
 		}
 	}

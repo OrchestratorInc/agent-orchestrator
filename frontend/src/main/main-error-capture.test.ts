@@ -35,6 +35,14 @@ describe("main error capture", () => {
 		expect(() => captureMainError({ category: "daemon", reason: "exited" })).not.toThrow();
 	});
 
+	it("continues flushing held errors when the sink throws", () => {
+		captureMainError({ category: "daemon", reason: "spawn_failed" });
+		captureMainError({ category: "window", reason: "unresponsive" });
+		const sink = vi.fn(() => { throw new Error("transport closed"); });
+		expect(() => setMainErrorSink(sink)).not.toThrow();
+		expect(sink).toHaveBeenCalledTimes(2);
+	});
+
 	it("reports IPC handler throws under the channel and still rejects to the renderer", async () => {
 		const handlers = new Map<string, (event: never, ...args: unknown[]) => unknown>();
 		const ipcMain = { handle: (channel: string, listener: (event: never, ...args: unknown[]) => unknown) => { handlers.set(channel, listener); } };

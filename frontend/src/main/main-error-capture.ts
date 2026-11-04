@@ -25,7 +25,7 @@ export type MainErrorReason = (typeof MAIN_ERROR_REASONS)[number];
 export type MainErrorCapture = {
 	category: MainErrorCategory;
 	reason: MainErrorReason;
-	// Only the error's constructor name and stack function names are used.
+	// Only the error's standard type is used.
 	error?: unknown;
 	// A short fixed detail such as "signal:SIGKILL" or "code:1".
 	detail?: string;
@@ -63,7 +63,7 @@ export function setMainErrorSink(next: Sink | null): void {
 	if (!next) return;
 	const held = pending;
 	pending = [];
-	for (const capture of held) next(capture);
+	for (const capture of held) captureMainError(capture);
 }
 
 export function captureMainError(capture: MainErrorCapture): void {

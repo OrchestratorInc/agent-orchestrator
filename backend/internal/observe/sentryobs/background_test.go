@@ -63,6 +63,24 @@ func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 	}
 }
 
+func TestCaptureBackgroundGroupsOnlyValidatedTags(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
+	CaptureBackground(context.Background(), errors.New("boom"), "reaper", "reaper_tick", nil)
+	first := <-transport.events
+	CaptureBackground(context.Background(), errors.New("boom"), "reaper", "reaper_tick", map[string]string{
+		"agent": "/private/project", "reason": "private reason", "error_code": "SPAWN_TIMEOUT",
+	})
+	second := <-transport.events
+	if first.Fingerprint[0] != second.Fingerprint[0] || second.Tags["error_code"] != "" {
+		t.Fatalf("unvalidated extras changed grouping: %v vs %v", first, second)
+	}
+}
+
 func TestFaultCodesAreTitledAndTimeoutsDetected(t *testing.T) {
 	t.Parallel()
 	for _, code := range []string{"SPAWN_TIMEOUT", "CHAT_RESUME_FAILED", "GIT_INIT_FAILED", "COMPUTER_USE_DAEMON_START_FAILED"} {
