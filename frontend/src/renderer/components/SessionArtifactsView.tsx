@@ -15,7 +15,7 @@ import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type Artifac
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
+import { artifactChangeError, canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -426,7 +426,8 @@ export function SessionArtifactsView({
 	);
 	const saveCloudArtifact = useCallback<ArtifactSave>(async ({ content, expectedFileFingerprint, path }) => {
 		if (!cloudOrgId) throw new Error(t("files.saveError"));
-		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint });
+		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint })
+			.catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); });
 		// The file's link changes with it, so the list's refresh reads it again.
 		await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 		return { fileFingerprint: artifact.sha256, size: artifact.size };

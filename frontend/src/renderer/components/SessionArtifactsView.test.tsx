@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
@@ -25,7 +26,9 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 	};
 });
 
-const { cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+const { capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
+	capturedSave: { current: undefined as ((input: { content: string; expectedFileFingerprint: string; path: string }) => Promise<unknown>) | undefined },
+	saveCloudArtifactMock: vi.fn(),
 	cloudAccessMock: vi.fn(),
 	createArtifactAccessMock: vi.fn(),
 	listArtifactsMock: vi.fn(),
@@ -49,6 +52,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 		client: {
 			sendSessionMessage: sendSessionMessageMock,
 			deleteSessionArtifact: deleteCloudArtifactMock,
+			saveSessionArtifact: saveCloudArtifactMock,
 			listSessionArtifacts: listArtifactsMock,
 			createSessionArtifactAccess: createArtifactAccessMock,
 		},
@@ -58,7 +62,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: unknown; sendMessage?: (message: string) => Promise<void> }) => (
+	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
 		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
 			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
@@ -748,6 +752,29 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 		expect(screen.queryByText(/^View only\./)).toBeNull();
+	});
+
+	// A session with no creator on record offers these, and the server refuses them.
+	it("reads a refused delete of a cloud file as view only", async () => {
+		deleteCloudArtifactMock.mockReset().mockRejectedValue(new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" }));
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete artifact: notes.md" }));
+		const dialog = screen.getByRole("dialog");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+
+		expect(await within(dialog).findByText("View only. Only the person who started this session can change, download or copy its files.")).toBeInTheDocument();
+	});
+
+	it("reads a refused save of a cloud file as view only", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		saveCloudArtifactMock.mockReset().mockRejectedValue(new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" }));
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		await screen.findByTestId("artifact-view");
+
+		await expect(capturedSave.current?.({ content: "x", expectedFileFingerprint: "f", path: "notes.md" })).rejects.toThrow(/^View only\./);
 	});
 
 	it("offers copy, download and delete for a cloud session", async () => {

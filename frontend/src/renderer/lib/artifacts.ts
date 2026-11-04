@@ -6,6 +6,7 @@ import {
 	type WorkspaceSummary,
 	type WorkspaceSession,
 } from "../types/workspace";
+import { CloudCpError } from "./cloud-cp/errors";
 import { isArchivedSession } from "./standalone-archive";
 
 /** One artifact file in the Artifacts list, with the session that wrote it. */
@@ -38,6 +39,17 @@ export type ArtifactRow = {
 export function canChangeSessionArtifacts(cloud: WorkspaceSession["cloud"], cloudUserId: string | undefined): boolean {
 	if (!cloud?.createdByUserId) return true;
 	return cloud.createdByUserId === cloudUserId;
+}
+
+/**
+ * What to show when the control plane refused a change to a session's artifact
+ * file: its 403 artifact_not_owner reads as `viewOnly`, anything else as is.
+ * canChangeSessionArtifacts offers the change on a session with no creator on
+ * record, since that looks the same as an older control plane, so this is what
+ * a member sees when they try it.
+ */
+export function artifactChangeError(error: unknown, viewOnly: string): unknown {
+	return error instanceof CloudCpError && error.code === "artifact_not_owner" ? new Error(viewOnly) : error;
 }
 
 export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path">): string {

@@ -6,7 +6,8 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
 	return { kind, name, path: name, size: 10, updatedAt, ...(kind === "html" ? { previewUrl: `http://preview/${name}` } : {}) };
@@ -124,6 +125,20 @@ describe("filterArtifactGroups", () => {
 
 	it("returns nothing when no row matches", () => {
 		expect(filterArtifactGroups(groups, "pricing", "px0")).toEqual([]);
+	});
+});
+
+describe("artifactChangeError", () => {
+	it("reads the control plane's refusal as view only", () => {
+		const refused = new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" });
+		expect((artifactChangeError(refused, "View only.") as Error).message).toBe("View only.");
+	});
+
+	it("leaves every other failure as it is", () => {
+		const changed = new CloudCpError("The file changed since it was opened.", { status: 409, code: "artifact_changed" });
+		const offline = new Error("network down");
+		expect(artifactChangeError(changed, "View only.")).toBe(changed);
+		expect(artifactChangeError(offline, "View only.")).toBe(offline);
 	});
 });
 

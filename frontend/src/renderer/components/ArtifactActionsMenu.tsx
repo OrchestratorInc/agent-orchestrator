@@ -11,7 +11,7 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpClient } from "../lib/cloud-cp";
-import { artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
+import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
@@ -115,7 +115,7 @@ export function ArtifactActionsMenu({
 	// The deleted file leaves the session's artifact list on the next read.
 	const remove = useMutation({
 		mutationFn: () => session.cloud
-			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path)
+			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
 			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
 		onSuccess: async () => {
 			setConfirmingDelete(false);
