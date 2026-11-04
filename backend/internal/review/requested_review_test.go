@@ -256,7 +256,7 @@ func TestCancelStopsEveryRunningReviewer(t *testing.T) {
 	}
 }
 
-// A dead pane must only fail its own reviewer's runs, never another reviewer's
+// A live pane must only fail its own reviewer's runs, never another reviewer's
 // pass that is still running on the same worker.
 func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 	store := &fakeStore{
@@ -268,7 +268,7 @@ func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 		},
 	}
 	store.runs[0].PRURL = "https://github.com/o/r/pull/2"
-	launcher := &fakeLauncher{handle: "claude-pane"}
+	launcher := &fakeLauncher{alive: true, handle: "claude-pane"}
 	prs := fakePRs{prs: []domain.PullRequest{{URL: requestedPRURL, Number: 1, HeadSHA: "sha1"}, {URL: "https://github.com/o/r/pull/2", Number: 2, HeadSHA: "sha1"}}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
 
@@ -277,6 +277,58 @@ func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 	}
 	if got := store.runs[0]; got.Status != domain.ReviewRunRunning {
 		t.Fatalf("codex run = %+v, want untouched by the claude-code trigger", got)
+	}
+}
+
+// A reviewer of another harness whose process is gone still owns a running run.
+// The selected-harness stale sweep cannot see it, so it must be settled here:
+// otherwise the PR stays "running" and later triggers keep reporting
+// REVIEW_ALREADY_RUNNING with no reviewer to wait for.
+func TestTriggerSettlesOrphanedRunFromAnotherHarness(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerCodex: {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane", ReviewerActivityState: domain.ActivityActive},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 1),
+		},
+	}
+	launcher := &fakeLauncher{handle: "claude-pane"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
+	if err != nil {
+		t.Fatalf("TriggerWithOptions: %v", err)
+	}
+	orphan := store.runs[0]
+	if orphan.Status != domain.ReviewRunFailed || orphan.Body != reviewerExitedBeforeSubmission {
+		t.Fatalf("orphaned codex run = %+v, want failed reviewer-exit result", orphan)
+	}
+	if !res.Created || res.Run.Harness != domain.ReviewerClaudeCode {
+		t.Fatalf("result = %+v, want a new claude-code pass after settling the orphan", res)
+	}
+}
+
+// A running pass whose reviewer handle was never recorded has no process that
+// could ever finish it, even while another reviewer's probe would report alive.
+func TestTriggerSettlesOtherHarnessRunWhoseReviewerNeverStarted(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerCodex: {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerActivityState: domain.ActivityActive},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 1),
+		},
+	}
+	launcher := &fakeLauncher{alive: true, handle: "claude-pane"}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+	if _, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAuto}); err != nil {
+		t.Fatalf("TriggerWithOptions: %v", err)
+	}
+	orphan := store.runs[0]
+	if orphan.Status != domain.ReviewRunFailed || orphan.Body != reviewerNotAttached {
+		t.Fatalf("orphaned codex run = %+v, want failed never-attached result", orphan)
 	}
 }
 
@@ -385,7 +437,7 @@ func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
 			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
-			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat},
+			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1"},
 		},
 		runs: []domain.ReviewRun{
 			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
@@ -399,6 +451,52 @@ func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 	}
 	if got := store.runs[1]; got.Status != domain.ReviewRunRunning {
 		t.Fatalf("codex chat run = %+v, want still running", got)
+	}
+}
+
+// A Chat controller that cannot come back will not be retried by this daemon,
+// so its running pass must be settled rather than left looking in progress.
+func TestRecoverChatReviewersFailsRunningRunsWhenChatRestoreErrors(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerCodex: {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat, ProviderConversationID: "conversation-1", ReviewerHandleID: "review-chat:rev-codex"},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 1),
+		},
+	}
+	launcher := &fakeLauncher{alive: false, interfaceMode: domain.ReviewerInterfaceChat, spawnErr: errors.New("provider unavailable")}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	store.recoverableReviews = []domain.Review{store.reviews[domain.ReviewerCodex]}
+
+	if err := eng.RecoverChatReviewers(context.Background()); err == nil {
+		t.Fatal("RecoverChatReviewers succeeded, want the provider failure")
+	}
+	if got := store.runs[0]; got.Status != domain.ReviewRunFailed || !strings.Contains(got.Body, "provider unavailable") {
+		t.Fatalf("run = %+v, want failed with the restore error", got)
+	}
+}
+
+// A Chat row without a provider conversation has nothing RecoverChatReviewers
+// can resume, so worker restore cannot leave its pass looking in progress.
+func TestRestoreReviewerCancelsRunningChatReviewerWithoutConversation(t *testing.T) {
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerClaudeCode: {ID: "rev-claude-code", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode},
+			domain.ReviewerCodex:      {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat},
+		},
+		runs: []domain.ReviewRun{
+			requestedRun("run-claude", domain.ReviewerClaudeCode, domain.ReviewRunComplete, domain.VerdictApproved, 1),
+			requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunRunning, domain.VerdictNone, 2),
+		},
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true, handle: "claude-pane"})
+
+	if _, err := eng.RestoreReviewer(context.Background(), "mer-1"); err != nil {
+		t.Fatalf("RestoreReviewer: %v", err)
+	}
+	if got := store.runs[1]; got.Status != domain.ReviewRunCancelled {
+		t.Fatalf("codex chat run = %+v, want cancelled without a recoverable conversation", got)
 	}
 }
 
