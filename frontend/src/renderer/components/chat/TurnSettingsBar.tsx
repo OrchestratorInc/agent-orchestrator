@@ -108,7 +108,7 @@ export interface ApprovalModeLimits {
 }
 
 export const TRIGGER_CLASS = cn(
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[length:var(--font-size-base)]! leading-none text-muted-foreground hover:text-foreground data-[state=open]:text-foreground",
 	GHOST_PILL_CLASS,
 );
 export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
