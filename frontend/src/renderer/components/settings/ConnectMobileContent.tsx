@@ -818,21 +818,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="flex min-w-0 items-center">
 							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-											className={ICON_ACTION_CLASS}
-											onClick={() => void copyPassword()}
-										>
-											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									</TooltipContent>
-								</Tooltip>
+								<button
+									type="button"
+									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+									className={ICON_ACTION_CLASS}
+									onClick={() => void copyPassword()}
+								>
+									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+								</button>
+							
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}

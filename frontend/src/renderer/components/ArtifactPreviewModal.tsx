@@ -19,7 +19,6 @@ import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { Button } from "./ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	artifact: ArtifactRow | null;
@@ -89,16 +88,12 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							{t("artifacts.openInSession")}
 							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
 						</Button>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<DialogClose asChild>
-									<Button aria-label={t("common.close")} className="shrink-0 transition-none" size="icon-sm" variant="ghost">
-										<X aria-hidden="true" className="size-icon-sm" />
-									</Button>
-								</DialogClose>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("common.close")}</TooltipContent>
-						</Tooltip>
+						<DialogClose asChild>
+							<Button aria-label={t("common.close")} className="shrink-0 transition-none" size="icon-sm" variant="ghost">
+								<X aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</DialogClose>
+					
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden bg-background">
 						<ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />

@@ -203,23 +203,15 @@ export function ArtifactActionsMenu({
 			{sidebar ? (
 				<>
 					{onEdit && !fileMediaKind(artifact.path) ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-foreground", actionClassName)} onClick={onEdit} size="icon-sm" type="button" variant="ghost">
-									<Pencil aria-hidden="true" className="size-icon-sm" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
-						</Tooltip>
+						<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-foreground", actionClassName)} onClick={onEdit} size="icon-sm" type="button" variant="ghost">
+							<Pencil aria-hidden="true" className="size-icon-sm" />
+						</Button>
+					
 					) : null}
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button aria-label={`${t("artifacts.delete")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-destructive", actionClassName)} onClick={confirmDelete} size="icon-sm" type="button" variant="ghost">
-								<Trash2 aria-hidden="true" className="size-icon-sm" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("artifacts.delete")}</TooltipContent>
-					</Tooltip>
+					<Button aria-label={`${t("artifacts.delete")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-destructive", actionClassName)} onClick={confirmDelete} size="icon-sm" type="button" variant="ghost">
+						<Trash2 aria-hidden="true" className="size-icon-sm" />
+					</Button>
+				
 				</>
 			) : null}
 			{onTogglePin && !pinInMenu ? (
@@ -259,12 +251,8 @@ export function ArtifactActionsMenu({
 			) : null}
 			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 				{iconOnly ? (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<span className="inline-flex">{menuTrigger}</span>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("files.moreFileActions")}</TooltipContent>
-					</Tooltip>
+					<span className="inline-flex">{menuTrigger}</span>
+				
 				) : menuTrigger}
 				<DropdownMenuContent align={iconOnly ? "end" : "start"} className="min-w-44" data-browser-native-overlay="true">
 					{children}

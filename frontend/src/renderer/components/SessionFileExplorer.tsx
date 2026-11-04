@@ -318,29 +318,26 @@ export function SessionFileExplorer({
 	);
 
 	const maximizeButton = onToggleMaximized ? (
-		<Tooltip>
-			{/* Closing the overlay hands focus back to this button, and a tooltip
-			    that opens on that focus stays up until the pointer comes back.
-			    Only keyboard focus (focus-visible) opens it; hover still does. */}
-			<TooltipTrigger asChild onFocus={(event) => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>
-				{/* Sized and toned like the pinned top-bar buttons beside it. */}
-				<Button
-					aria-label={isMaximized ? t("common.returnToPanel") : t("common.maximize")}
-					className="shrink-0 text-muted-foreground hover:text-foreground"
-					onClick={() => onToggleMaximized(!isMaximized)}
-					size="icon-sm"
-					type="button"
-					variant="ghost"
-				>
-					{isMaximized ? (
-						<Minimize2 className="size-icon-md" aria-hidden="true" />
-					) : (
-						<Maximize2 className="size-icon-md" aria-hidden="true" />
-					)}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{isMaximized ? t("common.returnToPanel") : t("common.maximize")}</TooltipContent>
-		</Tooltip>
+		ip
+k.
+/}
+}>
+/}
+on
+)}
+d"
+)}
+m"
+n"
+t"
+	>
+ (
+/>
+ (
+/>
+)}
+n>
+		
 	) : null;
 
 	const reviewPane = (
@@ -422,22 +419,18 @@ export function SessionFileExplorer({
 				</div>
 			) : null}
 			{showTreeToggle ? (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
-							aria-pressed={treeOpen}
-							className="shrink-0"
-							onClick={() => setTreeOpen((open) => !open)}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<FolderTree className="size-icon-base" aria-hidden="true" />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
-				</Tooltip>
+				<Button
+					aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
+					aria-pressed={treeOpen}
+					className="shrink-0"
+					onClick={() => setTreeOpen((open) => !open)}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					<FolderTree className="size-icon-base" aria-hidden="true" />
+				</Button>
+			
 			) : null}
 		</>
 	);

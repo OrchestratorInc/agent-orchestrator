@@ -2186,24 +2186,20 @@ export const ChatComposer = memo(function ChatComposer({
 										</OptionMenuContent>
 									</OptionMenu>
 								) : (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon-sm"
-												disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-												onClick={() => filePicker.current?.click()}
-												aria-label="Attach a file"
-												className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
-											>
-												<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</Button>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">Attach a file</TooltipContent>
-								</Tooltip>
+								<span className="inline-flex">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon-sm"
+										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onClick={() => filePicker.current?.click()}
+										aria-label="Attach a file"
+										className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+									>
+										<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
+									</Button>
+								</span>
+							
 								)}
 							</>
 						) : null}
