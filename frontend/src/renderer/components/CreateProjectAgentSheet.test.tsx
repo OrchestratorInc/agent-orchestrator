@@ -324,14 +324,14 @@ describe("CreateProjectAgentSheet", () => {
 		});
 	});
 
-	it("defaults each role from its own session history", async () => {
+	it("defaults both roles by agent priority and ignores session history", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(workspaceQueryKey, [
 			{
 				sessions: [
 					{ id: "w1", kind: "worker", provider: "codex", createdAt: hoursAgo(5) },
 					{ id: "w2", kind: "worker", provider: "codex", createdAt: hoursAgo(4) },
-					{ id: "o1", kind: "orchestrator", provider: "claude-code", createdAt: hoursAgo(3) },
+					{ id: "o1", kind: "orchestrator", provider: "codex", createdAt: hoursAgo(3) },
 				],
 			},
 		]);
@@ -341,30 +341,22 @@ describe("CreateProjectAgentSheet", () => {
 
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 		expect(onSubmit).toHaveBeenCalledWith({
-			workerAgent: "codex",
+			workerAgent: "claude-code",
 			orchestratorAgent: "claude-code",
 			trackerIntake: undefined,
 		});
 	});
 
-	it("does not replace a manually selected role when history refreshes", async () => {
+	it("does not replace a manually selected role when the agent catalog refreshes", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(workspaceQueryKey, [
-			{
-				sessions: [{ id: "w1", kind: "worker", provider: "claude-code", createdAt: hoursAgo(3) }],
-			},
-		]);
 		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
 		await chooseOption(screen.getByLabelText("Worker agent"), "codex");
 
-		queryClient.setQueryData(workspaceQueryKey, [
-			{
-				sessions: [
-					{ id: "w2", kind: "worker", provider: "claude-code", createdAt: hoursAgo(2) },
-					{ id: "w3", kind: "worker", provider: "claude-code", createdAt: hoursAgo(1) },
-				],
-			},
-		]);
+		act(() => {
+			queryClient.setQueryData(agentReadinessQueryKey, {
+				agents: [agentReadiness("claude-code"), agentReadiness("codex"), agentReadiness("cursor")],
+			});
+		});
 		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
 
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

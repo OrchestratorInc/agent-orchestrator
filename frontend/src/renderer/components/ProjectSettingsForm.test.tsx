@@ -679,8 +679,9 @@ describe("ProjectSettingsForm", () => {
 				}),
 			},
 		});
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(putMock).toHaveBeenCalledTimes(1);
 		expect(await screen.findByText("Saved")).toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalledWith("/api/v1/orchestrators", expect.anything());
 	}, 20_000);
 
 	it("loads workflow fields correctly", async () => {

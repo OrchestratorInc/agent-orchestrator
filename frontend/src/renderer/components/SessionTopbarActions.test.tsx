@@ -431,7 +431,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		});
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
 		useWorkspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -446,6 +446,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		});
 		paramsMock.projectId = "proj-1";
 		paramsMock.sessionId = "sess-1";
+		spawnMock.mockResolvedValue("orch-new");
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<TooltipProvider>
@@ -456,9 +457,8 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("opens the project orchestrator from the open-orchestrator shortcut", () => {

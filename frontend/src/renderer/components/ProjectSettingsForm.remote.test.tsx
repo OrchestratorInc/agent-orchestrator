@@ -51,7 +51,7 @@ vi.mock("../stores/ui-store", () => ({
 	}),
 }));
 
-import { ProjectSettingsForm, type ProjectSettingsSaveState } from "./ProjectSettingsForm";
+import { ProjectSettingsForm } from "./ProjectSettingsForm";
 
 const projects = new Map([
 	["box-a", { id: "shared", name: "Alpha", kind: "single_repo", path: "/srv/alpha", repo: "/srv/alpha.git", config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } } }],

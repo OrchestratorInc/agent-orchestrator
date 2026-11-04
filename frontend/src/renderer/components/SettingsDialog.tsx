@@ -484,7 +484,7 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 	const pageLayer = useSettingsPage();
 	const layer = layerProp ?? pageLayer;
 	if (!layer?.showSaveStatus) return null;
-	const { projectSaveState, remoteHostId } = layer;
+	const { projectSaveState } = layer;
 	return (
 		<div className="mt-2 border-t border-(--color-border-settings-dialog-header) px-2 py-3 text-xs" role="status" aria-live="polite">
 			{projectSaveState.phase === "failed" ? (

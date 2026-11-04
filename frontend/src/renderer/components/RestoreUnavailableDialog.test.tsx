@@ -26,6 +26,10 @@ const session: WorkspaceSession = {
 	prs: [],
 };
 
+beforeEach(() => {
+	vi.clearAllMocks();
+});
+
 describe("RestoreUnavailableDialog", () => {
 	it("recreates cleanly even when the project has no configured orchestrator agent", async () => {
 		const onOpenChange = vi.fn();
