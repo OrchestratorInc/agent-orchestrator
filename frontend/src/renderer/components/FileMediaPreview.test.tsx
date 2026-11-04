@@ -10,7 +10,16 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
-vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
+vi.mock("pdfjs-dist", () => ({
+	GlobalWorkerOptions: {},
+	getDocument: vi.fn(),
+	TextLayer: class {
+		render() {
+			return Promise.resolve();
+		}
+		cancel() {}
+	},
+}));
 
 describe("FileMediaPreview", () => {
 	afterEach(() => {
