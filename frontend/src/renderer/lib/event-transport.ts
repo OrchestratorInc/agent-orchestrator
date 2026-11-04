@@ -12,6 +12,7 @@ import {
 } from "../hooks/useReviewerConversation";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
+import { backgroundTasksQueryRoot } from "../hooks/useBackgroundTasks";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
@@ -240,6 +241,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
+					invalidate(backgroundTasksQueryRoot);
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;

@@ -180,7 +180,7 @@ func serveClaudeUsageLimitFixture(firstResponse string) error {
 			}
 			air := claudeNestedMap(claudeNestedMap(params.ClientCapabilities.Meta, "jetbrains"), "air")
 			capabilities, _ := air["capabilities"].([]any)
-			if air["version"] != float64(1) || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
+			if air["version"] != float64(1) || len(capabilities) != 2 || capabilities[0] != "sessionFailure" || capabilities[1] != "asyncTasks" {
 				return errors.New("Claude sessionFailure extension was not negotiated")
 			}
 			result = `{"protocolVersion":1,"agentCapabilities":{}}`
