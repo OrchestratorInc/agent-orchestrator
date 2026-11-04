@@ -64,6 +64,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReviewState } from "../lib/cloud-cp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { sessionWasSharedWithYou } from "../lib/shared-session-memory";
 import {
 	refetchCloudProjectsForUnknownSessions,
 	refreshCloudSessionLifecycle,
@@ -536,7 +537,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		() => () => aoBridge.app.setChatDraftRisk?.([]),
 		[sessionId],
 	);
-	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl } = useCloudCp();
+	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl, userId: cloudCpUserId } = useCloudCp();
 	// The session's own organization decides whether it can be shared (feature=share).
 	const sessionOffering = useCloudOffering(Boolean(session?.cloud), session?.cloud?.orgId);
 	const theme = useResolvedTheme();
@@ -2015,10 +2016,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
+		// A shared session's route names no organization, and once its sharing
+		// ends it is gone from the shared list too: it reads as shared because
+		// the list showed it earlier in this run.
 		const routeError = cloudRouteSession.error;
-		const noLongerShared = !hostId && Boolean(routeCloudOrgId) && (
-			(ownCloudOrg !== undefined && routeCloudOrgId !== ownCloudOrg.id) ||
-			(routeError instanceof CloudCpError && routeError.status === 403)
+		const noLongerShared = !hostId && (
+			sessionWasSharedWithYou(cloudCpBaseUrl, cloudCpUserId, sessionId) ||
+			(Boolean(routeCloudOrgId) && (
+				(ownCloudOrg !== undefined && routeCloudOrgId !== ownCloudOrg.id) ||
+				(routeError instanceof CloudCpError && routeError.status === 403)
+			))
 		);
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">

@@ -7,6 +7,7 @@ import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { rememberSharedSessions } from "../lib/shared-session-memory";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
@@ -804,7 +805,7 @@ async function withSharedArtifactFiles(
  * files, so a guest sees them as the owner does.
  */
 export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl],
@@ -819,7 +820,7 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 				const key = `${item.project.orgId}/${item.project.id}`;
 				byProject.set(key, [...(byProject.get(key) ?? []), item]);
 			}
-			return Promise.all([...byProject.values()].map(async (items) => {
+			const workspaces = await Promise.all([...byProject.values()].map(async (items) => {
 				const item = items[0]!;
 				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
 				const withFiles = await Promise.all(sessions.map((session) => withSharedArtifactFiles(queryClient, client, baseUrl, session)));
@@ -835,6 +836,8 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 					shared: share,
 				};
 			}));
+			rememberSharedSessions(baseUrl, userId, workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)));
+			return workspaces;
 		},
 	});
 }

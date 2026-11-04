@@ -20,6 +20,7 @@ import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
+import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
@@ -146,6 +147,7 @@ vi.mock("../hooks/useCloudOrg", () => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
+		userId: "guest-user",
 		client: cloudCpClientMock,
 		ready: true,
 	}),
@@ -1046,6 +1048,7 @@ describe("SessionView", () => {
 		cloudSessionQueryState.isLoading = false;
 		cloudSessionQueryState.isError = false;
 		cloudSessionQueryState.error = null;
+		forgetSharedSessions();
 		settingsState.chatHarnesses = undefined;
 		chatSurfaceWorkState.controllerBusy = false;
 		chatSurfaceWorkState.hasRunningTurn = false;
@@ -1352,6 +1355,21 @@ describe("SessionView", () => {
 		render(<SessionView cloudOrgId="owners-org" projectId="shared-project" sessionId="unshared" />);
 		expect(screen.getByText("This session is no longer shared with you. Pick another from the sidebar.")).toBeInTheDocument();
 		expect(screen.queryByText(/cleaned up/)).not.toBeInTheDocument();
+	});
+
+	it("says a session shared earlier is no longer shared once it drops off the list, though its route names no workspace", () => {
+		// The shared list showed it earlier in this run; now the owner removed access.
+		rememberSharedSessions("https://cloud.example.test", "guest-user", ["was-shared"]);
+		workspaceQueryState.data = [];
+		render(<SessionView projectId="shared-project" sessionId="was-shared" />);
+		expect(screen.getByText("This session is no longer shared with you. Pick another from the sidebar.")).toBeInTheDocument();
+	});
+
+	it("still says not found for a missing session that was never shared, or shared with another account", () => {
+		rememberSharedSessions("https://cloud.example.test", "another-account", ["was-shared"]);
+		workspaceQueryState.data = [];
+		render(<SessionView projectId="my-project" sessionId="was-shared" />);
+		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 	});
 
 	it("still says not found for a missing session in the person's own workspace", async () => {

@@ -41,6 +41,7 @@ vi.mock("./useCloudCp", () => ({
 		},
 		ready: cloudState.ready,
 		baseUrl: "https://cp.example.com",
+		userId: "guest-user",
 	}),
 }));
 
@@ -50,6 +51,7 @@ vi.mock("./useCloudOrg", () => ({
 
 import { CloudCpError } from "../lib/cloud-cp";
 import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { forgetSharedSessions, sessionWasSharedWithYou } from "../lib/shared-session-memory";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -119,6 +121,18 @@ describe("cloud sessions shared with this person", () => {
 		expect(sessions.find((session) => session.id === "no-files")?.artifactFiles).toBeUndefined();
 		expect(listSessionArtifactsMock).toHaveBeenCalledTimes(1);
 		expect(listSessionArtifactsMock).toHaveBeenCalledWith("org-owner", "with-files", expect.anything());
+	});
+
+	it("remembers each session it listed as shared, for this account only", async () => {
+		forgetSharedSessions();
+		listSharedProjectSessionsMock.mockResolvedValue({ sessions: [sharedSession("listed")] });
+
+		const { result } = renderHook(() => useSharedCloudWorkspacesQuery(), { wrapper });
+
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		expect(sessionWasSharedWithYou("https://cp.example.com", "guest-user", "listed")).toBe(true);
+		expect(sessionWasSharedWithYou("https://cp.example.com", "someone-else", "listed")).toBe(false);
+		expect(sessionWasSharedWithYou("https://cp.example.com", "guest-user", "never-listed")).toBe(false);
 	});
 
 	it("reads a session's failing files again a minute later, not on every refresh", async () => {
