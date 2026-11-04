@@ -204,6 +204,17 @@ export function FirstRunOnboarding() {
 		setOpen(true);
 	}, [migrationOffer.data?.show, open, projectCount, ready, status]);
 
+	// Developer mode's Replay onboarding: start again from the first page,
+	// whatever the first-run flag and the projects say.
+	const replayRequest = useUiStore((state) => state.onboardingReplayRequest);
+	const handledReplay = useRef(replayRequest);
+	useEffect(() => {
+		if (replayRequest === handledReplay.current) return;
+		handledReplay.current = replayRequest;
+		storeStep(null);
+		setOpen(true);
+	}, [replayRequest]);
+
 	if (!open) return null;
 	return (
 		<OnboardingFlow
