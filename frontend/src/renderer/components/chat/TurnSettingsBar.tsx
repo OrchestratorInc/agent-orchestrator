@@ -18,7 +18,7 @@
  */
 
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, Shuffle, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -492,7 +492,6 @@ export function TurnSettingsBar({
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
-								mark={reroute ? <Shuffle className="size-3 shrink-0 text-warning" aria-hidden="true" /> : undefined}
 								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
@@ -797,15 +796,6 @@ function ModelEffortPicker({
 					className={TRIGGER_CLASS}
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
-					{reroute ? (
-						// A mark, not a second name. Two truncated model names side by side is
-						// less legible than one readable name plus a flag that says it is not
-						// the one that was asked for; the tooltip and the menu spell out which.
-						<Shuffle
-							className="size-3 shrink-0 text-warning"
-							aria-label={`Substituted for ${reroute.fromModel ?? chosenLabel}`}
-						/>
-					) : null}
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub>
