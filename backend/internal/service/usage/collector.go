@@ -2495,10 +2495,17 @@ func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string
 }
 
 func newestPiPaths(ctx context.Context, root string, limit int) ([]string, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
+	// AO launches Pi with --session-dir, which writes sessions directly into
+	// root; Pi's own default layout nests them one directory deeper per cwd.
+	paths, err := filepath.Glob(filepath.Join(root, "*.jsonl"))
 	if err != nil {
 		return nil, err
 	}
+	nested, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, nested...)
 	type candidate struct {
 		path string
 		mod  time.Time

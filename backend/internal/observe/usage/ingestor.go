@@ -317,6 +317,11 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 		apply = func() error {
 			return i.pricing.WithSnapshot(ctx, func(snapshot *pricing.Snapshot) error {
 				for index := range parsed.Events {
+					// A cost the agent itself reported (its provider's billed
+					// amount) is kept as stored; the catalog prices the rest.
+					if parsed.Events[index].Costs.EstimatedCostNanos != nil {
+						continue
+					}
 					// Live ingestion prices only what the transcript or the
 					// binding's route hint named outright. Resolving the model
 					// against the catalog would turn "one catalog lists this

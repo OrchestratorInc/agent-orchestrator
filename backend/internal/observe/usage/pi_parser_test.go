@@ -94,15 +94,53 @@ func TestParsePiExplicitUsageEntry(t *testing.T) {
 	assertPiTokens(t, anthropic.Tokens, 9, 3, 6, 2)
 }
 
-func TestParsePiSkipsAssistantWithoutUsageAndUnknownProvider(t *testing.T) {
+func TestParsePiSkipsAssistantWithoutUsageAndFailedRequests(t *testing.T) {
 	source := usageSource(domain.UsageSourcePiSession)
 	records := []jsonlRecord{
 		{Data: []byte(`{"type":"message","id":"interrupted","message":{"role":"assistant","provider":"openai","model":"gpt-test"}}`)},
-		{Data: []byte(`{"type":"message","id":"gemini","message":{"role":"assistant","provider":"google","model":"gemini-test","usage":{"input":2,"output":1}}}`)},
+		{Data: []byte(`{"type":"message","id":"failed","message":{"role":"assistant","provider":"anthropic","model":"claude-test","stopReason":"error","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}}`)},
 	}
 	result := parseRecords(source, records, 100, time.Now())
 	if result.err != nil || len(result.Events) != 0 || result.Cursor.AnomalyCount != 0 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+// TestParsePiRecordsOtherProvidersWithPiCost catches dropping usage from any
+// provider other than Anthropic and OpenAI. Pi normalizes them all to one
+// shape; the record below is a live z.ai coding-plan reply, whose output (99)
+// already includes its 55 reasoning tokens.
+func TestParsePiRecordsOtherProvidersWithPiCost(t *testing.T) {
+	source := usageSource(domain.UsageSourcePiSession)
+	source.NativeRootID = "pi-session"
+	records := []jsonlRecord{
+		{Offset: 10, Data: []byte(`{"type":"message","id":"zai-1","timestamp":"2026-11-04T02:58:59.526Z","message":{"role":"assistant","provider":"zai-coding-cn","model":"glm-5.3-flash","stopReason":"stop","usage":{"input":4217,"output":99,"cacheRead":0,"cacheWrite":0,"reasoning":55,"totalTokens":4316,"cost":{"input":0.00063255,"output":0.0000495,"cacheRead":0,"cacheWrite":0,"total":0.0006820499999999999}}}}`)},
+		{Offset: 20, Data: []byte(`{"type":"message","id":"gemini-1","message":{"role":"assistant","provider":"google","model":"gemini-test","usage":{"input":6,"output":2,"cacheRead":4,"cacheWrite":0}}}`)},
+	}
+	result := parseRecords(source, records, 30, time.Now())
+	if result.err != nil || len(result.Events) != 2 || result.Cursor.AnomalyCount != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	zai, gemini := result.Events[0], result.Events[1]
+	if zai.ProviderID != domain.UsageProviderOpenAI || zai.BillingProviderID != "zai-coding-cn" ||
+		zai.BillingProviderSource != domain.UsageBillingProviderObserved || zai.ModelID != "glm-5.3-flash" {
+		t.Fatalf("z.ai event = %+v", zai)
+	}
+	assertPiTokens(t, zai.Tokens, 4217, 0, 4217, 99)
+	costs := zai.Costs
+	if costs.PricingVersion != piPricingVersion || costs.EstimatedCostNanos == nil || *costs.EstimatedCostNanos != 682050 ||
+		costs.InputCostNanos == nil || *costs.InputCostNanos != 632550 ||
+		costs.CachedInputCostNanos == nil || *costs.CachedInputCostNanos != 0 ||
+		costs.OutputCostNanos == nil || *costs.OutputCostNanos != 49500 {
+		t.Fatalf("z.ai costs = %+v", costs)
+	}
+
+	if gemini.ProviderID != domain.UsageProviderOpenAI || gemini.BillingProviderID != "google" || gemini.ModelID != "gemini-test" {
+		t.Fatalf("gemini event = %+v", gemini)
+	}
+	assertPiTokens(t, gemini.Tokens, 10, 4, 6, 2)
+	if gemini.Costs.EstimatedCostNanos != nil || gemini.Costs.PricingVersion != "" {
+		t.Fatalf("gemini without a Pi cost must be left for the catalog: %+v", gemini.Costs)
 	}
 }
 
