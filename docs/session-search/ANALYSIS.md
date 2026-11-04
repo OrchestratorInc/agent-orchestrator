@@ -1478,3 +1478,19 @@ sessions whose name holds every typed word first, ahead of any bm25 score.
 Each fix has a test that fails without it: the standalone backfill, the
 retry, the palette route, and the name tier. The name-tier test also fails if
 ids count as names.
+
+### 8.9 A deleted session leaves the index (5 Nov 2026)
+
+Since this branch began, main added deleting sessions: `ao session delete`,
+and an opt-in retention that deletes archived sessions after a number of days
+(`DeleteTerminatedSession`). A session's conversations cascade away with it,
+but the search tables are not linked to `sessions`. So a deleted session's
+text stayed searchable, and its rows kept appearing in results.
+
+The search migration now adds a trigger, `sessions_search_ad`. After any delete
+on `sessions`, it removes that session's search documents and sources, and the
+documents' own trigger then removes their text and FTS rows. It covers every
+deletion path, including seed sessions and task preparations, and any added
+later. `TestADeletedSessionLeavesTheIndex` deletes an archived session the way
+main does. Afterwards its words find nothing and only the kept session's source
+remains. Without the trigger, the deleted session is still found.

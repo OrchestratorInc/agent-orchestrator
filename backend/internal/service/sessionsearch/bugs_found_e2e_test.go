@@ -362,6 +362,48 @@ func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 	}
 }
 
+// Main added deleting sessions (`ao session delete`, and archived-session
+// retention). The index is not linked to sessions, so a deleted session's text
+// stayed searchable and its rows kept appearing. Deleting a session now takes
+// its documents and sources with it.
+func TestADeletedSessionLeavesTheIndex(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	ctx := context.Background()
+	session := seedChatSession(t, f.store, "proj", "sess-gone", "conv-gone")
+	appendUserMessage(t, f.store, session, "conv-gone", "gone-msg", "gone-turn", "rotate the hmac secret before friday")
+	kept := seedChatSession(t, f.store, "proj", "sess-kept", "conv-kept")
+	appendUserMessage(t, f.store, kept, "conv-kept", "kept-msg", "kept-turn", "rotate the logging key")
+	if _, err := f.svc.IndexAll(ctx); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if got := sessionIDs(search(t, f.svc, "hmac").Results); len(got) != 1 || got[0] != string(session.ID) {
+		t.Fatalf("before delete: hmac = %v, want the session", got)
+	}
+
+	session.IsTerminated = true
+	if err := f.store.UpdateSession(ctx, session); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if deleted, err := f.store.DeleteTerminatedSession(ctx, session.ID); err != nil || !deleted {
+		t.Fatalf("delete = %v, %v", deleted, err)
+	}
+
+	if got := search(t, f.svc, "hmac").Results; len(got) != 0 {
+		t.Fatalf("after delete: hmac = %v, want nothing from a deleted session", sessionIDs(got))
+	}
+	// Only the session that was kept is still indexed.
+	if got := sessionIDs(search(t, f.svc, "rotate").Results); len(got) != 1 || got[0] != string(kept.ID) {
+		t.Fatalf("after delete: rotate = %v, want only the kept session", got)
+	}
+	coverage, err := f.svc.Coverage(ctx)
+	if err != nil {
+		t.Fatalf("Coverage: %v", err)
+	}
+	if want := int64(1); coverage.IndexedSources != want {
+		t.Fatalf("indexed sources = %d, want %d: the deleted session's source must go too", coverage.IndexedSources, want)
+	}
+}
+
 // Tool details are provider JSON. Indexed raw, snippets showed escapes such as
 // "<" and a literal "\n", and the keys used up the detail budget.
 func TestToolDetailsAreIndexedAsText(t *testing.T) {

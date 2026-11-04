@@ -165,8 +165,21 @@ CREATE TABLE session_search_sources (
 CREATE INDEX idx_session_search_sources_state ON session_search_sources (state, updated_at);
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- A deleted session takes its search documents and sources with it, whatever
+-- deletes it (`ao session delete`, archived-session retention, a seed session
+-- or task preparation that never started). The documents' own trigger then
+-- removes their text and FTS rows, so nothing of a deleted session stays
+-- searchable.
+CREATE TRIGGER sessions_search_ad AFTER DELETE ON sessions BEGIN
+    DELETE FROM session_search_docs WHERE session_id = old.id;
+    DELETE FROM session_search_sources WHERE session_id = old.id;
+END;
+-- +goose StatementEnd
+
 -- +goose Down
 -- +goose StatementBegin
+DROP TRIGGER IF EXISTS sessions_search_ad;
 DROP TABLE IF EXISTS session_search_sources;
 DROP TRIGGER IF EXISTS session_search_docs_ad;
 DROP TRIGGER IF EXISTS session_search_text_au;
