@@ -307,8 +307,8 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.queryByText("ao/sess-1")).toBeNull();
 		expect(screen.queryByText("Working")).toBeNull();
 		const buttons = within(screen.getByTestId("workspace-topbar-actions")).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent);
-		expect(buttons.slice(0, 3)).toEqual(["New terminal", "Session option", "Switch to chat UI"]);
-		expect(buttons.at(-1)).toBe("Open orchestrator");
+		expect(buttons[0]).toBe("Open orchestrator");
+		expect(buttons.slice(1, 4)).toEqual(["New terminal", "Session option", "Switch to chat UI"]);
 		expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
 	});
 

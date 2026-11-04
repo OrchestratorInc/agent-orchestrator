@@ -95,10 +95,11 @@ export function SessionTopbarActions({
 	};
 	const archiveTarget = !isOrchestrator && session && !session.cloud && sessionIsActive(session) ? session : undefined;
 
-	// Reading order, left to right: workspace utilities (editor, cues) as quiet
-	// icons, then navigation, then the one emphasized action. Workers have no
-	// emphasized action: the session itself is the focus. Archive lives in the
-	// inspector's Summary and the sidebar menu; here only its ⌘⇧A shortcut stays.
+	// Reading order, left to right. Workers: Orchestrator (quiet, labeled), then
+	// the editor and cue icons; no emphasized action, the session is the focus.
+	// Orchestrators: the utility icons, Board, then New task, the one emphasized
+	// action. Archive lives in the inspector's Summary and the sidebar menu;
+	// here only its ⌘⇧A shortcut stays.
 	return (
 		<PageTopbarActions
 			data-compact-actions={compactActions ? "true" : "false"}
@@ -106,6 +107,30 @@ export function SessionTopbarActions({
 		>
 			{session ? <SessionOwnerTag session={session} /> : null}
 			{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
+			{/* A worker's way back to its orchestrator leads the row. */}
+			{!isOrchestrator && supportsProjectActions ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex" style={noDragStyle}>
+							<TopbarButton
+								aria-label={t("shell.openOrchestrator")}
+								className="topbar-control--labeled"
+								data-priority="secondary"
+								disabled={isSpawning || isProjectRestarting || isProvisioning}
+								onClick={() => {
+									captureTopbarAction("open_orchestrator", view);
+									void openOrchestrator();
+								}}
+								variant="action"
+							>
+								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
+								<span data-compact-label>{t("shell.orchestrator")}</span>
+							</TopbarButton>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
+				</Tooltip>
+			) : null}
 			{sessionAction ? (
 				<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
 					{sessionAction}
@@ -208,28 +233,6 @@ export function SessionTopbarActions({
 						<TooltipContent shortcut="new-session" side="bottom">{t("shell.newTask")}</TooltipContent>
 					</Tooltip>
 				</>
-			) : supportsProjectActions ? (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex" style={noDragStyle}>
-							<TopbarButton
-								aria-label={t("shell.openOrchestrator")}
-								className="topbar-control--labeled"
-								data-priority="secondary"
-								disabled={isSpawning || isProjectRestarting || isProvisioning}
-								onClick={() => {
-									captureTopbarAction("open_orchestrator", view);
-									void openOrchestrator();
-								}}
-								variant="action"
-							>
-								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
-								<span data-compact-label>{t("shell.orchestrator")}</span>
-							</TopbarButton>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent shortcut={orchestratorTooltipShortcut} side="bottom">{orchestratorTooltip}</TooltipContent>
-				</Tooltip>
 			) : null}
 		</PageTopbarActions>
 	);

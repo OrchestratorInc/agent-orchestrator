@@ -150,6 +150,7 @@ export function PageTopbarActions({ className, children, ...props }: ComponentPr
 export function SessionTabsTopbar({
 	className,
 	tabs,
+	tabsTrailing,
 	actions,
 	clearanceRef,
 	regionWidth = "100%",
@@ -159,6 +160,8 @@ export function SessionTabsTopbar({
 }: {
 	className?: string;
 	tabs: ReactNode;
+	/** Sits right after the last tab (e.g. New terminal), not with the actions. */
+	tabsTrailing?: ReactNode;
 	actions?: ReactNode;
 	clearanceRef?: Ref<HTMLDivElement>;
 	regionWidth?: number | string;
@@ -178,6 +181,11 @@ export function SessionTabsTopbar({
 					style={{ width: regionWidth }}
 				>
 					{tabs}
+					{tabsTrailing ? (
+						<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-testid="session-tab-strip-action">
+							{tabsTrailing}
+						</div>
+					) : null}
 				</div>
 				{!hideActions || fullscreen ? (
 					<div

@@ -507,23 +507,19 @@ export function CenterPane({
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
-			actions={
-				<>
-					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{topbarActions}
-				</>
-			}
+			actions={topbarActions}
 			clearanceClassName={cn(
 				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 			)}
 			clearanceRef={clearanceRef}
+			tabsTrailing={tabStripAction}
 			hideActions={isFullscreen}
 			regionWidth={terminalBounds.width > 0 ? terminalBounds.width : "100%"}
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className="flex h-full min-w-0 flex-1 items-stretch"
+							className="flex h-full min-w-0 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
