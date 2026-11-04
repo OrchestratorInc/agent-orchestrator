@@ -567,6 +567,12 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 	if err := requireNodeVersion(ctx, node); err != nil {
 		return runtimeLaunch{}, err
 	}
+	// The entry stays in the packaged runtime, so module resolution is
+	// unchanged even when an Intel Mac launches a re-signed copy of Node.
+	node, err := jitCapableNode(ctx, node)
+	if err != nil {
+		return runtimeLaunch{}, err
+	}
 	return runtimeLaunch{command: node, args: []string{entry}}, nil
 }
 

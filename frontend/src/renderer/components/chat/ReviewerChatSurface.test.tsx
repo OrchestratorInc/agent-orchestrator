@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatModel, TurnSettings } from "../../types/conversation";
+import { useUiStore } from "../../stores/ui-store";
 import { ReviewerChatSurface } from "./ReviewerChatSurface";
 
 const mocks = vi.hoisted(() => ({ openSessionLink: vi.fn(), chooseSettings: vi.fn(), resumeAgent: vi.fn() }));
@@ -31,8 +32,9 @@ vi.mock("../../lib/use-session-link-navigation", () => ({
 	useSessionLinkNavigation: () => mocks.openSessionLink,
 }));
 vi.mock("./ChatWorkspace", () => ({
-	ChatWorkspace: ({ onResumeAgent, onSessionLinkOpen, draftOwner, models, onChooseSettings, approvalModes }: { onResumeAgent?: () => void; onSessionLinkOpen?: (url: string) => void; draftOwner?: { sessionId: string }; models?: ChatModel[]; onChooseSettings?: (settings: TurnSettings) => void; approvalModes?: string[] }) => (
+	ChatWorkspace: ({ onResumeAgent, onSessionLinkOpen, draftOwner, models, onChooseSettings, approvalModes, annotationNavigationRequest, onAnnotationNavigationHandled }: { onResumeAgent?: () => void; onSessionLinkOpen?: (url: string) => void; draftOwner?: { sessionId: string }; models?: ChatModel[]; onChooseSettings?: (settings: TurnSettings) => void; approvalModes?: string[]; annotationNavigationRequest?: { id: string; messageId?: string }; onAnnotationNavigationHandled?: (id: string) => void }) => (
 		<>
+		<button type="button" data-message-id={annotationNavigationRequest?.messageId} onClick={() => annotationNavigationRequest && onAnnotationNavigationHandled?.(annotationNavigationRequest.id)}>Navigation request</button>
 		<button onClick={onResumeAgent}>Resume agent</button>
 		<button type="button" data-draft-owner={draftOwner?.sessionId} onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>
 			Open session
@@ -63,6 +65,22 @@ describe("ReviewerChatSurface", () => {
 		expect(choose).toHaveAttribute("data-approval-modes", "auto");
 		fireEvent.click(choose);
 		expect(mocks.chooseSettings).toHaveBeenCalledWith({ model: "review-model", reasoningEffort: "high", approvalMode: "auto" });
+	});
+
+	it("applies a palette hit once, to the reviewer chat it names", () => {
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		const { rerender } = render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		act(() => useUiStore.getState().requestChatMessageFocus("worker-1", "m1", "flaky login", "review-1"));
+		const request = () => screen.getByRole("button", { name: "Navigation request" });
+		expect(request()).toHaveAttribute("data-message-id", "m1");
+		// Another review's chat in the same surface must not get review 1's target.
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-2" />);
+		expect(request()).not.toHaveAttribute("data-message-id");
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
+		expect(request()).toHaveAttribute("data-message-id", "m1");
+		// Once the chat applied it, a later mount never replays it.
+		fireEvent.click(request());
+		expect(request()).not.toHaveAttribute("data-message-id");
 	});
 
 	it("keeps reviewer drafts isolated across remote hosts", () => {

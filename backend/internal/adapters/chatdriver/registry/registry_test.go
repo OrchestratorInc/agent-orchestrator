@@ -35,6 +35,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessHermes,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)
@@ -48,7 +49,6 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
-		domain.HarnessHermes,      // TUI-only until a chat driver is qualified
 		domain.HarnessCoderAgents, // setup-only until the local-only policy is enforceable
 		"definitely-not-an-agent",
 	} {

@@ -308,7 +308,8 @@ function reviewStatusDetail(pr: SessionPRSummary): string {
 		case "approved": return appI18n.t("pr.review.requirementSatisfied");
 		case "changes_requested": return appI18n.t("pr.review.changesActive");
 		case "review_required": return appI18n.t("pr.review.requiredNotSubmitted");
-		case "none": return appI18n.t("pr.review.notRequired");
+		// Unresolved comments hold a PR back (the row is a warning) even with no review required.
+		case "none": return appI18n.t(pr.review.hasUnresolvedHumanComments ? "pr.review.unresolvedComments" : "pr.review.notRequired");
 	}
 }
 

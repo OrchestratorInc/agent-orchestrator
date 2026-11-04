@@ -81,7 +81,7 @@ describe("TopbarOpenEditorButton", () => {
 
 	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
 	// method 'editorHandoff:open': Error: <reason>", and the topbar used to paint
-	// that whole string into the actions row.
+	// that whole string into the error.
 	it("shows the reason, not Electron's remote-method wrapper, when the open fails", async () => {
 		setState(availableState);
 		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
@@ -91,9 +91,10 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
 
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Session workspace is not available");
-		expect(alert.textContent).not.toContain("Error invoking remote method");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			body: "Session workspace is not available",
+			tone: "error",
+		}));
 	});
 
 
@@ -476,6 +477,11 @@ describe("TopbarOpenEditorButton", () => {
 		openMock.mockRejectedValueOnce(new Error("Could not open Cursor. Check that it is installed and try again."));
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Cursor");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Open in Cursor",
+			body: "Could not open Cursor. Check that it is installed and try again.",
+			tone: "error",
+		}));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });
