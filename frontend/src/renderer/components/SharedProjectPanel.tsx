@@ -2,7 +2,7 @@ import { ChevronDown, GitPullRequest, Users } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
-import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
+import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import type { CloudCpMergeRequest } from "../lib/cloud-cp";
 import { sessionPRDisplaySummaries } from "../lib/pr-display";
@@ -18,6 +18,10 @@ import { Pressable } from "./ui/pressable";
  * merge requests guests sent. Its owner approves (which merges) or rejects a
  * request here; a guest sees where theirs stands. Nothing shows for a project
  * nobody was given.
+ *
+ * Every participant sees every pull request: the orchestrator lists all of its
+ * project's, so one opened in a session this person was not given (a guest
+ * given only the orchestrator) still shows, under the project.
  */
 export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	orchestrator: WorkspaceSession;
@@ -31,12 +35,15 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const participants = useSessionParticipants([orchestrator]).get(orchestrator.id) ?? [];
 	const shared = participants.length > 0;
 	const requests = useProjectMergeRequests(orgId, projectId, shared, orchestrator.id);
+	const projectPRs = useSessionScmSummary(orchestrator.id, shared, orgId, orchestrator.autoInjectCI === true, hostId);
 	if (!orgId || !shared) return null;
 
 	const guest = orchestrator.cloud?.shared === true;
 	const ownerName = participants.find((person) => person.role === "owner")?.name;
 	const workers = sessions.filter((session) => !isOrchestratorSession(session) && session.cloud);
-	const prCount = workers.reduce((count, session) => count + session.prs.length, 0);
+	const listedURLs = new Set(workers.flatMap((session) => session.prs.map((pr) => pr.url)));
+	const elsewhere = (projectPRs.data?.prs ?? []).filter((pr) => !listedURLs.has(pr.url));
+	const prCount = workers.reduce((count, session) => count + session.prs.length, 0) + elsewhere.length;
 	const pending = (requests.data ?? []).filter((request) => request.status === "pending");
 	const summary = [
 		t("shareProject.prCount", { count: prCount }),
@@ -81,6 +88,22 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 							session={session}
 						/>
 					))}
+					{elsewhere.length > 0 ? (
+						<section className="flex flex-col gap-1.5 py-1.5" data-shared-project-session={orchestrator.id}>
+							<p className="truncate px-1 text-2xs text-muted-foreground">{t("shareProject.openedInProject")}</p>
+							<PullRequestRows
+								canDecide={!guest}
+								guest={guest}
+								hostId={hostId}
+								liveSessionId={orchestrator.id}
+								orgId={orgId}
+								projectId={projectId}
+								prs={elsewhere}
+								requests={requests.data}
+								sessionId={orchestrator.id}
+							/>
+						</section>
+					) : null}
 				</div>
 			) : null}
 		</div>
@@ -100,12 +123,46 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 	const { t } = useTranslation();
 	const scm = useSessionScmSummary(session.id, true, orgId, session.autoInjectCI === true, hostId);
 	const prs = sessionPRDisplaySummaries(session, scm.data?.prs);
-	const actions = useMergeRequestActions(orgId, session.workspaceId);
 	return (
 		<section className="flex flex-col gap-1.5 py-1.5" data-shared-project-session={session.id}>
 			<p className="truncate px-1 text-2xs text-muted-foreground">
 				{t("shareProject.openedBy", { name: openedBy, session: session.title })}
 			</p>
+			<PullRequestRows
+				canDecide={canDecide}
+				guest={guest}
+				hostId={hostId}
+				liveSessionId={liveSessionId}
+				orgId={orgId}
+				projectId={session.workspaceId}
+				prs={prs}
+				requests={requests}
+				sessionId={session.id}
+			/>
+		</section>
+	);
+}
+
+/**
+ * A session's pull requests, each with the merge request a guest sent for it:
+ * the owner decides it here, a guest sees it waiting. Merging itself, and
+ * asking for it, is on the card, which offers a guest only the asking.
+ */
+function PullRequestRows({ canDecide, guest, hostId, liveSessionId, orgId, projectId, prs, requests, sessionId }: {
+	canDecide: boolean;
+	guest: boolean;
+	hostId?: string;
+	liveSessionId: string;
+	orgId: string;
+	projectId: string;
+	prs: readonly SessionPRSummary[];
+	requests: readonly CloudCpMergeRequest[] | undefined;
+	sessionId: string;
+}) {
+	const { t } = useTranslation();
+	const actions = useMergeRequestActions(orgId, projectId);
+	return (
+		<>
 			{prs.map((pr) => {
 				const request = pendingMergeRequestFor(requests, pr.url);
 				const decision = actions.approve.error ?? actions.reject.error;
@@ -118,9 +175,9 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 							hostId={hostId}
 							onOpenReviews={() => undefined}
 							pr={pr}
-							projectId={session.workspaceId}
+							projectId={projectId}
 							liveSessionId={liveSessionId}
-							sessionId={session.id}
+							sessionId={sessionId}
 						/>
 						{request ? (
 							<div className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs" data-merge-request={request.id}>
@@ -159,6 +216,6 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 					</div>
 				);
 			})}
-		</section>
+		</>
 	);
 }
