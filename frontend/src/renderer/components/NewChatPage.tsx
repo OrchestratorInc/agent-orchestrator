@@ -26,7 +26,7 @@ import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSec
 import { useUiStore } from "../stores/ui-store";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
-import { NewChatRecents } from "./NewChatRecents";
+// import { NewChatRecents } from "./NewChatRecents";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -395,7 +395,8 @@ export function NewChatPage({ projectId, hostId, showRecents = false }: { projec
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
-				emptyFooter={showRecents && !hostId ? <NewChatRecents /> : undefined}
+				// Recent sessions at app open are parked: re-enable by restoring this prop.
+				// emptyFooter={showRecents && !hostId ? <NewChatRecents /> : undefined}
 				onSend={send}
 				busy={pending}
 				// The Cloud session started for this task is still coming up.
