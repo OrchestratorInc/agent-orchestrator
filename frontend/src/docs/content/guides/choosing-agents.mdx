@@ -1,0 +1,42 @@
+---
+title: Choosing and switching agents
+description: Pick an agent for each session, switch it later, and see which agent new workers use.
+---
+
+A session owns its agent. Projects do not have a worker agent or an orchestrator agent, and adding a project asks for none.
+
+## Pick an agent for a new chat
+
+Choose the agent in the new-chat composer. The composer preselects the last agent you used if it is still ready. Otherwise it picks the first ready agent in this order: Claude Code, Codex, Cursor, OpenCode.
+
+The model comes from the composer, or from the agent's own default. Set per-agent defaults in global **Settings**. To limit the models a harness offers, open **Settings → Harnesses**, choose a harness, and open **Models**.
+
+## Switch a running session
+
+Open the agent picker in the session's chat to switch an orchestrator or a worker. The switch applies on your next message.
+
+- The AO transcript and the worktree carry over.
+- The new agent starts a fresh native thread, seeded with an excerpt of the AO transcript.
+- Provider-native memory does not carry over.
+
+## Which agent a new worker uses
+
+A worker started by an orchestrator, or by `ao spawn` from inside a session, uses the spawning session's current agent. Pass `--agent` to choose another:
+
+```bash
+ao spawn --project my-project --name issue-42 --issue 42 --agent codex
+```
+
+With no session context, the daemon picks the first ready agent in the same order as the composer.
+
+An orchestrator that is restarted or replaced keeps the agent the project's latest orchestrator was running.
+
+## What stays in Project Settings
+
+Each role keeps its approval (permissions) setting. Reviewers are configured separately; see the [review loop](/guides/review-loop#ao-reviewer-agents).
+
+The `--worker-agent` and `--orchestrator-agent` flags on `ao project add` and `ao project set-config` still parse. They are deprecated and do nothing.
+
+<Callout type="info">
+	Orchestrator uses the provider CLI already installed and authenticated on your machine. Run `ao doctor` if an agent is not ready.
+</Callout>
