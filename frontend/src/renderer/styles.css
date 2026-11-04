@@ -714,6 +714,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 /* Floating session tabs read like the inspector's tabs beside them: rounded
  * pills centered in the bar, a soft fill for the active tab, no slab
  * background, separators, or underline. */
+[data-terminal-tab-frame] {
+	font-size: var(--font-size-base);
+}
+
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
 	height: var(--size-topbar-control);
 	align-self: center;
@@ -3586,7 +3590,7 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	justify-content: center;
 	border-radius: var(--radius-topbar-control);
-	font-size: var(--font-size-sm-md);
+	font-size: var(--font-size-base);
 	transition:
 		transform var(--duration-fast) ease-out,
 		background-color var(--duration-fast) ease,
