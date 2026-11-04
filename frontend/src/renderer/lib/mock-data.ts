@@ -46,7 +46,6 @@ export const mockWorkspaces: WorkspaceSummary[] = [
 		name: "ao-demo",
 		path: "/demo/ao-demo",
 		type: "main",
-		orchestratorAgent: "codex",
 		accentColor: "var(--color-project-accent-mint)",
 		sessions: [
 			{
@@ -197,7 +196,6 @@ export const mockWorkspaces: WorkspaceSummary[] = [
 		name: "docs-site",
 		path: "/demo/docs-site",
 		type: "main",
-		orchestratorAgent: "claude-code",
 		accentColor: "var(--color-project-accent-sky)",
 		sessions: [
 			{

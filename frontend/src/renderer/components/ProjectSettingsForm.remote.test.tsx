@@ -126,19 +126,20 @@ it("saves the full Project form on its owning host", async () => {
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.put).toHaveBeenCalledWith("box-b", "/api/v1/projects/{id}", {
 		params: { path: { id: "shared" } },
-		body: { displayName: "Renamed Beta", config: expect.objectContaining({ worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } }) },
+		body: { displayName: "Renamed Beta", config: expect.objectContaining({ worker: {}, orchestrator: {} }) },
 	}));
 	expect(mocks.localPut).not.toHaveBeenCalled();
 	await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project-config", "box-b", "shared"] }));
 });
 
-it("saves an orchestrator agent change on the selected host without replacing the orchestrator", async () => {
+it("saves a role approval change on the selected host without replacing the orchestrator", async () => {
 	connect("box-b");
 	renderForm("box-b", "agents");
-	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator agent" }));
-	await userEvent.click(await screen.findByRole("menuitem", { name: /^Codex/ }));
+	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator approval" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name: "Accept edits" }));
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+	expect(mocks.put.mock.calls[0][2].body.config.orchestrator).toEqual({ agentConfig: { permissions: "accept-edits" } });
 	expect(mocks.post).not.toHaveBeenCalledWith("box-b", "/api/v1/orchestrators", expect.anything());
 	expect(mocks.localPost).not.toHaveBeenCalled();
 });

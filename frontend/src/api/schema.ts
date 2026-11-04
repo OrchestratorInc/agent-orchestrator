@@ -6625,7 +6625,6 @@ export interface components {
             /** @enum {string} */
             kind: "single_repo" | "workspace" | "scratch";
             name: string;
-            orchestratorAgent?: string;
             path: string;
             resolveError?: string;
             sessionPrefix: string;

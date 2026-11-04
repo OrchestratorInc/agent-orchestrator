@@ -99,7 +99,7 @@ import type { WorkspaceSummary } from "../../types/workspace";
 import { ShellProvider, type ShellContextValue } from "../../lib/shell-context";
 import { useUiStore } from "../../stores/ui-store";
 
-type Project = { id: string; name: string; path: string; orchestratorAgent?: string };
+type Project = { id: string; name: string; path: string };
 type Session = Record<string, unknown>;
 
 function respondWith(
@@ -147,7 +147,6 @@ const project: Project = {
 	id: "proj-1",
 	name: "my-app",
 	path: "/repo/my-app",
-	orchestratorAgent: "claude-code",
 };
 
 const workerSession: Session = {
@@ -524,19 +523,6 @@ describe("project board with no sessions", () => {
 
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(1, "proj-1", "board", false, undefined);
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
-	});
-
-	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
-		const unconfiguredProject = { ...project, orchestratorAgent: undefined };
-		respondWith([unconfiguredProject], []);
-		renderBoard(<SessionsBoard projectId="proj-1" />);
-
-		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
-		await userEvent.click(spawnButton);
-
-		expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined);
-		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("shows the project creation startup error after navigating to the project board", async () => {

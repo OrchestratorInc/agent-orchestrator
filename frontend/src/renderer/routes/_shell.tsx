@@ -220,8 +220,6 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 }
 
 type CreateProjectConfigInput = {
-	workerAgent: string;
-	orchestratorAgent: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -229,8 +227,6 @@ type CreateProjectConfigInput = {
 export function createProjectConfig(input: CreateProjectConfigInput): components["schemas"]["ProjectConfig"] {
 	return {
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
-		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
-		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -650,7 +646,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const provisionOrchestrator = useCallback(
 		async (
 			workspace: WorkspaceSummary,
-			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
 		) => {
 		// Safety: a hung spawn must never wedge the board behind the
@@ -674,7 +669,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				body: {
 					projectId: workspace.id,
 					kind: "orchestrator",
-					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {
@@ -726,7 +720,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const completeProjectCreation = useCallback(
 		async (
 			project: components["schemas"]["Project"],
-			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
 		) => {
 			const workspace: WorkspaceSummary = {
@@ -736,7 +729,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				path: project.path,
 				workspaceRepos: project.workspaceRepos,
 				type: "main",
-				orchestratorAgent: input.orchestratorAgent as WorkspaceSummary["orchestratorAgent"],
 				sessions: [],
 			};
 			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
@@ -747,7 +739,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
 			await navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
-			void provisionOrchestrator(workspace, input, source);
+			void provisionOrchestrator(workspace, source);
 		},
 		[navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, updateWorkspaces],
 	);
@@ -755,8 +747,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const createProject = useCallback(
 		async (input: {
 			path: string;
-			workerAgent: string;
-			orchestratorAgent: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -824,7 +814,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
 							// Registration may have committed before its response was lost.
 							// The daemon reuses an active orchestrator under its project lock.
-							void provisionOrchestrator(registeredWorkspace, input, "project_add");
+							void provisionOrchestrator(registeredWorkspace, "project_add");
 							return;
 						}
 						showGlobalToast("Project already added", "Opened the registered project for this folder.");
@@ -844,7 +834,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project creation returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_add");
+			await completeProjectCreation(data.project, "project_add");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
@@ -853,8 +843,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		async (input: {
 			remoteUrl: string;
 			destinationParent: string;
-			workerAgent: string;
-			orchestratorAgent: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
@@ -904,7 +892,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project clone returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_clone");
+			await completeProjectCreation(data.project, "project_clone");
 		},
 		[completeProjectCreation],
 	);

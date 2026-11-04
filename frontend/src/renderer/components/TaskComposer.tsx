@@ -434,9 +434,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 				agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
 		  }
 		| undefined;
-	const projectWorkerAgent = projectConfig?.worker?.agent ?? "";
-	const globalDefaultAgent = projectQuery.data?.agent ?? "";
-	const configuredProjectAgent = projectWorkerAgent || globalDefaultAgent;
+	// A local project no longer pins an agent or model; the daemon's own default
+	// agent is not a user choice either, so neither seeds the composer. Cloud
+	// projects still carry both until they move off role pins.
+	const roleDefaults = isCloudProject ? projectConfig : undefined;
+	const configuredProjectAgent = roleDefaults?.worker?.agent ?? "";
 	const agentCatalog = agentsQuery.data;
 	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
 	// (the single source), with readiness derived from the user's provider connections.
@@ -481,10 +483,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		return "";
 	}, [isCloudProject, selectedAgent, cloudConnectionsQuery.data]);
 	const defaultWorkerModel =
-		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
-	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
+		roleDefaults?.worker?.agentConfig?.model ?? roleDefaults?.agentConfig?.model ?? "";
+	const defaultWorkerMode = roleDefaults?.worker?.agentConfig?.mode ?? roleDefaults?.agentConfig?.mode ?? "";
 	const defaultWorkerEffort =
-		projectConfig?.worker?.agentConfig?.effort ?? projectConfig?.agentConfig?.effort ?? "";
+		roleDefaults?.worker?.agentConfig?.effort ?? roleDefaults?.agentConfig?.effort ?? "";
 	const projectModelForSelectedAgent = selectedAgent === configuredProjectAgent
 		? defaultWorkerModel
 		: "";

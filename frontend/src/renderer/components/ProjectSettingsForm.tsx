@@ -10,9 +10,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { isLaunchableAgent } from "../lib/agent-select-options";
-import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
-import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
@@ -128,16 +126,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		displayName: project.name,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
 		sessionPrefix: config.sessionPrefix ?? "",
-		workerAgent: config.worker?.agent ?? "",
-		orchestratorAgent: config.orchestrator?.agent ?? "",
-		workerModel: config.worker?.agentConfig?.model ?? config.agentConfig?.model ?? "",
-		workerEffort: config.worker?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		workerPermissions: config.worker?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
-		orchestratorModel: config.orchestrator?.agentConfig?.model ?? config.agentConfig?.model ?? "",
-		orchestratorEffort: config.orchestrator?.agentConfig?.effort ?? config.agentConfig?.effort ?? "",
 		orchestratorPermissions: config.orchestrator?.agentConfig?.permissions ?? config.agentConfig?.permissions ?? "",
-		workerMode: config.worker?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
-		orchestratorMode: config.orchestrator?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
 		reviewerHarness: config.reviewers?.[0]?.harness ?? "",
 		reviewerModel: config.reviewers?.[0]?.agentConfig?.model ?? config.agentConfig?.model ?? "",
 		reviewerMode: config.reviewers?.[0]?.agentConfig?.mode ?? config.agentConfig?.mode ?? "",
@@ -149,8 +139,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		intakeRepo: intake.repo ?? "",
 		intakeAssignee: intake.assignee ?? "",
 	};
-	const agentsQuery = useAgentReadinessQuery(true, hostId);
-	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft) => {
 		const displayName = values.displayName.trim();
 		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
@@ -159,22 +147,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		const next: ProjectConfig = isScratchProject
 			? {
 					...scratchSupportedConfig(config),
-					worker: {
-						...config.worker,
-						agent: values.workerAgent || undefined,
-						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
-					},
-					orchestrator: {
-						...config.orchestrator,
-						agent: values.orchestratorAgent || undefined,
-						agentConfig: buildRoleAgentConfig(
-							config.orchestrator?.agentConfig,
-							values.orchestratorModel,
-							values.orchestratorMode,
-							values.orchestratorEffort,
-							values.orchestratorPermissions,
-						),
-					},
+					worker: roleWithoutAgent(config.worker, values.workerPermissions),
+					orchestrator: roleWithoutAgent(config.orchestrator, values.orchestratorPermissions),
 					agentConfig: blankToUndefined({
 						...sharedAgentConfig,
 						permissions: undefined,
@@ -184,22 +158,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 					...config,
 					defaultBranch: values.defaultBranch.trim() === DEFAULT_BRANCH_AUTO ? undefined : values.defaultBranch || undefined,
 					sessionPrefix: values.sessionPrefix || undefined,
-					worker: {
-						...config.worker,
-						agent: values.workerAgent || undefined,
-						agentConfig: buildRoleAgentConfig(config.worker?.agentConfig, values.workerModel, values.workerMode, values.workerEffort, values.workerPermissions),
-					},
-					orchestrator: {
-						...config.orchestrator,
-						agent: values.orchestratorAgent || undefined,
-						agentConfig: buildRoleAgentConfig(
-							config.orchestrator?.agentConfig,
-							values.orchestratorModel,
-							values.orchestratorMode,
-							values.orchestratorEffort,
-							values.orchestratorPermissions,
-						),
-					},
+					worker: roleWithoutAgent(config.worker, values.workerPermissions),
+					orchestrator: roleWithoutAgent(config.orchestrator, values.orchestratorPermissions),
 					agentConfig: blankToUndefined({
 						...sharedAgentConfig,
 						permissions: undefined,
@@ -252,20 +212,20 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, workersRequestReview: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
-		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
+		modelScope={() => ""} defaultReviewer={() => "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
-		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
+		renderAgent={(props) => <LocalReviewerPicker {...props} projectId={projectId} hostId={hostId} />} />;
 }
 
-function LocalAgentPicker({ role, draft, value, invalid, onChange, projectId, hostId, agentsQuery }: ProjectAgentPickerProps & { projectId: string; hostId?: string; agentsQuery: ReturnType<typeof useAgentReadinessQuery> }) {
+function LocalReviewerPicker({ draft, value, onChange, projectId, hostId }: ProjectAgentPickerProps & { projectId: string; hostId?: string }) {
 	const { t } = useTranslation();
-	useEnsureAgentReadiness({ agentIds: [draft.workerAgent, draft.orchestratorAgent, draft.reviewerHarness], enabled: role === "worker" && Boolean(draft.workerAgent || draft.orchestratorAgent || draft.reviewerHarness), hostId, purpose: hostId ? "launch" : "display" });
+	const agentsQuery = useAgentReadinessQuery(true, hostId);
+	useEnsureAgentReadiness({ hostId });
+	useEnsureAgentReadiness({ agentIds: [draft.reviewerHarness], enabled: Boolean(draft.reviewerHarness), hostId, purpose: hostId ? "launch" : "display" });
 	const disabled = agentsQuery.isFetching && agentsQuery.data === undefined;
 	const agents = hostId ? agentsQuery.data?.agents.filter(isLaunchableAgent) : agentsQuery.data?.agents;
-	return role === "reviewer"
-		? <ReviewerSelect value={value} model={draft.reviewerModel} mode={draft.reviewerMode} projectId={projectId} hostId={hostId} harnessOnly defaultHarness={WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"} triggerClassName="w-full" onChange={onChange} ariaLabel={t("settings.project.defaultReviewer")} agents={agents} disabled={disabled} />
-		: <RequiredAgentField id={`${role}Agent`} variant="settings-control" value={value} placeholder={t(role === "worker" ? "settings.project.selectWorker" : "settings.project.selectOrchestrator")} label={t(role === "worker" ? "settings.project.defaultWorker" : "settings.project.defaultOrchestrator")} agents={agents} hostId={hostId} disabled={disabled} invalid={invalid} onChange={onChange} />;
+	return <ReviewerSelect value={value} model={draft.reviewerModel} mode={draft.reviewerMode} projectId={projectId} hostId={hostId} harnessOnly defaultHarness="claude-code" triggerClassName="w-full" onChange={onChange} ariaLabel={t("settings.project.defaultReviewer")} agents={agents} disabled={disabled} />;
 }
 
 function repositoryHref(repository: string): string | undefined {
@@ -299,6 +259,12 @@ function scratchSupportedConfig(config: ProjectConfig): ProjectConfig {
 
 function blankToUndefined<T extends object>(obj: T): T | undefined {
 	return Object.values(obj).some((v) => v !== undefined) ? obj : undefined;
+}
+
+// A project contributes only a role's permissions. The legacy agent, model,
+// mode and effort keys are dropped so they are cleared from saved configs.
+function roleWithoutAgent(role: ProjectConfig["worker"], permissions: string): ProjectConfig["worker"] {
+	return { ...role, agent: undefined, agentConfig: buildRoleAgentConfig(role?.agentConfig, "", "", "", permissions) };
 }
 
 function buildRoleAgentConfig(

@@ -91,7 +91,6 @@ for (const destinationMode of ["picker", "typed"] as const) {
 		await page.getByRole("textbox", { name: "Repository URL" }).fill("https://example.com/example.git");
 		await selectDestination();
 		await page.getByRole("button", { name: "Use existing checkout", exact: true }).click();
-		await page.getByRole("button", { name: "Create and start", exact: true }).click();
 
 		await expect.poll(() => addRequest).toMatchObject({
 			path: "/repos/example",

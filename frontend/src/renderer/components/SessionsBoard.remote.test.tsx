@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 	openRemoteProjectSettings: vi.fn(),
 	connected: ["box-a", "box-b"],
 	workspaces: {} as Record<string, {
-		hostId: string; id: string; name: string; path: string; orchestratorAgent: string;
+		hostId: string; id: string; name: string; path: string;
 		sessions: Array<Record<string, unknown>>;
 	}>,
 }));
@@ -108,8 +108,8 @@ beforeEach(() => {
 		mocks.requestNewTask, mocks.openRemoteProjectSettings]) mock.mockReset();
 	mocks.connected = ["box-a", "box-b"];
 	mocks.workspaces = {
-		"box-a": { hostId: "box-a", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-a")] },
-		"box-b": { hostId: "box-b", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-b", "Fix billing")] },
+		"box-a": { hostId: "box-a", id: "shared", name: "Todo App", path: "/todo", sessions: [worker("box-a")] },
+		"box-b": { hostId: "box-b", id: "shared", name: "Todo App", path: "/todo", sessions: [worker("box-b", "Fix billing")] },
 	};
 	mocks.remoteGet.mockResolvedValue({ data: { prs: [] } });
 	mocks.remotePost.mockResolvedValue({ data: {}, error: undefined });

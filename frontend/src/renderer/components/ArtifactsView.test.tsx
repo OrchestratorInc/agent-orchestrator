@@ -667,7 +667,7 @@ describe("ArtifactsView", () => {
 		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_succeeded", { scope: "standalone" });
 	});
 
-	it("starts a project artifact session with the project's worker agent", async () => {
+	it("starts a project artifact session with the first ready agent, not the project's old pin", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = withoutArtifacts;
 		mocks.get.mockResolvedValue({ data: { status: "ok", project: { agent: "codex", config: { worker: { agent: "claude-code" } } } } });
@@ -679,7 +679,7 @@ describe("ArtifactsView", () => {
 
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "px0", sessionId: "px0-3" } }));
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
-			body: { kind: "worker", requestedOutput: "artifact", displayName: "New artifact", projectId: "px0", harness: "claude-code" },
+			body: { kind: "worker", requestedOutput: "artifact", displayName: "New artifact", projectId: "px0", harness: "codex" },
 		});
 		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_succeeded", { scope: "project" });
 	});

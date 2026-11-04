@@ -15,12 +15,12 @@ const initialValues: ProjectSettingsDraft = {
 	autoReview: true, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
 };
 
-function setup(cloud: boolean, save = vi.fn().mockResolvedValue({})) {
+function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), section: "general" | "agents" = "general") {
 	const onSaveState = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	render(<QueryClientProvider client={client}><TooltipProvider>
-		<ProjectSettingsEditor initialValues={initialValues} section="general"
-			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
+		<ProjectSettingsEditor initialValues={initialValues} section={section}
+			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud, roleAgents: cloud }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
 	</TooltipProvider></QueryClientProvider>);
 	return { save, onSaveState };
@@ -31,6 +31,20 @@ async function edit(label: string, value: string) {
 	fireEvent.change(screen.getByRole("textbox", { name: label }), { target: { value } });
 	await userEvent.keyboard("{Enter}");
 }
+
+describe("role agent rows", () => {
+	it("hides the worker and orchestrator agent rows for local projects but keeps approvals and the reviewer", () => {
+		setup(false, undefined, "agents");
+		expect(screen.getAllByText("Agent")).toHaveLength(1);
+		expect(screen.getAllByText("Approval")).toHaveLength(3);
+		expect(screen.queryByRole("button", { name: "Worker model" })).toBeNull();
+	});
+
+	it("keeps an agent row per role for Cloud projects", () => {
+		setup(true, undefined, "agents");
+		expect(screen.getAllByText("Agent")).toHaveLength(3);
+	});
+});
 
 describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 	it("uses the same inline fields and autosave, with supported workflow fields", async () => {

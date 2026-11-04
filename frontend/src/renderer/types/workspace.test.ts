@@ -273,7 +273,6 @@ describe("orchestratorHealth", () => {
 				id: "skills",
 				name: "skills",
 				path: "/tmp/skills",
-				orchestratorAgent: "codex",
 				sessions: [older, newest],
 			}),
 		).toEqual({
@@ -287,7 +286,6 @@ describe("orchestratorHealth", () => {
 				id: "skills",
 				name: "skills",
 				path: "/tmp/skills",
-				orchestratorAgent: "codex",
 				sessions: [newest],
 			}).state,
 		).toBe("ok");

@@ -37,6 +37,7 @@ import { useCloudGitHubAppRepositories } from "../hooks/useCloudGitHubAppReposit
 import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useSettings } from "../hooks/useSettings";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
@@ -245,6 +246,14 @@ export function CreateProjectFlow({
 	const projectImportOpen = projectImportStep !== null && projectValidation !== null;
 	const folderDialogOpen = folderPickerOpen && validationScan !== null;
 	const isBusy = isChoosingPath || isCreating || isInitializing || isPreparingGit || preparedClone.isCleaning;
+	const { settings: flowSettings, isLoading: settingsLoading } = useSettings(hostId);
+	const intakeVisible = !!flowSettings?.trackerIntakeEnabled;
+	// The sheet only exists to ask for tracker intake, show a repository setup
+	// notice, or report a failed create. With none of those there is nothing to
+	// decide, so the project is created as soon as the folder is validated.
+	const sheetNeeded = intakeVisible || repositorySetup !== null || error !== null;
+	const sheetOpen = selectedPath !== null && sheetNeeded;
+	const autoCreatedPath = useRef<string | null>(null);
 	const setModePickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "source" } : { type: "close", view: "source" });
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
@@ -595,6 +604,17 @@ export function CreateProjectFlow({
 			setIsInitializing(false);
 		}
 	};
+
+	useEffect(() => {
+		if (selectedPath === null) {
+			autoCreatedPath.current = null;
+			return;
+		}
+		if (sheetNeeded || settingsLoading || isCreating || isInitializing) return;
+		if (autoCreatedPath.current === selectedPath) return;
+		autoCreatedPath.current = selectedPath;
+		void createProject({});
+	}, [selectedPath, sheetNeeded, settingsLoading, isCreating, isInitializing]);
 
 	const prepareClone = async (next: CloneRepositorySelection) => {
 		if (hostId && !connected) {
@@ -989,7 +1009,7 @@ export function CreateProjectFlow({
 				} : undefined}
 				connected={connected}
 				error={error}
-				hostId={hostId}
+				intakeVisible={intakeVisible}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}
@@ -1020,7 +1040,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={sheetOpen}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
