@@ -3893,7 +3893,5 @@
 	"automations.template.weekly_release_notes_v1.description": "Rédigez des notes de version à partir des pull requests fusionnées, regroupées par fonctionnalités et correctifs.",
 	"automations.templates.setup": "Nécessite un accès GitHub en lecture au projet sélectionné.",
 	"shortcut.find-in-chat": "Rechercher dans le chat",
-	"chat.find.loadingMatches": "Chargement des correspondances… ({{total}} au total)",
-	"chat.find.incomplete": "Recherche incomplète",
-	"chat.find.updatingCount": "{{active}} sur {{total}} (mise à jour)"
+	"chat.find.incomplete": "Recherche incomplète"
 }

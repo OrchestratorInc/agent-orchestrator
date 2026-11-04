@@ -3806,7 +3806,5 @@
 	"automations.template.weekly_release_notes_v1.description": "根据已合并的拉取请求起草发布说明，按功能、修复和其他更改分组。",
 	"automations.templates.setup": "需要所选项目的 GitHub 读取权限。",
 	"shortcut.find-in-chat": "在聊天中查找",
-	"chat.find.loadingMatches": "正在加载匹配项…（共 {{total}} 项）",
-	"chat.find.incomplete": "搜索未完成",
-	"chat.find.updatingCount": "第 {{active}} 项，共 {{total}} 项（更新中）"
+	"chat.find.incomplete": "搜索未完成"
 }

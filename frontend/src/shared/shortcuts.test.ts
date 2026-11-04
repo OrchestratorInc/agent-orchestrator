@@ -126,6 +126,7 @@ describe("default shortcuts", () => {
 	// [id, chord] pairs a user can press on macOS. ⌘⇧[ reports key "{" with
 	// code BracketLeft, so those chords carry the physical code like Electron does.
 	it.each([
+		["find-in-chat", chord({ key: "f", meta: true })],
 		["new-session", chord({ key: "n", meta: true })],
 		["new-shell-terminal", chord({ key: "t", meta: true })],
 		["close-shell-terminal", chord({ key: "w", meta: true })],

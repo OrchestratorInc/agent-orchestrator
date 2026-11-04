@@ -3805,7 +3805,5 @@
 	"automations.template.daily_issue_triage_v1.description": "Turn new and recently updated issues into a focused triage list with clear next actions.",
 	"automations.template.weekly_release_notes_v1.description": "Draft release notes from merged pull requests, grouped into features, fixes, and other changes.",
 	"automations.templates.setup": "Requires GitHub read access for the selected project.",
-	"chat.find.loadingMatches": "Loading matches… ({{total}} total)",
-	"chat.find.incomplete": "Search incomplete",
-	"chat.find.updatingCount": "{{active}} of {{total}} (updating)"
+	"chat.find.incomplete": "Search incomplete"
 }

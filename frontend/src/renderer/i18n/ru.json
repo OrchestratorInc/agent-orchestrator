@@ -3954,8 +3954,6 @@
 	"automations.template.daily_issue_triage_v1.description": "Составьте краткий список новых и недавно обновлённых задач с конкретными дальнейшими действиями.",
 	"automations.template.weekly_release_notes_v1.description": "Подготовьте заметки о выпуске из объединённых запросов на слияние, сгруппировав их по новым возможностям, исправлениям и другим изменениям.",
 	"automations.templates.setup": "Требуется доступ на чтение к GitHub для выбранного проекта.",
-	"chat.find.loadingMatches": "Загрузка совпадений… (всего {{total}})",
 	"chat.find.incomplete": "Поиск не завершён",
-	"chat.find.updatingCount": "{{active}} из {{total}} (обновление)",
 	"shortcut.find-in-chat": "Найти в чате"
 }
