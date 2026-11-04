@@ -52,9 +52,10 @@ type ProjectConfig struct {
 	// are appended to OrchestratorRules for orchestrator sessions.
 	OrchestratorRulesFile string `json:"orchestratorRulesFile,omitempty"`
 
-	// AgentConfig is the default agent config for the project.
+	// AgentConfig is the project's base agent config. Only Permissions is read;
+	// Model, Effort and Mode are deprecated, ignored and cleared on write.
 	AgentConfig AgentConfig `json:"agentConfig,omitempty"`
-	// Worker and Orchestrator are role-specific harness/agent-config overrides.
+	// Worker and Orchestrator are role-specific permission overrides.
 	Worker       RoleOverride `json:"worker,omitempty"`
 	Orchestrator RoleOverride `json:"orchestrator,omitempty"`
 
@@ -134,41 +135,26 @@ func (c ProjectConfig) ResolveReviewerHarness(worker AgentHarness) ReviewerHarne
 	return FallbackReviewerHarness
 }
 
-// DefaultWorkerReviewer is the reviewer a worker gets when the project
-// configures none: the worker's own agent, with the model and effort the project
-// tuned for that agent. It returns an empty harness when the worker is not the
-// harness the project's worker settings were tuned for, or when that agent has
-// no unattended-safe reviewer (see ResolveReviewerHarness), so callers keep
-// their existing fallback.
-//
-// Only model and effort carry over. Permissions and mode are worker settings;
-// a reviewer's sandbox is owned by its adapter and must never inherit a
-// worker's bypass permissions.
-func (c ProjectConfig) DefaultWorkerReviewer(worker AgentHarness) (ReviewerHarness, AgentConfig) {
-	if worker == "" || c.Worker.Harness != worker {
-		return "", AgentConfig{}
-	}
-	harness := c.ResolveReviewerHarness(worker)
-	if string(harness) != string(worker) {
-		return "", AgentConfig{}
-	}
-	config := AgentConfig{Model: c.AgentConfig.Model, Effort: c.AgentConfig.Effort}
-	if c.Worker.AgentConfig.Model != "" {
-		config.Model = c.Worker.AgentConfig.Model
-	}
-	if c.Worker.AgentConfig.Effort != "" {
-		config.Effort = c.Worker.AgentConfig.Effort
-	}
-	return harness, config
+// RoleOverride holds the role-specific settings a project keeps. Only
+// AgentConfig.Permissions is read. A session owns its agent and model, so the
+// fields below are accepted from older clients and stripped on every write.
+type RoleOverride struct {
+	// Deprecated: ignored and cleared on write. A session picks its own agent.
+	Harness AgentHarness `json:"agent,omitempty"`
+	// AgentConfig keeps Permissions only; its Model, Effort and Mode are
+	// deprecated, ignored and cleared on write.
+	AgentConfig AgentConfig `json:"agentConfig,omitempty"`
 }
 
-// RoleOverride holds the model settings a project tuned for one role. Harness
-// names the agent those settings belong to; it no longer chooses which agent a
-// session runs (a session owns its harness), it only scopes the settings so a
-// model alias never reaches a different agent.
-type RoleOverride struct {
-	Harness     AgentHarness `json:"agent,omitempty"`
-	AgentConfig AgentConfig  `json:"agentConfig,omitempty"`
+// WithoutLegacyAgentSettings returns c with the agent, model, effort and mode
+// a project used to pin cleared, keeping permissions. Older clients still send
+// them, so every write path strips them instead of rejecting the request.
+func (c ProjectConfig) WithoutLegacyAgentSettings() ProjectConfig {
+	strip := func(a AgentConfig) AgentConfig { return AgentConfig{Permissions: a.Permissions} }
+	c.AgentConfig = strip(c.AgentConfig)
+	c.Worker = RoleOverride{AgentConfig: strip(c.Worker.AgentConfig)}
+	c.Orchestrator = RoleOverride{AgentConfig: strip(c.Orchestrator.AgentConfig)}
+	return c
 }
 
 const (
@@ -246,9 +232,6 @@ func (c ProjectConfig) Validate() error {
 		seenEnv[folded] = true
 	}
 	for role, ro := range map[string]RoleOverride{"worker": c.Worker, "orchestrator": c.Orchestrator} {
-		if ro.Harness != "" && !ro.Harness.IsKnown() {
-			return fmt.Errorf("%s.agent: unknown harness %q", role, ro.Harness)
-		}
 		if err := ro.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("%s.%w", role, err)
 		}

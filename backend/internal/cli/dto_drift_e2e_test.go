@@ -296,14 +296,9 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 		if got.Name == nil || *got.Name != "Demo" {
 			t.Errorf("Name = %v, want %q", got.Name, "Demo")
 		}
-		if got.Config == nil {
-			t.Fatal("Config = nil, want role agent config")
-		}
-		if got.Config.Worker.Harness != domain.HarnessCodex {
-			t.Errorf("Config.Worker.Harness = %q, want codex", got.Config.Worker.Harness)
-		}
-		if got.Config.Orchestrator.Harness != domain.HarnessClaudeCode {
-			t.Errorf("Config.Orchestrator.Harness = %q, want claude-code", got.Config.Orchestrator.Harness)
+		// The deprecated agent flags are accepted but never reach the request.
+		if got.Config != nil {
+			t.Errorf("Config = %#v, want nil: --worker-agent/--orchestrator-agent are ignored", got.Config)
 		}
 		if !got.AsWorkspace {
 			t.Errorf("AsWorkspace = false, want true (CLI json:\"asWorkspace\" vs AddInput)")

@@ -39,9 +39,9 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 			legacy        bool
 		}{
 			{name: "spawn_override", projectModel: "opus", projectEffort: "low", roleModel: "sonnet", roleEffort: "medium", spawnModel: "haiku", spawnEffort: "high", wantModel: "haiku", wantEffort: "high"},
-			{name: "role_default", projectModel: "opus", projectEffort: "low", roleModel: "sonnet", roleEffort: "high", wantModel: "sonnet", wantEffort: "high"},
-			{name: "project_default", projectModel: "opus", projectEffort: "medium", wantModel: "opus", wantEffort: "medium"},
-			{name: "custom_provider_model", projectModel: "opus", spawnModel: "provider/model-vNext", wantModel: "provider/model-vNext"},
+			// Legacy project/role model values are ignored at spawn.
+			{name: "legacy_project_role_ignored", projectModel: "opus", projectEffort: "low", roleModel: "sonnet", roleEffort: "high"},
+			{name: "custom_provider_model", spawnModel: "provider/model-vNext", wantModel: "provider/model-vNext"},
 			{name: "agent_default"},
 			{name: "extra_high", spawnModel: "haiku", spawnEffort: "xhigh", wantModel: "haiku", wantEffort: "xhigh"},
 			{name: "legacy_unknown", spawnModel: "haiku", wantModel: "haiku", legacy: true},

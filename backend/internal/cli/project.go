@@ -13,15 +13,14 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type projectAddOptions struct {
-	path              string
-	id                string
-	name              string
-	workerAgent       string
-	orchestratorAgent string
-	asWorkspace       bool
+	path        string
+	id          string
+	name        string
+	asWorkspace bool
 }
 
 type projectListOptions struct {
@@ -144,10 +143,7 @@ type projectSetConfigOptions struct {
 	canonicalRepoURL      string
 	defaultBranch         string
 	sessionPrefix         string
-	model                 string
 	permission            string
-	workerAgent           string
-	orchestratorAgent     string
 	agentRules            string
 	agentRulesFile        string
 	orchestratorRules     string
@@ -274,12 +270,6 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 			if opts.name != "" {
 				req.Name = &opts.name
 			}
-			if opts.workerAgent != "" || opts.orchestratorAgent != "" {
-				req.Config = &projectConfig{
-					Worker:       roleOverride{Agent: opts.workerAgent},
-					Orchestrator: roleOverride{Agent: opts.orchestratorAgent},
-				}
-			}
 			var res projectResult
 			if err := ctx.postJSON(cmd.Context(), "projects", req, &res); err != nil {
 				return err
@@ -292,8 +282,7 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.path, "path", "", "Absolute path to the local git repo (required)")
 	f.StringVar(&opts.id, "id", "", "Project id (default: derived by the daemon from the path)")
 	f.StringVar(&opts.name, "name", "", "Display name")
-	f.StringVar(&opts.workerAgent, "worker-agent", "", "Default worker session agent")
-	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Default orchestrator session agent")
+	deprecatedAgentFlags(f, "worker-agent", "orchestrator-agent")
 	f.BoolVar(&opts.asWorkspace, "as-workspace", false, "Register a parent folder as a workspace project (root-as-repo plus direct child repos)")
 	return cmd
 }
@@ -344,10 +333,8 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.defaultBranch, "default-branch", "", "Base branch for new worktrees; auto infers each repository's Git default")
 	f.StringVar(&opts.canonicalRepoURL, "canonical-repo-url", "", "Explicit upstream HTTPS repository URL for PR claims (same provider, host, and port as origin)")
 	f.StringVar(&opts.sessionPrefix, "session-prefix", "", "Displayed session-id prefix")
-	f.StringVar(&opts.model, "model", "", "Agent model override (e.g. claude-opus-4-5)")
 	f.StringVar(&opts.permission, "permission", "", "Permission mode: default, accept-edits, auto, bypass-permissions")
-	f.StringVar(&opts.workerAgent, "worker-agent", "", "Harness override for worker sessions")
-	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Harness override for orchestrator sessions")
+	deprecatedAgentFlags(f, "worker-agent", "orchestrator-agent", "model")
 	f.StringVar(&opts.agentRules, "agent-rules", "", "Project-specific standing instructions for worker sessions")
 	f.StringVar(&opts.agentRulesFile, "agent-rules-file", "", "Repo-relative file containing worker standing instructions")
 	f.StringVar(&opts.orchestratorRules, "orchestrator-rules", "", "Project-specific standing instructions for orchestrator sessions")
@@ -364,6 +351,16 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVar(&opts.clear, "clear", false, "Clear all config")
 	f.BoolVar(&opts.json, "json", false, "Output the updated project as JSON")
 	return cmd
+}
+
+// deprecatedAgentFlags registers flags that used to pin a project's agent or
+// model. A session now owns its agent, so they are accepted and ignored, which
+// keeps existing scripts working.
+func deprecatedAgentFlags(f *pflag.FlagSet, names ...string) {
+	for _, name := range names {
+		f.String(name, "", "Ignored")
+		_ = f.MarkDeprecated(name, "agents are chosen per session; this flag is ignored")
+	}
 }
 
 // projectConfigFlags are the set-config flags that edit one config field.
@@ -410,10 +407,7 @@ func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) 
 	setIfChanged("canonical-repo-url", &cfg.CanonicalRepoURL, opts.canonicalRepoURL)
 	setIfChanged("default-branch", &cfg.DefaultBranch, opts.defaultBranch)
 	setIfChanged("session-prefix", &cfg.SessionPrefix, opts.sessionPrefix)
-	setIfChanged("model", &cfg.AgentConfig.Model, opts.model)
 	setIfChanged("permission", &cfg.AgentConfig.Permissions, opts.permission)
-	setIfChanged("worker-agent", &cfg.Worker.Agent, opts.workerAgent)
-	setIfChanged("orchestrator-agent", &cfg.Orchestrator.Agent, opts.orchestratorAgent)
 	setIfChanged("agent-rules", &cfg.AgentRules, opts.agentRules)
 	setIfChanged("agent-rules-file", &cfg.AgentRulesFile, opts.agentRulesFile)
 	setIfChanged("orchestrator-rules", &cfg.OrchestratorRules, opts.orchestratorRules)

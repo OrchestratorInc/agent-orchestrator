@@ -28,9 +28,7 @@ ao project add [flags]
 | `--as-workspace` | Register a parent folder as a workspace project (root-as-repo plus direct child repos) | - |
 | `--id string` | Project id | Derived by the daemon from the path |
 | `--name string` | Display name | - |
-| `--orchestrator-agent string` | Default orchestrator session agent | - |
 | `--path string` | Absolute path to the local git repo | Required |
-| `--worker-agent string` | Default worker session agent | - |
 
 **Examples:**
 
@@ -147,8 +145,6 @@ ao project set-config <id> [flags]
 | `--default-branch string` | Base branch new session worktrees are created from | - |
 | `--env stringArray` | Env var `KEY=VALUE` forwarded into sessions (repeatable) | - |
 | `--json` | Output the updated project as JSON | - |
-| `--model string` | Agent model override (e.g. `claude-opus-4-5`) | - |
-| `--orchestrator-agent string` | Harness override for orchestrator sessions | - |
 | `--orchestrator-rules string` | Project-specific standing instructions appended to orchestrator session prompts | - |
 | `--permission string` | Permission mode: `default`, `accept-edits`, `auto`, `bypass-permissions` | - |
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
@@ -159,19 +155,19 @@ ao project set-config <id> [flags]
 | `--tracker-intake` | Opt this project into GitHub or GitLab issue intake; inert unless the daemon also has `AO_TRACKER_INTAKE=on` | Disabled |
 | `--tracker-repo string` | Provider-native issue repository (`owner/repo` or `group/subgroup/repo`); defaults to the Git origin | - |
 | `--reviewer stringArray` | Reviewer harness for worker PRs (repeatable) | - |
-| `--worker-agent string` | Harness override for worker sessions | - |
 
 Use `--config-json` for fields without a dedicated flag, including
 `trackerIntake.provider`, `autoReview`, `containerReap.disabled`,
-`agentConfig.mode`, `worker.agentConfig.mode`,
-`orchestrator.agentConfig.mode`, and `effort` under any `agentConfig`. The
-full-config replacement warning above still applies.
+and the reviewer `agentConfig` fields. A project does not pin an agent, model,
+effort or mode: each session chooses its own, and the daemon drops `worker.agent`,
+`orchestrator.agent` and `model`, `effort` or `mode` under the project and role
+`agentConfig` on every save. The full-config replacement warning above still applies.
 
 **Examples:**
 
 ```bash
-# Set default branch and model for a project
-ao project set-config agent-orchestrator --default-branch main --model claude-opus-4-5
+# Set the default branch for a project
+ao project set-config agent-orchestrator --default-branch main
 ```
 
 ```bash
