@@ -8,7 +8,7 @@ import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
-import { MuxClient, type MuxStatus } from "../mux";
+import type { MuxStatus } from "../mux";
 import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
 import { Composer } from "./Composer";
@@ -53,6 +53,7 @@ import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
+import { useTerminalMux } from "./useTerminalMux";
 
 const FONT_SIZE = 12;
 
@@ -598,15 +599,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const leave = useCallback(() => backOr(router), [router]);
 
 	const xtermRef = useRef<XtermWebViewHandle | null>(null);
-	// Theme changes still replace xterm. Retain bytes arriving between the old
-	// WebView unmount and the replacement's onInitialized callback in wire order.
-	const xtermReadyRef = useRef(false);
-	const pendingOutputRef = useRef<Uint8Array[]>([]);
-	const muxRef = useRef<MuxClient | null>(null);
-	const openedRef = useRef(false);
-	// Last grid size reported by the WebView's FitAddon, so we can send it to the
-	// PTY the moment the terminal opens (dims may arrive before or after open).
-	const lastDimsRef = useRef<{ cols: number; rows: number } | null>(null);
 	// The authoritative grid the daemon told us the shared PTY is actually using
 	// (driven by the largest/primary client — e.g. a co-viewing desktop). We render
 	// THIS grid, not the phone's own fit, so the display matches the PTY and a
@@ -647,6 +639,34 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// tmux. Older daemons omit terminalHandleId and retain the historical
 	// session-id handle, which keeps the fallback backward-compatible.
 	const terminalHandleId = shellOnly ? id : known?.terminalHandleId || id;
+	// The mux socket and the PTY attached on it. Theme changes still replace the
+	// xterm; output arriving between the old WebView and the replacement's
+	// onInitialized is held in wire order (see useTerminalMux).
+	const { muxRef, openedRef, lastDimsRef, xtermReadyRef, markXtermReady, openTerminal } = useTerminalMux({
+		config: activeConfig,
+		terminalHandleId,
+		projectId,
+		xtermRef,
+		events: {
+			onStatus: setStatus,
+			onExited: (code) => {
+				showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
+				setNotFound(true);
+			},
+			// A missing PTY means the session is terminated - offer Restore
+			// instead of surfacing it as a raw error notice.
+			onError: (message) => {
+				if (isTerminalGoneError(message)) setNotFound(true);
+				else showNotice(terminalErrorCopy(message));
+			},
+			// Render the daemon's authoritative grid exactly. The WebView applies
+			// only local crop/zoom, so the phone cannot disturb a desktop owner.
+			onResize: (cols, rows) => {
+				authRef.current = { cols, rows };
+				xtermRef.current?.resize({ cols, rows });
+			},
+		},
+	});
 	const interfaceSwitch = useInterfaceTransition(activeConfig, shellOnly ? "" : sessionId, refresh);
 	// Owned by the screen rather than the hook: the background poll calls the same
 	// `refresh()`, so a hook-wide busy flag would let a poll tick disable the
@@ -793,66 +813,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		});
 	}, [navigation, id, params.title, sessionName, shellOnly]);
 
-	// Load config, then connect the mux socket.
-	// Rebuilt whenever the active endpoint changes, not only when the session
-	// does. The app re-races its endpoints when the network moves — losing
-	// Wi-Fi hands the session to Tailscale or the tunnel — and a mux still
-	// pointed at the previous address stays disconnected on a blank screen
-	// until the screen is closed and reopened.
-	useEffect(() => {
-		let disposed = false;
-		(async () => {
-			// A selected machine without a verified connection has no terminal.
-			// The global saved config may belong to a different machine.
-			const config = activeConfig;
-			if (disposed) return;
-			if (!config || !isConfigured(config)) return;
-
-			const mux = new MuxClient(config, {
-				onStatus: (s) => setStatus(s),
-				onTerminalData: (tid, bytes) => {
-					if (tid !== terminalHandleId) return;
-					if (!xtermReadyRef.current || !xtermRef.current) {
-						pendingOutputRef.current.push(bytes.slice());
-						return;
-					}
-					xtermRef.current.write(bytes);
-				},
-				onTerminalExited: (tid, code) => {
-					if (tid === terminalHandleId) {
-						showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
-						setNotFound(true);
-					}
-				},
-				onTerminalError: (tid, msg) => {
-					if (tid !== terminalHandleId) return;
-					// A missing PTY means the session is terminated - offer Restore
-					// instead of surfacing it as a raw error notice.
-					if (isTerminalGoneError(msg)) setNotFound(true);
-					else showNotice(terminalErrorCopy(msg));
-				},
-				onTerminalResize: (tid, cols, rows) => {
-					if (tid !== terminalHandleId) return;
-					// Render the daemon's authoritative grid exactly. The WebView applies
-					// only local crop/zoom, so the phone cannot disturb a desktop owner.
-					authRef.current = { cols, rows };
-					xtermRef.current?.resize({ cols, rows });
-				},
-			});
-			muxRef.current = mux;
-			mux.connect();
-		})();
-		return () => {
-			disposed = true;
-			muxRef.current?.disconnect();
-			muxRef.current = null;
-			xtermReadyRef.current = false;
-			pendingOutputRef.current = [];
-		};
-		// The store preserves config identity when the endpoint and credential
-		// did not change, so this also handles two hosts sharing one URL.
-	}, [terminalHandleId, activeConfig]);
-
 	// Whether there is older output to jump to, as the WebView last reported it.
 	const [canScrollTop, setCanScrollTop] = useState(false);
 	// Android killed the WebView's renderer: the grid is black for good. Held as
@@ -904,23 +864,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	);
 
 	const onInitialized = useCallback(() => {
-		xtermReadyRef.current = true;
-		const pending = pendingOutputRef.current;
-		pendingOutputRef.current = [];
-		for (const bytes of pending) xtermRef.current?.write(bytes);
+		markXtermReady();
 		// A fresh xterm (first mount, or a remount after a font-zoom) starts at its
 		// default grid — restore the daemon's authoritative grid onto it so it keeps
 		// mirroring the shared PTY rather than snapping to the default.
 		if (authRef.current) xtermRef.current?.resize(authRef.current);
-		// Guard against a second open if the WebView re-fires onInitialized (e.g.
-		// remount on orientation change) - that would attach the PTY twice.
-		if (openedRef.current) return;
-		openedRef.current = true;
-		muxRef.current?.openTerminal(terminalHandleId, projectId);
-		// If the FitAddon already reported dims before open, send them to the PTY now.
-		const d = lastDimsRef.current;
-		if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
-	}, [terminalHandleId, projectId]);
+		// Opens at most once per socket, so a WebView re-firing onInitialized (e.g.
+		// remount on orientation change) does not attach the PTY twice. With no
+		// socket yet, the socket opens it when it connects.
+		openTerminal();
+	}, [markXtermReady, openTerminal]);
 
 	const onData = useCallback(
 		(data: string) => {
@@ -1185,19 +1138,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			setNotFound(false);
 			openedRef.current = false;
 			// Give the daemon a moment to bring the PTY up, then re-attach.
-			setTimeout(() => {
-				if (openedRef.current) return;
-				openedRef.current = true;
-				muxRef.current?.openTerminal(terminalHandleId, projectId);
-				const d = lastDimsRef.current;
-				if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
-			}, 1200);
+			setTimeout(openTerminal, 1200);
 		} catch (e) {
 			showNotice(`Couldn't restore the session. ${userFacingError(e)}`);
 		} finally {
 			setRestoring(false);
 		}
-	}, [restore, id, terminalHandleId, projectId, clearNotice, showNotice]);
+	}, [restore, id, openTerminal, clearNotice, showNotice]);
 
 	const xtermOptions = useMemo(
 		() => ({
