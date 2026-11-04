@@ -25,6 +25,9 @@ describe("retryCloudRead", () => {
 
 	it("reads a 404 as a control plane from before teams", () => {
 		expect(teamsUnavailable(new CloudCpError("missing", { status: 404 }))).toBe(true);
+		// A coded 404 is about what was asked for (an archived project, a
+		// session not in the project), not about teams.
+		expect(teamsUnavailable(new CloudCpError("The requested resource was not found.", { status: 404, code: "not_found" }))).toBe(false);
 		expect(teamsUnavailable(new CloudCpError("boom", { status: 500 }))).toBe(false);
 		expect(teamsUnavailable(new Error("other"))).toBe(false);
 	});

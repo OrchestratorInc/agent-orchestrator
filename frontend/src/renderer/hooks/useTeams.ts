@@ -12,9 +12,15 @@ export function retryCloudRead(failureCount: number, error: unknown): boolean {
 	return failureCount < 1;
 }
 
-/** A control plane from before teams answers their routes with 404. */
+/**
+ * A control plane from before teams has no teams routes: it answers them with
+ * its router's bare 404, which carries no error code. A 404 with a code
+ * ("not_found": an archived project, a session not in the project) is about
+ * what was asked for, not about teams, and must not switch sharing to links
+ * only (for that dialog, or for every other one in the app run).
+ */
 export function teamsUnavailable(error: unknown): boolean {
-	return error instanceof CloudCpError && error.status === 404;
+	return error instanceof CloudCpError && error.status === 404 && !error.code;
 }
 
 /** The workspace's teams. */

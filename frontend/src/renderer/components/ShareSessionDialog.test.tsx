@@ -114,6 +114,30 @@ describe("sharing a session", () => {
 		expect(await screen.findByRole("textbox", { name: "Share link" })).toHaveValue(`https://cp.example.test/s/${CODE}`);
 	});
 
+	it("shows a project or session the control plane can't find as an error, and keeps people for every other session", async () => {
+		// A control plane with teams says "not_found" for an archived project or
+		// a session not in the project; that is no reason to drop to links only.
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		mocks.client.getShareAccess.mockReset().mockRejectedValueOnce(new CloudCpError("The requested resource was not found.", { status: 404, code: "not_found" }));
+		const first = render(
+			<QueryClientProvider client={queryClient}>
+				<ShareSessionDialog open onOpenChange={() => undefined} orgId={ORG} projectId="project" sessionId="s1" />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByRole("alert")).toHaveTextContent("The requested resource was not found.");
+		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
+		first.unmount();
+
+		// Another session's dialog in the same app run offers people from the start.
+		mocks.client.getShareAccess.mockImplementation(() => new Promise(() => undefined));
+		render(
+			<QueryClientProvider client={queryClient}>
+				<ShareSessionDialog open onOpenChange={() => undefined} orgId={ORG} projectId="project" sessionId="s2" />
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
+	});
+
 	it.each([
 		["a well-formed code", { code: CODE, token: "tok" }, `https://cp.example.test/s/${CODE}`],
 		["no code", { token: "tok" }, `https://cp.example.test/app/share#${ORG}/tok`],
