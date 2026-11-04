@@ -2102,6 +2102,7 @@ func TestSourceKindForHarness(t *testing.T) {
 		{harness: domain.HarnessPi, want: domain.UsageSourcePiSession, ok: true},
 		{harness: domain.HarnessQwen, want: domain.UsageSourceQwenMonthly, ok: true},
 		{harness: domain.HarnessGoose, want: domain.UsageSourceGooseLedger, ok: true},
+		{harness: domain.HarnessHermes, want: domain.UsageSourceHermesState, ok: true},
 		{harness: domain.HarnessAider, ok: false},
 	}
 	for _, tt := range tests {

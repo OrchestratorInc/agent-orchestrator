@@ -69,6 +69,9 @@ type SourceRoots struct {
 	PiSessions     string
 	QwenUsage      string
 	GooseSessions  string
+	// HermesAgents is AO's per-session Hermes launch state. Each session's
+	// native-home file names the Hermes home whose state.db it writes.
+	HermesAgents string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -106,6 +109,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		PiSessions:     filepath.Join(dataDir, "pi", "sessions"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
 		GooseSessions:  filepath.Join(gooseDataDir(home), "sessions"),
+		HermesAgents:   filepath.Join(dataDir, "agents", "hermes"),
 	}, nil
 }
 
@@ -136,7 +140,53 @@ const gooseSessionsDBName = "sessions.db"
 // sqliteUsageHarness reports whether the harness stores usage in a SQLite
 // database read by row cursor rather than in an append-only JSONL transcript.
 func sqliteUsageHarness(harness domain.AgentHarness) bool {
-	return harness == domain.HarnessGoose
+	return harness == domain.HarnessGoose || harness == domain.HarnessHermes
+}
+
+// hermesStateDBName is Hermes's session store, which also holds its per-model
+// usage counters.
+const hermesStateDBName = "state.db"
+
+// hermesHome returns the Hermes home AO launched the session against. The
+// Hermes adapter records it per session because HERMES_HOME may differ from
+// the daemon's environment; without that record there is nothing to read.
+func (c *Collector) hermesHome(sessionID domain.SessionID) string {
+	if strings.TrimSpace(c.roots.HermesAgents) == "" || !nativeUsageIDPattern.MatchString(string(sessionID)) {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(c.roots.HermesAgents, string(sessionID), "native-home"))
+	if err != nil {
+		return ""
+	}
+	home := strings.TrimSpace(string(data))
+	if !filepath.IsAbs(home) {
+		return ""
+	}
+	return filepath.Clean(home)
+}
+
+// HermesWatchRoots makes each live Hermes session's home eligible for
+// exact-file watches; Hermes homes are per launch, not one global root.
+func (c *Collector) HermesWatchRoots(ctx context.Context) ([]string, error) {
+	sessions, err := c.store.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	roots := make(map[string]struct{})
+	for _, session := range sessions {
+		if session.Harness != domain.HarnessHermes || session.IsTerminated {
+			continue
+		}
+		if home := c.hermesHome(session.ID); home != "" {
+			roots[home] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(roots))
+	for root := range roots {
+		result = append(result, root)
+	}
+	slices.Sort(result)
+	return result, nil
 }
 
 func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, error) {
@@ -1763,6 +1813,13 @@ func (c *Collector) registerValidatedSource(
 			record.ParserStateJSON = identityMatch.ParserStateJSON
 		}
 	}
+	if replaced != nil && kind == domain.UsageSourceHermesState && replaced.Kind == kind {
+		// Hermes stores cumulative counters. The parser's per-row baseline must
+		// follow the database into its new generation, or every earlier call
+		// would be billed again from zero.
+		record.ByteOffset = replaced.ByteOffset
+		record.ParserStateJSON = replaced.ParserStateJSON
+	}
 	var inserted domain.UsageSourceRecord
 	var err error
 	if replaced != nil {
@@ -2406,6 +2463,9 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 		}
 		roots = []string{root}
 	}
+	if harness == domain.HarnessHermes {
+		roots = []string{c.hermesHome(sessionID)}
+	}
 	allowed := false
 	for _, root := range roots {
 		if root == "" {
@@ -2509,6 +2569,13 @@ func validateSourceAttribution(
 			subagentID != "" || filepath.Base(resolved) != gooseSessionsDBName {
 			return rejected()
 		}
+	case domain.UsageSourceHermesState:
+		// Like Goose, one database holds every Hermes session; the parser
+		// selects rows by the bound root session and its descendants.
+		if binding.Harness != domain.HarnessHermes || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != hermesStateDBName {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2583,6 +2650,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceQwenMonthly, true
 	case domain.HarnessGoose:
 		return domain.UsageSourceGooseLedger, true
+	case domain.HarnessHermes:
+		return domain.UsageSourceHermesState, true
 	default:
 		return "", false
 	}
@@ -2638,6 +2707,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverQwenPath(ctx, sessionID)
 	case domain.HarnessGoose:
 		return c.discoverGoosePath(ctx)
+	case domain.HarnessHermes:
+		return c.discoverHermesPath(ctx, sessionID)
 	}
 	type candidate struct {
 		path string
@@ -2691,6 +2762,21 @@ func (c *Collector) discoverGoosePath(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	path := filepath.Join(c.roots.GooseSessions, gooseSessionsDBName)
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return "", nil
+	}
+	return path, nil
+}
+
+func (c *Collector) discoverHermesPath(ctx context.Context, sessionID domain.SessionID) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	home := c.hermesHome(sessionID)
+	if home == "" {
+		return "", nil
+	}
+	path := filepath.Join(home, hermesStateDBName)
 	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 		return "", nil
 	}

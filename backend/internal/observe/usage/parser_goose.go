@@ -46,6 +46,14 @@ type gooseLedgerRow struct {
 // readGooseLedgerRows reads ledger rows for the bound Goose session and every
 // session it spawned. Goose files subagent calls under the child session and
 // links it by parent_session_id, the same tree its own usage totals walk.
+func readGooseLedgerChunk(ctx context.Context, db *sql.DB, source domain.UsageSourceRecord, limit int) (sqliteUsageChunk, error) {
+	records, err := readGooseLedgerRows(ctx, db, source.NativeSessionID, source.ByteOffset, limit)
+	if err != nil {
+		return sqliteUsageChunk{}, err
+	}
+	return readRowIDChunk(records, source.ByteOffset, limit)
+}
+
 func readGooseLedgerRows(ctx context.Context, db *sql.DB, nativeSessionID string, after int64, limit int) ([]jsonlRecord, error) {
 	rows, err := db.QueryContext(ctx, `
 WITH RECURSIVE tree(id) AS (

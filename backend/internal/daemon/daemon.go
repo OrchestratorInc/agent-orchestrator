@@ -900,7 +900,12 @@ func Run(buildVersion string) error {
 				if err != nil {
 					return nil, err
 				}
-				return append(usagePipelineWatchRoots(roots), qwenRoots...), nil
+				hermesRoots, err := usageCollector.HermesWatchRoots(watchCtx)
+				if err != nil {
+					return nil, err
+				}
+				watchRoots := append(usagePipelineWatchRoots(roots), qwenRoots...)
+				return append(watchRoots, hermesRoots...), nil
 			},
 			Reconcile: func(reconcileCtx context.Context) error {
 				return usageCollector.ReconcileSources(reconcileCtx, 0)

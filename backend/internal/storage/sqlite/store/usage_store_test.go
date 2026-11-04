@@ -2021,6 +2021,34 @@ func TestGooseUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHermesUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessHermes)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "20261103_100000_aaaa", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceHermesState,
+		NativeSessionID: "20261103_100000_aaaa", ArtifactPath: "/tmp/hermes/state.db",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	event := usageEvent("hermes-anthropic", canonicalUsageTokens(110, 30, 80, 20))
+	event.ProviderID = domain.UsageProviderAnthropic
+	event.ModelID = "claude-sonnet-4-5"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 161, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}); err != nil {
+		t.Fatalf("apply Hermes usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 1 || models[0].Harness != domain.HarnessHermes ||
+		usageTokenValue(models[0].Tokens.InputTokens) != 110 {
+		t.Fatalf("Hermes aggregate = %+v", models)
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"
