@@ -427,7 +427,7 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Accounts" })).not.toHaveAttribute("data-active", "true");
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
