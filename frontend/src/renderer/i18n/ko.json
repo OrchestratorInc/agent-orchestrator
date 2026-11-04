@@ -3736,6 +3736,7 @@
 	"shareProject.waiting_other": "병합 요청 {{count}}개",
 	"shareProject.noPRs": "아직 풀 리퀘스트가 없습니다",
 	"shareProject.openedBy": "{{name}}님이 {{session}}에서 생성",
+	"shareProject.openedInProject": "이 프로젝트에서 생성",
 	"shareProject.wantsToMerge": "{{name}}님이 병합을 원합니다",
 	"shareProject.approve": "승인 후 병합",
 	"shareProject.reject": "거절",

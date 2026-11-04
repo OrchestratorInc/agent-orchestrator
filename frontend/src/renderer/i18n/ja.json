@@ -3736,6 +3736,7 @@
 	"shareProject.waiting_other": "マージ依頼 {{count}} 件",
 	"shareProject.noPRs": "まだプルリクエストはありません",
 	"shareProject.openedBy": "{{name}} が {{session}} で作成",
+	"shareProject.openedInProject": "このプロジェクトで作成",
 	"shareProject.wantsToMerge": "{{name}} がマージを希望",
 	"shareProject.approve": "承認してマージ",
 	"shareProject.reject": "却下",

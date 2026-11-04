@@ -3717,6 +3717,7 @@
 	"shareProject.waiting_other": "{{count}} merges requested",
 	"shareProject.noPRs": "No pull requests yet",
 	"shareProject.openedBy": "Opened by {{name}} in {{session}}",
+	"shareProject.openedInProject": "Opened in this project",
 	"shareProject.wantsToMerge": "{{name}} wants to merge",
 	"shareProject.approve": "Approve and merge",
 	"shareProject.reject": "Reject",

@@ -3867,6 +3867,7 @@
 	"shareProject.waiting_other": "{{count}} запроса на слияние",
 	"shareProject.noPRs": "Пока нет pull request",
 	"shareProject.openedBy": "Открыт пользователем {{name}} в {{session}}",
+	"shareProject.openedInProject": "Открыты в этом проекте",
 	"shareProject.wantsToMerge": "{{name}} хочет выполнить слияние",
 	"shareProject.approve": "Одобрить и слить",
 	"shareProject.reject": "Отклонить",

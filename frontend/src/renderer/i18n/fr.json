@@ -3805,6 +3805,7 @@
 	"shareProject.waiting_many": "{{count}} fusions demandées",
 	"shareProject.noPRs": "Aucune pull request pour l'instant",
 	"shareProject.openedBy": "Ouverte par {{name}} dans {{session}}",
+	"shareProject.openedInProject": "Ouvertes dans ce projet",
 	"shareProject.wantsToMerge": "{{name}} veut fusionner",
 	"shareProject.approve": "Approuver et fusionner",
 	"shareProject.reject": "Refuser",

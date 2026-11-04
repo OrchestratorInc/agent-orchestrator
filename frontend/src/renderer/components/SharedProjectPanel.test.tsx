@@ -7,6 +7,7 @@ import { SharedProjectPanel } from "./SharedProjectPanel";
 const mocks = vi.hoisted(() => ({
 	participants: [] as CloudCpSessionParticipant[],
 	requests: [] as CloudCpMergeRequest[],
+	projectPRs: [] as { number: number; url: string; headSha: string }[],
 	approve: vi.fn(),
 	reject: vi.fn(),
 	card: vi.fn(),
@@ -23,12 +24,16 @@ vi.mock("../hooks/useProjectMergeRequests", () => ({
 		request: { mutate: vi.fn(), isPending: false, error: null },
 	}),
 }));
-vi.mock("../hooks/useSessionScmSummary", () => ({ useSessionScmSummary: () => ({ data: undefined }) }));
+// The orchestrator lists every pull request in its project; a worker's own
+// list is left to its facts here.
+vi.mock("../hooks/useSessionScmSummary", () => ({
+	useSessionScmSummary: (sessionId: string) => ({ data: sessionId === "orch" ? { prs: mocks.projectPRs, linkedPrs: [] } : undefined }),
+}));
 vi.mock("../lib/pr-display", () => ({
 	sessionPRDisplaySummaries: (session: WorkspaceSession) => session.prs.map((pr) => ({ ...pr, headSha: "head-1" })),
 }));
 vi.mock("./SessionInspector", () => ({
-	PRSummaryCard: (props: { pr: { number: number }; guest?: boolean }) => {
+	PRSummaryCard: (props: { pr: { number: number }; guest?: boolean; sessionId: string }) => {
 		mocks.card(props);
 		return <div data-testid="pr-card">#{props.pr.number}</div>;
 	},
@@ -57,6 +62,7 @@ describe("SharedProjectPanel", () => {
 	beforeEach(() => {
 		mocks.participants = [{ userId: "u-owner", name: "Vaibhaav", role: "owner", present: true, state: "idle" }];
 		mocks.requests = [];
+		mocks.projectPRs = [];
 		vi.clearAllMocks();
 	});
 
@@ -88,5 +94,25 @@ describe("SharedProjectPanel", () => {
 		expect(screen.getByText("Waiting for the owner")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Approve and merge" })).toBeNull();
 		expect(mocks.card.mock.lastCall?.[0].guest).toBe(true);
+	});
+
+	it.each([
+		{ who: "the owner", shared: false },
+		{ who: "a guest", shared: true },
+	])("shows $who every pull request in the project, even one opened in a session they were not given", ({ shared }) => {
+		const viewer = shared ? { ...orchestrator, cloud: { orgId: "org-1", shared: true } } : orchestrator;
+		const elsewhereURL = "https://github.com/owner/repo/pull/500";
+		mocks.projectPRs = [{ number: 412, url: prUrl, headSha: "head-1" }, { number: 500, url: elsewhereURL, headSha: "head-5" }];
+		render(<SharedProjectPanel orchestrator={viewer} sessions={[viewer, guestWork]} />);
+		expect(screen.getByRole("button", { expanded: false }).textContent).toContain("2 pull requests");
+		fireEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getAllByTestId("pr-card").map((card) => card.textContent)).toEqual(["#412", "#500"]);
+		expect(screen.getByText("Opened by Vaanya in Login flow")).toBeTruthy();
+		expect(screen.getByText("Opened in this project")).toBeTruthy();
+		const cards = mocks.card.mock.calls.map(([props]) => props);
+		expect(cards.map((props) => [props.pr.number, props.sessionId, props.guest])).toEqual([
+			[412, "guest-work", shared],
+			[500, "orch", shared],
+		]);
 	});
 });

@@ -3718,6 +3718,7 @@
 	"shareProject.waiting_other": "{{count}} 个合并请求",
 	"shareProject.noPRs": "还没有拉取请求",
 	"shareProject.openedBy": "由 {{name}} 在 {{session}} 中创建",
+	"shareProject.openedInProject": "在此项目中创建",
 	"shareProject.wantsToMerge": "{{name}} 想要合并",
 	"shareProject.approve": "批准并合并",
 	"shareProject.reject": "拒绝",
