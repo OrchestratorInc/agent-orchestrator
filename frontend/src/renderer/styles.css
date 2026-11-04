@@ -605,9 +605,17 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
 	--size-inspector-tabs: var(--floating-topbar-height);
 	--spacing-inspector-tabs: var(--floating-topbar-height);
-	/* Larger controls fill the band the panel inset used to take. */
-	--size-topbar-control: calc(var(--size-topbar-primary) - 2px);
+	/* Controls fill the band with the panel's own inset above and below them,
+	 * and share the panel's corner radius. */
+	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--size-center-panel-inset-mac));
+	--radius-topbar-control: var(--radius-center-panel);
 	padding-top: 0;
+}
+
+.center-panel-shell--floating-topbar .session-inspector__tab-button,
+.center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control,
+.center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control-group {
+	border-radius: var(--radius-topbar-control);
 }
 
 .center-panel-shell--floating-topbar .session-inspector__tab-button {
