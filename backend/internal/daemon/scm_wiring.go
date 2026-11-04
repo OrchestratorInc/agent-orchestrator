@@ -43,6 +43,7 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 	}
 	provider := scmmulti.New(named...)
 	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates})
+	lcm.SetReviewThreadReader(observer)
 	reviewRefresher.Bind(observer)
 	return observer.Start(ctx)
 }

@@ -127,6 +127,12 @@ type sessionTerminator interface {
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
+// reviewThreadReader re-reads an observed PR's review threads from its
+// provider. The SCM observer implements it.
+type reviewThreadReader interface {
+	ReviewThreads(ctx context.Context, o ports.SCMObservation) (ports.SCMReviewObservation, error)
+}
+
 type sessionUsageFinalizer interface {
 	FinalizeSession(
 		ctx context.Context,
@@ -236,6 +242,9 @@ type Manager struct {
 	// completionTerminator is late-bound because Session Manager itself depends
 	// on this lifecycle reducer. It is required before the SCM observer starts.
 	completionTerminator sessionTerminator
+	// reviewThreads is late-bound because the SCM observer itself depends on
+	// this lifecycle reducer. Nil relays review feedback from the stored threads.
+	reviewThreads reviewThreadReader
 	// usageFinalizer is late-bound because the usage pipeline is optional. It
 	// receives terminal intent before is_terminated makes the session ineligible
 	// for normal source discovery.
@@ -318,6 +327,14 @@ func (m *Manager) SetCompletionTerminator(terminator sessionTerminator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.completionTerminator = terminator
+}
+
+// SetReviewThreadReader wires the provider read that re-checks review threads
+// right before review feedback is relayed.
+func (m *Manager) SetReviewThreadReader(reader reviewThreadReader) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reviewThreads = reader
 }
 
 // SetUsageFinalizer wires termination and relaunches to usage collection.
