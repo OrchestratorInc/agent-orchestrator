@@ -1955,6 +1955,47 @@ func TestPiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+// Break caught: the store accepting only one provider vocabulary for a Pi
+// fork. OMP and Kimchi normalize Anthropic replies to Anthropic counters and
+// every other provider to OpenAI's, exactly as Pi does, so both must land.
+func TestPiForkUsageEventsRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		harness domain.AgentHarness
+		kind    domain.UsageSourceKind
+	}{
+		{harness: domain.HarnessOMP, kind: domain.UsageSourceOMPSession},
+		{harness: domain.HarnessKimchi, kind: domain.UsageSourceKimchiSession},
+	} {
+		t.Run(string(test.harness), func(t *testing.T) {
+			s := newTestStore(t)
+			now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+			session := seedUsageSession(t, s, test.harness)
+			binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+				NativeRootID: "fork-session", State: domain.UsageBindingActive,
+			})
+			source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+				BindingID: binding.ID, Kind: test.kind,
+				NativeSessionID: "fork-session", ArtifactPath: "/tmp/fork/session.jsonl",
+				FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+			})
+			event := usageEvent("fork-event", canonicalUsageTokens(41368, 40896, 472, 426))
+			event.ModelID = "glm-5.2"
+			anthropicEvent := anthropicUsageEvent("fork-anthropic-event", 11, 3, 5, 7)
+			anthropicEvent.ModelID = "claude-opus-4-8"
+			if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+				ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+			}, []domain.ModelUsageEvent{event, anthropicEvent}); err != nil {
+				t.Fatalf("apply %s usage: %v", test.harness, err)
+			}
+			models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+			mustNoError(t, err)
+			if len(models) != 2 || models[0].Harness != test.harness || models[1].Harness != test.harness {
+				t.Fatalf("%s aggregates = %+v", test.harness, models)
+			}
+		})
+	}
+}
+
 func TestQwenUsageEventRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
