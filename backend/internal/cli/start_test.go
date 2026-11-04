@@ -3,13 +3,17 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha1" //nolint:gosec // UUIDv5 is defined over SHA-1
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -200,11 +204,89 @@ func TestRequireAMD64(t *testing.T) {
 	}
 }
 
-func TestWindowsInstalledExe(t *testing.T) {
-	got := windowsInstalledExe("C:\\Users\\me\\AppData\\Local")
-	want := filepath.Join("C:\\Users\\me\\AppData\\Local", "Programs", "Agent Orchestrator", "agent-orchestrator.exe")
-	if got != want {
-		t.Fatalf("windowsInstalledExe = %q, want %q", got, want)
+func TestWindowsAppLocations(t *testing.T) {
+	local := filepath.Join("C:", "Users", "me", "AppData", "Local")
+	pf := filepath.Join("C:", "Program Files")
+	custom := filepath.Join("D:", "Apps", "AO")
+	got := windowsAppLocations([]string{custom, ""}, local, pf)
+	want := []string{
+		filepath.Join(custom, "agent-orchestrator.exe"),
+		// The folder electron-builder actually installs to (named after
+		// win.executableName), then the pre-#2467 product-name folder.
+		filepath.Join(local, "Programs", "agent-orchestrator", "agent-orchestrator.exe"),
+		filepath.Join(local, "Programs", "Agent Orchestrator", "agent-orchestrator.exe"),
+		filepath.Join(pf, "agent-orchestrator", "agent-orchestrator.exe"),
+		filepath.Join(pf, "Agent Orchestrator", "agent-orchestrator.exe"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("windowsAppLocations =\n%q\nwant\n%q", got, want)
+	}
+	if got := windowsAppLocations(nil, "", ""); len(got) != 0 {
+		t.Fatalf("windowsAppLocations with no env = %q, want none", got)
+	}
+}
+
+// TestWindowsInstallNamesMatchForgeConfig ties the Windows discovery names to
+// the packaging config they mirror. electron-builder installs into a folder
+// named after win.executableName (EXECUTABLE_NAME) and records InstallLocation
+// under Software\<UUIDv5(appId)>, so a rename in forge.config.ts must move
+// these too or `ao start` stops finding the installed app.
+func TestWindowsInstallNamesMatchForgeConfig(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "frontend", "forge.config.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe := regexp.MustCompile(`const EXECUTABLE_NAME = "([^"]+)"`).FindSubmatch(src)
+	if exe == nil {
+		t.Fatal("EXECUTABLE_NAME not found in forge.config.ts")
+	}
+	if want := string(exe[1]) + ".exe"; windowsExeName != want {
+		t.Errorf("windowsExeName = %q, want %q", windowsExeName, want)
+	}
+	if windowsInstallDirNames[0] != string(exe[1]) {
+		t.Errorf("windowsInstallDirNames[0] = %q, want %q", windowsInstallDirNames[0], exe[1])
+	}
+	nsis := regexp.MustCompile(`new MakerNSIS\(\s*\{\s*appId: "([^"]+)"`).FindSubmatch(src)
+	if nsis == nil {
+		t.Fatal("MakerNSIS appId not found in forge.config.ts")
+	}
+	if want := `Software\` + electronBuilderGUID(string(nsis[1])); windowsInstallRegistryKey != want {
+		t.Errorf("windowsInstallRegistryKey = %q, want %q", windowsInstallRegistryKey, want)
+	}
+}
+
+// electronBuilderGUID is electron-builder's NSIS APP_GUID: a UUIDv5 of the appId
+// in its fixed namespace (NsisTarget.ts, ELECTRON_BUILDER_NS_UUID).
+func electronBuilderGUID(appID string) string {
+	ns, _ := hex.DecodeString("50e065bc313411e69bab38c9862bdaf3")
+	h := sha1.Sum(append(ns, appID...)) //nolint:gosec // UUIDv5 is defined over SHA-1
+	h[6] = h[6]&0x0f | 0x50
+	h[8] = h[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+}
+
+// TestResolveApp_FindsWindowsInstallFolder covers the #7726 follow-up: with no
+// marker, an app installed where the NSIS installer puts it must resolve
+// instead of sending `ao start` off to re-download and reinstall it.
+func TestResolveApp_FindsWindowsInstallFolder(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("isUsableBundle wants a directory on macOS; this models a Windows exe")
+	}
+	setConfigEnv(t)
+	local := t.TempDir()
+	exe := filepath.Join(local, "Programs", "agent-orchestrator", "agent-orchestrator.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(swapPreferredAppPath(func() string { return "" }))
+	t.Cleanup(swapScanLocations(func() []string { return windowsAppLocations(nil, local, "") }))
+
+	c := &commandContext{deps: Deps{}.withDefaults()}
+	if got := c.resolveApp(); got != exe {
+		t.Fatalf("resolveApp() = %q, want %q", got, exe)
 	}
 }
 
