@@ -61,7 +61,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 					</Section>
 					<Section
 						title="Connection"
-						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : undefined}
+						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : form.connectHint ? <FormFooter>{form.connectHint}</FormFooter> : undefined}
 						modifiers={sectionModifiers(t)}
 					>
 						{/* The port is a few digits: it shares the host's row, at its end. */}

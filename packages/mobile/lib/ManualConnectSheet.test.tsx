@@ -172,14 +172,18 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
 	});
 
-	it("enables Connect once the form has a name and a host", async () => {
+	it("enables Connect once the form has a name and a host, saying what it waits for", async () => {
 		render();
+		const hint = () => renderer!.root.findAllByType("Section" as never)[1].props.footer?.props;
 		expect(confirm().props.disabled).toBe(true);
+		expect(hint()).toMatchObject({ children: "Add a name and a host to connect." });
+		expect(hint().error).toBeFalsy();
 		await type("manual-connect-host", "192.168.1.30");
 		expect(confirm().props.disabled).toBe(true);
+		expect(hint()).toMatchObject({ children: "Add a name to connect." });
 		await type("manual-connect-name", "Office PC");
 		expect(confirm().props.disabled).toBe(false);
-		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
+		expect(hint()).toBeUndefined();
 	});
 
 	it("reveals the password in place and hides it again", () => {
@@ -242,6 +246,17 @@ describe("ManualConnectSheet on Android", () => {
 		expect(scroll.findAll((node) => node === connect)).toHaveLength(1);
 		// The last field clears the gesture bar when scrolled to the end.
 		expect(Object.assign({}, ...[scroll.props.contentContainerStyle].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
+	});
+
+	// A disabled Connect alone does not say a name is required.
+	it("says under Connect what it waits for", async () => {
+		await renderAndroid();
+		const hint = () => renderer!.root.findAll((node) => node.type === ("Text" as never) && typeof node.props.children === "string" && node.props.children.startsWith("Add ")).map((node) => node.props.children);
+		expect(hint()).toEqual(["Add a name and a host to connect."]);
+		await type("manual-connect-name", "Office PC");
+		expect(hint()).toEqual(["Add a host to connect."]);
+		await type("manual-connect-host", "192.168.1.30");
+		expect(hint()).toEqual([]);
 	});
 
 	// No back button on this page: the way back names where it goes.
