@@ -297,6 +297,28 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatalf("destroy second: %v", err)
 	}
 
+	// Allowing every session: the next new session runs without asking.
+	const third, fourth = "e2e-third", "e2e-fourth"
+	allConsent := make(chan error, 1)
+	go func() {
+		allConsent <- clickConsentExpression(ctx, cdp, "document.getElementById('all-sessions').click(); document.getElementById('allow').click()")
+	}()
+	if _, err := broker.Execute(ctx, third, "open", map[string]interface{}{"url": site.URL + "/next"}); err != nil {
+		t.Fatalf("third session open: %v", err)
+	}
+	if err := <-allConsent; err != nil {
+		t.Fatalf("allow every session: %v", err)
+	}
+	if _, err := broker.Execute(ctx, fourth, "open", map[string]interface{}{"url": site.URL + "/next"}); err != nil {
+		t.Fatalf("session after allowing every session: %v", err)
+	}
+	if err := broker.DestroySession(ctx, third); err != nil {
+		t.Fatalf("destroy third: %v", err)
+	}
+	if err := broker.DestroySession(ctx, fourth); err != nil {
+		t.Fatalf("destroy fourth: %v", err)
+	}
+
 	// The user closes the agent's window: the next command starts over cleanly.
 	extension(fmt.Sprintf(`chrome.windows.remove(%d).then(() => ({}))`, agentWindow))
 	time.Sleep(500 * time.Millisecond)
@@ -383,6 +405,10 @@ func errorAs(err error, target *browserruntime.CommandError) bool {
 // clickConsent waits for the extension's consent window and clicks Allow
 // through the Chrome DevTools Protocol, standing in for the person.
 func clickConsent(ctx context.Context, cdp string) error {
+	return clickConsentExpression(ctx, cdp, "document.getElementById('allow').click()")
+}
+
+func clickConsentExpression(ctx context.Context, cdp, expression string) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(cdp + "/json/list")
@@ -402,7 +428,7 @@ func clickConsent(ctx context.Context, cdp string) error {
 					payload, _ := json.Marshal(map[string]interface{}{
 						"id":     1,
 						"method": "Runtime.evaluate",
-						"params": map[string]interface{}{"expression": "document.getElementById('allow').click()", "userGesture": true},
+						"params": map[string]interface{}{"expression": expression, "userGesture": true},
 					})
 					err = conn.Write(ctx, websocket.MessageText, payload)
 					_, _, _ = conn.Read(ctx)
