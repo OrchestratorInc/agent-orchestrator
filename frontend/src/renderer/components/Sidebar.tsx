@@ -145,6 +145,7 @@ import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
@@ -1987,6 +1988,7 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
+									{workspace.shared ? <SharedProjectMark share={workspace.shared} /> : null}
 									{/* The host badge shrinks and truncates in narrow sidebars so it never
 									    runs under the row actions; half the row stays for the name. */}
 									{hostLabel && (
@@ -2944,7 +2946,8 @@ const SessionRow = memo(function SessionRow({
 			</HoverCardContent>
 			</HoverCard>
 			<ContextMenuContent className="min-w-44">
-				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -3041,7 +3044,8 @@ const SessionActions = memo(function SessionActions({
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						</Button>}
-				<Tooltip>
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				{session.cloud?.shared ? null : <Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
 							<SessionArchiveDialog
@@ -3066,7 +3070,7 @@ const SessionActions = memo(function SessionActions({
 						</span>
 					</TooltipTrigger>
 					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>
+				</Tooltip>}
 			</div>
 			{hideAge ? null : <SessionMessageAge session={session} />}
 		</div>

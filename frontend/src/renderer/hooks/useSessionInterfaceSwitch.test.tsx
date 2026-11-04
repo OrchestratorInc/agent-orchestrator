@@ -192,6 +192,15 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.renderedMode).toBe("tui");
 	});
 
+	it.each(["tui", "chat"] as const)("offers a guest of a shared session no switch from %s", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", {
+			...cloudSession, mode, cloud: { orgId: "org-1", shared: true },
+		}, { orgId: "org-1" }));
+		expect(result.current.switchControl).toBeNull();
+		expect(result.current.switchAction).toBeFalsy();
+	});
+
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {
 		mocks.status = {
 			supported: true,
