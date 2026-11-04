@@ -454,7 +454,6 @@ export default function CloneRepositoryDialog({
 
 						{activity ? <div className="space-y-1 px-4 pt-3 text-[12px] text-muted-foreground" role="status" aria-live="polite">
 							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
-							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
 						</div> : null}
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
@@ -496,6 +495,7 @@ const clonePhaseLabelKeys: Record<CloneProgress["phase"], MessageKey> = {
 // the plain busy label.
 function CloneProgressReport({ progress, repository }: { progress: CloneProgress | null; repository: string | null }) {
 	const { t } = useTranslation();
+	const [showLogTail, setShowLogTail] = useState(false);
 	const phaseLabel = progress ? t(clonePhaseLabelKeys[progress.phase]) : t("createProject.cloning");
 	const percent = progress ? Math.min(100, Math.max(0, Math.round(progress.percent))) : 0;
 	const stats: string[] = [];
@@ -535,6 +535,29 @@ function CloneProgressReport({ progress, repository }: { progress: CloneProgress
 				<p className="text-pretty text-[12px] leading-5 tabular-nums text-[var(--color-text-import-muted)]">
 					{stats.join(" · ")}
 				</p>
+			) : null}
+			{progress?.log?.length ? (
+				<div className="space-y-1">
+					<Button
+						type="button"
+						variant="ghost"
+						size="none"
+						className="h-6 px-0 text-[12px] text-muted-foreground"
+						aria-expanded={showLogTail}
+						onClick={() => setShowLogTail((value) => !value)}
+					>
+						{showLogTail ? t("createProject.cloneLogsHide") : t("createProject.cloneLogsShow")}
+					</Button>
+					{showLogTail ? (
+						<pre
+							aria-live="polite"
+							className="max-h-32 overflow-auto rounded bg-muted p-2 font-mono text-[11px] leading-4 whitespace-pre-wrap text-muted-foreground"
+							data-testid="clone-log-tail"
+						>
+							{progress.log.join("\n")}
+						</pre>
+					) : null}
+				</div>
 			) : null}
 		</div>
 	);

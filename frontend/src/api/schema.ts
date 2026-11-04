@@ -5124,6 +5124,7 @@ export interface components {
         CloneProgress: {
             itemsDone?: number;
             itemsTotal?: number;
+            log?: string[];
             /** Format: double */
             percent: number;
             /** @enum {string} */

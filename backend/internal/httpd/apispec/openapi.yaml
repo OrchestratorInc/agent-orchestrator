@@ -14969,6 +14969,10 @@ components:
         itemsTotal:
           minimum: 0
           type: integer
+        log:
+          items:
+            type: string
+          type: array
         percent:
           format: double
           type: number

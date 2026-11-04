@@ -359,6 +359,9 @@ describe("clone repository input", () => {
 		const { props } = renderCloneDialog({ disabled: true, cloning: true, activity: "cloning" });
 		expect(screen.getByRole("status")).toHaveTextContent("Cloning repository · 0s");
 		expect(screen.getByText("Cloning into /code/web-app. Large repositories can take a few minutes.")).toBeInTheDocument();
+		// Exactly one wait message: the second wait sentence and its i18n key
+		// were removed (#7745).
+		expect(screen.queryByText(/AO retries temporary connection failures automatically/)).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel clone" }));
 		expect(props.onCancel).toHaveBeenCalledOnce();
 		expect(screen.getByRole("button", { name: "Close clone repository dialog" })).toBeDisabled();
@@ -423,6 +426,47 @@ describe("clone progress", () => {
 		expect(screen.getByText("2.0 MB transferred · 1.5 MB/s · 2s left")).toBeInTheDocument();
 		const bar = screen.getByRole("progressbar", { name: "Cloning web-app" });
 		expect(bar).toHaveAttribute("aria-valuenow", "45");
+	});
+
+	it("hides the raw log tail until the user asks for it, then shows and hides it", () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog({
+			cloning: true,
+			disabled: true,
+			progress: {
+				phase: "receiving",
+				percent: 45,
+				startedAt: "2026-10-12T00:00:00Z",
+				updatedAt: "2026-10-12T00:00:01Z",
+				log: ["Cloning into '/repos/.ao-clone-x'...", "Receiving objects:  45% (1234/2748)"],
+			},
+		});
+
+		expect(screen.queryByTestId("clone-log-tail")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "View logs" }));
+		const tail = screen.getByTestId("clone-log-tail");
+		expect(tail).toHaveTextContent("Cloning into '/repos/.ao-clone-x'...");
+		expect(tail).toHaveTextContent("Receiving objects: 45% (1234/2748)");
+		expect(screen.getByRole("button", { name: "Hide logs" })).toHaveAttribute("aria-expanded", "true");
+		fireEvent.click(screen.getByRole("button", { name: "Hide logs" }));
+		expect(screen.queryByTestId("clone-log-tail")).not.toBeInTheDocument();
+	});
+
+	it("offers no log toggle before the daemon has sent any clone output", () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog({
+			cloning: true,
+			disabled: true,
+			progress: {
+				phase: "receiving",
+				percent: 45,
+				startedAt: "2026-10-12T00:00:00Z",
+				updatedAt: "2026-10-12T00:00:01Z",
+			},
+		});
+
+		expect(screen.queryByRole("button", { name: "View logs" })).not.toBeInTheDocument();
+		expect(screen.queryByTestId("clone-log-tail")).not.toBeInTheDocument();
 	});
 });
 

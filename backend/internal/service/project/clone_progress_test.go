@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -345,5 +347,69 @@ func TestPrepareCloneExposesProgressWhileCloning(t *testing.T) {
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "CLONE_PROGRESS_NOT_FOUND" {
 		t.Fatalf("CloneProgress after completion = %v, want CLONE_PROGRESS_NOT_FOUND", err)
+	}
+}
+
+func TestCloneProgressTrackerLogTailCollapsesTaskUpdates(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	tracker.applyLine("Cloning into '/tmp/dest/.ao-clone-123'...")
+	for percent := 1; percent <= 3; percent++ {
+		tracker.applyLine(fmt.Sprintf("Receiving objects:  %d%% (%d/2748)", percent, percent*27))
+	}
+	tracker.applyLine("warning: remote banner kept verbatim")
+
+	got := tracker.snapshot()
+	want := []string{
+		"Cloning into '/tmp/dest/.ao-clone-123'...",
+		"Receiving objects:  3% (81/2748)",
+		"warning: remote banner kept verbatim",
+	}
+	if !slices.Equal(got.Log, want) {
+		t.Fatalf("log tail = %q, want %q", got.Log, want)
+	}
+}
+
+func TestCloneProgressTrackerLogTailIsBounded(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	for i := 0; i < cloneLogTailMaxLines+10; i++ {
+		tracker.applyLine(fmt.Sprintf("remote: banner-%02d", i))
+	}
+
+	got := tracker.snapshot()
+	if len(got.Log) != cloneLogTailMaxLines {
+		t.Fatalf("log tail length = %d, want %d", len(got.Log), cloneLogTailMaxLines)
+	}
+	if got.Log[0] != "remote: banner-10" || got.Log[len(got.Log)-1] != fmt.Sprintf("remote: banner-%02d", cloneLogTailMaxLines+9) {
+		t.Fatalf("log tail kept the wrong window: first=%q last=%q", got.Log[0], got.Log[len(got.Log)-1])
+	}
+}
+
+func TestCloneProgressTrackerLogTailTruncatesLongLines(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	long := strings.Repeat("x", cloneLogTailMaxRunes+50)
+	tracker.applyLine(long)
+
+	got := tracker.snapshot()
+	if len(got.Log) != 1 || len([]rune(got.Log[0])) != cloneLogTailMaxRunes {
+		t.Fatalf("log tail line length = %d, want %d", len([]rune(got.Log[0])), cloneLogTailMaxRunes)
+	}
+}
+
+func TestCloneProgressTrackerLogTailSnapshotIsACopy(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	tracker.applyLine("Receiving objects: 100% (2748/2748), done.")
+	snap := tracker.snapshot()
+	snap.Log[0] = "mutated"
+
+	if got := tracker.snapshot(); got.Log[0] == "mutated" {
+		t.Fatal("snapshot exposed the tracker's internal log tail")
 	}
 }

@@ -77,6 +77,10 @@ type CloneProgress struct {
 	SpeedBytesPerSecond float64   `json:"speedBytesPerSecond,omitempty"`
 	StartedAt           time.Time `json:"startedAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
+	// Log is a bounded tail of git's raw stderr for this clone, newest last.
+	// Empty until git has produced output; lets clients show what a slow
+	// clone is actually doing.
+	Log []string `json:"log,omitempty"`
 }
 
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.

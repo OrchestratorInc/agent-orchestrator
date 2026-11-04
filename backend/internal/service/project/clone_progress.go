@@ -80,6 +80,11 @@ type cloneProgressTracker struct {
 	buf  []byte
 	now  func() time.Time
 	snap CloneProgress
+	// logTail is the bounded raw stderr tail surfaced in the snapshot;
+	// lastLogTask is the task label of the newest tail entry, so consecutive
+	// percent updates for one task replace each other instead of spamming it.
+	logTail     []string
+	lastLogTask string
 }
 
 // maxCloneProgressLine bounds the unparsed buffer. Progress lines are short;
@@ -127,7 +132,36 @@ func (t *cloneProgressTracker) finish() {
 func (t *cloneProgressTracker) snapshot() CloneProgress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.snap
+	snap := t.snap
+	if len(t.logTail) > 0 {
+		snap.Log = append([]string(nil), t.logTail...)
+	}
+	return snap
+}
+
+// Bounded raw-output tail carried in the progress snapshot. It exists so the
+// clone dialog can show what git is actually doing during a long clone.
+const (
+	cloneLogTailMaxLines = 40
+	cloneLogTailMaxRunes = 200
+)
+
+// appendLogTail records one stderr line in the tail. Task updates ("Receiving
+// objects: 41% (…)") collapse into the task's newest line; anything else
+// (remote banners, warnings, errors) always gets its own entry.
+func (t *cloneProgressTracker) appendLogTail(line, task string) {
+	if runes := []rune(line); len(runes) > cloneLogTailMaxRunes {
+		line = string(runes[:cloneLogTailMaxRunes])
+	}
+	if task != "" && task == t.lastLogTask && len(t.logTail) > 0 {
+		t.logTail[len(t.logTail)-1] = line
+		return
+	}
+	t.logTail = append(t.logTail, line)
+	t.lastLogTask = task
+	if len(t.logTail) > cloneLogTailMaxLines {
+		t.logTail = t.logTail[len(t.logTail)-cloneLogTailMaxLines:]
+	}
 }
 
 var cloneProgressTask = regexp.MustCompile(`^(?:remote:\s*)?(Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files):\s*(.*)$`)
@@ -157,14 +191,17 @@ func (t *cloneProgressTracker) applyLine(line string) {
 		return
 	}
 	if strings.HasPrefix(line, "Cloning into ") {
+		t.appendLogTail(line, "")
 		t.setPhase(clonePhaseConnecting)
 		return
 	}
 	match := cloneProgressTask.FindStringSubmatch(line)
 	if match == nil {
+		t.appendLogTail(line, "")
 		return
 	}
 	phase := cloneProgressPhases[match[1]]
+	t.appendLogTail(line, match[1])
 	rest := strings.TrimSpace(match[2])
 	if t.snap.Phase != phase {
 		t.setPhase(phase)

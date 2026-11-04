@@ -420,19 +420,23 @@ func TestProjectsAPI_CloneProgress(t *testing.T) {
 		"connecting": true, "enumerating": true, "counting": true, "compressing": true,
 		"receiving": true, "resolving": true, "updating": true, "finalizing": true,
 	}
-	sawSnapshot, sawTransfer := false, false
+	sawSnapshot, sawTransfer, sawLogTail := false, false, false
 	for _, p := range polls {
 		if p.status != http.StatusOK {
 			continue
 		}
 		var snapshot struct {
-			Phase string `json:"phase"`
+			Phase string   `json:"phase"`
+			Log   []string `json:"log"`
 		}
 		mustJSON(t, p.body, &snapshot)
 		if !validPhases[snapshot.Phase] {
 			t.Fatalf("progress poll reported phase %q", snapshot.Phase)
 		}
 		sawSnapshot = true
+		if len(snapshot.Log) > 0 {
+			sawLogTail = true
+		}
 		if snapshot.Phase == "receiving" || snapshot.Phase == "resolving" || snapshot.Phase == "updating" || snapshot.Phase == "finalizing" {
 			sawTransfer = true
 		}
@@ -442,6 +446,9 @@ func TestProjectsAPI_CloneProgress(t *testing.T) {
 	}
 	if !sawTransfer {
 		t.Fatal("no poll observed a transfer phase (receiving, resolving, updating, or finalizing)")
+	}
+	if !sawLogTail {
+		t.Fatal("no poll observed the raw clone log tail")
 	}
 
 	// After the preparation settles the entry is gone: late polls get the
