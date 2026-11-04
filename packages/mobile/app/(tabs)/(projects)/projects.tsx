@@ -107,7 +107,7 @@ export default function ProjectsScreen() {
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
 					// Android's tab bar is clear and the list runs on under it.
-					contentContainerStyle={{ flexGrow: 1, paddingTop: space.md, paddingBottom: space.xxl + tabBar.inset }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl + tabBar.inset }}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={largeTitle.topInset} {...refreshControlColors(t)} />}
 					ListHeaderComponent={<>{largeTitle.header}{staleBanner}</>}
 					onScroll={largeTitle.onScroll}

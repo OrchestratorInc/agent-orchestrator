@@ -6,26 +6,23 @@ const page = readFileSync(new URL("../app/project/[id].tsx", import.meta.url), "
 const projects = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", import.meta.url), "utf8");
 
 describe("project row", () => {
-	// A filled card, no outline, as a Settings group is.
-	it("is a filled card with no outline", () => {
-		expect(card).toMatch(/card:\s*\{[^}]*borderRadius:\s*radius\.lg[^}]*backgroundColor:\s*t\.bgElevated/s);
-		expect(card).not.toMatch(/card:\s*\{[^}]*borderWidth/s);
+	// Matches a worker row: a divider, not a filled card with initials.
+	it("is a flat row with a divider inset to its text", () => {
+		expect(card).toMatch(/divider:\s*\{\s*marginLeft:\s*space\.lg,\s*height:\s*rowDividerWidth/);
+		expect(card).toMatch(/body:\s*\{\s*paddingLeft:\s*space\.lg/);
+		expect(card).toMatch(/row:\s*\{\s*backgroundColor:\s*t\.bgBase\s*\}/);
+		expect(card).not.toContain("projectInitials");
 	});
 
-	// A round button at the card's end, play to start or resume the orchestrator
+	// A round button at the row's end, play to start or resume the orchestrator
 	// and the orchestrator's mark to open a running one: a chevron there read as
-	// "open this row", and the card itself opens the project.
+	// "open this row", and the row itself opens the project.
 	it("ends in the orchestrator's round button, with no bar under it", () => {
 		expect(card).toContain("trailing={<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />}");
 		expect(card).not.toContain("ProjectCardActions");
 		expect(card).not.toContain(">Expand</Text>");
 		expect(card).toContain("if (live) return <OrchestratorIcon size={GLYPH_SIZE} color={color} />;");
 		expect(card).not.toContain("M9.5 5.5 16 12l-6.5 6.5");
-	});
-
-	it("leads with the project's initials on its own colour", () => {
-		expect(card).toContain("backgroundColor: projectHue(row.project.name)");
-		expect(card).toContain("{projectInitials(row.project.name)}");
 	});
 
 	it("keeps counts as quiet text rather than chips", () => {

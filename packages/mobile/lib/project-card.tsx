@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { OrchestratorIcon } from "./orchestrator-icon";
-import { projectHue, projectInitials } from "./projectAvatar";
 import {
 	orchestratorButtonCopy,
 	orchestratorStatus,
@@ -27,8 +26,6 @@ import { machineAppearance } from "./machineAppearance";
 const PILL_SIZE = 40;
 /** The glyph inside it. */
 const GLYPH_SIZE = 20;
-/** The initials' side. */
-const AVATAR_SIZE = 44;
 /** Reaches the platform's touch target around a button drawn smaller than it. */
 const PILL_HIT_SLOP = (touchTarget - PILL_SIZE) / 2;
 
@@ -36,9 +33,11 @@ const PILL_HIT_SLOP = (touchTarget - PILL_SIZE) / 2;
  * One project on the Projects page: who it is, how its fleet is doing, and the
  * way into its orchestrator.
  *
- * A card, pressed anywhere to open the project page. At its end a round
- * button starts or resumes the orchestrator (play), or opens a running one
- * (chevron): a labelled pill outweighed the project's name.
+ * A flat row with a divider, like a worker row, rather than a card: the two
+ * lists read as one app. Pressed anywhere, it opens the project page. At its
+ * end a round button starts or resumes the orchestrator (play), or opens a
+ * running one (the orchestrator's mark): a labelled pill outweighed the
+ * project's name.
  *
  * The name has the body's full width; everything else is one quiet line under
  * it, plus the blocker on a row that needs attention.
@@ -65,7 +64,7 @@ export function ProjectCard({
 	const blockerColor = blocker ? statusVisual(t, blocker.status).color : undefined;
 	return (
 		<TrailingActionRow
-			style={styles.card}
+			style={styles.row}
 			bodyStyle={styles.body}
 			accessibilityLabel={[
 				row.project.name,
@@ -97,47 +96,40 @@ export function ProjectCard({
 				</View>
 			) : undefined}
 		>
-			<View style={styles.identity}>
-				<View style={[styles.avatar, { backgroundColor: projectHue(row.project.name) }]}>
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.avatarText}>{projectInitials(row.project.name)}</Text>
-				</View>
-				<View style={styles.identityText}>
-					<Text style={styles.project} numberOfLines={1}>
-						{row.project.name}
-					</Text>
+			<Text style={styles.project} numberOfLines={1}>
+				{row.project.name}
+			</Text>
 
-					{/* The orchestrator's state, the fleet's size, and where it runs. */}
-					<View style={styles.summaryRow}>
-						<Dot color={status.color} size={6} breathing={status.breathing} />
-						<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
-							{status.label}
-						</Text>
-						<Text style={styles.summary} numberOfLines={1}>
-							{` · ${summary.workers}`}
-						</Text>
-						{showMachine ? (
-							<MachineIdentity
-								name={row.project.hostName}
-								appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
-								style={styles.machineIdentity}
-							/>
-						) : null}
-					</View>
-				</View>
+			{/* The orchestrator's state, the fleet's size, and where it runs. */}
+			<View style={styles.summaryRow}>
+				<Dot color={status.color} size={6} breathing={status.breathing} />
+				<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
+					{status.label}
+				</Text>
+				<Text style={styles.summary} numberOfLines={1}>
+					{` · ${summary.workers}`}
+				</Text>
+				{showMachine ? (
+					<MachineIdentity
+						name={row.project.hostName}
+						appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+						style={styles.machineIdentity}
+					/>
+				) : null}
 			</View>
 		</TrailingActionRow>
 	);
 }
 
 /**
- * A card that is one control, with a second control at its trailing end. The
- * whole card presses, ripple and highlight included: with only the text block
+ * A row that is one control, with a second control at its trailing end. The
+ * whole row presses, ripple and highlight included: with only the text block
  * pressable, a tap beside the button or below the text did nothing. The button
  * is nested inside and takes its own touches; a screen reader, which hears the
- * card as one element, reaches it as the card's custom action.
+ * row as one element, reaches it as the row's custom action.
  *
  * The trailing slot takes only the width its control needs: at a large text
- * size the body narrows instead of running under it. A footer runs the card's
+ * size the body narrows instead of running under it. A footer runs the row's
  * full width under both.
  */
 function TrailingActionRow({
@@ -185,10 +177,11 @@ function TrailingActionRow({
 			<View style={styles.trailingRow}>
 				<View style={[styles.trailingBody, bodyStyle, footer ? styles.bodyAboveFooter : null]}>{children}</View>
 				{/* Moved down by what the body gave up, so the button stays level with
-				    the same two lines on every card. */}
+				    the same two lines on every row. */}
 				{trailing ? <View style={[styles.trailingSlot, footer ? styles.slotAboveFooter : null]}>{trailing}</View> : null}
 			</View>
 			{footer ? <View style={styles.footer}>{footer}</View> : null}
+			<View style={styles.divider} />
 		</Pressable>
 	);
 }
@@ -196,7 +189,7 @@ function TrailingActionRow({
 const PLAY_PATH = "M7.5 5.9v12.2a1.6 1.6 0 0 0 2.45 1.36l9.6-6.1a1.6 1.6 0 0 0 0-2.72l-9.6-6.1A1.6 1.6 0 0 0 7.5 5.9Z";
 
 /**
- * The orchestrator's round button at a card's end: a play button to start or
+ * The orchestrator's round button at a row's end: a play button to start or
  * resume it, and the orchestrator's own mark once it runs and opens. Not a
  * chevron: at a row's end a chevron reads as "open this row", and the row
  * opens the project.
@@ -342,23 +335,17 @@ export function ProjectPageHeader({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		// A filled card with no outline or shadow, as a Settings group is
-		// (DESIGN.md); `overflow` keeps the Android ripple inside its corners.
-		card: { marginHorizontal: space.lg, marginBottom: space.md, borderRadius: radius.lg, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated },
-		body: { paddingHorizontal: space.lg, paddingVertical: space.lg },
-		// The initials, then the name over its one quiet line.
-		identity: { flexDirection: "row", alignItems: "center", gap: space.md, minWidth: 0 },
-		identityText: { flex: 1, minWidth: 0, gap: space.hair },
-		avatar: { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: radius.md, borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
-		avatarText: { fontFamily: "DMSans_700Bold", color: "#ffffff", fontSize: 16, lineHeight: 20, fontWeight: "700", letterSpacing: 0.3 },
+		// A flat row like a worker row: no card, just the inset divider.
+		row: { backgroundColor: t.bgBase },
+		body: { paddingLeft: space.lg, paddingVertical: space.md, gap: space.hair },
 		bodyAboveFooter: { paddingBottom: space.hair },
-		slotAboveFooter: { paddingTop: space.lg - space.hair },
-		// Under the name, past the initials.
-		footer: { paddingLeft: space.lg + AVATAR_SIZE + space.md, paddingRight: space.lg, paddingBottom: space.lg },
+		slotAboveFooter: { paddingTop: space.md - space.hair },
+		footer: { paddingHorizontal: space.lg, paddingBottom: space.md },
 		trailingRow: { flexDirection: "row", alignItems: "stretch" },
 		trailingBody: { flex: 1, minWidth: 0, justifyContent: "center" },
 		// Centred on the row whatever its height, and never narrower than its pill.
 		trailingSlot: { flexShrink: 0, justifyContent: "center", paddingLeft: space.md, paddingRight: space.lg },
+		divider: { marginLeft: space.lg, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 
 		project: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
 		// Pushed to the line's end, as on a worker row, and the first thing to
@@ -376,10 +363,9 @@ const makeStyles = (t: Theme) =>
 		blockerReason: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		blockerWorker: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
-		// A capsule, as both platforms draw a button; `overflow` keeps the Android
-		// ripple inside it.
-		// A soft filled circle.
-		pill: { width: PILL_SIZE, height: PILL_SIZE, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgBase },
+		// A soft filled circle on the page, as the old labelled pill was filled;
+		// `overflow` keeps the Android ripple inside it.
+		pill: { width: PILL_SIZE, height: PILL_SIZE, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgElevated },
 
 		stats: { flexDirection: "row", marginHorizontal: space.lg, marginTop: space.xxs, borderTopWidth: rowDividerWidth, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle },
 		stat: { flex: 1, alignItems: "center", paddingVertical: space.sm, gap: space.none },
