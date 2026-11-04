@@ -674,6 +674,15 @@ describe("telemetry sanitizers", () => {
 		).toEqual({});
 	});
 
+	it("keeps only known action and view values on topbar clicks", async () => {
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "run_cue", view: "worker" }),
+		).toEqual({ action: "run_cue", view: "worker" });
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "/Users/me/repo", view: "board", extra: 1 }),
+		).toEqual({});
+	});
+
 	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_succeeded", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
 			project_id: "demo-project",

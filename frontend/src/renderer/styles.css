@@ -3438,6 +3438,13 @@ html.sidebar-reordering * {
 }
 
 
+/* The editor control's menu chevron belongs to its icon, so it is half a
+   control wide instead of reading as a second button. */
+.workspace-topbar-actions .topbar-control--chevron {
+	width: var(--space-4);
+	min-width: var(--space-4);
+}
+
 .workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
 }

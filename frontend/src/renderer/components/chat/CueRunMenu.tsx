@@ -32,12 +32,15 @@ export function CueRunMenu({
 	sessionId,
 	cloudOrgId,
 	disabled = false,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
 	/** A Cloud session's organization: its project's cues live on the control plane. */
 	cloudOrgId?: string;
 	disabled?: boolean;
+	/** Called once per cue dispatch, from the trigger or the menu. */
+	onRun?: () => void;
 }) {
 	return (
 		<CueRunMenuTrigger
@@ -46,6 +49,7 @@ export function CueRunMenu({
 			sessionId={sessionId}
 			cloudOrgId={cloudOrgId}
 			disabled={disabled}
+			onRun={onRun}
 		/>
 	);
 }
@@ -55,11 +59,13 @@ function CueRunMenuTrigger({
 	sessionId,
 	cloudOrgId,
 	disabled,
+	onRun,
 }: {
 	projectId: string;
 	sessionId: string;
 	cloudOrgId?: string;
 	disabled: boolean;
+	onRun?: () => void;
 }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -139,6 +145,7 @@ function CueRunMenuTrigger({
 	const handleInvoke = async (cue: CueDTO) => {
 		if (pending.current) return;
 		pending.current = true;
+		onRun?.();
 		const origin = generation.current;
 		setInvokingId(cue.id);
 		try {

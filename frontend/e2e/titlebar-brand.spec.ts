@@ -69,7 +69,7 @@ test("brand stays put and readable when navigating board → session", async ({ 
 	expect(boardBrandBox).not.toBeNull();
 
 	await page.getByRole("button", { name: "Open Split terminal mux responsibilities" }).click();
-	await expect(page.getByRole("button", { name: "Open Kanban" })).toBeVisible();
+	await expect(page.getByRole("button", { name: "Board" })).toBeVisible();
 
 	const sessionBrandBox = await brand(page).boundingBox();
 	expect(sessionBrandBox).not.toBeNull();
