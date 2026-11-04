@@ -37,6 +37,9 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if exists && old.RunID != "" && task.RunID != "" && old.RunID != task.RunID && task.State != "running" {
 		return
 	}
+	if task.RunID == "" {
+		task.RunID = old.RunID
+	}
 	if task.Description == "" {
 		task.Description = old.Description
 	}
