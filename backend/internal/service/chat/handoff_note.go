@@ -134,88 +134,76 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 	return domain.BuildHandoffNote(input), nil
 }
 
-// replacementHandoffNote builds the note a replacement project orchestrator
-// starts with. The project conversation keeps its history across owners, but
-// the new provider session is fresh, so the note carries what the previous
-// owner's turns held. It must run before the conversation is rebound: after
-// that the previous owner no longer resolves to the conversation. It returns ""
-// for a project's first orchestrator and when the note cannot be built; a note
-// is never worth failing a spawn.
-func (s *Service) replacementHandoffNote(ctx context.Context, cfg StartConfig) string {
-	projects, ok := s.store.(interface {
-		ProjectConversation(context.Context, domain.ProjectID) (domain.ConversationRecord, error)
-	})
-	if !ok || s.sessions == nil {
+// replacementHandoffNote builds the note a project orchestrator starts with
+// when it takes over a provider branch another orchestrator left: the project
+// conversation keeps its history, but the new provider session starts fresh.
+// Turns are read from the conversation itself, since after the rebind the
+// previous owner no longer resolves to it. A request the previous orchestrator
+// never answered is carried as unfinished. It returns "" when the note cannot
+// be built; a note is never worth failing a spawn.
+func (s *Service) replacementHandoffNote(ctx context.Context, cfg StartConfig, conversationID string, previousID domain.SessionID) string {
+	if s.sessions == nil || s.reader == nil {
 		return ""
 	}
-	conversation, err := projects.ProjectConversation(ctx, cfg.ProjectID)
-	if err != nil || conversation.SessionID == "" || conversation.SessionID == cfg.SessionID {
-		return ""
-	}
-	previous, found, err := s.sessions.GetSession(ctx, conversation.SessionID)
-	if err == nil && !found {
-		err = ports.ErrSessionNotFound
-	}
-	var note string
-	if err == nil {
-		note, err = s.HandoffNote(ctx, previous, cfg.Harness, "")
-	}
+	note, err := func() (string, error) {
+		previous, found, err := s.sessions.GetSession(ctx, previousID)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", ports.ErrSessionNotFound
+		}
+		rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
+		if err != nil {
+			return "", fmt.Errorf("load conversation %s turns: %w", conversationID, err)
+		}
+		turns := chatHandoffTurns(rows.Turns, rows.Messages, rows.Activities)
+		stored, err := s.store.ListTerminalTurns(ctx, previous.ID)
+		if err != nil {
+			return "", err
+		}
+		turns = append(turns, stored...)
+		sort.SliceStable(turns, func(i, j int) bool { return turns[i].At.Before(turns[j].At) })
+		input := s.handoffNoteInputWithTurns(ctx, previous, cfg.Harness, "", turns)
+		input.UnansweredRequest = unansweredHandoffRequest(rows.Turns, rows.Messages)
+		input.ChangedFiles = handoffChangedFiles(ctx, previous.Metadata.WorkspacePath, previous.Metadata.DiffBaseSHA)
+		return domain.BuildHandoffNote(input), nil
+	}()
 	if err != nil {
-		s.log.Warn("build replacement orchestrator handoff note", "session", cfg.SessionID, "previous", conversation.SessionID, "error", err)
+		s.log.Warn("build replacement orchestrator handoff note", "session", cfg.SessionID, "previous", previousID, "error", err)
 		return ""
-	}
-	if err := writeReplacementHandoffNote(cfg, note); err != nil {
-		s.log.Warn("persist replacement orchestrator handoff note", "session", cfg.SessionID, "previous", conversation.SessionID, "error", err)
 	}
 	return note
 }
 
-// replacementHandoffNotePath is the AO-owned file keeping a replacement
-// orchestrator's note across restarts, under the data dir's handoffs folder.
-func replacementHandoffNotePath(cfg StartConfig) string {
-	if cfg.DataDir == "" {
+// unansweredHandoffRequest returns the latest request a person or automation
+// sent that no agent answered, when it came after the last answered one: the
+// turn was cut off (stopped, failed, or still running when its orchestrator
+// was replaced). Queued and cancelled turns are not unanswered requests.
+func unansweredHandoffRequest(turns []domain.ConversationTurn, messages []domain.ConversationMessage) string {
+	states := make(map[string]domain.TurnState, len(turns))
+	for _, turn := range turns {
+		if turn.RolledBackAt == nil {
+			states[turn.ID] = turn.State
+		}
+	}
+	var latest *domain.ConversationMessage
+	for index := range messages {
+		message := &messages[index]
+		state, ok := states[message.TurnID]
+		if !ok || message.Streaming || message.Role != domain.MessageRoleUser || strings.TrimSpace(message.Text) == "" ||
+			(message.Origin != domain.MessageOriginHuman && message.Origin != domain.MessageOriginAutomation) ||
+			state == domain.TurnStateQueued || state == domain.TurnStateCancelled {
+			continue
+		}
+		if latest == nil || message.Sequence > latest.Sequence {
+			latest = message
+		}
+	}
+	if latest == nil || states[latest.TurnID] == domain.TurnStateCompleted {
 		return ""
 	}
-	return filepath.Join(cfg.DataDir, "handoffs", "orchestrator-replacement-"+filepath.Base(string(cfg.SessionID))+".md")
-}
-
-// writeReplacementHandoffNote writes the note atomically. An empty data dir
-// keeps the note in memory only.
-func writeReplacementHandoffNote(cfg StartConfig, note string) error {
-	path := replacementHandoffNotePath(cfg)
-	if path == "" {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".replacement-note-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.WriteString(note); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
-
-// persistedReplacementHandoffNote reads back the note this session was given
-// when it replaced an orchestrator. Other sessions have no such file.
-func persistedReplacementHandoffNote(cfg StartConfig) string {
-	path := replacementHandoffNotePath(cfg)
-	if path == "" || !strings.HasPrefix(filepath.Clean(path), filepath.Join(cfg.DataDir, "handoffs")+string(filepath.Separator)) {
-		return ""
-	}
-	body, err := os.ReadFile(path) //nolint:gosec // checked to be under AO's handoffs folder
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(body))
+	return latest.Text
 }
 
 // handoffNoteInput is the note's input without the changed files, which need
@@ -225,6 +213,10 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	if err != nil {
 		return domain.HandoffNoteInput{}, err
 	}
+	return s.handoffNoteInputWithTurns(ctx, record, target, switchID, turns), nil
+}
+
+func (s *Service) handoffNoteInputWithTurns(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string, turns []domain.HandoffTurn) domain.HandoffNoteInput {
 	artifactDir, artifacts := s.handoffArtifacts(ctx, record)
 	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
@@ -241,7 +233,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
 		HistoryFiles:  s.handoffHistoryFiles(record, turns),
-	}, nil
+	}
 }
 
 // handoffArtifacts returns the session's artifact directory and its files,

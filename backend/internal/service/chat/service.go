@@ -626,10 +626,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ProviderItemID: domain.ConversationContextResetProviderItemID(cfg.SessionID),
 		}
 	}
-	var replacementNote string
-	if freshProjectContext {
-		replacementNote = s.replacementHandoffNote(ctx, cfg)
-	}
 	conversationID := s.newID()
 	var conversation domain.ConversationRecord
 	if owner.Kind == domain.ConversationOwnerReview {
@@ -700,6 +696,14 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	activeBranch, err := s.store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
 	if err != nil {
 		return nil, fmt.Errorf("load active conversation branch: %w", err)
+	}
+	// A fresh provider over a branch another orchestrator left gets that
+	// orchestrator's context. The note is stored with this session's provider
+	// boundary below, so restarts re-apply it and a later switch replaces it.
+	var replacementNote string
+	if freshProjectContext && cfg.ProviderHandoff == nil &&
+		activeBranch.SessionID != "" && activeBranch.SessionID != cfg.SessionID {
+		replacementNote = s.replacementHandoffNote(ctx, cfg, conversation.ID, activeBranch.SessionID)
 	}
 	providerScopeID := activeBranch.ProviderScopeID
 	providerHandleOwnedByActiveBranch := true
@@ -818,13 +822,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	handoffNote := activeBranch.HandoffNote
 	if cfg.ProviderSwitch != nil {
 		handoffNote = cfg.ProviderSwitch.Bootstrap
-	}
-	// A replacement orchestrator's provider session is fresh over inherited
-	// project history, so it gets the previous owner's context. The note was
-	// saved when first built, so a restart still carries it.
-	if replacementNote == "" && scope == domain.ConversationScopeProject &&
-		cfg.ProviderSwitch == nil && conversation.SessionID == cfg.SessionID {
-		replacementNote = persistedReplacementHandoffNote(cfg)
 	}
 	if replacementNote != "" {
 		handoffNote = replacementNote
@@ -1032,6 +1029,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			providerBoundary.ReplayTruncated = true
 			// Stored with the branch, so a later restart of its provider reads it back.
 			providerBoundary.HandoffNote = cfg.ProviderSwitch.Bootstrap
+		} else if replacementNote != "" {
+			providerBoundary.HandoffNote = replacementNote
+		} else if activeBranch.SessionID == cfg.SessionID {
+			// A fresh provider on this session's own lineage keeps the note its
+			// branch was given, so the next restart still reads it back.
+			providerBoundary.HandoffNote = activeBranch.HandoffNote
 		}
 	}
 	// Whatever the previous controller left in flight is not this controller's, and

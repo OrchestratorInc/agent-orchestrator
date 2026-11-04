@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// terminalTurnsFailStore makes the replacement note's turn read fail while
-// keeping the concrete store, whose ProjectConversation the note relies on.
+// terminalTurnsFailStore makes the replacement note's turn read fail.
 type terminalTurnsFailStore struct{ *sqlite.Store }
 
 func (terminalTurnsFailStore) ListTerminalTurns(context.Context, domain.SessionID) ([]domain.HandoffTurn, error) {
@@ -26,8 +23,9 @@ func (terminalTurnsFailStore) ListTerminalTurns(context.Context, domain.SessionI
 
 // seedPreviousOrchestrator runs an orchestrator through one completed chat
 // turn on the project conversation, then terminates it, as a replacement
-// finds it.
-func seedPreviousOrchestrator(t *testing.T, st *sqlite.Store, task string) {
+// finds it. A non-empty unanswered request is sent last and never answered,
+// as when the orchestrator is replaced mid-turn.
+func seedPreviousOrchestrator(t *testing.T, st *sqlite.Store, task string, unanswered ...string) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -61,6 +59,11 @@ func seedPreviousOrchestrator(t *testing.T, st *sqlite.Store, task string) {
 		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted},
 	)
 	waitForTurnState(t, svc, previous.ID, domain.TurnStateCompleted)
+	for _, request := range unanswered {
+		if _, err := svc.Send(ctx, previous.ID, ports.ChatUserMessage{Text: request, Origin: domain.MessageOriginHuman}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := svc.Stop(ctx, previous.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +81,7 @@ func seedPreviousOrchestrator(t *testing.T, st *sqlite.Store, task string) {
 // what the provider was started with. The first start commits the provider
 // boundary as spawn does.
 // idPrefix must differ per start in one test: each start creates new rows.
-func startReplacement(t *testing.T, store chatsvc.Store, st *sqlite.Store, id domain.SessionID, dataDir, idPrefix string, commitBoundary bool) ports.ChatStartConfig {
+func startReplacement(t *testing.T, store chatsvc.Store, st *sqlite.Store, id domain.SessionID, idPrefix string, commitBoundary bool) ports.ChatStartConfig {
 	t.Helper()
 	var started ports.ChatStartConfig
 	svc := chatsvc.New(chatsvc.Options{
@@ -89,7 +92,7 @@ func startReplacement(t *testing.T, store chatsvc.Store, st *sqlite.Store, id do
 	})
 	cfg := chatsvc.StartConfig{
 		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
-		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), DataDir: dataDir,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
 	}
 	if commitBoundary {
 		cfg.ControllerReady = func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
@@ -123,12 +126,15 @@ func TestReplacementOrchestratorStartsWithPreviousOwnersHandoffNote(t *testing.T
 	provisioningOrchestrator(t, st, id)
 	seedPreviousOrchestrator(t, st, "migrate the billing service to the new ledger")
 
-	started := startReplacement(t, st, st, id, "", "replacement", true)
+	started := startReplacement(t, st, st, id, "replacement", true)
 
 	for _, want := range []string{domain.HandoffNotePrefix, "migrate the billing service to the new ledger", "ledger migration plan agreed"} {
 		if !strings.Contains(started.SystemPrompt, want) {
 			t.Fatalf("replacement SystemPrompt = %q, want it to contain %q", started.SystemPrompt, want)
 		}
+	}
+	if strings.Contains(started.SystemPrompt, "Unanswered request") {
+		t.Fatalf("replacement SystemPrompt = %q, want no unanswered request after an idle replacement", started.SystemPrompt)
 	}
 }
 
@@ -136,35 +142,78 @@ func TestReplacementOrchestratorKeepsItsHandoffNoteAcrossRestarts(t *testing.T) 
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	provisioningOrchestrator(t, st, id)
 	seedPreviousOrchestrator(t, st, "migrate the billing service to the new ledger")
-	dataDir := t.TempDir()
 
-	startReplacement(t, st, st, id, dataDir, "replacement", true)
-	files, err := filepath.Glob(filepath.Join(dataDir, "handoffs", "*"))
-	if err != nil || len(files) != 1 {
-		t.Fatalf("persisted notes = %v, err=%v; want one file", files, err)
+	startReplacement(t, st, st, id, "replacement", true)
+	// A fresh restart that commits its own boundary must carry the note on.
+	restarted := startReplacement(t, st, st, id, "restarted", true)
+	again := startReplacement(t, st, st, id, "again", false)
+
+	for name, prompt := range map[string]string{"restart": restarted.SystemPrompt, "second restart": again.SystemPrompt} {
+		if !strings.Contains(prompt, "migrate the billing service to the new ledger") {
+			t.Fatalf("%s SystemPrompt = %q, want the replacement handoff note", name, prompt)
+		}
 	}
-	if body, err := os.ReadFile(files[0]); err != nil || !strings.Contains(string(body), "migrate the billing service to the new ledger") {
-		t.Fatalf("persisted note = %q, err=%v", body, err)
+}
+
+// A provider switch after the replacement gives the branch its own note; a cold
+// resume of that branch must use it, not the older replacement note.
+func TestReplacementNoteDoesNotOverrideALaterSwitchNote(t *testing.T) {
+	ctx := context.Background()
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	provisioningOrchestrator(t, st, id)
+	seedPreviousOrchestrator(t, st, "migrate the billing service to the new ledger")
+	startReplacement(t, st, st, id, "replacement", true)
+
+	conversation, err := st.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := st.GetSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Metadata.ProviderConversationID = "switched-thread"
+	record.Metadata.ControllerGeneration = "switched-generation"
+	if err := st.CommitChatSpawn(ctx, record, domain.ConversationBranch{
+		ID: "switch-branch", ConversationID: conversation.ID, SessionID: id,
+		ProviderConversationID: "switched-thread", ParentBranchID: conversation.ActiveBranchID,
+		ForkAfterSequence: conversation.LatestSequence, ProviderScopeID: "switch-branch", ProviderIDsScoped: true,
+		Strategy: domain.ConversationBranchStrategyApproximateContext, ReplayCutoffSequence: conversation.LatestSequence,
+		ReplayTruncated: true, HandoffNote: "switch note: plan agreed with the replacement", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("commit provider switch branch: %v", err)
 	}
 
-	restarted := startReplacement(t, st, st, id, dataDir, "restarted", false)
-	if !strings.Contains(restarted.SystemPrompt, "migrate the billing service to the new ledger") {
-		t.Fatalf("restarted SystemPrompt = %q, want the persisted handoff note", restarted.SystemPrompt)
+	resumed := startReplacement(t, st, st, id, "resumed", false)
+
+	if !strings.Contains(resumed.SystemPrompt, "switch note: plan agreed with the replacement") ||
+		strings.Contains(resumed.SystemPrompt, "migrate the billing service to the new ledger") {
+		t.Fatalf("resumed SystemPrompt = %q, want only the switch branch's note", resumed.SystemPrompt)
+	}
+}
+
+func TestReplacementMidTurnCarriesTheUnansweredRequest(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	provisioningOrchestrator(t, st, id)
+	seedPreviousOrchestrator(t, st, "migrate the billing service to the new ledger", "use the staging account instead")
+
+	started := startReplacement(t, st, st, id, "replacement", true)
+
+	for _, want := range []string{"ledger migration plan agreed", "## Unanswered request", "use the staging account instead"} {
+		if !strings.Contains(started.SystemPrompt, want) {
+			t.Fatalf("replacement SystemPrompt = %q, want it to contain %q", started.SystemPrompt, want)
+		}
 	}
 }
 
 func TestFirstOrchestratorStartsWithoutHandoffNote(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	provisioningOrchestrator(t, st, id)
-	dataDir := t.TempDir()
 
-	started := startReplacement(t, st, st, id, dataDir, "first", true)
+	started := startReplacement(t, st, st, id, "first", true)
 
 	if strings.Contains(started.SystemPrompt, domain.HandoffNotePrefix) {
 		t.Fatalf("first orchestrator SystemPrompt = %q, want no handoff note", started.SystemPrompt)
-	}
-	if files, _ := filepath.Glob(filepath.Join(dataDir, "handoffs", "*")); len(files) != 0 {
-		t.Fatalf("first orchestrator persisted %v, want none", files)
 	}
 }
 
@@ -173,7 +222,7 @@ func TestReplacementHandoffNoteFailureDoesNotFailTheStart(t *testing.T) {
 	provisioningOrchestrator(t, st, id)
 	seedPreviousOrchestrator(t, st, "migrate the billing service to the new ledger")
 
-	started := startReplacement(t, terminalTurnsFailStore{st}, st, id, t.TempDir(), "replacement", true)
+	started := startReplacement(t, terminalTurnsFailStore{st}, st, id, "replacement", true)
 
 	if strings.Contains(started.SystemPrompt, domain.HandoffNotePrefix) {
 		t.Fatalf("SystemPrompt = %q, want no note when it cannot be built", started.SystemPrompt)
