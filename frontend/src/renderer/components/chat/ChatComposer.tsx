@@ -187,9 +187,14 @@ function withAttachmentReferences(text: string, paths: string[]): string {
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
+/** Whether the unsent strip can take this send: the same rule parkChatComposerDelivery applies. */
+function fitsUnsentSlot(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope): delivery is ChatComposerDelivery {
+	return isParkableChatComposerDelivery(delivery) && !readChatSessionDraft(scope).unsent;
+}
+
 /** A send nobody is sending, which the composer moves out of the box into the unsent strip. */
 function parksDelivery(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope | undefined): delivery is ChatComposerDelivery {
-	return Boolean(scope && isParkableChatComposerDelivery(delivery) && !getChatComposerMutation(scope).pending);
+	return Boolean(scope && fitsUnsentSlot(delivery, scope) && !getChatComposerMutation(scope).pending);
 }
 
 function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, parks = false): string | null {
@@ -1771,8 +1776,10 @@ export const ChatComposer = memo(function ChatComposer({
 			// was lost. Only an initial, definitively unaccepted send can be edited.
 			const refused = delivery.kind === "send" && !prepared.recovered &&
 				DEFINITIVE_SEND_REJECTIONS.has(apiErrorCode(error) ?? "");
-			// An unanswered send moves to the unsent strip instead of back into the box.
-			const parks = parkUnsentSends && delivery.kind === "send" && !refused;
+			// An unanswered send moves to the unsent strip instead of back into the box,
+			// by the same rule the park uses; anything it would refuse (excerpts, file
+			// references, a taken slot) keeps the restore and notice below.
+			const parks = parkUnsentSends && !refused && fitsUnsentSlot(delivery, draftScope);
 			if (delivery.kind === "send" && !parks && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
 				hasTextRef.current = textRef.current.trim().length > 0;

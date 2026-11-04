@@ -3427,6 +3427,32 @@ describe("unsent message strip", () => {
 		expect(onSend).toHaveBeenCalledOnce();
 	});
 
+	it("keeps a second lost send in the box with its notice while one is parked", async () => {
+		const { onSend, field } = restoreUnsent("unsent-second-loss");
+		await screen.findByTestId("unsent-message-strip");
+		onSend.mockRejectedValue(new Error("tunnel still down"));
+		await typeInComposer(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		await waitFor(() => expect(field.textContent).toBe("second message"));
+		expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled();
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
+		expect(readChatSessionDraft("unsent-second-loss").unsent?.clientMessageId).toBe("unsent-second-loss-old");
+	});
+
+	it("keeps a lost excerpt send in the box with its notice", async () => {
+		const sessionId = "unsent-excerpt-loss";
+		writeChatExcerptReferences(sessionId, EXCERPTS);
+		const onSend = vi.fn().mockRejectedValue(new Error("tunnel down"));
+		const { field } = renderComposer({ onSend, draftSessionId: sessionId });
+		await typeInComposer(field, "about this excerpt");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		await waitFor(() => expect(field.textContent).toBe("about this excerpt"));
+		expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.delivery?.excerpts).toHaveLength(EXCERPTS.length);
+	});
+
 	it("drops the strip once the chat shows the message", async () => {
 		const { view, onSend } = restoreUnsent("unsent-observed");
 		await screen.findByTestId("unsent-message-strip");
