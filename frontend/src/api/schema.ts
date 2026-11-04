@@ -1174,7 +1174,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Load a read-only transcript page ending at a find result */
+        /** Load a read-only transcript page around a find result */
         get: operations["findConversationWindow"];
         put?: never;
         post?: never;
