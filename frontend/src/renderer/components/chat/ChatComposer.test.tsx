@@ -3441,6 +3441,41 @@ describe("unsent message strip", () => {
 		expect(readChatSessionDraft("unsent-second-loss").unsent?.clientMessageId).toBe("unsent-second-loss-old");
 	});
 
+	it("keeps a send that fails during a discard's undo window in the box with its notice", async () => {
+		const { onSend, field } = restoreUnsent("unsent-undo-window-loss");
+		await screen.findByTestId("unsent-message-strip");
+		const pending = deferred<void>();
+		onSend.mockReturnValueOnce(pending.promise.then(() => { throw new Error("tunnel still down"); }));
+		await typeInComposer(field, "sent during undo");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
+		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
+		await act(async () => pending.resolve());
+		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		await waitFor(() => expect(field.textContent).toBe("sent during undo"));
+
+		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
+		expect(field.textContent).toBe("sent during undo");
+		expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		expect(readChatSessionDraft("unsent-undo-window-loss").unsent?.clientMessageId).toBe("unsent-undo-window-loss-old");
+	});
+
+	it("parks a send that failed during the undo window once the window ends", async () => {
+		const { onSend, field } = restoreUnsent("unsent-undo-window-ends");
+		await screen.findByTestId("unsent-message-strip");
+		onSend.mockRejectedValueOnce(new Error("tunnel still down"));
+		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
+		await typeInComposer(field, "sent during undo");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("sent during undo"), { timeout: 8000 });
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	}, 15000);
+
 	function restoreTwoUnsent(sessionId: string) {
 		const first = { kind: "send" as const, composerText: "first message", attachments: [], requestText: "first message", clientMessageId: `${sessionId}-a` };
 		if (!prepareChatComposerDelivery(sessionId, first).ok || !parkChatComposerDelivery(sessionId, first.clientMessageId).ok) throw new Error("Failed to park A");

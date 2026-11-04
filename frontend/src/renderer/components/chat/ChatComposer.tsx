@@ -489,6 +489,9 @@ export const ChatComposer = memo(function ChatComposer({
 	// The id being retried from the strip, and a just-discarded message that Undo can restore.
 	const [retryingUnsent, setRetryingUnsent] = useState<string>();
 	const [discardedUnsent, setDiscardedUnsent] = useState<ChatComposerDelivery>();
+	// A send can fail long after submit captured its state, so it reads the undo window here.
+	const discardedUnsentRef = useRef(discardedUnsent);
+	discardedUnsentRef.current = discardedUnsent;
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
 	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
 	const [modifierHeld, setModifierHeld] = useState(false);
@@ -1087,7 +1090,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (loadedDraft?.ok === false) return;
 		const committedDraft = loadedDraft?.draft;
 		// A send about to move into the unsent strip takes its text and files with it.
-		const parking = parkUnsentSends && parksDelivery(committedDraft?.composer.delivery, draftScope);
+		const parking = parkUnsentSends && !discardedUnsentRef.current && parksDelivery(committedDraft?.composer.delivery, draftScope);
 		const sentDraft = parking ? undefined : committedDraft?.composer.delivery?.draft;
 		// Keep this surface's native bytes for retry; only a new surface needs descriptors.
 		if (committedDraft && (!sentDraft || restoredSeedKey.current === undefined)) {
@@ -1783,7 +1786,8 @@ export const ChatComposer = memo(function ChatComposer({
 			// An unanswered send moves to the unsent strip instead of back into the box,
 			// by the same rule the park uses; anything it would refuse (excerpts, file
 			// references, a taken slot) keeps the restore and notice below.
-			const parks = parkUnsentSends && !refused && fitsUnsentSlot(delivery, draftScope);
+			// An open undo window still holds the slot for the discarded message.
+			const parks = parkUnsentSends && !refused && !discardedUnsentRef.current && fitsUnsentSlot(delivery, draftScope);
 			if (delivery.kind === "send" && !parks && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
 				hasTextRef.current = textRef.current.trim().length > 0;
