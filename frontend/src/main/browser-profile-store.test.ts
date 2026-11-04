@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	BROWSER_PROFILE_MAX_COUNT,
+	BROWSER_PROFILE_MAX_BINDINGS,
 	BROWSER_PROFILE_REGISTRY_VERSION,
 	browserProfilePartition,
 	type BrowserProfileRegistry,
@@ -42,6 +43,43 @@ afterEach(async () => {
 });
 
 describe("BrowserProfileStore", () => {
+	it("reclaims a slot when an ended worker is forgotten", async () => {
+		const stateDir = await makeStateDir();
+		const registry = registryWithProfiles(0);
+		for (let index = 0; index < BROWSER_PROFILE_MAX_BINDINGS; index++) {
+			registry.bindings[`worker-${index}`] = { profileId: null, updatedAt: "2026-01-01T00:00:00.000Z" };
+		}
+		await writeFile(path.join(stateDir, "browser-profiles.json"), JSON.stringify(registry), "utf8");
+		const store = new BrowserProfileStore({ stateDir });
+		expect((await store.load()).error).toBeUndefined();
+		await expect(store.bindSession("new-worker", null)).rejects.toMatchObject({ code: "BROWSER_PROFILE_BINDING_LIMIT" });
+		await store.forgetSession("worker-0");
+		await expect(store.bindSession("new-worker", null)).resolves.toBeUndefined();
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getSessionProfileId("worker-0")).toBeUndefined();
+		expect(reloaded.getSessionProfileId("new-worker")).toBeNull();
+	});
+
+	it("forgets named and Temporary bindings idempotently without changing other choices", async () => {
+		const stateDir = await makeStateDir();
+		const store = new BrowserProfileStore({ stateDir });
+		await store.load();
+		const profile = await store.createProfile("Work");
+		await store.setDefaultProfileId(profile.id);
+		await Promise.all([store.bindSession("named", profile.id), store.bindSession("temporary", null), store.bindSession("keep", null)]);
+		await Promise.all([store.forgetSession("named"), store.forgetSession("temporary"), store.forgetSession("missing")]);
+		await store.forgetSession("temporary");
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getSessionProfileId("named")).toBeUndefined();
+		expect(reloaded.getSessionProfileId("temporary")).toBeUndefined();
+		expect(reloaded.getSessionProfileId("keep")).toBeNull();
+		expect(reloaded.getDefaultProfileId()).toBe(profile.id);
+		expect(reloaded.profiles).toHaveLength(1);
+		await expect(store.forgetSession("__proto__")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+	});
+
 	it("treats a missing registry as empty and persists named profiles atomically", async () => {
 		const stateDir = await makeStateDir();
 		const store = new BrowserProfileStore({ stateDir });

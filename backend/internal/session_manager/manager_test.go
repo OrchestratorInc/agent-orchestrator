@@ -677,8 +677,14 @@ type fakePreviewLifecycle struct {
 }
 
 type fakeBrowserLifecycle struct {
+	forgotten []domain.SessionID
 	destroyed []domain.SessionID
 	err       error
+}
+
+func (f *fakeBrowserLifecycle) ForgetSession(_ context.Context, id domain.SessionID) error {
+	f.forgotten = append(f.forgotten, id)
+	return f.err
 }
 
 func (f *fakeBrowserLifecycle) DestroySession(_ context.Context, id domain.SessionID) error {
@@ -3989,6 +3995,34 @@ func TestSpawn_WorkspaceProjectRollsBackWhenWorktreeRowsFail(t *testing.T) {
 	}
 	if rt.created != 0 {
 		t.Fatal("runtime.Create must not run when worktree row recording fails")
+	}
+}
+
+func TestKill_ForgetsBrowserBindingOnlyAfterTermination(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprint(fails), func(t *testing.T) {
+			m, st, rt, _ := newManager()
+			browser := &fakeBrowserLifecycle{}
+			m.browser = browser
+			st.sessions["mer-1"] = mkLive("mer-1")
+			if fails {
+				rt.destroyErr = errors.New("runtime still live")
+			}
+			_, err := m.Kill(ctx, "mer-1")
+			if (err != nil) != fails {
+				t.Fatalf("Kill error = %v", err)
+			}
+			if len(browser.destroyed) != 1 {
+				t.Fatal("browser must be closed before runtime teardown")
+			}
+			want := 1
+			if fails {
+				want = 0
+			}
+			if len(browser.forgotten) != want {
+				t.Fatalf("forgotten = %v, want %d", browser.forgotten, want)
+			}
+		})
 	}
 }
 
@@ -8883,6 +8917,35 @@ func TestSaveAndTeardownAll_SkipsScratchSessions(t *testing.T) {
 	}
 	if rows := st.worktrees["scratch-1"]; len(rows) != 0 {
 		t.Fatalf("scratch shutdown must not write restore markers, got %#v", rows)
+	}
+}
+
+func TestRetireForReplacementWithoutWorkspaceForgetsOnlyAfterTermination(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprint(fails), func(t *testing.T) {
+			m, st, rt, _ := newLifecycleManager()
+			browser := &fakeBrowserLifecycle{}
+			m.browser = browser
+			st.sessions["mer-orch"] = domain.SessionRecord{
+				ID: "mer-orch", ProjectID: "mer", Kind: domain.KindOrchestrator,
+				Metadata: domain.SessionMetadata{RuntimeHandleID: "orch-handle"},
+				Activity: domain.Activity{State: domain.ActivityActive},
+			}
+			if fails {
+				rt.destroyErr = errors.New("runtime still live")
+			}
+			err := m.RetireForReplacement(ctx, "mer-orch")
+			if (err != nil) != fails {
+				t.Fatalf("retire error = %v", err)
+			}
+			want := 1
+			if fails {
+				want = 0
+			}
+			if len(browser.forgotten) != want {
+				t.Fatalf("forgotten = %v, want %d", browser.forgotten, want)
+			}
+		})
 	}
 }
 

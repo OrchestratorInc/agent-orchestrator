@@ -965,6 +965,8 @@ export function createBrowserViewHost(
   const pendingTemporaryPartitionClears = new Set<Promise<void>>();
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
+  const forgottenSessions = new WeakSet<BrowserSessionEntry>();
+  const profileSwitchSessions = new Map<string, BrowserSessionEntry>();
 
   // A worker without a durable binding starts in the first configured profile;
   // temporary is used only when no profile exists or the human picked it.
@@ -3196,6 +3198,7 @@ export function createBrowserViewHost(
     }
 
     session.profileSwitching = true;
+    profileSwitchSessions.set(session.sessionId, session);
     session.profileSwitchTargetId = normalizedRequestedProfileId;
     const previousProfileId = session.profileId;
     const previousPartition = session.profilePartition;
@@ -3287,7 +3290,7 @@ export function createBrowserViewHost(
         await clearTemporaryPartition(previousPartition);
       return profileStateForSession(session);
     } catch (error) {
-      if (bindingChanged) {
+      if (bindingChanged && !forgottenSessions.has(session)) {
         try {
           await store.bindSession(session.sessionId, previousProfileId);
         } catch (rollbackError) {
@@ -3324,6 +3327,8 @@ export function createBrowserViewHost(
       }
       throw error;
     } finally {
+      if (profileSwitchSessions.get(session.sessionId) === session)
+        profileSwitchSessions.delete(session.sessionId);
       session.profileSwitching = false;
       session.profileReplacing = false;
       session.profileSwitchTargetId = null;
@@ -4296,6 +4301,19 @@ export function createBrowserViewHost(
       throwIfAborted(signal);
       if (!sessionId.trim())
         throw browserError("INVALID_ARGUMENT", "sessionId is required");
+      if (action === "__forget-session") {
+        const viewId = viewIdsBySessionId.get(sessionId);
+        // Invalidate in-flight profile switches before queueing the final write.
+        const session = viewId ? entries.get(viewId) : undefined;
+        if (session) forgottenSessions.add(session);
+        const switchingSession = profileSwitchSessions.get(sessionId);
+        if (switchingSession) forgottenSessions.add(switchingSession);
+        if (viewId) destroy(viewId);
+        explicitTemporarySessionIds.delete(sessionId);
+        await options.browserProfileStore?.forgetSession(sessionId);
+        await options.agentBrowserRuntime?.closeSession(sessionId);
+        return { forgotten: true };
+      }
       if (action === "__destroy-session") {
         const viewId = viewIdsBySessionId.get(sessionId);
         await options.agentBrowserRuntime?.closeSession(sessionId);

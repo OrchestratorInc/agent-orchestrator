@@ -1494,6 +1494,7 @@ function fakeBrowserProfileStore(
 		bindSession: vi.fn(async (sessionId: string, profileId: string | null) => {
 			bindings[sessionId] = profileId;
 		}),
+		forgetSession: vi.fn(async (sessionId: string) => { delete bindings[sessionId]; }),
 		isProfileOperationInProgress: () => false,
 		waitForProfileOperation: async () => undefined,
 		partitionForProfile: (profileId: string) => browserProfilePartition(profileId),
@@ -2722,6 +2723,21 @@ describe("browser profile partitions and replacement", () => {
 		});
 	});
 
+	it("forgets bindings only for confirmed ended workers, even without a mounted browser", async () => {
+		const bindings: Record<string, string | null> = { closed: null, headless: profile.id, keep: null };
+		const store = fakeBrowserProfileStore(profile, bindings, profile.id);
+		const { host, invoke } = setupTabHost(store);
+		await invoke("browser:ensure", "closed");
+		await host.execute("closed", "__destroy-session");
+		expect(bindings.closed).toBeNull();
+		await host.execute("closed", "__forget-session");
+		await host.execute("headless", "__forget-session");
+		await host.execute("headless", "__forget-session");
+		expect(bindings).toEqual({ keep: null });
+		const reensured = await invoke("browser:ensure", "closed") as BrowserNavState;
+		expect(host.getProfileState(reensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+	});
+
 	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
 		const bindings: Record<string, string | null> = {};
 		const store = fakeBrowserProfileStore(profile, bindings, profile.id);
@@ -3317,7 +3333,7 @@ describe("browser profile partitions and replacement", () => {
 		expect(() => fixture.host.refreshLastFocusedPanelSurface()).not.toThrow();
 	});
 
-	it("does not recreate tabs after a worker is destroyed during profile replacement", async () => {
+	it.each([false, true])("does not recreate tabs after a worker is destroyed during profile replacement (forget: %s)", async (forget) => {
 		const bindings = { "worker-1": profile.id };
 		const store = fakeBrowserProfileStore(profile, bindings);
 		let releaseReload!: () => void;
@@ -3341,12 +3357,13 @@ describe("browser profile partitions and replacement", () => {
 		await replacementStarted;
 		expect(fixture.views).toHaveLength(2);
 		fixture.host.destroy(nav.viewId);
+		if (forget) await fixture.host.execute("worker-1", "__forget-session");
 		releaseReload();
 
 		await expect(switching).rejects.toMatchObject({ code: "BROWSER_TARGET_UNAVAILABLE" });
 		expect(fixture.views).toHaveLength(2);
 		expect(fixture.views[1]!.webContents.close).toHaveBeenCalled();
-		expect(bindings["worker-1"]).toBe(profile.id);
+		expect(bindings["worker-1"]).toBe(forget ? undefined : profile.id);
 	});
 
 	it("lets agent tab-new and tab-close admitted before a switch finish during the wait", async () => {

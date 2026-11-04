@@ -2641,6 +2641,9 @@ func (m *Manager) recordTermination(ctx context.Context, id domain.SessionID, dr
 		return fmt.Errorf("kill %s: %w", id, errors.Join(err, markerErr))
 	}
 	m.cleanupSystemPromptDir(id)
+	// Closing the browser happens before teardown and can precede a failed
+	// kill. Forget durable profile choices only once termination is recorded.
+	m.forgetBrowserBestEffort(ctx, id)
 	if markerErr != nil {
 		return fmt.Errorf("kill %s: clear restore marker: %w", id, markerErr)
 	}
@@ -2900,6 +2903,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 		if err := m.lcm.MarkTerminated(ctx, id); err != nil {
 			return fmt.Errorf("retire replacement %s: mark terminated: %w", id, err)
 		}
+		m.forgetBrowserBestEffort(ctx, id)
 		return nil
 	}
 	// Gate shut this session's scoped shell terminals before either branch
@@ -2991,6 +2995,23 @@ func (m *Manager) terminateNativeSession(ctx context.Context, rec domain.Session
 			ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID,
 		},
 	})
+}
+
+// Optional so older browser lifecycle implementations remain compatible.
+type browserSessionForgetter interface {
+	ForgetSession(context.Context, domain.SessionID) error
+}
+
+func (m *Manager) forgetBrowserBestEffort(ctx context.Context, id domain.SessionID) {
+	forgetter, ok := m.browser.(browserSessionForgetter)
+	if !ok {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := forgetter.ForgetSession(cleanupCtx, id); err != nil {
+		m.logger.Warn("session browser binding cleanup failed", "sessionID", id, "error", err)
+	}
 }
 
 func (m *Manager) destroyBrowserBestEffort(ctx context.Context, id domain.SessionID) {
