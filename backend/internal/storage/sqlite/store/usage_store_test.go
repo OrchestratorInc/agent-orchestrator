@@ -2328,3 +2328,26 @@ WHERE source_event_key = 'provider-promotion'`).Scan(
 		t.Fatal("observed replacement remains open for attribution repair")
 	}
 }
+
+// TestUsageStoreRejectsUnknownHarnessAndKind covers the store guard that
+// replaced the schema's enumerated harness and source-kind CHECK lists.
+func TestUsageStoreRejectsUnknownHarnessAndKind(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessCodex)
+	if _, err := s.UpsertUsageBinding(context.Background(), domain.UsageBindingRecord{
+		SessionID: session.ID, Harness: domain.AgentHarness("not-a-harness"),
+		NativeRootID: "native", State: domain.UsageBindingActive, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("UpsertUsageBinding accepted an unknown harness")
+	}
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "native", State: domain.UsageBindingActive,
+	})
+	if _, err := s.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceKind("not_a_kind"),
+		ArtifactPath: "/tmp/unknown.jsonl", State: domain.UsageSourcePending, UpdatedAt: now,
+	}); err == nil {
+		t.Fatal("InsertUsageSource accepted an unknown source kind")
+	}
+}

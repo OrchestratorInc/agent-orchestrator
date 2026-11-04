@@ -17,6 +17,10 @@ import (
 // UpsertUsageBinding records or refreshes the association between an AO
 // session and a native root session/thread.
 func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingRecord) (domain.UsageBindingRecord, error) {
+	// The schema no longer enumerates usage harnesses; the store is the guard.
+	if !rec.Harness.IsKnown() {
+		return domain.UsageBindingRecord{}, fmt.Errorf("upsert usage binding: unknown harness %q", rec.Harness)
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	row, err := s.qw.UpsertUsageBinding(ctx, gen.UpsertUsageBindingParams{
@@ -146,6 +150,9 @@ func (s *Store) InsertUsageSource(ctx context.Context, rec domain.UsageSourceRec
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
+	if err := validateUsageSourceKind(rec.Kind); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	row, err := s.qw.InsertUsageSource(ctx, usageSourceInsertParams(rec))
@@ -165,6 +172,9 @@ func (s *Store) ReplaceUsageSource(
 	at time.Time,
 ) (domain.UsageSourceRecord, error) {
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
+	if err := validateUsageSourceKind(rec.Kind); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
 	s.writeMu.Lock()
@@ -931,6 +941,15 @@ func usageSourceContextFromGen(row gen.GetUsageSourceWithBindingAndSessionRow) d
 		ProviderHint:   row.ProviderHint,
 		BindingState:   row.BindingState,
 	}
+}
+
+// validateUsageSourceKind rejects source kinds the domain does not certify. The
+// schema no longer enumerates them, so this is the only guard.
+func validateUsageSourceKind(kind domain.UsageSourceKind) error {
+	if !kind.IsKnown() {
+		return fmt.Errorf("unknown usage source kind %q", kind)
+	}
+	return nil
 }
 
 func usageSourceInsertParams(rec domain.UsageSourceRecord) gen.InsertUsageSourceParams {
