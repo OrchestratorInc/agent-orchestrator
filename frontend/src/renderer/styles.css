@@ -611,6 +611,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	padding-top: 0;
 }
 
+.center-panel-shell--floating-topbar .panel-topbar-controls {
+	top: 1px;
+}
+
 .center-panel-shell--floating-topbar .session-inspector__tab-button {
 	width: var(--size-topbar-control);
 	height: var(--size-topbar-control);
@@ -623,7 +627,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	isolation: isolate;
 	border: 0;
 	border-radius: 0;
-	padding: 0 1px 1px;
+	/* The frame's faint top line reads as part of the gap below the controls,
+	 * so the bar's contents sit 1px low to look evenly spaced. */
+	padding: 1px 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
