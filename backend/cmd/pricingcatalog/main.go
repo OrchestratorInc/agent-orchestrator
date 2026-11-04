@@ -1,6 +1,7 @@
 // Command pricingcatalog generates and validates the pricing catalog in the
 // repository. Releases before the daemon built its catalog from the live
-// LiteLLM table still download it.
+// LiteLLM table still download it; once no supported release does, delete
+// this command and the committed catalog together.
 package main
 
 import (

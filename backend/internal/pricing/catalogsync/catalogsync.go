@@ -137,17 +137,8 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 	if u.upstreamRates, err = decodeRates(fields, ""); err != nil {
 		return err
 	}
-	for _, tier := range suffixTiers {
-		rates, err := decodeRates(fields, "_"+tier)
-		if err != nil {
-			return err
-		}
-		if rates != (upstreamRates{}) {
-			if u.Tiers == nil {
-				u.Tiers = make(map[string]upstreamRates, len(suffixTiers))
-			}
-			u.Tiers[tier] = rates
-		}
+	if u.Tiers, err = decodeTiers(fields, ""); err != nil {
+		return err
 	}
 	for name := range fields {
 		match := longContextInputField.FindStringSubmatch(name)
@@ -163,17 +154,8 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 		if long.upstreamRates, err = decodeRates(fields, suffix); err != nil {
 			return err
 		}
-		for _, tier := range suffixTiers {
-			rates, err := decodeRates(fields, suffix+"_"+tier)
-			if err != nil {
-				return err
-			}
-			if rates != (upstreamRates{}) {
-				if long.Tiers == nil {
-					long.Tiers = make(map[string]upstreamRates, len(suffixTiers))
-				}
-				long.Tiers[tier] = rates
-			}
+		if long.Tiers, err = decodeTiers(fields, suffix); err != nil {
+			return err
 		}
 		if u.LongContext == nil {
 			u.LongContext = make(map[int64]longContextRates)
@@ -189,6 +171,25 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// decodeTiers reads the rates each suffix tier publishes after suffix, or nil
+// when no tier publishes any.
+func decodeTiers(fields map[string]json.RawMessage, suffix string) (map[string]upstreamRates, error) {
+	var tiers map[string]upstreamRates
+	for _, tier := range suffixTiers {
+		rates, err := decodeRates(fields, suffix+"_"+tier)
+		if err != nil {
+			return nil, err
+		}
+		if rates != (upstreamRates{}) {
+			if tiers == nil {
+				tiers = make(map[string]upstreamRates, len(suffixTiers))
+			}
+			tiers[tier] = rates
+		}
+	}
+	return tiers, nil
 }
 
 func decodeRates(fields map[string]json.RawMessage, suffix string) (upstreamRates, error) {
@@ -320,6 +321,10 @@ type generatedCatalog struct {
 // each provider the table prices; otherwise it keeps only the required ones,
 // which is the copy committed to the repository for releases that accept no
 // other.
+//
+// ponytail: the committed copy, cmd/pricingcatalog and the every flag exist
+// only for releases that download pricing/catalog/v1 instead of building the
+// catalog at runtime. Delete all three once no supported release does.
 func build(upstream []byte, source Source, every bool) (generatedCatalog, error) {
 	if source.Repository != "BerriAI/litellm" || source.Path != "model_prices_and_context_window.json" || !isSHA(source.Revision) {
 		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
@@ -448,9 +453,7 @@ func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map
 		if err != nil {
 			return nil, fmt.Errorf("%s tier: %w", tier, err)
 		}
-		if (standard.CacheReadUSDPerToken != nil && r.CacheReadUSDPerToken == nil) ||
-			(standard.CacheWriteUSDPerToken != nil && r.CacheWriteUSDPerToken == nil) ||
-			(standard.CacheWrite1HUSDPerToken != nil && r.CacheWrite1HUSDPerToken == nil) {
+		if !coversCacheRates(r, standard) {
 			continue
 		}
 		rows[pricing.TierModelID(modelID, tier)] = r
@@ -471,6 +474,13 @@ func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map
 	return rows, nil
 }
 
+// coversCacheRates reports whether r carries every cache rate base carries.
+func coversCacheRates(r, base rates) bool {
+	return (base.CacheReadUSDPerToken == nil || r.CacheReadUSDPerToken != nil) &&
+		(base.CacheWriteUSDPerToken == nil || r.CacheWriteUSDPerToken != nil) &&
+		(base.CacheWrite1HUSDPerToken == nil || r.CacheWrite1HUSDPerToken != nil)
+}
+
 // addLongContextRows prices the sizes over which one record bills a prompt at
 // other rates, keyed by pricing.LongContextModelID. Each extends a row already
 // in rows: the standard row, or a service tier's. Like a tier, a size ships
@@ -487,9 +497,7 @@ func addLongContextRows(rows map[string]rates, modelID string, record upstreamRe
 			if err != nil {
 				return fmt.Errorf("above %dk: %w", aboveK, err)
 			}
-			if (base.CacheReadUSDPerToken != nil && r.CacheReadUSDPerToken == nil) ||
-				(base.CacheWriteUSDPerToken != nil && r.CacheWriteUSDPerToken == nil) ||
-				(base.CacheWrite1HUSDPerToken != nil && r.CacheWrite1HUSDPerToken == nil) {
+			if !coversCacheRates(r, base) {
 				return nil
 			}
 			rows[pricing.LongContextModelID(rowID, aboveK)] = r
