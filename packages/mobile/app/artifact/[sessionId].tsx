@@ -1,10 +1,11 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
+import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactVisual } from "../../lib/artifactVisual";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
@@ -193,7 +194,7 @@ function ArtifactViewerContent() {
 				onPage={showPage}
 				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
 			/>
-			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={artifacts} index={pageIndex} onSelect={pageTo} /> : null}
+			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={artifacts} index={pageIndex} versionOf={versionOf} onSelect={pageTo} /> : null}
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
@@ -286,7 +287,7 @@ const ArtifactPager = forwardRef<PagerHandle, {
 	);
 });
 
-const STRIP_TILE = 48;
+const STRIP_TILE = 56;
 const STRIP_GAP = space.xs;
 const STRIP_PAD = space.sm;
 /** The strip's height without the home indicator's inset. */
@@ -297,17 +298,30 @@ const STRIP_HEIGHT = STRIP_TILE + STRIP_PAD * 2;
  * strip: the page on screen is outlined and kept in the middle of the row as
  * the pages change. Tapping a tile goes to that page.
  */
-function ArtifactFilmstrip({ config, sessionId, artifacts, index, onSelect }: {
+function ArtifactFilmstrip({ config, sessionId, artifacts, index, versionOf, onSelect }: {
 	config: ServerConfig;
 	sessionId: string;
 	artifacts: readonly SessionArtifact[];
 	index: number;
+	versionOf(path: string): string | undefined;
 	onSelect(index: number): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const list = useRef<FlatList<SessionArtifact>>(null);
+	// Tiles that are on screen may load their preview; the others let theirs go.
+	const [visiblePaths, setVisiblePaths] = useState<ReadonlySet<string>>(() => new Set());
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<SessionArtifact>[] }) => {
+		setVisiblePaths(new Set(viewableItems.flatMap((token) => token.item ? [token.item.path] : [])));
+	}).current;
+	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50, minimumViewTime: 120 }).current;
+	// A preview that cannot load falls back to the kind's glyph, until the file changes.
+	const [previewFailed, setPreviewFailed] = useState<Readonly<Record<string, string>>>({});
+	// Returns the same object when nothing changed, so a preview reporting failure again does not re-render.
+	const markPreviewFailed = useCallback((path: string, updatedAt: string) => {
+		setPreviewFailed((previous) => previous[path] === updatedAt ? previous : { ...previous, [path]: updatedAt });
+	}, []);
 	// The first placement happens at once; later ones glide.
 	const placed = useRef(false);
 	useEffect(() => {
@@ -324,6 +338,8 @@ function ArtifactFilmstrip({ config, sessionId, artifacts, index, onSelect }: {
 				data={artifacts}
 				horizontal
 				showsHorizontalScrollIndicator={false}
+				onViewableItemsChanged={onViewableItemsChanged}
+				viewabilityConfig={viewabilityConfig}
 				keyExtractor={(artifact) => artifact.path}
 				// Fixed-size tiles let the list jump to any of them without measuring.
 				getItemLayout={(_, item) => ({ length: STRIP_TILE + STRIP_GAP, offset: (STRIP_TILE + STRIP_GAP) * item, index: item })}
@@ -332,6 +348,8 @@ function ArtifactFilmstrip({ config, sessionId, artifacts, index, onSelect }: {
 					const selected = position === index;
 					const visual = artifactVisual(item, t);
 					const picture = artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined;
+					// A text, markdown or HTML file shows a peek at its contents, as its gallery card does.
+					const previewing = !picture && hasContentThumbnail(item) && previewFailed[item.path] !== item.updatedAt;
 					return (
 						<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
 							<Pressable
@@ -343,6 +361,8 @@ function ArtifactFilmstrip({ config, sessionId, artifacts, index, onSelect }: {
 							>
 								{picture ? (
 									<Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" style={StyleSheet.absoluteFill} />
+								) : previewing ? (
+									<ArtifactThumbnail config={config} sessionId={sessionId} artifact={item} visible={visiblePaths.has(item.path)} versionOf={versionOf} onFailed={() => markPreviewFailed(item.path, item.updatedAt)} />
 								) : (
 									<Feather name={visual.icon} size={18} color={visual.color} />
 								)}
