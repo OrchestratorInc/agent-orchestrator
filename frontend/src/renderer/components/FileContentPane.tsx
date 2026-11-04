@@ -1,6 +1,6 @@
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -44,6 +44,8 @@ import { FileMediaPreview } from "./FileMediaPreview";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { AoDiffFile } from "./diffs/AoDiffFile";
 import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
+import { AppBrowserLinkContext } from "./AppLink";
+import { BrowserIcon } from "./icons";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
@@ -140,6 +142,7 @@ export function FileContentPane({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const openInBrowser = useContext(AppBrowserLinkContext);
 	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
 	const uiSessionId = sessionUiKey(sessionId,hostId);
  const displayModePath = source.kind === "snapshot" ? `${JSON.stringify(source)}:${path}` : path;
@@ -452,6 +455,9 @@ export function FileContentPane({
 		</Tooltip>
 	);
 	const pathSegments = detail.path.split("/");
+	// HTML has no Rich preview here: its rendered view is the session's Browser,
+	// which serves the live workspace file, so not for a commit or deleted file.
+	const browserPage = openInBrowser && source.kind === "workspace" && !commitSha && !detail.deleted && /\.html?$/i.test(detail.path);
 	// Mode switches and file actions share one row and one gap.
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
@@ -461,6 +467,12 @@ export function FileContentPane({
 					{compactModeButton("file", t("files.fileView"), <FileCode2 aria-hidden="true" className="size-icon-sm" />)}
 					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
 				</div>
+			) : null}
+			{browserPage ? (
+				<Tooltip>
+					<TooltipTrigger asChild><Button aria-label={t("inspector.openInAOBrowser")} className="text-muted-foreground hover:text-foreground" onClick={() => openInBrowser(detail.path)} size="icon-sm" type="button" variant="ghost"><BrowserIcon aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+					<TooltipContent side="bottom">{t("inspector.openInAOBrowser")}</TooltipContent>
+				</Tooltip>
 			) : null}
    {onOpenInCenter ? <Tooltip><TooltipTrigger asChild><span tabIndex={editing ? 0 : undefined}><Button aria-label={t("files.openInCenter",{path:detail.path})} disabled={editing} onClick={()=>onOpenInCenter(effectiveMode)} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{editing ? t("files.finishEditingToOpen") : t("files.openInCenter",{path:detail.path})}</TooltipContent></Tooltip> : null}
 			{editing ? (

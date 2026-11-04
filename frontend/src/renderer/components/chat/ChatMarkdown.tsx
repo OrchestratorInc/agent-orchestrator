@@ -511,6 +511,11 @@ export function FileReference({ path, line, className, children }: { path: strin
 	);
 }
 
+/** Opens a URL in this chat session's Browser panel; undefined when the chat cannot. */
+export function useChatBrowserOpen() {
+	return useContext(OpenChatLink).open;
+}
+
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces() {
 	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
