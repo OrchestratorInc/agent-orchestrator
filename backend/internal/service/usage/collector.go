@@ -66,6 +66,8 @@ type SourceRoots struct {
 	KimiHome       string
 	PiSessions     string
 	QwenUsage      string
+	OMPSessions    string
+	KimchiSessions string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -95,6 +97,11 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if err != nil {
 		return SourceRoots{}, err
 	}
+	// AO launches OMP and Kimchi without a session directory, so both write
+	// to their own agent directory, which an absolute environment override
+	// moves exactly as it moves the CLI's.
+	ompAgentDir := piFamilyAgentDir(home, "PI_CODING_AGENT_DIR", ".omp", "agent")
+	kimchiAgentDir := piFamilyAgentDir(home, "KIMCHI_CODING_AGENT_DIR", ".config", "kimchi", "harness")
 	return SourceRoots{
 		ClaudeProjects: filepath.Join(claudeHome, "projects"),
 		CodexSessions:  filepath.Join(codexHome, "sessions"),
@@ -102,7 +109,26 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		KimiHome:       filepath.Join(dataDir, "kimi"),
 		PiSessions:     filepath.Join(dataDir, "pi", "sessions"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
+		OMPSessions:    filepath.Join(ompAgentDir, "sessions"),
+		KimchiSessions: filepath.Join(kimchiAgentDir, "sessions"),
 	}, nil
+}
+
+// piFamilyAgentDir resolves a Pi fork's agent directory: the environment
+// override when it names an absolute directory (after expanding a leading
+// ~), else the fork's default under home.
+func piFamilyAgentDir(home, envName string, defaultParts ...string) string {
+	dir := strings.TrimSpace(os.Getenv(envName))
+	switch {
+	case dir == "~":
+		dir = home
+	case strings.HasPrefix(dir, "~/"):
+		dir = filepath.Join(home, dir[2:])
+	}
+	if dir != "" && filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(append([]string{home}, defaultParts...)...)
 }
 
 func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, error) {
@@ -420,8 +446,8 @@ func (c *Collector) reactivateSessionLocked(
 		if err := c.backfillSession(ctx, session, nativeID); err != nil {
 			return err
 		}
-	} else if session.Harness == domain.HarnessPi {
-		if err := c.backfillPiPaths(ctx, nil); err != nil {
+	} else if family, ok := piFamilyForHarness(session.Harness); ok {
+		if err := c.backfillPiFamilyPaths(ctx, family, nil); err != nil {
 			return err
 		}
 	} else {
@@ -465,7 +491,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 		}
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
-		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessPi ||
+		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || isPiFamilyHarness(session.Harness) ||
 			session.Harness == domain.HarnessQwen ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
@@ -536,7 +562,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	inventoryChanged := !exists || state != existing.State
 	needsReconcile := false
 	lastErrorCode := ""
-	if (session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessPi) &&
+	if (session.Harness == domain.HarnessCodex || isPiFamilyHarness(session.Harness)) &&
 		strings.TrimSpace(signal.TranscriptPath) == "" {
 		lastErrorCode = domain.UsageErrorSourceDiscoveryPending
 	}
@@ -799,18 +825,18 @@ func (c *Collector) BackfillActive(ctx context.Context) error {
 		return err
 	}
 	var errs []error
-	piBackfilled := false
+	piBackfilled := make(map[domain.AgentHarness]bool)
 	for _, session := range sessions {
 		if session.IsTerminated || !SupportedHarness(session.Harness) {
 			continue
 		}
 		nativeID := usageNativeSessionID(session)
-		if nativeID == "" && session.Harness == domain.HarnessPi {
-			if !piBackfilled {
-				if err := c.backfillPiPaths(ctx, sessions); err != nil {
+		if family, ok := piFamilyForHarness(session.Harness); ok && nativeID == "" {
+			if !piBackfilled[family.harness] {
+				if err := c.backfillPiFamilyPaths(ctx, family, sessions); err != nil {
 					errs = append(errs, err)
 				}
-				piBackfilled = true
+				piBackfilled[family.harness] = true
 			}
 			continue
 		}
@@ -839,7 +865,11 @@ func usageNativeSessionID(session domain.SessionRecord) string {
 	return boundedUsageMetadata(nativeID)
 }
 
-func (c *Collector) backfillPiPaths(ctx context.Context, sessions []domain.SessionRecord) error {
+func (c *Collector) backfillPiFamilyPaths(
+	ctx context.Context,
+	family piFamilyHarness,
+	sessions []domain.SessionRecord,
+) error {
 	if sessions == nil {
 		var err error
 		sessions, err = c.store.ListAllSessions(ctx)
@@ -847,18 +877,19 @@ func (c *Collector) backfillPiPaths(ctx context.Context, sessions []domain.Sessi
 			return err
 		}
 	}
-	hasLivePi := false
+	hasLive := false
 	for _, session := range sessions {
-		if session.Harness == domain.HarnessPi && !session.IsTerminated &&
+		if session.Harness == family.harness && !session.IsTerminated &&
 			session.Activity.State != domain.ActivityExited {
-			hasLivePi = true
+			hasLive = true
 			break
 		}
 	}
-	if !hasLivePi {
+	root := c.piFamilyRoot(family)
+	if !hasLive || root == "" {
 		return nil
 	}
-	paths, err := newestPiPaths(ctx, c.roots.PiSessions, 256)
+	paths, err := newestPiPaths(ctx, root, 256)
 	if err != nil {
 		return err
 	}
@@ -867,7 +898,7 @@ func (c *Collector) backfillPiPaths(ctx context.Context, sessions []domain.Sessi
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := c.reconcilePiPath(ctx, path, sessions); err != nil {
+		if err := c.reconcilePiFamilyPath(ctx, family, path, sessions); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -979,8 +1010,18 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 	defer c.mu.Unlock()
 
 	var errs []error
-	if err := c.backfillPiPaths(ctx, nil); err != nil {
+	sessions, err := c.store.ListAllSessions(ctx)
+	if err != nil {
 		errs = append(errs, err)
+	} else {
+		if sessions == nil {
+			sessions = []domain.SessionRecord{} // Listed once: nil would make each family list again.
+		}
+		for _, family := range piFamilyHarnesses {
+			if err := c.backfillPiFamilyPaths(ctx, family, sessions); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 	if limit == 0 {
 		limit = defaultDiscoveryLimit
@@ -1008,14 +1049,17 @@ func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	piCandidate := false
-	if c.roots.PiSessions != "" && filepath.IsAbs(path) {
-		rel, err := filepath.Rel(filepath.Clean(c.roots.PiSessions), filepath.Clean(path))
-		piCandidate = err == nil && rel != ".." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator))
-	}
-	if piCandidate || pathWithinRoot(ctx, path, c.roots.PiSessions) {
-		return c.reconcilePiPath(ctx, path, nil)
+	for _, family := range piFamilyHarnesses {
+		root := c.piFamilyRoot(family)
+		candidate := false
+		if root != "" && filepath.IsAbs(path) {
+			rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+			candidate = err == nil && rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		}
+		if candidate || pathWithinRoot(ctx, path, root) {
+			return c.reconcilePiFamilyPath(ctx, family, path, nil)
+		}
 	}
 
 	resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessCodex, "", path)
@@ -1071,12 +1115,17 @@ func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 	return errors.Join(errs...)
 }
 
-func (c *Collector) reconcilePiPath(ctx context.Context, path string, sessions []domain.SessionRecord) error {
-	resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessPi, "", path)
+func (c *Collector) reconcilePiFamilyPath(
+	ctx context.Context,
+	family piFamilyHarness,
+	path string,
+	sessions []domain.SessionRecord,
+) error {
+	resolved, _, _, err := c.validateSourcePath(ctx, family.harness, "", path)
 	if err != nil {
 		return err
 	}
-	meta, ok := readPiSessionMeta(ctx, resolved)
+	meta, ok := readPiFamilySessionMeta(ctx, resolved, family)
 	if !ok {
 		return ctx.Err()
 	}
@@ -1088,7 +1137,7 @@ func (c *Collector) reconcilePiPath(ctx context.Context, path string, sessions [
 	}
 	var match *domain.SessionRecord
 	for _, session := range sessions {
-		if session.Harness != domain.HarnessPi || session.IsTerminated ||
+		if session.Harness != family.harness || session.IsTerminated ||
 			session.Activity.State == domain.ActivityExited || usageNativeSessionID(session) != meta.ID {
 			continue
 		}
@@ -1106,20 +1155,20 @@ func (c *Collector) reconcilePiPath(ctx context.Context, path string, sessions [
 		return err
 	}
 	for _, binding := range existing {
-		if binding.Harness == domain.HarnessPi && binding.NativeRootID != meta.ID {
+		if binding.Harness == family.harness && binding.NativeRootID != meta.ID {
 			return nil
 		}
 	}
 	now := c.now().UTC()
 	binding, err := c.store.UpsertUsageBinding(ctx, domain.UsageBindingRecord{
-		SessionID: match.ID, Harness: domain.HarnessPi, NativeRootID: meta.ID,
+		SessionID: match.ID, Harness: family.harness, NativeRootID: meta.ID,
 		State: domain.UsageBindingActive, UpdatedAt: now,
 	})
 	if err != nil {
 		return err
 	}
 	changed, err := c.registerSource(
-		ctx, binding, domain.UsageSourcePiSession, meta.ID, "", resolved, now, false,
+		ctx, binding, family.kind, meta.ID, "", resolved, now, false,
 	)
 	if err != nil {
 		return err
@@ -2447,9 +2496,10 @@ func validateSourceAttribution(
 			filepath.Base(sessionDir) != binding.NativeRootID || subagentID != wantSubagent {
 			return rejected()
 		}
-	case domain.UsageSourcePiSession:
-		meta, ok := readPiSessionMeta(ctx, resolved)
-		if binding.Harness != domain.HarnessPi || nativeSessionID != binding.NativeRootID ||
+	case domain.UsageSourcePiSession, domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession:
+		family, known := piFamilyForKind(kind)
+		meta, ok := readPiFamilySessionMeta(ctx, resolved, family)
+		if !known || binding.Harness != family.harness || nativeSessionID != binding.NativeRootID ||
 			subagentID != "" || !ok || meta.ID != nativeSessionID {
 			return rejected()
 		}
@@ -2507,8 +2557,9 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.CodexSessions, c.roots.CodexArchived}
 	case domain.HarnessKimi:
 		return []string{c.roots.KimiHome}
-	case domain.HarnessPi:
-		return []string{c.roots.PiSessions}
+	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi:
+		family, _ := piFamilyForHarness(harness)
+		return []string{c.piFamilyRoot(family)}
 	case domain.HarnessQwen:
 		return []string{c.roots.QwenUsage}
 	default:
@@ -2526,6 +2577,10 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceKimiWire, true
 	case domain.HarnessPi:
 		return domain.UsageSourcePiSession, true
+	case domain.HarnessOMP:
+		return domain.UsageSourceOMPSession, true
+	case domain.HarnessKimchi:
+		return domain.UsageSourceKimchiSession, true
 	case domain.HarnessQwen:
 		return domain.UsageSourceQwenMonthly, true
 	default:
@@ -2577,8 +2632,9 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:
 		return c.discoverKimiPath(ctx, nativeID)
-	case domain.HarnessPi:
-		return c.discoverPiPath(ctx, nativeID)
+	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi:
+		family, _ := piFamilyForHarness(harness)
+		return c.discoverPiFamilyPath(ctx, family, nativeID)
 	case domain.HarnessQwen:
 		return c.discoverQwenPath(ctx, sessionID)
 	}
@@ -2702,6 +2758,59 @@ func (c *Collector) discoverKimiPath(ctx context.Context, nativeID string) (stri
 	return paths[0], nil
 }
 
+// piFamilyHarness is one harness that writes Pi-format session transcripts:
+// Pi itself and the forks that kept its session manager (OMP, Kimchi).
+type piFamilyHarness struct {
+	harness domain.AgentHarness
+	kind    domain.UsageSourceKind
+	// preambleType names one record the harness may write ahead of the
+	// session header. OMP reserves line 1 for a padded title slot it rewrites
+	// in place, so its header is line 2; Pi and Kimchi start with the header.
+	preambleType string
+}
+
+var piFamilyHarnesses = []piFamilyHarness{
+	{harness: domain.HarnessPi, kind: domain.UsageSourcePiSession},
+	{harness: domain.HarnessOMP, kind: domain.UsageSourceOMPSession, preambleType: "title"},
+	{harness: domain.HarnessKimchi, kind: domain.UsageSourceKimchiSession},
+}
+
+func piFamilyForHarness(harness domain.AgentHarness) (piFamilyHarness, bool) {
+	for _, family := range piFamilyHarnesses {
+		if family.harness == harness {
+			return family, true
+		}
+	}
+	return piFamilyHarness{}, false
+}
+
+func piFamilyForKind(kind domain.UsageSourceKind) (piFamilyHarness, bool) {
+	for _, family := range piFamilyHarnesses {
+		if family.kind == kind {
+			return family, true
+		}
+	}
+	return piFamilyHarness{}, false
+}
+
+func isPiFamilyHarness(harness domain.AgentHarness) bool {
+	_, ok := piFamilyForHarness(harness)
+	return ok
+}
+
+func (c *Collector) piFamilyRoot(family piFamilyHarness) string {
+	switch family.harness {
+	case domain.HarnessPi:
+		return c.roots.PiSessions
+	case domain.HarnessOMP:
+		return c.roots.OMPSessions
+	case domain.HarnessKimchi:
+		return c.roots.KimchiSessions
+	default:
+		return ""
+	}
+}
+
 type piSessionMeta struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
@@ -2709,7 +2818,10 @@ type piSessionMeta struct {
 	CWD       string `json:"cwd"`
 }
 
-func readPiSessionMeta(ctx context.Context, path string) (piSessionMeta, bool) {
+// readPiFamilySessionMeta reads the session header that names a Pi-format
+// transcript's native identity: the first record, or the second when the
+// first is the harness's preamble record.
+func readPiFamilySessionMeta(ctx context.Context, path string, family piFamilyHarness) (piSessionMeta, bool) {
 	if ctx.Err() != nil {
 		return piSessionMeta{}, false
 	}
@@ -2719,23 +2831,39 @@ func readPiSessionMeta(ctx context.Context, path string) (piSessionMeta, bool) {
 	}
 	defer func() { _ = file.Close() }()
 	reader := bufio.NewReader(io.LimitReader(file, 64<<10))
-	line, err := reader.ReadBytes('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return piSessionMeta{}, false
+	maxLines := 1
+	if family.preambleType != "" {
+		maxLines = 2
 	}
-	if ctx.Err() != nil {
-		return piSessionMeta{}, false
+	for lineIndex := 0; lineIndex < maxLines; lineIndex++ {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return piSessionMeta{}, false
+		}
+		if ctx.Err() != nil {
+			return piSessionMeta{}, false
+		}
+		var meta piSessionMeta
+		if json.Unmarshal(bytes.TrimSpace(line), &meta) != nil {
+			return piSessionMeta{}, false
+		}
+		if lineIndex == 0 && family.preambleType != "" && meta.Type == family.preambleType && err == nil {
+			continue
+		}
+		if meta.Type != "session" || !nativeUsageIDPattern.MatchString(meta.ID) || !filepath.IsAbs(meta.CWD) {
+			return piSessionMeta{}, false
+		}
+		return meta, true
 	}
-	var meta piSessionMeta
-	if json.Unmarshal(bytes.TrimSpace(line), &meta) != nil || meta.Type != "session" ||
-		!nativeUsageIDPattern.MatchString(meta.ID) || !filepath.IsAbs(meta.CWD) {
-		return piSessionMeta{}, false
-	}
-	return meta, true
+	return piSessionMeta{}, false
 }
 
-func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string, error) {
-	paths, err := newestPiPaths(ctx, c.roots.PiSessions, 256)
+func (c *Collector) discoverPiFamilyPath(ctx context.Context, family piFamilyHarness, nativeID string) (string, error) {
+	root := c.piFamilyRoot(family)
+	if root == "" {
+		return "", nil // An unset root must not glob the daemon's working directory.
+	}
+	paths, err := newestPiPaths(ctx, root, 256)
 	if err != nil {
 		return "", err
 	}
@@ -2743,7 +2871,7 @@ func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if meta, ok := readPiSessionMeta(ctx, path); ok && meta.ID == nativeID {
+		if meta, ok := readPiFamilySessionMeta(ctx, path, family); ok && meta.ID == nativeID {
 			return path, nil
 		}
 	}
@@ -2752,7 +2880,8 @@ func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string
 
 func newestPiPaths(ctx context.Context, root string, limit int) ([]string, error) {
 	// AO launches Pi with --session-dir, which writes sessions directly into
-	// root; Pi's own default layout nests them one directory deeper per cwd.
+	// root; Pi's own default layout, which OMP and Kimchi keep, nests them one
+	// directory deeper per cwd.
 	paths, err := filepath.Glob(filepath.Join(root, "*.jsonl"))
 	if err != nil {
 		return nil, err

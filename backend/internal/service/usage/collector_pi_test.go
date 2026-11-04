@@ -161,7 +161,7 @@ func TestReadPiSessionMetaHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, ok := readPiSessionMeta(ctx, path); ok {
+	if _, ok := readPiFamilySessionMeta(ctx, path, piFamilyHarnesses[0]); ok {
 		t.Fatal("canceled Pi metadata read succeeded")
 	}
 }
