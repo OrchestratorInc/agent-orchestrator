@@ -118,6 +118,10 @@ type Config struct {
 	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// SplitModelVariant maps a model id the session does not offer onto the base
+	// model it may offer instead, plus the option that selects the variant. Set
+	// it for agents that moved a suffix of their model ids into its own option.
+	SplitModelVariant func(model string) (base string, variant SessionOption, ok bool)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -853,6 +857,7 @@ func (d *Driver) initialize(
 			return servedModel(ctx, cfg, sessionID, selectedModel)
 		}
 	}
+	conv.splitModelVariant = d.cfg.SplitModelVariant
 	if d.cfg.ValidateModel != nil {
 		validateModel := d.cfg.ValidateModel
 		conv.validateModel = func(ctx context.Context, model string) error {

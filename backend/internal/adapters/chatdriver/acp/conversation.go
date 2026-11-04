@@ -123,6 +123,7 @@ type conversation struct {
 	closed            bool
 	modeFor           func(ports.PermissionMode) string
 	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	splitModelVariant func(string) (string, SessionOption, bool)
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
@@ -569,28 +570,50 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	if legacyModel && settings.Model != "" {
 		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		modelOptional := false
 		for _, option := range options {
 			if option.ID == "model" && option.Value != "" {
 				model = option.Value
+				modelOptional = option.Optional
 			}
 		}
-		modelOptionFound := false
+		modelOptionFound, modelSkipped, variantSplit := false, false, false
 		for _, option := range configOptions {
 			if option.ID != "model" {
 				continue
 			}
 			modelOptionFound = true
 			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
-			if !ok {
+			if !ok && c.splitModelVariant != nil {
+				if base, variant, split := c.splitModelVariant(model); split {
+					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
+						options = append(options, variant)
+						variantSplit = true
+					}
+				}
+			}
+			if !ok && !modelOptional {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
-			model = resolved
+			model, modelSkipped = resolved, !ok
 			break
 		}
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if c.configOptionCurrent("model") != model {
+		switch {
+		case modelSkipped:
+			c.log.Warn("ACP session does not offer the chosen model; keeping its default", "model", settings.Model)
+		case c.configOptionCurrent("model") == model:
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+		case variantSplit && c.modelConfigOption:
+			// A base model exists only as a config option value: session/set_model
+			// still takes the full ids of the legacy list.
+			if err := c.setSessionOption(ctx, sessionID, SessionOption{ID: "model", Value: model}); err != nil {
+				return err
+			}
+			catalogStale = true
+		default:
 			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
@@ -598,8 +621,8 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
 			catalogStale = true
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 		}
-		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
 	applyOption := func(option SessionOption) error {
 		if option.ID == "" || option.Value == "" {

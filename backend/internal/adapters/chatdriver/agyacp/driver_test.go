@@ -58,7 +58,7 @@ func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
 	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Errorf("empty model options = %v", got)
 	}
-	want := []acpdriver.SessionOption{{ID: "model", Value: "gemini-3.8-flash-high"}}
+	want := []acpdriver.SessionOption{{ID: "model", Value: "gemini-3.8-flash-high", Optional: true}}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: " gemini-3.8-flash-high "}); !reflect.DeepEqual(got, want) {
 		t.Errorf("options = %v, want %v", got, want)
 	}
@@ -244,7 +244,7 @@ func TestAuthBootstrapAuthenticatesOnlyAnAlreadySignedInUser(t *testing.T) {
 				writeFile(t, filepath.Join(home, "antigravity-acp", "settings.json"), tt.settings)
 			}
 			var calls []string
-			b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil })
+			b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil }, nil)
 			err := b.bootstrap(context.Background(), tt.init, nil, func(_ context.Context, method string) error {
 				calls = append(calls, method)
 				return nil
@@ -268,7 +268,7 @@ func TestAuthBootstrapChecksTheSessionGeminiHome(t *testing.T) {
 		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
 	}}
 	calls := 0
-	b := newAuthBootstrap(agy.GeminiHome)
+	b := newAuthBootstrap(agy.GeminiHome, nil)
 	if err := b.bootstrap(context.Background(), init, map[string]string{"GEMINI_HOME": sessionHome}, func(_ context.Context, _ string) error {
 		calls++
 		return nil
@@ -286,7 +286,7 @@ func TestAuthBootstrapBoundsAndReportsAFailedAuthenticate(t *testing.T) {
 	init := acpsdk.InitializeResponse{AuthMethods: []acpsdk.AuthMethod{
 		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
 	}}
-	b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil })
+	b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil }, nil)
 	b.timeout = 50 * time.Millisecond
 	err := b.bootstrap(context.Background(), init, nil, func(ctx context.Context, _ string) error {
 		<-ctx.Done()
@@ -348,5 +348,90 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSplitModelVariantMapsCLIIDsOntoServer14Options(t *testing.T) {
+	base, variant, ok := splitModelVariant("gemini-3.8-flash-medium")
+	want := acpdriver.SessionOption{ID: "thinking_level", Value: "medium", Optional: true}
+	if !ok || base != "gemini-3.8-flash" || variant != want {
+		t.Fatalf("split = %q, %+v, %v", base, variant, ok)
+	}
+	for _, model := range []string{"claude-opus-4-6-thinking", "gemini-3.8-flash", "-high"} {
+		if _, _, ok := splitModelVariant(model); ok {
+			t.Errorf("%q split, want it left alone", model)
+		}
+	}
+}
+
+func TestInstallCheckReportsAMissingServerWithoutStartingIt(t *testing.T) {
+	r := resolver{
+		getenv: func(string) string { return "" }, isFile: func(string) bool { return false },
+		resolveSpec: func(context.Context, binaryutil.BinarySpec) (string, error) {
+			return "", errors.New("not found")
+		},
+	}
+	err := buildConfig(fakePlugin{}, r, nil).InstallCheck(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "antigravity-acp") {
+		t.Fatalf("InstallCheck = %v, want the install hint", err)
+	}
+	r.resolveSpec = func(context.Context, binaryutil.BinarySpec) (string, error) { return "/bin/agy_acp_server", nil }
+	if err := buildConfig(fakePlugin{}, r, nil).InstallCheck(context.Background()); err != nil {
+		t.Fatalf("InstallCheck with a server = %v", err)
+	}
+}
+
+func TestAuthBootstrapAcceptsASignedInAgyCLI(t *testing.T) {
+	init := acpsdk.InitializeResponse{AuthMethods: []acpsdk.AuthMethod{
+		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
+	}}
+	for _, tt := range []struct {
+		name     string
+		signedIn bool
+		wantCall bool
+	}{
+		{name: "agy signed in, no Gemini accounts file", signedIn: true, wantCall: true},
+		{name: "agy signed out: never risk a browser flow"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			b := newAuthBootstrap(
+				func(map[string]string) (string, error) { return home, nil },
+				func(context.Context, map[string]string) bool { return tt.signedIn },
+			)
+			calls := 0
+			if err := b.bootstrap(context.Background(), init, nil, func(context.Context, string) error {
+				calls++
+				return nil
+			}); err != nil {
+				t.Fatalf("bootstrap = %v", err)
+			}
+			if (calls == 1) != tt.wantCall {
+				t.Fatalf("authenticate calls = %d, want call=%v", calls, tt.wantCall)
+			}
+		})
+	}
+}
+
+func TestCLISignedInFollowsAgyModelsExitStatus(t *testing.T) {
+	dir := t.TempDir()
+	script := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	check := func(path string) bool {
+		return cliSignedIn(func(context.Context) (string, error) { return path, nil })(context.Background(), nil)
+	}
+	if !check(script("in", `[ "$1" = models ]`)) {
+		t.Error("exit 0 from agy models is a sign-in")
+	}
+	if check(script("out", "echo 'Please sign in' >&2; exit 1")) {
+		t.Error("a failing agy models is no sign-in")
+	}
+	if cliSignedIn(nil)(context.Background(), nil) {
+		t.Error("no CLI is no sign-in")
 	}
 }
