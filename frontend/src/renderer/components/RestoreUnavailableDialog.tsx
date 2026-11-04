@@ -2,11 +2,9 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Loader2, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
-import { useUiStore } from "../stores/ui-store";
-import { hasConfiguredOrchestratorAgent, isOrchestratorSession } from "../types/workspace";
+import { isOrchestratorSession } from "../types/workspace";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import {
@@ -26,24 +24,11 @@ type RestoreUnavailableDialogProps = {
 
 export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
 	const { t } = useTranslation();
-	const workspaceQuery = useWorkspaceScope(session.workspaceId, undefined, hostId);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const orchestrator = isOrchestratorSession(session);
-	const workspace = workspaceQuery.data?.project;
-	const hasOrchestratorAgent = hasConfiguredOrchestratorAgent(workspace);
-	const checkingProject = workspaceQuery.isLoading && workspaceQuery.data === undefined;
 
 	const recreate = async () => {
-		if (checkingProject) return;
-		if (!hasOrchestratorAgent) {
-			onOpenChange(false);
-			useUiStore.getState().openProjectSettings(
-				session.workspaceId,
-				session.cloud?.orgId ? { cloudOrgId: session.cloud.orgId } : hostId,
-			);
-			return;
-		}
 		setBusy(true);
 		setError(undefined);
 		try {
@@ -95,14 +80,10 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 								type="button"
 								variant="footer-primary"
 								onClick={recreate}
-								disabled={busy || checkingProject}
+								disabled={busy}
 							>
 								{busy ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
-								{checkingProject
-									? t("restoreUnavailable.checkingProject")
-									: hasOrchestratorAgent
-										? t("restoreUnavailable.createOrchestrator")
-										: t("restoreUnavailable.configureOrchestrator")}
+								{t("restoreUnavailable.createOrchestrator")}
 							</Button>
 						) : null}
 					</div>

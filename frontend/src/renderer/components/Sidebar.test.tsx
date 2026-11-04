@@ -806,15 +806,15 @@ describe("Sidebar", () => {
 		expect(content).not.toContainElement(screen.getByText("Projects"));
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
 		const user = userEvent.setup();
+		spawnMock.mockResolvedValue("proj-1-orch");
 		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
 
 		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	// The sidebar owns its own openOrchestrator, separate from

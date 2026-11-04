@@ -344,7 +344,10 @@ func TestSpawnConfirmationIncludesDisplayName(t *testing.T) {
 	}
 }
 
-func TestSpawnResolvesProjectFromEnvAndDefaultAgent(t *testing.T) {
+// With no --agent the CLI sends no harness and runs no client-side readiness
+// preflight: the daemon picks the agent and checks it. The project's worker
+// agent setting in the fixture does not choose it.
+func TestSpawnResolvesProjectFromEnvAndLeavesAgentToTheDaemon(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
 	var req spawnRequest
@@ -379,15 +382,17 @@ func TestSpawnResolvesProjectFromEnvAndDefaultAgent(t *testing.T) {
 	if !strings.Contains(out, "[prompt 0 B, system 123 B]") {
 		t.Fatalf("output missing system-only prompt metrics: %s", out)
 	}
-	if req.ProjectID != "demo" || req.Harness != "codex" || req.DisplayName != "worker" {
+	if req.ProjectID != "demo" || req.Harness != "" || req.DisplayName != "worker" {
 		t.Fatalf("spawn request = %#v", req)
 	}
-	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions"}
+	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/sessions"}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%#v want %#v", requests, want)
 	}
 }
 
+// The spawning session is sent as the parent; the daemon, not the CLI, decides
+// that a worker follows its parent's agent.
 func TestSpawnResolvesProjectFromAOSessionID(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -419,10 +424,10 @@ func TestSpawnResolvesProjectFromAOSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
 	}
-	if req.ProjectID != "demo" || req.Harness != "codex" || req.ParentSessionID != "demo-1" {
+	if req.ProjectID != "demo" || req.Harness != "" || req.ParentSessionID != "demo-1" {
 		t.Fatalf("spawn request = %#v", req)
 	}
-	want := []string{"GET /api/v1/sessions/demo-1", "GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions"}
+	want := []string{"GET /api/v1/sessions/demo-1", "GET /api/v1/projects/demo", "POST /api/v1/sessions"}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%#v want %#v", requests, want)
 	}
@@ -498,7 +503,7 @@ func TestSpawnResolvesProjectFromCWD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
 	}
-	if req.ProjectID != "demo" || req.Harness != "codex" {
+	if req.ProjectID != "demo" || req.Harness != "" {
 		t.Fatalf("spawn request = %#v", req)
 	}
 }
@@ -1040,38 +1045,6 @@ func TestSpawnCommand_RejectsInvalidKind(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "orch", "--kind", "orchestartor")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker" or "orchestrator"`) {
 		t.Fatalf("err=%v exit=%d, want --kind validation error", err, ExitCode(err))
-	}
-}
-
-// TestResolveSpawnHarness_OrchestratorDefault asserts the orchestrator role falls
-// back to the project's orchestrator agent (and worker to the worker agent), while
-// an explicit --agent always wins.
-func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
-	project := projectDetails{
-		ID: "demo",
-		Config: &projectConfig{
-			Worker:       roleOverride{Agent: "codex"},
-			Orchestrator: roleOverride{Agent: "claude-code"},
-		},
-	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
-	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
-	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
-	}
-	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
-	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
-	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
 	}
 }
 

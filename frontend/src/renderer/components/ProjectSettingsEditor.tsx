@@ -52,7 +52,6 @@ type Capabilities = {
 	sessionPrefix: boolean;
 	intake: boolean;
 	reviewer: boolean;
-	requiredAgents: boolean;
 	workersRequestReview?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
@@ -92,7 +91,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	autoReviewDescription?: string;
 	/** The issue intake row's description, for an intake with rules of its own. */
 	intakeDescription?: string;
-	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
+	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	saveUnchanged?: boolean;
 	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
@@ -105,7 +104,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const saved = useRef(JSON.stringify(initialValues));
 	const failedKey = useRef<string | undefined>(undefined);
 	const [error, setError] = useState<string>();
-	const [replacementError, setReplacementError] = useState<string>();
 	const [didSave, setDidSave] = useState(false);
 	const [showSaving, setShowSaving] = useState(false);
 	const [validity, setValidity] = useState({ worker: true, orchestrator: true, reviewer: true });
@@ -116,7 +114,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 			saved.current = JSON.stringify(normalized);
 			failedKey.current = undefined;
 			setDraft((current) => JSON.stringify(current) === JSON.stringify(values) ? normalized : current);
-			setReplacementError(result.replacementError ?? undefined);
 			setDidSave(true);
 		},
 		onError: (cause, values) => {
@@ -130,7 +127,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const visibleRoles = capabilities.reviewer ? roles : roles.slice(0, 2);
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
 	const validate = () => {
-		if (capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
 		if (!draft.displayName.trim()) return t("settings.project.nameRequired");
 		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });
 		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return t("settings.cloudProject.identityValidation");
@@ -142,7 +138,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		const problem = validate();
 		setError(problem);
 		if (problem) return;
-		setReplacementError(undefined);
 		setDidSave(false);
 		mutation.mutate(draft);
 	};
@@ -157,8 +152,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		return () => window.clearTimeout(timeout);
 	}, [mutation.isPending]);
 	useEffect(() => {
-		onSaveState?.({ phase: error ? "failed" : mutation.isPending ? showSaving ? "saving" : "pending" : dirty && !intakeIncomplete ? "pending" : didSave ? "saved" : "idle", dirty: dirty && !intakeIncomplete, requestPending: mutation.isPending, error, replacementError });
-	}, [dirty, didSave, error, intakeIncomplete, mutation.isPending, onSaveState, replacementError, showSaving]);
+		onSaveState?.({ phase: error ? "failed" : mutation.isPending ? showSaving ? "saving" : "pending" : dirty && !intakeIncomplete ? "pending" : didSave ? "saved" : "idle", dirty: dirty && !intakeIncomplete, requestPending: mutation.isPending, error });
+	}, [dirty, didSave, error, intakeIncomplete, mutation.isPending, onSaveState, showSaving]);
 	useEffect(() => {
 		if (!didSave) return;
 		const timeout = window.setTimeout(() => setDidSave(false), 1800);
@@ -212,7 +207,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						[fields.permissions]: value,
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
-						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
+						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: false, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
 						<div className="min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
@@ -224,7 +219,6 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
 					</ProjectSettingsSection>;
 				})}
-				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
 				{warning && <p className="px-(--settings-row-inset) text-xs text-warning" role="status">{warning}</p>}
 			</>}
 		</fieldset>

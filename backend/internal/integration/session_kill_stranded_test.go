@@ -100,7 +100,7 @@ func TestKillAndCleanupReachASessionGitWillNotRelease(t *testing.T) {
 	})
 	lcm.SetCompletionTerminator(manager)
 
-	sess, _, _, err := manager.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "do it"})
+	sess, _, _, err := manager.Spawn(ctx, ports.SpawnConfig{Harness: domain.HarnessClaudeCode, ProjectID: "mer", Kind: domain.KindWorker, Prompt: "do it"})
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}

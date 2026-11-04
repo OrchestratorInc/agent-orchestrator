@@ -62,7 +62,6 @@ import type { UpdateStatus } from "../../main/update-settings";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
 import { parseNightlyVersion } from "../lib/build-channel";
 import {
-	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
 	openPRs,
 	type WorkspaceSession,
@@ -1642,10 +1641,6 @@ const ProjectItem = memo(function ProjectItem({
 			} finally {
 				setIsSpawning(false);
 			}
-			return;
-		}
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-					selection.goSettings(workspace.id, workspace.cloudOrgId);
 			return;
 		}
 		setIsSpawning(true);

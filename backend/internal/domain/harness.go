@@ -60,6 +60,29 @@ var AllHarnesses = []AgentHarness{
 	HarnessCommandCode, HarnessMemcode, HarnessHermes,
 }
 
+// DefaultHarnessPriority orders the agents a new session may default to by
+// popularity and how well AO integrates with each. It is the only place the
+// default is decided; a session's own harness is the source of truth after it
+// is created.
+var DefaultHarnessPriority = []AgentHarness{
+	HarnessClaudeCode, HarnessCodex, HarnessCursor, HarnessOpenCode, HarnessOpenCodeV2, HarnessAider,
+}
+
+// ChooseDefaultHarness returns the first harness in DefaultHarnessPriority that
+// readiness reports ready, else the first one it cannot rule out (unknown), else
+// the top of the list so a launch fails with the harness's own install or login
+// error instead of a generic one.
+func ChooseDefaultHarness(readiness func(AgentHarness) AgentEffectiveReadiness) AgentHarness {
+	for _, want := range []AgentEffectiveReadiness{AgentReadinessReady, AgentReadinessUnknown} {
+		for _, h := range DefaultHarnessPriority {
+			if readiness(h) == want {
+				return h
+			}
+		}
+	}
+	return DefaultHarnessPriority[0]
+}
+
 // IsKnown reports whether h is one of the supported harnesses.
 func (h AgentHarness) IsKnown() bool {
 	for _, k := range AllHarnesses {

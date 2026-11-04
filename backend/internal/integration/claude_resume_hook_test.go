@@ -26,6 +26,7 @@ func TestClaudeResumeHookConfirmsNativeIdentityForCurrentLaunch(t *testing.T) {
 	ctx := context.Background()
 	st := newStack(t)
 	session, _, _, err := st.sm.Spawn(ctx, ports.SpawnConfig{
+		Harness:   domain.HarnessClaudeCode,
 		ProjectID: "mer",
 		Kind:      domain.KindWorker,
 		Branch:    "resume-hook",

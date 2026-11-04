@@ -253,23 +253,11 @@ func TestHookPATH(t *testing.T) {
 	}
 }
 
-func TestEffectiveHarnessAndAgentConfig(t *testing.T) {
+func TestEffectiveAgentConfig(t *testing.T) {
 	cfg := domain.ProjectConfig{
 		AgentConfig:  domain.AgentConfig{Model: "base", Effort: "medium", Mode: "low", Permissions: domain.PermissionModeAuto},
 		Worker:       domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "worker", Effort: "high", Mode: "high"}},
 		Orchestrator: domain.RoleOverride{Harness: domain.HarnessClaudeCode},
-	}
-
-	// Explicit harness always wins.
-	if h := effectiveHarness(domain.HarnessAider, domain.KindWorker, cfg); h != domain.HarnessAider {
-		t.Fatalf("explicit harness = %q, want aider", h)
-	}
-	// Empty harness falls back to the role override per kind.
-	if h := effectiveHarness("", domain.KindWorker, cfg); h != domain.HarnessCodex {
-		t.Fatalf("worker harness = %q, want codex", h)
-	}
-	if h := effectiveHarness("", domain.KindOrchestrator, cfg); h != domain.HarnessClaudeCode {
-		t.Fatalf("orchestrator harness = %q, want claude-code", h)
 	}
 
 	// Role override merges over the base agent config (set fields win; unset keep base).
@@ -278,28 +266,25 @@ func TestEffectiveHarnessAndAgentConfig(t *testing.T) {
 		t.Fatalf("merged worker config = %#v, want model=worker mode=high permissions=auto", got)
 	}
 	// Orchestrator has no agent-config override, so the base config is used as-is.
-	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.Model != "base" {
+	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.Model != "base" || got.Effort != "medium" || got.Mode != "low" {
 		t.Fatalf("orchestrator config = %#v, want base", got)
 	}
 	// A launch harness that differs from the role's configured harness drops the
-	// role's model/mode — they were tuned for the other agent — but keeps the
-	// harness-neutral permissions.
-	if got := effectiveAgentConfig(domain.HarnessAider, domain.KindWorker, cfg); got.Model != "base" || got.Mode != "low" || got.Permissions != domain.PermissionModeAuto {
-		t.Fatalf("mismatched-harness worker config = %#v, want model=base mode=low permissions=auto", got)
+	// project's model/effort/mode: they were tuned for the other agent. The
+	// harness-neutral permissions are still inherited.
+	if got := effectiveAgentConfig(domain.HarnessAider, domain.KindWorker, cfg); got.Model != "" || got.Effort != "" || got.Mode != "" || got.Permissions != domain.PermissionModeAuto {
+		t.Fatalf("mismatched-harness worker config = %#v, want empty model/effort/mode and permissions=auto", got)
 	}
-	// A role override with no harness pinned is deliberately treated as
-	// "applies to any harness", so its model/mode are inherited whichever
-	// harness the session launches with. This is a behavior decision, not a
-	// side effect: assert it across two unrelated harnesses so it cannot
-	// silently flip back to the old drop-on-every-switch behavior.
+	// A role override with no harness pinned matches no launch harness, so the
+	// model/effort/mode never leak onto an agent they were not tuned for.
 	unpinned := domain.ProjectConfig{
-		AgentConfig: domain.AgentConfig{Model: "base", Mode: "low"},
+		AgentConfig: domain.AgentConfig{Model: "base", Effort: "medium", Mode: "low", Permissions: domain.PermissionModeAuto},
 		Worker:      domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "worker", Mode: "high"}},
 	}
 	for _, harness := range []domain.AgentHarness{domain.HarnessAider, domain.HarnessCodex} {
 		got := effectiveAgentConfig(harness, domain.KindWorker, unpinned)
-		if got.Model != "worker" || got.Mode != "high" {
-			t.Fatalf("unpinned worker config for %q = %#v, want model=worker mode=high", harness, got)
+		if got.Model != "" || got.Effort != "" || got.Mode != "" || got.Permissions != domain.PermissionModeAuto {
+			t.Fatalf("unpinned worker config for %q = %#v, want empty model/effort/mode and permissions=auto", harness, got)
 		}
 	}
 }
@@ -322,7 +307,7 @@ func TestResolveChatAgentConfigValidatesAndResetsDependentTuning(t *testing.T) {
 		{ID: "old", Efforts: []string{"high"}},
 		{ID: "new", Efforts: []string{"low"}},
 	}}}}
-	project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "old", Effort: "high"}}}
+	project := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "old", Effort: "high"}}}
 	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 		AgentConfig: ports.AgentConfig{Model: "new"},
@@ -482,7 +467,7 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		AgentConfig: ports.AgentConfig{Model: "sonnet"}, EffortOverride: true,
-	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{Effort: "high"}}})
 	if err != nil || resolved.Effort != "" {
 		t.Fatalf("explicit Claude provider default did not clear role tuning: %#v, %v", resolved, err)
 	}
@@ -544,7 +529,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessDroid,
 		AgentConfig: ports.AgentConfig{Model: "gemini-2.5-pro"},
-	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessDroid, AgentConfig: domain.AgentConfig{Effort: "high"}}})
 	if err != nil {
 		t.Fatalf("inherited effort error = %v, want silent clear", err)
 	}
@@ -559,7 +544,7 @@ func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
 	_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		AgentConfig: ports.AgentConfig{Model: "provider/model-vNext"},
-	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode, AgentConfig: domain.AgentConfig{
 		Model: "sonnet", Effort: "high",
 	}}})
 	if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
@@ -730,7 +715,7 @@ func TestResolveCommandCodeTUIAgentConfigPassesEffortThrough(t *testing.T) {
 	resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode,
 		RequestedMode: domain.SessionModeTUI,
-	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "medium"}}})
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessCommandCode, AgentConfig: domain.AgentConfig{Effort: "medium"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -993,7 +978,7 @@ func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
 	st.projects["mer"] = project
 	var extended time.Duration
 	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
-	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{Harness: domain.HarnessClaudeCode, ProjectID: "mer", Kind: domain.KindWorker})
 	if want := 121 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
 		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 30m)", probe.budget, want)
 	}

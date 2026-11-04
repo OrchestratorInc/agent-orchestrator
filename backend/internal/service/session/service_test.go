@@ -3226,7 +3226,6 @@ func TestSpawnStandaloneRejectsProjectFeatures(t *testing.T) {
 		{Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex},
 		{Kind: domain.KindWorker, Harness: domain.HarnessCodex, Branch: "feature/x"},
 		{Kind: domain.KindWorker, Harness: domain.HarnessCodex, IssueID: "42"},
-		{Kind: domain.KindWorker},
 	} {
 		fc := &fakeCommander{}
 		svc := &Service{manager: fc, store: newFakeStore()}
@@ -3883,7 +3882,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"delete shared history", fmt.Errorf("delete mer-1: %w", domain.ErrSessionHistoryShared), apierr.KindConflict, "SESSION_HISTORY_SHARED"},
 		{"delete cleanup refused", fmt.Errorf("delete mer-1: %w", &sessionmanager.CleanupRefusedError{Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}), apierr.KindConflict, "WORKSPACE_CLEANUP_REFUSED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
-		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
+		{"missing harness", fmt.Errorf("spawn: %w", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
@@ -4456,29 +4455,6 @@ func TestSpawnOrchestratorNoCleanSpawnsWhenNoneExists(t *testing.T) {
 	}
 	if got.ID == "" {
 		t.Fatal("returned session must have an id")
-	}
-}
-
-func TestSpawnOrchestratorVerifiesReplacementHarness(t *testing.T) {
-	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{
-		ID:     "mer",
-		Config: domain.ProjectConfig{Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex}},
-	}
-	fc := &fakeCommander{
-		spawnRecord: domain.SessionRecord{
-			ID:        "mer-9",
-			ProjectID: "mer",
-			Kind:      domain.KindOrchestrator,
-			Harness:   domain.HarnessClaudeCode,
-			Metadata:  domain.SessionMetadata{Branch: "ao/mer-orchestrator"},
-		},
-	}
-	svc := &Service{manager: fc, store: st}
-
-	_, err := svc.SpawnOrchestrator(context.Background(), "mer", false, "", "")
-	if err == nil || !strings.Contains(err.Error(), `uses harness "claude-code", want "codex"`) {
-		t.Fatalf("SpawnOrchestrator err = %v, want harness verification failure", err)
 	}
 }
 

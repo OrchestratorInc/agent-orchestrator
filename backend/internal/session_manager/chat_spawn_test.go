@@ -330,6 +330,7 @@ func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 			launcher := &recordingLauncher{}
 			m, st, _ := newChatManager(launcher)
 			project := st.projects[string(chatTestProject)]
+			project.Config.Worker.Harness = domain.HarnessCodex
 			project.Config.AgentConfig.Effort = "high"
 			st.projects[string(chatTestProject)] = project
 
@@ -1203,6 +1204,7 @@ func TestDefaultChatSpawnFallbackSkipsChatTuningResolution(t *testing.T) {
 	mgr.defaults = fixedSessionModeDefaults(domain.SessionModeChat)
 	mgr.modelCatalog = tuningCatalog{err: errors.New("model discovery unavailable")}
 	project := store.projects[string(chatTestProject)]
+	project.Config.Worker.Harness = domain.HarnessCodex
 	project.Config.Worker.AgentConfig.Effort = "high"
 	store.projects[string(chatTestProject)] = project
 
@@ -1565,6 +1567,7 @@ func TestChatSpawnAppliesRequestAgentConfigOverProjectDefaults(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
 	project := store.projects[string(chatTestProject)]
+	project.Config.Worker.Harness = domain.HarnessCodex
 	project.Config.AgentConfig.Model = "project-model"
 	store.projects[string(chatTestProject)] = project
 

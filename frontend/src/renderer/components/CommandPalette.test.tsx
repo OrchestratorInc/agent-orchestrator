@@ -864,18 +864,17 @@ describe("CommandPalette actions", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
 		ctx.params = { projectId: "proj-2" };
 		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockResolvedValue("orch-new");
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-2" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
-		await waitFor(() => expect(paletteInput()).toBeNull());
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-2", "command_palette"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("navigates and closes when selecting a project", async () => {

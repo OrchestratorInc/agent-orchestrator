@@ -51,7 +51,6 @@ import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
-	hasConfiguredOrchestratorAgent,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
@@ -598,13 +597,6 @@ export function CommandPalette() {
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 				navigateToTarget(sessionRoute(projectId, sessionId));
 				if (isCurrentRun()) closePalette();
-				return;
-			}
-			if (!hasConfiguredOrchestratorAgent(workspace)) {
-				if (workspace) {
-					navigateToTarget({ to: "/projects/$projectId/settings", params: { projectId } });
-					closePalette();
-				}
 				return;
 			}
 			const sessionId = await spawnOrchestrator(projectId, "command_palette");

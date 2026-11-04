@@ -150,6 +150,7 @@ func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing
 			m.browserCapabilities = browsersvc.NewAuthority()
 			deferred := deferredBackground(m)
 			project := st.projects[string(chatTestProject)]
+			project.Config.Worker.Harness = domain.HarnessCodex
 			project.Config.AgentConfig.Effort = "high"
 			st.projects[string(chatTestProject)] = project
 
@@ -290,6 +291,7 @@ func TestResumeFailedAsyncChatSpawnPreservesResolvedEffort(t *testing.T) {
 				ws := m.workspace.(*fakeWorkspace)
 				ws.createErr = errors.New("temporary git failure")
 				project := st.projects[string(chatTestProject)]
+				project.Config.Worker.Harness = domain.HarnessCodex
 				project.Config.AgentConfig.Effort = selection.projectEffort
 				st.projects[string(chatTestProject)] = project
 				cfg := asyncChatSpawnConfig("do the thing")
@@ -388,6 +390,7 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 				t.Fatalf("saved model/effort = %q/%q, want %q/xhigh", failed.Metadata.Model, failed.Metadata.Effort, tc.model)
 			}
 			project := st.projects[string(chatTestProject)]
+			project.Config.Worker.Harness = domain.HarnessCodex
 			project.Config.AgentConfig = domain.AgentConfig{Model: "small", Effort: "low"}
 			st.projects[string(chatTestProject)] = project
 			if tc.chatModel != "" {

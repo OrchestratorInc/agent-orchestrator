@@ -6,12 +6,10 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import {
 	buildRankedAgentOptions,
@@ -158,13 +156,6 @@ export function CreateProjectAgentSheet({
 			),
 		[selectableAgents],
 	);
-	// Local history is an inference signal only for local projects. A remote
-	// project must never infer its agent from this laptop's sessions.
-	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: open && !hostId });
-	const sessionHistory = useMemo(
-		() => (workspacesQuery.data ?? []).flatMap((workspace) => workspace.sessions),
-		[workspacesQuery.data],
-	);
 	const isLoadingAgents = connected && agents === undefined && agentsQuery.isFetching;
 	const agentsError = !connected ? t("remote.connectBeforeStart") : agentsQuery.isError
 		? agentsQuery.error instanceof Error
@@ -218,12 +209,12 @@ export function CreateProjectAgentSheet({
 	useEffect(() => {
 		if (!open) return;
 		if (!workerAgentTouched) {
-			setWorkerAgent(defaultAuthorizedAgentForRole(authorizedAgents, sessionHistory, "worker"));
+			setWorkerAgent(defaultAuthorizedAgentForRole(authorizedAgents));
 		}
 		if (!orchestratorAgentTouched) {
-			setOrchestratorAgent(defaultAuthorizedAgentForRole(authorizedAgents, sessionHistory, "orchestrator"));
+			setOrchestratorAgent(defaultAuthorizedAgentForRole(authorizedAgents));
 		}
-	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
+	}, [authorizedAgents, open, orchestratorAgentTouched, workerAgentTouched]);
 
 	if (isBusy) return null;
 
