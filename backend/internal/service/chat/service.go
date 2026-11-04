@@ -3135,12 +3135,13 @@ func (s *Service) InterruptedAwakeAgents() []domain.AwakeAgentTarget {
 
 // replacedProjectOwnerError explains why session found no conversation when the
 // project's orchestrator conversation now belongs to another session. Any other
-// case, including a lookup failure, keeps the original error.
+// case, including a lookup failure, keeps the original error, which stays
+// wrapped either way.
 func (s *Service) replacedProjectOwnerError(ctx context.Context, project domain.ProjectID, session domain.SessionID, err error) error {
 	current, lookupErr := s.store.ProjectConversation(ctx, project)
 	if lookupErr != nil || current.SessionID == "" || current.SessionID == session {
 		return err
 	}
-	return fmt.Errorf("project conversation %s is owned by session %s, not %s: %w",
-		current.ID, current.SessionID, session, ports.ErrProjectConversationReplaced)
+	return fmt.Errorf("project conversation %s is owned by session %s, not %s: %w: %w",
+		current.ID, current.SessionID, session, ports.ErrProjectConversationReplaced, err)
 }

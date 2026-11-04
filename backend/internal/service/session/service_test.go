@@ -6225,8 +6225,9 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 
 func TestRestoreReplacedOrchestratorAnswersTypedConflictAndStaysInTelemetry(t *testing.T) {
 	captured := 0
+	originalCapture := captureRelaunchError
 	captureRelaunchError = func(context.Context, error, map[string]string, string) { captured++ }
-	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
 	cause := fmt.Errorf("open conversation: %w", ports.ErrProjectConversationReplaced)
 	fc := &fakeCommander{restoreErr: fmt.Errorf("restore mer-1: %w", &sessionmanager.RelaunchError{Step: "chat start", Err: cause})}
 	sink := &fakeTelemetrySink{}

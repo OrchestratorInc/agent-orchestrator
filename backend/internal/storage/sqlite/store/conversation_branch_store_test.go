@@ -1206,7 +1206,10 @@ func TestOpenNativeConversationWithDeletedOwnerIsNotReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create old session: %v", err)
 	}
-	gone, err := s.CreateSession(ctx, sampleRecord("chat-orphaned"))
+	// Only a seed session (no workspace yet) can be deleted outright.
+	seed := sampleRecord("chat-orphaned")
+	seed.Metadata = domain.SessionMetadata{}
+	gone, err := s.CreateSession(ctx, seed)
 	if err != nil {
 		t.Fatalf("Create owner session: %v", err)
 	}
