@@ -42,7 +42,7 @@ func commandCodeHooksPath(workspacePath string) string {
 // discounts. Standing instructions ride the session's memory instead. See
 // sessionhome.go.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
-	return commandCodeHooks.Install(ctx, cfg.WorkspacePath)
+	return prepareImportedCommandWorkspace(ctx, cfg)
 }
 
 // UninstallHooks removes only AO-owned Command Code hooks.
