@@ -365,9 +365,15 @@ function nativeStagingFilesPresent(): boolean {
   const directory = macShipItDir();
   if (!directory || !existsSync(path.join(directory, "ShipItState.plist"))) return false;
   try {
-    return readdirSync(directory).some(name =>
-      /^update\.[^/]+$/.test(name) &&
-      existsSync(path.join(directory, name, path.basename(bundle), "Contents", "Info.plist")));
+    return readdirSync(directory, { withFileTypes: true }).some(update => {
+      if (!update.isDirectory() || !/^update\.[^/]+$/.test(update.name)) return false;
+      try {
+        // Finder can rename the running app, but ShipIt extracts the zip's bundle name.
+        return readdirSync(path.join(directory, update.name), { withFileTypes: true }).some(candidate =>
+          candidate.isDirectory() && candidate.name.endsWith(".app") &&
+          existsSync(path.join(directory, update.name, candidate.name, "Contents", "Info.plist")));
+      } catch { return false; }
+    });
   } catch { return false; }
 }
 export function __setStagingProbesForTesting(probes: {
