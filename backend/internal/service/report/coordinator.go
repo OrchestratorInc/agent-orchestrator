@@ -178,7 +178,7 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 			}
 			projectID = early
 		}
-		// Held until the project's pending done reports are delivered.
+		// Held until a batch of the project is delivered (see deliverProject).
 		c.earlyHold[projectID] = now.Add(OrchestratorBusyRetry)
 		if err := c.deliverProject(ctx, projectID); err != nil {
 			return c.retryDelay, err
@@ -315,8 +315,12 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 		return c.retryLater(ctx, batch, err)
 	}
-	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	return err
+	if _, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC()); err != nil {
+		return err
+	}
+	// Accepted, so a separate pending batch need not wait out the hold.
+	delete(c.earlyHold, projectID)
+	return nil
 }
 
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {

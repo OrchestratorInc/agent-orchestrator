@@ -309,3 +309,23 @@ func TestCoordinatorExpiredDoneBusyOrchestratorAttemptsOnce(t *testing.T) {
 		t.Fatalf("after backoff submissions = %#v, attempts = %d", got, h.delivery.attempts)
 	}
 }
+
+func TestCoordinatorDueDeliveryDoesNotHoldSeparateDoneBatch(t *testing.T) {
+	start := time.Date(2026, 10, 12, 17, 0, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)))
+	checkpoint := reportAt("checkpoint-a", "a", start, start, "a progress")
+	checkpoint.DeliveryBatchID = "batch-checkpoint"
+	done := doneAt("done-a", "a", start, "a finished")
+	done.DeliveryBatchID = "batch-done"
+	h.store.add(checkpoint, done)
+
+	h.now = start.Add(domain.ReportEarlyFlushDebounce)
+	if delay := h.run(t); delay != -1 {
+		t.Fatalf("delay = %v, want idle after both batches", delay)
+	}
+	got := h.delivery.submitted()
+	if len(got) != 2 || !strings.Contains(got[0].message, "a progress") || !strings.Contains(got[1].message, "a finished") {
+		t.Fatalf("submissions = %#v, want the due batch, then the done batch", got)
+	}
+}
