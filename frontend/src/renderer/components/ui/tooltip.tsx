@@ -3,7 +3,6 @@ import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } fr
 import { isMacPlatform } from "../../lib/platform";
 import { cn } from "../../lib/utils";
 import { useKeybindingsStore } from "../../stores/keybindings-store";
-import { ShortcutCaps } from "./kbd";
 
 function TooltipProvider({
 	delayDuration = 400,
@@ -46,7 +45,7 @@ function TooltipContent({
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content> & {
 	hideArrow?: boolean;
-	/** Command whose keybinding is shown beside the label, as small caps like the Cmd+K footer. */
+	/** Command whose keybinding is shown beside the label as muted glyphs (⌘ K), like the Cmd+K palette. */
 	shortcut?: AppShortcutId;
 }) {
 	const keys = useShortcutKeys(shortcut);
@@ -63,7 +62,11 @@ function TooltipContent({
 				{...props}
 			>
 				{keys ? <span>{children}</span> : children}
-				{keys ? <ShortcutCaps keys={keys} capClassName="h-5 min-w-5 bg-foreground/10 px-1" /> : null}
+				{keys ? (
+					<span data-slot="tooltip-shortcut" className="inline-flex shrink-0 items-center gap-1 text-muted-foreground" aria-hidden="true">
+						{keys.map((key, index) => <kbd key={`${key}-${index}`} className="font-sans">{key}</kbd>)}
+					</span>
+				) : null}
 				{hideArrow ? null : (
 					<TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-overlay fill-overlay" />
 				)}

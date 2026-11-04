@@ -17,7 +17,7 @@ function renderOpen(shortcut?: "toggle-sidebar") {
 describe("TooltipContent shortcut", () => {
 	afterEach(() => useKeybindingsStore.setState({ overrides: {} }));
 
-	it("shows the command's keybinding as caps beside the label", () => {
+	it("shows the command's keybinding beside the label", () => {
 		renderOpen("toggle-sidebar");
 		const [content] = screen.getAllByText("Toggle sidebar");
 		const caps = content.closest("[data-slot=tooltip-content]")?.querySelectorAll("kbd");
