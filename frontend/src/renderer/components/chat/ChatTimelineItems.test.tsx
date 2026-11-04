@@ -635,6 +635,39 @@ describe("AssistantMessage streaming", () => {
 });
 
 describe("ActivityRow", () => {
+	it("does not print a null tool payload as the row's body", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "delegate", sequence: 1, revision: 1, createdAt: "2026-11-04T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+				// As the daemon sends it: JSON null for each payload the provider left out.
+				detail: JSON.parse('{"protocol":"acp","arguments":null,"result":null,"content":null}'),
+			}} />,
+		);
+
+		const row = screen.getByRole("button", { name: /Agent tool/ });
+		expect(row).toBeDisabled();
+		fireEvent.click(row);
+		expect(screen.queryByText("null")).not.toBeInTheDocument();
+		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+	});
+
+	it("opens a tool row onto its real payload and skips the null ones", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "search", sequence: 1, revision: 1, createdAt: "2026-11-04T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Search files",
+				detail: JSON.parse('{"protocol":"acp","arguments":null,"result":{"matches":2},"content":null}'),
+			}} />,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: /Search files/ }));
+		expect(screen.getByText("Result")).toBeInTheDocument();
+		expect(screen.getByText(/"matches": 2/)).toBeInTheDocument();
+		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+		expect(screen.queryByText("null")).not.toBeInTheDocument();
+	});
+
 	it("renders inline code in provider activity titles without literal backticks", () => {
 		const path = "/Users/sachin/.ao/worktrees/murdock/docs/system-design.html";
 		const { container } = render(
