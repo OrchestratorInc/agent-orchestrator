@@ -364,8 +364,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{/* No session yet: the shared session frame with no tabs holds the header's
-			    place and surface, so nothing moves or changes colour at handoff. */}
-			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+			    place and surface, so nothing moves or changes colour at handoff. The
+			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
+			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
 			<ChatWorkspace
