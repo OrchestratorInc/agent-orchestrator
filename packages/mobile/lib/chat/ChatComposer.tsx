@@ -81,7 +81,6 @@ const steer = { ios: "arrow.turn.up.right", android: "turn_right" } as const;
 /** A message waiting its turn in the queue. */
 const queued = { ios: "arrow.turn.down.right", android: "subdirectory_arrow_right" } as const;
 /** Sent once the running turn ends. */
-const sentLater = { ios: "clock", android: "schedule" } as const;
 const approvalGlyph = { ios: "shield", android: "shield" } as const;
 /** Dictate, filled as on the new-task sheet's round button. */
 const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
@@ -555,12 +554,6 @@ export function ChatComposer({
 			</View> : null}
 		</ScrollView>
 	</Animated.View> : null;
-	// While a turn runs, a message waits for it: the placeholder says so until
-	// there is a draft, and this note after that.
-	const deliveryNote = deliveryPresentation.showQueueNote && !steerAction ? <View style={styles.deliveryNote}>
-		<AppSymbol name={sentLater} size={iconSize.xs} color={t.textTertiary} />
-		<Text numberOfLines={1} style={styles.deliveryNoteText} maxFontSizeMultiplier={fontScaleCap.chrome}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
-	</View> : null;
 	return (
 		// The dock holds its resting inset at all times and rides the keyboard's own
 		// progress to close the difference, so its distance to the keyboard is
@@ -696,7 +689,6 @@ export function ChatComposer({
 					<View style={styles.settingsSlot}>
 						<ChatTurnSettingsControl {...settingsProps} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
 					</View>
-					{deliveryNote}
 					{steerAction}
 				</Animated.View>
 				{/* The corner controls, pinned to the pill's bottom corners in both
@@ -779,8 +771,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	corner: { position: "absolute", bottom: space.xs, height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 	cornerLeading: { left: space.xs },
 	cornerTrailing: { right: space.xs },
-	// The card's controls: attach, the turn settings, then the delivery note or
-	// steer, dictation and the control that commits. The settings label is the
+	// The card's controls: attach, the turn settings, then steer, dictation and the control that commits. The settings label is the
 	// only one that can be long, so it is the one that yields: `flex: 1` with
 	// `minWidth: 0` to allow the squeeze, and `overflow: "hidden"` so a label that
 	// does not truncate cleanly cannot paint over its neighbours. Both are at
@@ -816,8 +807,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	contextFill: { height: 4, borderRadius: radius.pill },
 	contextText: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, fontWeight: "600" },
 	// As tall as the row; it yields before the controls do.
-	deliveryNote: { flexShrink: 1, minWidth: 0, height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
-	deliveryNoteText: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },
 	// Out of the layout but still mounted, with its draft and its place.

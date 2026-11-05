@@ -176,10 +176,11 @@ describe("composer chips", () => {
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
 	});
 
-	// Steering stays reachable from the open card, and the note says when a
-	// message will go while a turn runs.
-	it("keeps the steer action and the delivery note in the card", () => {
+	// Steering stays reachable from the open card. While a turn runs the field's
+	// placeholder says a message waits for it; the controls row repeats nothing.
+	it("keeps the steer action in the card, with no delivery note beside it", () => {
 		expect(composer).toContain('accessibilityLabel="Steer this turn now"');
-		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
+		expect(composer).not.toContain("Sent after this");
+		expect(composer).not.toContain("deliveryNote");
 	});
 });

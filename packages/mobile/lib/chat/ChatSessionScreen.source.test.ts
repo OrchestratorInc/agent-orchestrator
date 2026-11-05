@@ -41,10 +41,8 @@ describe("active turn controls", () => {
 		expect(composerSource).not.toContain("queueSteerText");
 	});
 
-	it("keeps settings and active-turn delivery state in the pill's controls row", () => {
+	it("keeps the turn settings in the pill's controls row", () => {
 		expect(composerSource).toContain("style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>");
-		expect(composerSource).toContain('numberOfLines={1} style={styles.deliveryNoteText}');
-		expect(composerSource).toContain('Sent after this');
 	});
 	// One name per session, as on desktop: useWorkspaceQuery derives
 	// `displayName ?? issueId ?? id`, ChatWorkspace prefers that over the
