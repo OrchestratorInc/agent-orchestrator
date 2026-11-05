@@ -447,8 +447,8 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
-	/** The API error code that goes with resumeError. */
-	resumeErrorCode?: string;
+	/** resumeError says another app still holds this chat. */
+	resumeOpenElsewhere?: boolean;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -760,7 +760,7 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
-	resumeErrorCode,
+	resumeOpenElsewhere,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -1989,7 +1989,7 @@ function ChatWorkspaceContent({
 									onResume={newWorkDisabled ? undefined : onResumeAgent}
 									resuming={resumingAgent}
 									resumeError={resumeError}
-									resumeErrorCode={resumeErrorCode}
+									resumeOpenElsewhere={resumeOpenElsewhere}
 									harness={snapshot.harness}
 									onOpenShell={onOpenShell}
 									openingShell={openingShell}
@@ -2514,7 +2514,7 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
-	resumeErrorCode,
+	resumeOpenElsewhere,
 	harness,
 	onOpenShell,
 	openingShell,
@@ -2533,14 +2533,14 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
-	resumeErrorCode?: string;
+	resumeOpenElsewhere?: boolean;
 	harness?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
-	const openElsewhere = resumeErrorCode === "SESSION_OPEN_ELSEWHERE" && controller.state === "stopped";
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped";
 	// The other app releases the chat without telling AO (Codex can hold a closed
 	// one for many minutes), so keep checking instead of waiting for Retry.
 	const resumeRef = useRef(onResume);
@@ -2616,7 +2616,7 @@ function ControllerBanner({
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
 							{openElsewhere
-								? `Close it there to continue here.${harness === "codex" ? " Codex can keep a closed chat for a while." : ""} AO checks again every 30 seconds.`
+								? `Close it there to continue here.${harness === "codex" ? " Codex can keep a closed chat for a while." : ""} AO checks again every ${OPEN_ELSEWHERE_RECHECK_MS / 1000} seconds.`
 								: needsResume ? "Retry to continue this conversation." : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (

@@ -4,6 +4,8 @@ import { cn } from "../../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
 export type HarnessDetailTab = "account" | "models" | "health" | "import";
+/** A Harness page tab that Settings can be opened on directly. */
+export type HarnessLinkTab = Extract<HarnessDetailTab, "import">;
 export type HarnessTone = "ok" | "error" | "off";
 
 const SPLIT_LAYOUT_MIN_WIDTH = 720;

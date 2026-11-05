@@ -5,6 +5,7 @@ import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucen
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
+import type { HarnessLinkTab } from "../components/settings/harness/harness-ui";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -68,7 +69,7 @@ export type SettingsModal =
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
 			focusSetting?: string;
 			/** Open this tab of focusAgentId's Harness page. */
-			harnessTab?: "import";
+			harnessTab?: HarnessLinkTab;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -183,6 +184,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Home offers the session import once: until the user imports or dismisses it. */
+	sessionImportOfferClosed: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -258,6 +261,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	closeSessionImportOffer: () => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
@@ -269,7 +273,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: "import"; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; harnessTab?: HarnessLinkTab; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -331,6 +335,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
@@ -362,6 +367,14 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+}
+
+function initialSessionImportOfferClosed() {
+	try {
+		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
+	} catch {
+		return false;
+	}
 }
 
 function initialTerminalCopyOnSelect() {
@@ -432,6 +445,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
@@ -500,6 +514,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
+	},
+	closeSessionImportOffer: () => {
+		try {
+			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
+		} catch {
+			// The offer comes back next launch; the agent page still has the import.
+		}
+		set({ sessionImportOfferClosed: true });
 	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));

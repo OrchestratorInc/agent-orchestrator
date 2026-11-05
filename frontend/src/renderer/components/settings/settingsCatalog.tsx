@@ -3,6 +3,7 @@ import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePoint
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
+import type { HarnessLinkTab } from "./harness/harness-ui";
 import { BillingSection } from "./BillingSection";
 import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
@@ -72,7 +73,7 @@ type CatalogContext = {
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
 	showDiagnostics?: HarnessDiagnosticsRequest;
-	harnessTab?: "import";
+	harnessTab?: HarnessLinkTab;
 	/** One page is shown, under its own title: a first heading that only
 	 * rewords that title ("Keyboard shortcuts" on Shortcuts) is hidden. */
 	singlePage?: boolean;

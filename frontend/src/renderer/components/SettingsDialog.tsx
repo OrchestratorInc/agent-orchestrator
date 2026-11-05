@@ -17,6 +17,7 @@ import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation"
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
+import type { HarnessLinkTab } from "./settings/harness/harness-ui";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
@@ -153,7 +154,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
 	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
-	const [harnessTab, setHarnessTab] = useState<"import">();
+	const [harnessTab, setHarnessTab] = useState<HarnessLinkTab>();
 	const projectHistory = useSectionHistory<ProjectSettingsSection>("general");
 	const activeProjectSection = projectHistory.current;
 	const [pendingProjectSection, setPendingProjectSection] = useState<{ navigate: () => void } | null>(null);

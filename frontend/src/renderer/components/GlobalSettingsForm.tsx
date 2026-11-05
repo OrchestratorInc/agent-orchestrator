@@ -2,6 +2,7 @@ import { Fragment, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { type GlobalSettingsSection as GlobalSettingsPage, type HarnessDiagnosticsRequest, useUiStore } from "../stores/ui-store";
 import { globalSettingsItemsFor } from "./settings/settingsCatalog";
+import type { HarnessLinkTab } from "./settings/harness/harness-ui";
 import { SettingsPageTitleContext } from "./settings/SettingsSection";
 
 export type GlobalSettingsSection = GlobalSettingsPage | "all";
@@ -31,7 +32,7 @@ export function GlobalSettingsForm({
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
 	showDiagnostics?: HarnessDiagnosticsRequest;
-	harnessTab?: "import";
+	harnessTab?: HarnessLinkTab;
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();

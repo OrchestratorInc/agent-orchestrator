@@ -1,15 +1,14 @@
 import { ChevronDown, Download } from "lucide-react";
-import { useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { agentLabel, type AgentId } from "../lib/agent-options";
+import { agentSignedIn } from "../lib/agent-select-options";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { closeSessionImportOffer, IMPORTABLE_AGENTS, sessionImportOfferClosed, subscribeSessionImportOffer } from "./settings/harness/SessionImportPanel";
+import { IMPORTABLE_AGENTS } from "./settings/harness/SessionImportPanel";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-const SIGNED_IN = new Set(["authorized", "not_applicable", "configured"]);
 /** Logos shown before the rest collapse into "+N", so the card keeps one row
  * however many agents can import. */
 const MAX_LOGOS = 4;
@@ -21,11 +20,12 @@ const MAX_LOGOS = 4;
  * dismisses it. */
 export function SessionImportOffer() {
 	const { t } = useTranslation();
-	const closed = useSyncExternalStore(subscribeSessionImportOffer, sessionImportOfferClosed);
+	const closed = useUiStore((state) => state.sessionImportOfferClosed);
+	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const readiness = useAgentReadinessQuery(!closed);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const agents = (readiness.data?.agents ?? [])
-		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && agent.installation.state === "installed" && SIGNED_IN.has(agent.authentication.state))
+		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id as AgentId) && agent.installation.state === "installed" && agentSignedIn(agent))
 		.map((agent) => agent.id as AgentId);
 	if (closed || agents.length === 0) return null;
 	const openImport = (agentId: AgentId) => openGlobalSettings("harness", { focusAgentId: agentId, harnessTab: "import" });
@@ -63,7 +63,7 @@ export function SessionImportOffer() {
 									</DropdownMenuContent>
 								</DropdownMenu>
 							)}
-							<TopbarButton onClick={closeSessionImportOffer} variant="accent">
+							<TopbarButton onClick={() => closeSessionImportOffer()} variant="accent">
 								{t("sessionImport.offerDismiss")}
 							</TopbarButton>
 							{agents.length > 1 ? (

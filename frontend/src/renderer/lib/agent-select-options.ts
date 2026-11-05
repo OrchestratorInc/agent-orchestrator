@@ -133,6 +133,12 @@ export function isReadyAgent(agent: AgentInfo): boolean {
 		(agent.authentication.state === "authorized" || agent.authentication.state === "not_applicable");
 }
 
+/** Signed in as far as AO can tell: "configured" counts though AO cannot verify it. */
+export function agentSignedIn(agent: { authentication: { state: string } }): boolean {
+	return agent.authentication.state === "authorized" || agent.authentication.state === "not_applicable" ||
+		agent.authentication.state === "configured";
+}
+
 /** Unknown readiness is not a rejection; only definite failures block launch. */
 export function isLaunchableAgent(agent: AgentInfo): boolean {
 	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";

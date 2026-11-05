@@ -182,7 +182,7 @@ describe("ChatWorkspace retry", () => {
 				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
 				onResumeAgent={retry}
 				resumeError="Reworded by the daemon"
-				resumeErrorCode="SESSION_OPEN_ELSEWHERE"
+				resumeOpenElsewhere
 			/>,
 		);
 		expect(screen.getByText("This is open elsewhere")).toBeVisible();
@@ -201,13 +201,13 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
 	});
 
-	it("reads open elsewhere from the error code, not the message text", () => {
+	it("reads open elsewhere from the flag, not the message text", () => {
 		render(
 			<ChatWorkspace
 				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
 				onResumeAgent={vi.fn()}
 				resumeError="this is open elsewhere; close it there to continue here"
-				resumeErrorCode="AGENT_RESUME_FAILED"
+				resumeOpenElsewhere={false}
 			/>,
 		);
 		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
@@ -223,7 +223,7 @@ describe("ChatWorkspace retry", () => {
 					snapshot={{ ...chatFixture, controller: { state: "ready" } }}
 					onResumeAgent={retry}
 					resumeError="this is open elsewhere; close it there to continue here"
-					resumeErrorCode="SESSION_OPEN_ELSEWHERE"
+					resumeOpenElsewhere
 				/>,
 			);
 			act(() => vi.advanceTimersByTime(60_000));
@@ -242,7 +242,7 @@ describe("ChatWorkspace retry", () => {
 					snapshot={{ ...chatFixture, harness: "claude-code", controller: { state: "stopped" } }}
 					onResumeAgent={retry}
 					resumeError="this is open elsewhere; close it there to continue here"
-					resumeErrorCode="SESSION_OPEN_ELSEWHERE"
+					resumeOpenElsewhere
 				/>,
 			);
 			expect(screen.getByText("Close it there to continue here. AO checks again every 30 seconds.")).toBeVisible();

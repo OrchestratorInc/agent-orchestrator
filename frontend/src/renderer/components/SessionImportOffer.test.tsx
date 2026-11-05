@@ -24,7 +24,7 @@ function renderOffer(...agents: ReturnType<typeof agent>[]) {
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useUiStore.setState({ settingsModal: null });
+	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false });
 });
 
 it("offers a direct button when only one importable agent is configured", () => {
@@ -63,6 +63,8 @@ it("stays hidden once dismissed", () => {
 	const { unmount } = renderOffer(agent("codex", true, "authorized"));
 	fireEvent.click(screen.getByRole("button", { name: "Not now" }));
 	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
+	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
+	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 	unmount();
 	renderOffer(agent("codex", true, "authorized"));
 	expect(screen.queryByRole("button", { name: "Import Codex chats" })).not.toBeInTheDocument();

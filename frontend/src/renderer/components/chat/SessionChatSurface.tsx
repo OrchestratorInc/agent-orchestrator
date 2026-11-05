@@ -137,7 +137,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	accountMoving,
 	agentResuming,
 	controllerResumeError,
-	controllerResumeErrorCode,
+	controllerResumeOpenElsewhere,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
@@ -196,8 +196,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
-	/** The API error code that goes with controllerResumeError. */
-	controllerResumeErrorCode?: string;
+	/** controllerResumeError says another app still holds this chat. */
+	controllerResumeOpenElsewhere?: boolean;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** A switch from the terminal is under way and the conversation is not readable yet. */
@@ -386,9 +386,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	// Catalog reads wait for a ready controller, including an import's first open.
-	// Cached catalogs and saved settings remain visible while it resumes.
-	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
+	// Until the controller is ready (sleeping, waking, reconnecting or resuming an import) the bar shows the cached and saved settings.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
 	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
@@ -855,7 +853,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
-				resumeErrorCode={commands.resumeError ? commands.resumeErrorCode : controllerResumeErrorCode}
+				resumeOpenElsewhere={commands.resumeError ? commands.resumeOpenElsewhere : controllerResumeOpenElsewhere}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

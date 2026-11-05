@@ -21,6 +21,16 @@ export function resumeAgentErrorMessage(error: unknown, status?: number): string
 	}
 }
 
+/** A failed resume as a thrown Error that keeps the API error code. */
+export function resumeAgentError(error: unknown, status?: number): Error {
+	return Object.assign(new Error(resumeAgentErrorMessage(error, status)), { code: apiErrorCode(error) });
+}
+
+/** A failed resume says another app still holds the chat. */
+export function resumeOpenElsewhere(error: unknown): boolean {
+	return apiErrorCode(error) === "SESSION_OPEN_ELSEWHERE";
+}
+
 /**
  * Resume a local session's stopped agent, sharing one request per session.
  * Hovering a session starts it early; opening the session then joins the same
@@ -31,7 +41,7 @@ export function resumeAgentOnOpen(sessionId: string): Promise<void> {
 		const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
-		if (error) throw Object.assign(new Error(resumeAgentErrorMessage(error, response.status)), { code: apiErrorCode(error) });
+		if (error) throw resumeAgentError(error, response.status);
 	});
 }
 

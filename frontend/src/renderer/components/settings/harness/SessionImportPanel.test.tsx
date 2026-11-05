@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
+import { useUiStore } from "../../../stores/ui-store";
 import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
@@ -51,6 +52,7 @@ function renderPanel(harness: AgentId = "claude-code") {
 beforeEach(() => {
 	vi.clearAllMocks();
 	window.localStorage.clear();
+	useUiStore.setState({ sessionImportOfferClosed: false });
 	api.GET.mockResolvedValue({
 		data: {
 			candidates: [
@@ -88,6 +90,7 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
 	expect(screen.getByText("Already in AO")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
+	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 });
 
 it("filters the list by a search over titles and projects", async () => {
@@ -136,6 +139,7 @@ it("reports new, existing and failed imports separately", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
 	expect(await screen.findByText("1 already in AO. 1 could not be imported.")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBeNull();
+	expect(useUiStore.getState().sessionImportOfferClosed).toBe(false);
 });
 
 it("adds a new folder as a project, scans again and imports its chat there", async () => {

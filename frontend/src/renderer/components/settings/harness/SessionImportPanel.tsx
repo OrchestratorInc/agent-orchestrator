@@ -22,32 +22,9 @@ type ImportResult = components["schemas"]["SessionImportResult"];
 /** Agents whose local chats AO can import. */
 export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "aider", "devin", "cline", "cursor", "grok", "opencode"]);
 
-const offerClosedKey = "ao.sessionImport.offerClosed";
-const offerListeners = new Set<() => void>();
 const folderFilter = "folder:";
-
-/** Home offers the import once: until the user imports or dismisses it. */
-export function sessionImportOfferClosed(): boolean {
-	try {
-		return window.localStorage.getItem(offerClosedKey) === "true";
-	} catch {
-		return false;
-	}
-}
-
-export function subscribeSessionImportOffer(listener: () => void): () => void {
-	offerListeners.add(listener);
-	return () => offerListeners.delete(listener);
-}
-
-export function closeSessionImportOffer(): void {
-	try {
-		window.localStorage.setItem(offerClosedKey, "true");
-	} catch {
-		// The offer comes back next launch; the agent page still has the import.
-	}
-	for (const listener of offerListeners) listener();
-}
+/** The most chats one import request takes. */
+const MAX_IMPORT = 500;
 
 function folderName(path: string): string {
 	return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -72,6 +49,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const navigate = useNavigate();
 	const navigateToSession = useNavigateToSession();
 	const closeSettings = useUiStore((state) => state.closeSettings);
+	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const workspaces = useQuery(workspaceQueryOptions);
 	const projects = useMemo(
 		() =>
@@ -131,26 +109,25 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						: c.projectId === project)) &&
 			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
-	const selectedVisible = visible.filter(
-		(c) =>
-			selected.has(c.id) &&
-			!c.sessionId &&
-			!results.some((r) => r.id === c.id && r.status !== "failed"),
-	);
+	const importedIds = new Set(results.filter((r) => r.status !== "failed").map((r) => r.id));
+	const eligible = visible.filter((c) => !c.sessionId && !importedIds.has(c.id));
+	const selectedVisible = eligible.filter((c) => selected.has(c.id));
 	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
 	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
 	const openSession = (c: Candidate, sessionId: string) => {
 		closeSettings();
 		navigateToSession(c.projectId, sessionId);
 	};
-	const created = results
-		.filter((r) => r.status === "created" && r.sessionId)
-		.flatMap((r) => {
-			const c = candidates.find((item) => item.id === r.id);
-			return c && r.sessionId ? [{ candidate: c, sessionId: r.sessionId }] : [];
-		})
-		.sort((a, b) => b.candidate.lastActivity.localeCompare(a.candidate.lastActivity));
-	const firstCreated = created[0];
+	// The most recent chat this import created.
+	let latest: { candidate: Candidate; sessionId: string } | undefined;
+	for (const r of results) {
+		if (r.status !== "created" || !r.sessionId) continue;
+		const c = candidates.find((item) => item.id === r.id);
+		if (c && (!latest || c.lastActivity.localeCompare(latest.candidate.lastActivity) > 0)) {
+			latest = { candidate: c, sessionId: r.sessionId };
+		}
+	}
+	const firstCreated = latest;
 	const toggle = (ids: string[], checked: boolean) => {
 		keepChoicesRef.current = true;
 		setSelected((current) => {
@@ -162,11 +139,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			return next;
 		});
 	};
-	const eligible = visible.filter(
-		(c) =>
-			!c.sessionId &&
-			!results.some((r) => r.id === c.id && r.status !== "failed"),
-	);
 	const importSelected = async () => {
 		setImporting(true);
 		importingRef.current = true;
@@ -358,7 +330,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						onClick={() => void importSelected()}
 						disabled={
 							!selectedVisible.length ||
-							selectedVisible.length > 500 ||
+							selectedVisible.length > MAX_IMPORT ||
 							importing
 						}
 					>
@@ -367,7 +339,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 							: t("sessionImport.import", { count: selectedVisible.length })}
 					</Button>
 				</div>
-				{selectedVisible.length > 500 ? (
+				{selectedVisible.length > MAX_IMPORT ? (
 					<p role="alert" className="text-xs text-destructive">
 						{t("sessionImport.limit")}
 					</p>

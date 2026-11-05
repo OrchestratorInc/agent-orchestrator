@@ -56,7 +56,7 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -582,6 +582,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
+	// This session's background resume failed; the chat shows why.
+	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
 		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
@@ -2159,10 +2161,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
-										? apiErrorMessage(autoResume.error) : undefined}
-									controllerResumeErrorCode={!hostId && autoResume.variables === sessionId && autoResume.isError
-										? apiErrorCode(autoResume.error) : undefined}
+									controllerResumeError={autoResumeFailed ? apiErrorMessage(autoResume.error) : undefined}
+									controllerResumeOpenElsewhere={autoResumeFailed && resumeOpenElsewhere(autoResume.error)}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
 									arriving={interfaceUi.optimisticTarget === "chat"}
