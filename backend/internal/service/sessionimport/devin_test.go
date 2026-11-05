@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDevinActiveChain(t *testing.T) {
@@ -53,5 +54,17 @@ func TestDevinMissingStoreAndRoot(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
 	if got := devinRoot("/home/test"); got != filepath.Join("/custom/data", "devin", "cli") {
 		t.Fatal(got)
+	}
+}
+
+// The Devin CLI stores Unix seconds; reading them as milliseconds dated every
+// chat to January 1970, so none counted as recent.
+func TestDevinTimeReadsSeconds(t *testing.T) {
+	want := time.Date(2026, 11, 4, 10, 27, 40, 0, time.UTC)
+	if got := devinTime(want.Unix()); !got.Equal(want) {
+		t.Fatalf("seconds: %v", got)
+	}
+	if got := devinTime(want.UnixMilli()); !got.Equal(want) {
+		t.Fatalf("milliseconds: %v", got)
 	}
 }

@@ -21,6 +21,15 @@ func devinRoot(home string) string {
 	return filepath.Join(home, ".local", "share", "devin", "cli")
 }
 
+// devinTime reads a Devin timestamp. The CLI writes Unix seconds; values too
+// large to be seconds (anything after 2286) are taken as milliseconds.
+func devinTime(v int64) time.Time {
+	if v > 0 && v < 1e10 {
+		return time.Unix(v, 0)
+	}
+	return time.UnixMilli(v)
+}
+
 func devinDB(root string) (*sql.DB, error) {
 	path := filepath.Join(root, "sessions.db")
 	if _, err := os.Stat(path); err != nil {
@@ -56,7 +65,7 @@ func discoverDevin(ctx context.Context, root string) ([]sourceFiles, error) {
 		if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
 			continue
 		}
-		out = append(out, sourceFiles{harness: domain.HarnessDevin, root: root, key: id, paths: []string{id}, modTime: time.UnixMilli(updated), size: count})
+		out = append(out, sourceFiles{harness: domain.HarnessDevin, root: root, key: id, paths: []string{id}, modTime: devinTime(updated), size: count})
 	}
 	return out, rows.Err()
 }
@@ -85,7 +94,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 	if !filepath.IsAbs(t.cwd) {
 		return t, errors.New("transcript working directory must be absolute")
 	}
-	t.last = time.UnixMilli(updated)
+	t.last = devinTime(updated)
 	rows, err := db.QueryContext(ctx, `WITH RECURSIVE chain(node_id,parent_node_id) AS (
 		SELECT node_id,parent_node_id FROM message_nodes WHERE session_id=? AND node_id=(SELECT main_chain_id FROM sessions WHERE id=?)
 		UNION SELECT n.node_id,n.parent_node_id FROM message_nodes n JOIN chain c ON n.node_id=c.parent_node_id WHERE n.session_id=?
@@ -130,7 +139,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 				t.title = text
 			}
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(m.Role), Text: text, At: time.UnixMilli(at)}})
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(m.Role), Text: text, At: devinTime(at)}})
 		if len(items) > 2 {
 			before := len(items)
 			items = trimVisible(items)
