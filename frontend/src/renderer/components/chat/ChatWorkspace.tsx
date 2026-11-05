@@ -2647,8 +2647,12 @@ const WELCOME_FADE_MS = 150;
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
-/** A settled turn holds the reader's row still this long, while "Worked for" opens (240ms). */
+/** A settled turn holds the reader's view still this long while its rows re-measure. */
 const SETTLE_HOLD_MS = 400;
+/** A settled turn's rows slide from where the reader last saw them for this long. */
+const SETTLE_SLIDE_MS = 240;
+/** The same ease-out the turn's other settle motion ("Worked for" fading in) uses. */
+const SETTLE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 /**
  * A reader who nudges the view up a little and then stops has paused, not left.
  * After this long with no further input, while the turn is still live and they are
@@ -2796,6 +2800,18 @@ export function Timeline({
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
 	const skipRelatchFollow = useRef(false);
+	const reducedMotion = useReducedMotion();
+	const reducedMotionRef = useRef(reducedMotion);
+	reducedMotionRef.current = reducedMotion;
+	// Set while the virtualizer applies a size change that the prompt spacer takes
+	// instead of the scroll position (see scrollToFn).
+	const spacerTakesResize = useRef(false);
+	// Set once syncStreamedGrowth exists, for the virtualizer's onChange to call.
+	const followVirtualHeight = useRef<() => void>(() => {});
+	const spacerTakes = useCallback((takes: boolean) => {
+		spacerTakesResize.current = takes && (promptSpacer.current?.offsetHeight ?? 0) > 0;
+		if (spacerTakesResize.current) queueMicrotask(() => { spacerTakesResize.current = false; });
+	}, []);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
 		setPinned(next);
@@ -3711,6 +3727,7 @@ export function Timeline({
 		getScrollElement: () => scroller.current,
 		getItemKey: virtualItemKey,
 		estimateSize: () => CHAT_ESTIMATED_TURN_HEIGHT,
+		onChange: () => followVirtualHeight.current(),
 		gap: CHAT_TURN_GAP,
 		overscan: 2,
 		scrollMargin: virtualScrollMargin,
@@ -3734,11 +3751,14 @@ export function Timeline({
 		measureElement: (element, entry, instance) => {
 			// Capture the old row positions before the first width remeasurement.
 			captureViewportResize(instance);
-			const group = groups[Number(element.getAttribute("data-index"))];
+			const index = Number(element.getAttribute("data-index"));
+			const group = groups[index];
 			if (group && !measuredVirtualGroups.current.has(group)) {
 				measuredVirtualGroups.current.add(group);
 				pendingVirtualLayout.current = true;
 			}
+			// The resize this measure leads to is applied synchronously, right after it.
+			spacerTakes(pinnedRef.current && index >= groups.findLastIndex(groupHasHumanPrompt));
 			return measureElement(element, entry, instance) || CHAT_ESTIMATED_TURN_HEIGHT;
 		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
@@ -3752,6 +3772,13 @@ export function Timeline({
 				reaim();
 				return;
 			}
+			// Anchored to the end, the virtualizer moves the view by every change in the
+			// latest prompt's turn: a fold opening or closing, a settled turn folding its
+			// steps away. While the spacer under that prompt is open, the change is the
+			// spacer's to take (syncStreamedGrowth sizes it, as without windowing), so
+			// the view holds still instead of sliding the wrong way and snapping back.
+			// The next scroll event re-syncs the virtualizer's offset.
+			if (spacerTakesResize.current && adjustments !== 0) return;
 			instance.scrollElement.scrollTop = offset + adjustments;
 			// Anchoring writes are ours; they must never read as the reader leaving the end.
 			markWritten(instance.scrollElement.scrollTop);
@@ -4037,7 +4064,36 @@ export function Timeline({
 		updateScrollbar();
 	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
-	// Keeps a settled turn's row still under the reader while "Worked for" opens.
+	// A windowed chat learns a turn's new height (a fold opening or closing) a frame
+	// before React draws it, and the spacer waits for the two to agree. Near the end,
+	// a shrink then clamps the view to the stale height on every frame of the fold's
+	// animation and snaps it back once the animation ends. Take the new height now and
+	// size the spacer against it, as an unwindowed chat already does: following the
+	// end, always; reading back, only when the shrink would otherwise clamp the view.
+	followVirtualHeight.current = () => {
+		const node = scroller.current;
+		const content = virtualContent.current;
+		if (!virtualized || !node || !content || viewportResize.current || !initialLayoutDone.current) return;
+		const total = virtualizer.getTotalSize();
+		const shrink = renderedVirtualHeight.current - total;
+		if (shrink === 0) return;
+		const following = pinnedRef.current;
+		if (!following && (shrink < 0 || node.scrollTop + node.clientHeight <= node.scrollHeight - shrink)) return;
+		const top = node.scrollTop;
+		content.style.height = `${total}px`;
+		renderedVirtualHeight.current = total;
+		if (following) {
+			syncStreamedGrowth();
+			return;
+		}
+		syncPromptSpacer();
+		node.scrollTop = Math.min(top, Math.max(0, node.scrollHeight - node.clientHeight));
+		markWritten(node.scrollTop);
+		lastScrollTop.current = node.scrollTop;
+	};
+
+	// Keeps a settled turn's row still under a reader who scrolled up, while its rows
+	// re-measure (a reply leaving its streaming render, code highlighting landing).
 	const settleHold = useRef<{ observer: ResizeObserver; timer: number } | undefined>(undefined);
 	const releaseSettleHold = useCallback(() => {
 		const hold = settleHold.current;
@@ -4047,13 +4103,15 @@ export function Timeline({
 		settleHold.current = undefined;
 	}, []);
 	useEffect(() => releaseSettleHold, [releaseSettleHold]);
-	// A settling turn folds all of its steps under "Worked for" in one commit. Following
-	// the end, syncStreamedGrowth puts the view back; a reader who scrolled up into the
-	// turn would instead see what they were reading vanish and the reply slide up under
-	// them. So note the turn's row at the top of their view just before the fold...
+	// A settling turn folds all of its steps under "Worked for" in one commit, so
+	// everything under them (the reply, its action row) moves up by their height at
+	// once, and the turn shrinks before the prompt spacer can grow back to take it.
+	// Left alone, the browser or the virtualizer pulls the view up and the follow
+	// glides it back down: the whole chat dips and returns. So note where the turn's
+	// rows were on screen just before the fold...
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
-		if (!node || pinnedRef.current || !initialLayoutDone.current) return undefined;
+		if (!node || !initialLayoutDone.current) return undefined;
 		if (!groups.some((group) => group.key === key && !group.live)) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
@@ -4061,44 +4119,101 @@ export function Timeline({
 		if (!turn) return undefined;
 		const top = node.getBoundingClientRect().top;
 		const rows = Array.from(turn.children) as HTMLElement[];
-		const index = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
-		if (index < 0) return undefined;
-		return { turn, rows, index, offset: rows[index]!.getBoundingClientRect().top - top };
+		const rects = rows.map((row) => row.getBoundingClientRect());
+		const following = pinnedRef.current;
+		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
+		if (!following && index < 0) return undefined;
+		return {
+			turn,
+			rows,
+			tops: rects.map((rect) => rect.top),
+			scrollTop: node.scrollTop,
+			following,
+			index,
+			offset: index >= 0 ? rects[index]!.top - top : 0,
+		};
 	}, [groups]);
-	// ...and put it back right after, before paint. A row still in the turn (the prompt,
-	// a steer, the reply) holds its place. A step that folded away hands its place to
-	// "Worked for", which lands at the top of the view with the reply under it.
-	const restoreSettle = useCallback(({ turn, rows, index, offset }: SettleAnchor) => {
+	// ...and put the view back right after, before paint. A reader following the end
+	// stays where they were: only a shrink the spacer cannot take moves the view, and
+	// that lands on the end. For a reader who scrolled up, a row still in the turn
+	// (the prompt, a steer, the reply) holds its place; a step that folded away hands
+	// its place to "Worked for", which lands at the top of the view with the reply
+	// under it. Then every row that still moved slides there from where it was.
+	const restoreSettle = useCallback((settle: SettleAnchor) => {
 		const node = scroller.current;
 		if (!node) return;
+		const { turn, rows, index, offset } = settle;
+		// The live row popLayout lifted out of the flow still props the scroll height up
+		// where it was, so leave it out while the spacer and the view are worked out.
+		const liveRows = rows.filter((row) => row.isConnected && row.hasAttribute("data-turn-live-row"));
+		for (const row of liveRows) row.style.display = "none";
+		// A windowed list learns the turn's new height on its next measure, a frame
+		// later, and only then shrinks; take it now, so the end is final before paint.
+		const wrapper = turn.parentElement;
+		const virtualIndex = Number(wrapper?.dataset.index);
+		if (virtualized && wrapper && Number.isInteger(virtualIndex)) {
+			spacerTakes(settle.following);
+			virtualizer.resizeItem(virtualIndex, Math.round(wrapper.getBoundingClientRect().height));
+			const total = virtualizer.getTotalSize();
+			if (virtualContent.current) virtualContent.current.style.height = `${total}px`;
+			renderedVirtualHeight.current = total;
+		}
 		// The fold changed what the end can reach, so size the spacer before moving.
 		syncPromptSpacer();
-		const anchor = rows[index]!;
-		const kept = anchor.isConnected && !anchor.hasAttribute("data-turn-live-row");
-		const target = kept
-			? anchor
-			: Array.from(turn.children).find((child) => child.hasAttribute("data-turn-worked"))
-				?? rows.slice(index + 1).find((row) => row.isConnected);
-		if (!target) return;
-		const landing = kept ? offset : 0;
-		const place = () => {
-			const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
-			if (Math.abs(delta) < 0.5) return;
-			node.scrollTop += delta;
+		let held: Element | undefined;
+		if (settle.following) {
+			const end = Math.max(0, node.scrollHeight - node.clientHeight);
+			const top = Math.min(settle.scrollTop, end);
+			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
-		};
-		place();
+		} else {
+			const anchor = rows[index]!;
+			const kept = anchor.isConnected && !anchor.hasAttribute("data-turn-live-row");
+			const target = kept
+				? anchor
+				: Array.from(turn.children).find((child) => child.hasAttribute("data-turn-worked"))
+					?? rows.slice(index + 1).find((row) => row.isConnected);
+			if (target) {
+				held = target;
+				const landing = kept ? offset : 0;
+				const place = () => {
+					const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
+					if (Math.abs(delta) < 0.5) return;
+					node.scrollTop += delta;
+					markWritten(node.scrollTop);
+					lastScrollTop.current = node.scrollTop;
+				};
+				place();
+				// The log has no scroll anchoring of its own: re-place the row after each
+				// layout step while the turn re-measures, or until the reader scrolls.
+				releaseSettleHold();
+				if (typeof ResizeObserver !== "undefined") {
+					const observer = new ResizeObserver(place);
+					observer.observe(turn);
+					settleHold.current = { observer, timer: window.setTimeout(releaseSettleHold, SETTLE_HOLD_MS) };
+				}
+			}
+		}
+		for (const row of liveRows) row.style.display = "";
 		updateScrollbar();
-		// "Worked for" then opens from zero height above a row the reader kept, and the
-		// log has no scroll anchoring of its own: re-place the row after each layout
-		// step until it has opened, or until the reader scrolls.
-		releaseSettleHold();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(place);
-		observer.observe(turn);
-		settleHold.current = { observer, timer: window.setTimeout(releaseSettleHold, SETTLE_HOLD_MS) };
-	}, [syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+		if (reducedMotionRef.current || typeof Element.prototype.animate !== "function") return;
+		rows.forEach((row, at) => {
+			// The row the hold keeps in place is measured on every re-place, so it must not move.
+			if (row === held || !row.isConnected || row.parentElement !== turn) return;
+			const delta = settle.tops[at]! - row.getBoundingClientRect().top;
+			if (Math.abs(delta) < 1) return;
+			const from = `translateY(${delta}px)`;
+			// The live row is already out of the flow, fading where it was; if the view
+			// moved under it, it stays put on screen (and inside the scroll height) while
+			// it goes.
+			if (row.hasAttribute("data-turn-live-row")) {
+				row.animate([{ transform: from }, { transform: from }], { duration: SETTLE_SLIDE_MS, fill: "forwards" });
+				return;
+			}
+			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
+		});
+	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -4832,10 +4947,6 @@ const TurnGroup = memo(function TurnGroup({
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
 	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
-	// "Worked for" names the turn's duration only when there is work to fold. With
-	// nothing to fold the time moves to the turn's action row, so a quick answer
-	// still says how long it took.
-	const unfoldedDurationMs = group.outcome && foldedRuns.length === 0 && !onlyRead ? group.outcome.durationMs : undefined;
 	// What the live row names: the step the agent is on right now. Items the user acts
 	// on (approvals, questions) are not work, and a provider retry has its own slot.
 	const currentTask = group.live
@@ -4894,7 +5005,6 @@ const TurnGroup = memo(function TurnGroup({
 				queued={queued}
 				newHumanMessageIds={newHumanMessageIds}
 				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
-				durationMs={!endsWithOutcome && run.items[0]?.id === copyableMessageId ? unfoldedDurationMs : undefined}
 				live={group.live}
 				onRollback={
 					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
@@ -4943,15 +5053,17 @@ const TurnGroup = memo(function TurnGroup({
 	// A settled worker turn whose answer asks the user nothing draws that answer as
 	// one line under the rows, with the work folded into it instead of "Worked for".
 	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
-	// "Worked for" is the fold for the turn's work, so it appears only when there is
-	// work to fold: a turn that went straight to its answer has nothing to open and
-	// shows the answer alone. It opens from zero height as the live steps leave, so
-	// the top of the turn reads as the work collapsing into its summary rather than
-	// one line appearing while the steps vanish. A settled turn loaded from history
-	// mounts it without the animation. The wrapper's own gutter keeps the summary's
-	// hover wash, which overhangs by 4px, inside the clip.
+	// "Worked for" heads every settled turn with how long it ran. With work to fold it
+	// is the fold, opening onto the steps; a turn that went straight to its answer has
+	// nothing to open, so it is the same words without the chevron. As the turn
+	// settles it fades in where the turn reserved its row, and the reply slides up
+	// into the room its steps left (restoreSettle), so the work reads as collapsing
+	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
-	const showsWorked = Boolean(outcome && foldedRuns.length > 0 && !quietReply);
+	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
+	const showsWorked = Boolean(
+		outcome && !quietReply && !onlyRead && (foldedRuns.length > 0 || workedDurationMs !== undefined),
+	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
 	// them off the reply. A branch navigator already reserves the row in the flow.
@@ -4959,38 +5071,28 @@ const TurnGroup = memo(function TurnGroup({
 		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
 	);
 	const reservesActionRow = promptBubble && !quietReply && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
+	// The empty row is exactly as tall as "Worked for", which takes its place as the
+	// turn settles, so the handover moves nothing. Only one of the two is ever in the
+	// DOM, so the turn's row gap is never counted twice.
+	if (!showsWorked && reservesActionRow) {
+		body.push(<div key="turn-worked-gap" aria-hidden="true" className="h-7 shrink-0" data-turn-worked-gap="" />);
+	}
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
-			{!showsWorked && reservesActionRow ? (
-				// Same height and timing as "Worked for", so one handing over to the other
-				// as a turn settles leaves the reply where it was. Leaving, it also gives
-				// back the turn's 10px row gap (gap-2.5) so the two never count it twice.
-				<motion.div
-					key="turn-worked-gap"
-					aria-hidden="true"
-					initial={false}
-					animate={{ height: 28, marginTop: 0 }}
-					exit={{ height: 0, marginTop: -10 }}
-					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-					className="h-7 shrink-0"
-					data-turn-worked-gap=""
-				/>
-			) : null}
 			{outcome && showsWorked ? (
 				<motion.div
 					key="turn-worked-summary"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1 }}
+					initial={{ opacity: 0 }}
+					animate={{ opacity: 1 }}
 					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-					className="-mx-1 overflow-hidden px-1"
 					data-turn-worked=""
 				>
 					<TurnWorkSummary
-						durationMs={outcome.durationMs}
+						durationMs={workedDurationMs}
 						open={Boolean(activityDisclosureOverrides[disclosureKey])}
 						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 					>
-						{foldedRuns.flatMap(renderWorkerRun)}
+						{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
 					</TurnWorkSummary>
 				</motion.div>
 			) : null}
@@ -5022,7 +5124,9 @@ const TurnGroup = memo(function TurnGroup({
 	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
 	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
+		// Positioned, so the live row that popLayout lifts out of the flow as the turn
+		// settles fades where it was rather than against some outer ancestor.
+		<div className={cn("relative flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}
 			{/* Both of these are current state of the turn rather than steps in it, which
 			    is why they sit at its end: a checklist that ticks itself off and a file
@@ -5065,7 +5169,6 @@ const TurnGroup = memo(function TurnGroup({
 			    it on its outcome's row instead. */}
 			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
 				<TurnActions
-					durationMs={unfoldedDurationMs}
 					onRollback={() => onRollback(group.turnId as string)}
 					rollbackDisabled={rollbackDisabled}
 				/>
@@ -5084,7 +5187,6 @@ const TurnGroup = memo(function TurnGroup({
 					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={copyableMessage?.createdAt}
-					durationMs={unfoldedDurationMs}
 				/>
 			) : null}
 		</div>
@@ -5127,7 +5229,6 @@ function TimelineItem({
 	queued,
 	newHumanMessageIds,
 	showCopy,
-	durationMs,
 	live,
 	onRollback,
 	rollbackDisabled,
@@ -5163,8 +5264,6 @@ function TimelineItem({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** This is the final assistant response of a turn that has finished. */
 	showCopy?: boolean;
-	/** How long that turn ran, when no "Worked for" fold above the answer says so. */
-	durationMs?: number;
 	live?: boolean;
 	/** Undo this finished turn from the answer that owns its copy action. */
 	onRollback?: () => void;
@@ -5180,7 +5279,6 @@ function TimelineItem({
 				<AssistantMessage
 					message={item}
 					showCopy={showCopy}
-					durationMs={durationMs}
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
@@ -5454,7 +5552,18 @@ function useStableValue<T>(value: T): T {
 }
 
 /** A settling turn's rows from just before the fold, and the one at the top of the view. */
-type SettleAnchor = { turn: HTMLElement; rows: HTMLElement[]; index: number; offset: number };
+type SettleAnchor = {
+	turn: HTMLElement;
+	rows: HTMLElement[];
+	/** Each row's top on screen just before the fold, for it to slide from. */
+	tops: number[];
+	scrollTop: number;
+	/** The reader was following the end, rather than reading back. */
+	following: boolean;
+	/** For a reader who scrolled up: the first row they could see, and how far down. */
+	index: number;
+	offset: number;
+};
 
 type TimelineGroup = {
 	key: string;
