@@ -12,7 +12,7 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -193,13 +193,13 @@ describe("CloudSessionChatSurface", () => {
 		const [[, , first], [, , second]] = cloudMocks.sendSessionMessage.mock.calls;
 		expect(first.attachmentIds).toEqual([attachmentId]);
 		expect(first.displayText).toBe("Is this right?");
-		expect(first.text.startsWith("Is this right?\n\nUser-supplied captured code")).toBe(true);
+		expect(first.text.startsWith("Is this right?\n\nReferenced annotations.")).toBe(true);
 		expect(first.text).toContain("const ttl = 60;");
 		expect(first.text).toContain("Selected text:\n---\nthe cache");
 		expect(first.content).toHaveLength(2);
 		expect(second.attachmentIds).toEqual([attachmentId]);
 		expect(second).not.toHaveProperty("displayText");
-		expect(second.text.startsWith("User-supplied captured code")).toBe(true);
+		expect(second.text.startsWith("Referenced annotations.")).toBe(true);
 		for (const body of [first, second]) {
 			expect(JSON.stringify(body)).not.toContain("ao-cloud-attachment:");
 			expect(JSON.stringify(body)).not.toContain("Attached files");
@@ -241,6 +241,11 @@ describe("CloudSessionChatSurface", () => {
 			createdAt: session.updatedAt,
 		}]);
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
+	});
+	it("retains a chart-only annotation when history omits its empty display text", () => {
+		const chart = { version: 1, referenceFormat: "numbered-v1", captureMode: "block", containsFlowchart: true, badgeOnly: true, rawText: "```mermaid\nflowchart LR; A-->B\n```" };
+		const snapshot = toSnapshot(session, [{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Explain the chart", content: [{ type: "excerpt", annotationId: "chart", snapshot: chart }] }, createdAt: session.updatedAt }]);
+		expect(snapshot.items[0]).toMatchObject({ content: [{ type: "excerpt", text: "", snapshot: chart }] });
 	});
 
 	it("shows a message of only files, with its files and no text", () => {
@@ -2065,3 +2070,11 @@ describe("CloudSessionChatSurface palette jump", () => {
 		expect(props().annotationNavigationRequest).toBeUndefined();
 	});
 });
+
+ it("delivers frozen excerpts independently of Cloud source history", () => {
+	const ref = { id: "quote", conversationId: "cloud", messageId: "deleted", revision: 9, role: "assistant" as const, text: "selected", snapshot: { version: 1, rawText: "**selected**", captureMode: "exact" as const } };
+	const text = cloudExcerptText([ref], { items: [] });
+	expect(text).toContain("**selected**");
+	expect(text).toContain("Selected text:\n---\nselected");
+	expect(cloudAnnotationContent([ref])[0].snapshot).toEqual(ref.snapshot);
+ });

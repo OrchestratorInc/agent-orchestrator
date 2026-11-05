@@ -433,7 +433,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
-	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string; revision?: number }>(uiSessionId);
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number }>(uiSessionId);
 	const navigateToAnnotation = annotationNavigation.navigate;
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
@@ -474,7 +474,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
 		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
 		if (!current()) throw new Error("Side chat is no longer active.");
-		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text, excerpt.snapshot?.sourceRange, excerpt.snapshot?.renderedRange]);
 		const pending = selectionSideScope.processing.get(identity);
 		if (pending) return pending;
 		const destination = selectionSideChatsRef.current;
@@ -485,7 +485,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			openSideInspector();
 			if (destinationId) {
 				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
-				destination.addReference(destinationId, excerpt);
+				await destination.addReference(destinationId, excerpt);
 				destination.show(destinationId);
 			} else {
 				let receipt = selectionSideScope.receipts.get(identity);
@@ -771,7 +771,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						clientMessageId,
 						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
-							id: excerpt.id, order: excerpt.order,
+							id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,

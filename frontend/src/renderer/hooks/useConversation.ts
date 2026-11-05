@@ -169,7 +169,7 @@ export type ConversationLocalEcho = {
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
 	fileReferences?: ChatFileReference[];
-	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order"> & { id?: string; conversationId?: string })[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
@@ -614,7 +614,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				continuation: variables.input.continuation,
 				fileReferences: variables.input.fileReferences,
 			excerpts: variables.input.excerpts?.map((excerpt) => ({
-				id: excerpt.id, order: excerpt.order,
+				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
 					conversationId: excerpt.conversationId,
 					text: excerpt.text,
 					messageId: excerpt.messageId,
@@ -1998,7 +1998,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			fileReference: item.fileReference as ChatFileReference | undefined, annotationId: item.annotationId, annotationOrder: item.annotationOrder,
 			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,
-			sourceRevision: item.sourceRevision ?? undefined,
+			sourceRevision: item.sourceRevision ?? undefined, snapshot: item.snapshot,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		continuation: wire.continuation || undefined,

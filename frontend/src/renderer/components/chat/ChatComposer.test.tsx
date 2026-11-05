@@ -1,3 +1,4 @@
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
@@ -335,7 +336,7 @@ describe("send keys", () => {
 			undefined,
 			expect.any(String),
 			undefined,
-			excerpts,
+			excerpts.map(upgradeExcerpt),
 		));
 	});
 
@@ -834,7 +835,7 @@ describe("send keys", () => {
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("reselect it"));
 		const draft = readChatSessionDraft(sessionId).composer;
 		expect(draft.delivery).toBeUndefined();
-		expect(draft.excerpts).toEqual(excerpts);
+		expect(draft.excerpts).toEqual(excerpts.map(upgradeExcerpt));
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
 	});
 
@@ -850,7 +851,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		expect(onSteer).not.toHaveBeenCalled();
-		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts);
+		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
 	it.each([

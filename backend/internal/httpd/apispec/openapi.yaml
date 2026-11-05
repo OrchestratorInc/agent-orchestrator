@@ -15018,6 +15018,89 @@ components:
       - agent
       - modes
       type: object
+    ChatExcerptRange:
+      properties:
+        end:
+          type: integer
+        offsetUnit:
+          enum:
+          - utf-16
+          type: string
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      - offsetUnit
+      type: object
+    ChatExcerptSnapshot:
+      properties:
+        badgeOnly:
+          type: boolean
+        captureMode:
+          enum:
+          - exact
+          - block
+          - legacy
+          type: string
+        containsFlowchart:
+          type: boolean
+        contextOmitted:
+          type: boolean
+        diagramRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        prefix:
+          type: string
+        rawText:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
+          type: string
+        renderedRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceTurnId:
+          type: string
+        suffix:
+          type: string
+        turn:
+          $ref: '#/components/schemas/ChatExcerptTurnSnapshot'
+        version:
+          type: integer
+      required:
+      - version
+      - rawText
+      - captureMode
+      type: object
+    ChatExcerptTurnMessage:
+      properties:
+        role:
+          enum:
+          - user
+          - assistant
+          type: string
+        text:
+          type: string
+      required:
+      - role
+      - text
+      type: object
+    ChatExcerptTurnSnapshot:
+      properties:
+        id:
+          type: string
+        messages:
+          items:
+            $ref: '#/components/schemas/ChatExcerptTurnMessage'
+          type: array
+        truncated:
+          type: boolean
+      required:
+      - id
+      - messages
+      type: object
     ChatFileReferenceLine:
       properties:
         kind:
@@ -16607,13 +16690,16 @@ components:
           type: string
         name:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceConversationId:
           type: string
         sourceMessageId:
           type: string
         sourceRevision:
-          format: int64
-          type: integer
+          type:
+          - "null"
+          - integer
         text:
           type: string
         type:
@@ -16662,6 +16748,8 @@ components:
         revision:
           format: int64
           type: integer
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         text:
           type: string
       required:
@@ -16700,6 +16788,10 @@ components:
         path:
           type: string
         previousPath:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
           type: string
         scope:
           type: string
@@ -17687,13 +17779,20 @@ components:
       properties:
         conversationId:
           type: string
+        id:
+          type: string
         messageId:
           type: string
+        order:
+          format: int64
+          type: integer
         revision:
           format: int64
           type: integer
         selection:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceRole:
           type: string
       required:
