@@ -6410,6 +6410,8 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
 		inThread +
+		"Only files you register appear as this session's artifacts. Run `ao artifact add <path>` once for each deliverable as soon as it exists, and again on the new path if you rename or copy it; edits to a registered file need no further command. " +
+		"Other files stay in the directory, so links between them keep working, but they are not listed. `ao report --artifact` and `ao render --artifact` do not register a file.\n\n" +
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or Orchestrator report notes. " +
 		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
 		"Saving a file here or attaching it to an Orchestrator report does not authorize external publishing. " +

@@ -19,6 +19,8 @@ export type SessionArtifact = {
 	updatedAt: string;
 	/** The file's public link, when someone published it from the desktop's Share. */
 	shareUrl?: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
 };
 
 /** How the viewer draws a file. */
@@ -59,7 +61,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 	const out: SessionArtifact[] = [];
 	for (const item of raw) {
 		if (!item || typeof item !== "object") continue;
-		const { path, name, kind, size, updatedAt, shareUrl } = item as Record<string, unknown>;
+		const { path, name, kind, size, updatedAt, shareUrl, registered } = item as Record<string, unknown>;
 		if (typeof path !== "string" || !isSafeArtifactPath(path)) continue;
 		const link = artifactShareUrl(shareUrl);
 		out.push({
@@ -69,6 +71,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 			size: typeof size === "number" && size >= 0 ? size : 0,
 			updatedAt: typeof updatedAt === "string" ? updatedAt : "",
 			...(link ? { shareUrl: link } : {}),
+			...(registered === true ? { registered } : {}),
 		});
 	}
 	return out;

@@ -6719,6 +6719,63 @@ paths:
         theme bootstrap
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-registrations:
+    post:
+      operationId: registerSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterArtifactsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterArtifactsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Register files in the session's artifact directory as its deliverables
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-versions:
     get:
       operationId: listSessionArtifactVersions
@@ -20121,6 +20178,37 @@ components:
       required:
       - pat
       type: object
+    RegisterArtifactsRequest:
+      properties:
+        paths:
+          description: 'Files or bundle directories in the session''s artifact directory:
+            absolute paths, or paths relative to it.'
+          items:
+            type: string
+          type: array
+      required:
+      - paths
+      type: object
+    RegisterArtifactsResponse:
+      properties:
+        otherFiles:
+          description: How many of the session's files are not registered.
+          type: integer
+        otherRootFiles:
+          description: The unregistered files at the root of the artifact directory.
+          items:
+            type: string
+          type: array
+        registered:
+          description: The requested paths, relative to the artifact directory.
+          items:
+            type: string
+          type: array
+      required:
+      - registered
+      - otherFiles
+      - otherRootFiles
+      type: object
     RegisterPushDeviceRequest:
       properties:
         deviceName:
@@ -20776,6 +20864,8 @@ components:
           type: string
         rawUrl:
           type: string
+        registered:
+          type: boolean
         shareUrl:
           type: string
         size:

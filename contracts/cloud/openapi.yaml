@@ -3258,6 +3258,42 @@ paths:
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/registrations:
+    post:
+      operationId: registerWorkerArtifacts
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Registers paths in the worker's own session as its deliverables,
+        which is what ao artifact add calls, and returns every path the session
+        has registered. A path need not be committed yet: it applies to the
+        file once one is committed at that path. Registering a path again
+        changes nothing; a new path appends an artifact.changed event and
+        moves the updatedAt of the files it names. A session holds at most 100
+        paths (artifact_registration_limit otherwise). Requires
+        `worker:connect`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactRegistrationInput"
+      responses:
+        "200":
+          description: The paths are registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactRegistrationResult"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "409":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
     get:
       operationId: listWorkerChildren
@@ -7525,7 +7561,16 @@ components:
           type: string
           format: date-time
           description: >-
-            When the control plane last committed a new version of the file.
+            When the control plane last committed a new version of the file,
+            or registered it as a deliverable.
+        registered:
+          type: boolean
+          description: >-
+            Set on a file the session's agent registered as a deliverable with
+            ao artifact add, or inside a bundle directory it registered. Absent
+            otherwise. A client lists only registered files as the session's
+            artifacts, or the files at the root of its artifact directory when
+            none is registered.
     SessionArtifactResult:
       type: object
       additionalProperties: false
@@ -8000,6 +8045,29 @@ components:
           type: array
           maxItems: 200
           description: Paths this worker previously synced and has since removed.
+          items:
+            type: string
+    WorkerArtifactRegistrationInput:
+      type: object
+      additionalProperties: false
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1024
+    WorkerArtifactRegistrationResult:
+      type: object
+      additionalProperties: false
+      required: [registered]
+      properties:
+        registered:
+          type: array
+          description: Every path the session has registered.
           items:
             type: string
     SessionStartupError:

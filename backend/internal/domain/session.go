@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -119,6 +120,14 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
+// MaxRegisteredArtifactPaths bounds how many paths one session can register as
+// deliverables.
+const MaxRegisteredArtifactPaths = 100
+
+// ErrRegisteredArtifactLimit reports a registration past
+// MaxRegisteredArtifactPaths.
+var ErrRegisteredArtifactLimit = errors.New("session has too many registered artifacts")
+
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
 	Path      string              `json:"path"`
@@ -127,6 +136,9 @@ type SessionArtifactFile struct {
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 	ShareURL  string              `json:"shareUrl,omitempty"`
+	// Registered is set on a file the agent registered as a deliverable, or
+	// inside a bundle directory it registered.
+	Registered bool `json:"registered,omitempty"`
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.
@@ -361,7 +373,11 @@ type SessionRecord struct {
 	// RequestedOutput is the deliverable requested at spawn. It is fixed after
 	// insertion so restore and agent switching rebuild the same worker prompt.
 	RequestedOutput RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
-	Metadata        SessionMetadata `json:"-"`
+	// RegisteredArtifactPaths are the artifact-directory-relative paths the agent
+	// registered as deliverables with ao artifact add. A path may name a file
+	// that no longer exists; reads ignore it until the path is written again.
+	RegisteredArtifactPaths []string        `json:"-"`
+	Metadata                SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a

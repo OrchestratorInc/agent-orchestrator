@@ -1,3 +1,4 @@
+import { deliverableArtifacts, type Deliverable } from "../../../../packages/shared/artifacts/deliverables";
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
@@ -82,6 +83,8 @@ export type SessionArtifact = {
 	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -328,12 +331,21 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
+/** Every artifact file of a session whose output includes artifacts, listed or not, newest first. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
 	return [...(session.artifactFiles ?? [])].sort(
 		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
 	);
+}
+
+/**
+ * The session's artifacts as the artifact lists show them. Use
+ * {@link sessionArtifacts} for anything that needs every file, such as a count
+ * of what a delete removes.
+ */
+export function sessionDeliverables(session: WorkspaceSession): Deliverable<SessionArtifact>[] {
+	return deliverableArtifacts(sessionArtifacts(session));
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {

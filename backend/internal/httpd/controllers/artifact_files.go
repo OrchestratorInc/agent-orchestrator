@@ -38,6 +38,9 @@ const (
 	artifactFilesPath = "/api/v1/sessions/{sessionId}/artifact-files"
 	// Not under artifact-files/, where it would shadow a file named "events".
 	artifactEventsPath = "/api/v1/sessions/{sessionId}/artifact-events"
+	// artifactRegistrationsPath is the only way a path gets registered as a
+	// deliverable: it is what ao artifact add calls.
+	artifactRegistrationsPath = "/api/v1/sessions/{sessionId}/artifact-registrations"
 )
 
 // artifactFile serves a file from the session's artifact directory in the
@@ -231,12 +234,44 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
+	if err := c.Svc.UnregisterArtifact(r.Context(), sess.ID, clean); err != nil {
+		envelope.WriteError(w, r, fmt.Errorf("unregister artifact: %w", err))
+		return
+	}
 	updated, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
+}
+
+// registerArtifacts registers files in the session's artifact directory as its
+// deliverables.
+func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, artifactRegistrationsPath)
+		return
+	}
+	var in RegisterArtifactsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if len(in.Paths) == 0 || len(in.Paths) > domain.MaxRegisteredArtifactPaths {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxRegisteredArtifactPaths), nil))
+		return
+	}
+	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.Paths)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, RegisterArtifactsResponse{
+		Registered:     result.Registered,
+		OtherFiles:     result.OtherFiles,
+		OtherRootFiles: result.OtherRootFiles,
+	})
 }
 
 func listsArtifactFile(files []domain.SessionArtifactFile, relPath string) bool {

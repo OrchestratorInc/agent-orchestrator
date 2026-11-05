@@ -38,6 +38,9 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	AddSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, paths []string) ([]string, bool, error)
+	RemoveSessionRegisteredArtifactPath(ctx context.Context, id domain.SessionID, path string) error
+	ClearSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID) error
 	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error)
@@ -1246,6 +1249,9 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 		return fmt.Errorf("delete artifacts %s: artifact dir %q is outside the data dir", id, stored)
 	}
 	err = s.artifactDeleter.DeleteSession(ctx, id)
+	if err == nil {
+		err = s.store.ClearSessionRegisteredArtifactPaths(ctx, id)
+	}
 	// Reconcile even after a failure: the files may already be gone while the
 	// version rows were not dropped, and OutputType must follow what is on disk.
 	if s.outputTypeReconciler != nil {
@@ -1776,7 +1782,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 			backfilledArtifactDir = true
 		}
 	}
-	artifactFiles, err := sessionartifacts.List(ctx, rec.Metadata.ArtifactDir)
+	artifactFiles, err := sessionartifacts.ListRegistered(ctx, rec.Metadata.ArtifactDir, rec.RegisteredArtifactPaths)
 	if err != nil {
 		// An unwalkable artifact root must not fail the session read (and with
 		// it the whole board); the artifact list is simply empty for this read.

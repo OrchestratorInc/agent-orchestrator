@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -511,6 +512,103 @@ func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.Sessi
 		return false, fmt.Errorf("update session artifact output for %s: %w", id, err)
 	}
 	return rows > 0, nil
+}
+
+// AddSessionRegisteredArtifactPaths adds paths the session has not registered
+// yet and returns all of its registered paths. It returns
+// domain.ErrRegisteredArtifactLimit, changing nothing, when the result would
+// pass domain.MaxRegisteredArtifactPaths, and false for an unknown session.
+func (s *Store) AddSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, paths []string) ([]string, bool, error) {
+	return s.editRegisteredArtifactPaths(ctx, id, func(current []string) ([]string, error) {
+		next := slices.Clone(current)
+		for _, path := range paths {
+			if !slices.Contains(next, path) {
+				next = append(next, path)
+			}
+		}
+		if len(next) > domain.MaxRegisteredArtifactPaths && len(next) > len(current) {
+			return nil, domain.ErrRegisteredArtifactLimit
+		}
+		return next, nil
+	})
+}
+
+// RemoveSessionRegisteredArtifactPath removes one registered path, if present.
+func (s *Store) RemoveSessionRegisteredArtifactPath(ctx context.Context, id domain.SessionID, path string) error {
+	_, _, err := s.editRegisteredArtifactPaths(ctx, id, func(current []string) ([]string, error) {
+		return slices.DeleteFunc(slices.Clone(current), func(p string) bool { return p == path }), nil
+	})
+	return err
+}
+
+// ClearSessionRegisteredArtifactPaths removes every registered path.
+func (s *Store) ClearSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID) error {
+	_, _, err := s.editRegisteredArtifactPaths(ctx, id, func([]string) ([]string, error) {
+		return nil, nil
+	})
+	return err
+}
+
+// editRegisteredArtifactPaths replaces the session's registered paths with
+// edit's result. It reads and writes only that column, in one transaction under
+// the write lock, so concurrent edits cannot lose a path.
+func (s *Store) editRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, edit func([]string) ([]string, error)) ([]string, bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var next []string
+	found := true
+	err := s.inTx(ctx, "edit registered artifact paths", func(q *gen.Queries) error {
+		raw, err := q.GetSessionRegisteredArtifactPaths(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			found = false
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		current := unmarshalRegisteredArtifactPaths(raw)
+		if next, err = edit(current); err != nil {
+			return err
+		}
+		if slices.Equal(next, current) {
+			return nil
+		}
+		encoded, err := marshalRegisteredArtifactPaths(next)
+		if err != nil {
+			return err
+		}
+		_, err = q.UpdateSessionRegisteredArtifactPaths(ctx, gen.UpdateSessionRegisteredArtifactPathsParams{
+			RegisteredArtifactPaths: encoded,
+			ID:                      id,
+		})
+		return err
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("edit registered artifact paths for %s: %w", id, err)
+	}
+	return next, found, nil
+}
+
+func marshalRegisteredArtifactPaths(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "[]", nil
+	}
+	raw, err := json.Marshal(paths)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// unmarshalRegisteredArtifactPaths reads the column's JSON array. An unreadable
+// value reads as no paths, so a damaged row costs the labels and not the
+// session read.
+func unmarshalRegisteredArtifactPaths(raw string) []string {
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil || len(paths) == 0 {
+		return nil
+	}
+	return paths
 }
 
 // UpdateBrowserCapabilityVerifier rotates only the verifier when the caller's
@@ -1169,16 +1267,17 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			State:          row.ActivityState,
 			LastActivityAt: row.ActivityLastAt,
 		},
-		FirstSignalAt:      nullTimeToTime(row.FirstSignalAt),
-		IsTerminated:       row.IsTerminated,
-		HibernatedAt:       nullTimeToTimePtr(row.HibernatedAt),
-		StaleBinary:        staleBinaryFromRow(row),
-		IsPinned:           row.IsPinned,
-		PinnedAt:           nullTimeToTimePtr(row.PinnedAt),
-		TerminateOnPRMerge: row.TerminateOnPRMerge,
-		AutoInjectReview:   row.AutoInjectReview,
-		AutoInjectCI:       row.AutoInjectCI,
-		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
+		FirstSignalAt:           nullTimeToTime(row.FirstSignalAt),
+		IsTerminated:            row.IsTerminated,
+		HibernatedAt:            nullTimeToTimePtr(row.HibernatedAt),
+		StaleBinary:             staleBinaryFromRow(row),
+		IsPinned:                row.IsPinned,
+		PinnedAt:                nullTimeToTimePtr(row.PinnedAt),
+		TerminateOnPRMerge:      row.TerminateOnPRMerge,
+		AutoInjectReview:        row.AutoInjectReview,
+		AutoInjectCI:            row.AutoInjectCI,
+		OutputType:              normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
+		RegisteredArtifactPaths: unmarshalRegisteredArtifactPaths(row.RegisteredArtifactPaths),
 		Metadata: domain.SessionMetadata{
 			ImportSource:                     unmarshalImportSource(row.ImportSource),
 			Branch:                           row.Branch,

@@ -704,6 +704,8 @@ export interface CloudCpSessionArtifact {
 	size: number;
 	sha256: string;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
 }
 
 /** One kept version of a cloud artifact file, numbered per path; the newest is the committed file. */

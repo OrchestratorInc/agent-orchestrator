@@ -146,7 +146,11 @@ export function ArtifactsView() {
 	const { client: cloudClient } = useCloudCp(cloudArtifacts);
 	const cloudUserId = useCloudMeUserId(cloudArtifacts);
 	// Another member's cloud session files are view only, so they cannot be selected.
-	const deleteBlockedReason = (row: ArtifactRow) => canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
+	// A bundle row stands for one of its files, so deleting it would leave the
+	// rest of the bundle behind; it has no Delete in its menu either.
+	const deleteBlockedReason = (row: ArtifactRow) => row.bundle
+		? t("artifacts.bundleNotDeletable")
+		: canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
@@ -606,7 +610,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						</span>
 					</Pressable>
 					{selection ? null : <div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
-						<ArtifactActionsMenu
+						{row.bundle ? null : <ArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
@@ -615,7 +619,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
-						/>
+						/>}
 					</div>}
 					<time dateTime={row.updatedAt} className="pointer-events-none relative z-[1] w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 						{formatTimeCompact(row.updatedAt)}
@@ -632,7 +636,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
 			selection={selection}
-			actions={selection ? null : (
+			actions={selection || row.bundle ? null : (
 				<ArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}

@@ -96,6 +96,8 @@ type SessionService interface {
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
+	RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error)
+	UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -230,6 +232,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
+	r.Post("/sessions/{sessionId}/artifact-registrations", c.registerArtifacts)
 	r.Get("/sessions/{sessionId}/artifact-versions", c.listArtifactVersions)
 	r.Get("/sessions/{sessionId}/artifact-versions/{version}", c.getArtifactVersion)
 	r.Post("/sessions/{sessionId}/artifact-versions/restore", c.restoreArtifactVersion)
@@ -3029,12 +3032,13 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
 	for _, artifact := range s.ArtifactFiles {
 		view := SessionArtifactView{
-			Path:      artifact.Path,
-			Name:      artifact.Name,
-			Kind:      artifact.Kind,
-			Size:      artifact.Size,
-			UpdatedAt: artifact.UpdatedAt,
-			ShareURL:  artifact.ShareURL,
+			Path:       artifact.Path,
+			Name:       artifact.Name,
+			Kind:       artifact.Kind,
+			Size:       artifact.Size,
+			UpdatedAt:  artifact.UpdatedAt,
+			ShareURL:   artifact.ShareURL,
+			Registered: artifact.Registered,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide
