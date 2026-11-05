@@ -128,6 +128,8 @@ export function beginPaneTabDrag(
 	};
 	const onUp = (upEvent: PointerEvent) => {
 		if (upEvent.pointerId !== drag.pointerId) return;
+		drag.x = upEvent.clientX;
+		drag.y = upEvent.clientY;
 		finish(drag, true);
 	};
 	const onCancel = (cancelEvent: PointerEvent) => {
@@ -272,7 +274,7 @@ function finish(drag: ActiveDrag, commit: boolean): void {
 	const stayedPut = Math.hypot(drag.x - drag.startX, drag.y - drag.startY) <= HOLD_SLOP_PX;
 	window.setTimeout(() => {
 		window.removeEventListener("click", swallowClick, true);
-		if (stayedPut && drag.pressTarget instanceof HTMLElement && drag.pressTarget.isConnected) drag.pressTarget.click();
+		if (commit && stayedPut && drag.pressTarget instanceof HTMLElement && drag.pressTarget.isConnected) drag.pressTarget.click();
 	}, 0);
 	// Resolve against the final pointer position, not the last painted frame.
 	const resolution = commit && !stayedPut ? (dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null) : null;
