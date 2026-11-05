@@ -505,6 +505,9 @@ async function syncGithubLogin(): Promise<void> {
 			.catch(() => null);
 		if (!login) continue;
 		githubLogin = login;
+		// A resolved login means GitHub sign-in is done, even when it happened
+		// outside the app or after the onboarding step was closed.
+		void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
 		registerBaseProperties();
 		if (identifiedId) posthog.setPersonProperties({ github_login: login });
 		return;
