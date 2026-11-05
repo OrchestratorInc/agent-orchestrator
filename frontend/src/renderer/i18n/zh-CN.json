@@ -3511,7 +3511,6 @@
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "工作用时",
 	"chat.rollBackToHere": "回滚到此处",
-	"chat.showReplyWork": "显示此回复背后的工作",
 	"chat.taskNamed": "新任务已命名为 <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<pr>#{{number}}</pr> 的 <strong>CI 失败</strong>",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong> 评论了 <pr>#{{number}}</pr>",

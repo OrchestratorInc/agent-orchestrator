@@ -3588,7 +3588,6 @@
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "Tiempo de trabajo",
 	"chat.rollBackToHere": "Revertir hasta aquí",
-	"chat.showReplyWork": "Mostrar el trabajo detrás de esta respuesta",
 	"chat.taskNamed": "Nueva tarea llamada <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<strong>CI falla</strong> en <pr>#{{number}}</pr>",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong> comentó en <pr>#{{number}}</pr>",

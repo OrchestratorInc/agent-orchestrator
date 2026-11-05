@@ -151,9 +151,7 @@ import {
 	isTaskTitleUpdate,
 	isWorkerLead,
 	isDuplicateSpawnAction,
-	OrchestratorReply,
 	piggybackedUpdates,
-	quietWorkerReply,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
@@ -4689,8 +4687,6 @@ export function Timeline({
 									group={group}
 									harness={snapshot.harness}
 									workerUpdates={workerUpdates}
-									// Consecutive quiet worker turns read as one list of rows, not separate turns.
-									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -5016,7 +5012,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup,
 	onSelectAnnotation,
 	workerUpdates = false,
-	tight = false,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -5059,7 +5054,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
-	tight?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
@@ -5269,9 +5263,6 @@ const TurnGroup = memo(function TurnGroup({
 			</LiveResponseStatus>
 		) : null;
 	const outcome = group.outcome;
-	// A settled worker turn whose answer asks the user nothing draws that answer as
-	// one line under the rows, with the work folded into it instead of "Worked for".
-	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
 	// nothing to open, so it is the same words without the chevron. As the turn
@@ -5286,7 +5277,7 @@ const TurnGroup = memo(function TurnGroup({
 	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
 	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
 	const showsWorked = Boolean(
-		outcome && !quietReply && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
+		outcome && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -5297,7 +5288,7 @@ const TurnGroup = memo(function TurnGroup({
 	// The reports line under the prompt takes that row itself.
 	const reportsUnderPrompt = Boolean(workerUpdates) && humanRuns.some((run) => run.kind === "single"
 		&& (piggybackedUpdates(run.items[0]).length > 0 || Boolean(batched?.under.has(run.items[0].id))));
-	const reservesActionRow = promptBubble && !quietReply && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
+	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	// The empty row is exactly as tall as "Worked for", which takes its place as the
 	// turn settles, so the handover moves nothing. Only one of the two is ever in the
 	// DOM, so the turn's row gap is never counted twice.
@@ -5331,25 +5322,11 @@ const TurnGroup = memo(function TurnGroup({
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (quietReply && finalRun) {
-		body.push(
-			<OrchestratorReply
-				key={finalRun.key}
-				message={quietReply}
-				work={foldedRuns.length > 0 || spawnedLine ? foldedWork() : undefined}
-				workOpen={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onWorkOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-				onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
-				rollbackDisabled={rollbackDisabled}
-			/>,
-		);
-	} else if (finalRun) {
-		body.push(renderRun(finalRun));
-	}
+	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
-		<div className={cn("relative flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
+		<div className="relative flex min-w-0 flex-col gap-2.5">
 			{body}
 			{/* The live row comes straight after the steps, so the step it names sits
 			    under the work it continues, and the plan reads below it. Once the turn
@@ -6104,28 +6081,7 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
 
-const quietWorkerGroups = new WeakMap<TimelineGroup, boolean>();
-
-/**
- * A settled worker turn that draws only rows and a quiet reply, so it can sit
- * tight against its neighbours. Groups keep their identity while unchanged, so
- * each is judged once rather than on every streamed delta.
- */
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
-
-function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
-	if (!group) return false;
-	let quiet = quietWorkerGroups.get(group);
-	if (quiet === undefined) {
-		quiet = group.outcome?.state === "completed"
-			&& !group.plan
-			&& !group.diff
-			&& quietWorkerReply(group.items) !== undefined
-			&& !group.items.some(isNoticeItem);
-		quietWorkerGroups.set(group, quiet);
-	}
-	return quiet;
-}
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
 function rendersNothing(run: TimelineRun): boolean {

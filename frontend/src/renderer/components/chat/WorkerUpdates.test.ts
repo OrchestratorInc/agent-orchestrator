@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationTurn } from "../../types/conversation";
 import {
-	asksUser,
 	isWorkerLead,
 	isDuplicateSpawnAction,
 	piggybackedUpdates,
 	placeBatchedReports,
-	quietWorkerReply,
 	renamedTitle,
 	spawnedSessionIds,
 	splitHeadline,
@@ -98,14 +96,6 @@ describe("worker updates", () => {
 		expect(splitHeadline("Rebased **#5051**; disk full during validation. Retrying.").headline).toBe("Rebased #5051");
 	});
 
-	it("tells a question from a ? in code, links and chained calls", () => {
-		expect(asksUser("Merged #7054. Should I start a fix?")).toBe(true);
-		expect(asksUser("#7043 の修正を始めますか？")).toBe(true);
-		expect(asksUser("Opened [the run](https://ci.example/run?id=4).")).toBe(false);
-		expect(asksUser("Guarded `config?.retries` and https://x.dev/a?b=1 now.")).toBe(false);
-		expect(asksUser("Used value?.trim() for the name.")).toBe(false);
-	});
-
 	it("reads spawned workers from what `ao spawn` prints", () => {
 		const items: ConversationItem[] = [
 			command("ao spawn --prompt 'check regressions'", 'spawned session proj-288 "Check regressions" (working)\n'),
@@ -128,14 +118,6 @@ describe("worker updates", () => {
 		expect(isDuplicateSpawnAction({ ...action, status: "failed" }, spawned)).toBe(false);
 		expect(isDuplicateSpawnAction(command("ao spawn --prompt audit"), spawned)).toBe(false);
 		expect(spawnedSessionIds([{ ...command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)'), status: "failed" }])).toEqual([]);
-	});
-
-	it("finds a worker turn's quiet reply only when it asks nothing", () => {
-		const reply = (text: string) => message({ id: "a1", role: "assistant", origin: "provider", text });
-		expect(quietWorkerReply([message({ text: batch }), reply("Noted.")])?.text).toBe("Noted.");
-		expect(quietWorkerReply([message({ text: batch }), reply("Tunnel or loopback?")])).toBeUndefined();
-		expect(quietWorkerReply([message({ text: batch }), command("gh pr merge 7054")])).toBeUndefined();
-		expect(quietWorkerReply([message({ origin: "human", text: "Hi" }), reply("Noted.")])).toBeUndefined();
 	});
 });
 

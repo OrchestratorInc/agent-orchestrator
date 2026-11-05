@@ -3529,7 +3529,6 @@
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "작업 시간",
 	"chat.rollBackToHere": "여기까지 되돌리기",
-	"chat.showReplyWork": "이 답변의 작업 내용 보기",
 	"chat.taskNamed": "새 작업 이름: <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<pr>#{{number}}</pr>에서 <strong>CI 실패</strong>",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong>님이 <pr>#{{number}}</pr>에 댓글을 남겼습니다",

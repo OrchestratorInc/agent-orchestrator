@@ -9,18 +9,16 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "@/components/app-icons";
+import { Bot, ChevronDown, ChevronRight, FileText, GitPullRequest, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
-import { isSteer, type ConversationItem, type ConversationMessage, type ConversationTurn } from "../../types/conversation";
+import { isSteer, type ConversationItem, type ConversationTurn } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
-import { CopyButton } from "./CopyButton";
-import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 
 export interface WorkerUpdate {
@@ -216,32 +214,6 @@ export function placeBatchedReports(turns: readonly ConversationTurn[], items: r
 		moved.add(turn.id);
 	}
 	return { under, moved };
-}
-
-/** True when a reply asks the user something. A `?` in code or a link, or one running into more text (`a?.b`), is not a question. */
-// ponytail: punctuation is a guess at intent; a structured ask from the orchestrator would replace it.
-export function asksUser(text: string): boolean {
-	const prose = text.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\]\([^)]*\)|\bhttps?:\/\/\S+/g, " ");
-	return /[?？](?=[\s"'”’)\]*_]|$)/.test(prose);
-}
-
-function finalReply(items: readonly ConversationItem[]): ConversationMessage | undefined {
-	for (let index = items.length - 1; index >= 0; index -= 1) {
-		const item = items[index];
-		if (item?.kind === "message" && item.role === "assistant" && item.text.trim() !== "") return item;
-	}
-	return undefined;
-}
-
-/**
- * The orchestrator's answer to a turn a worker opened, when it asks the user
- * nothing. That answer is drawn as one line under the worker's rows.
- */
-export function quietWorkerReply(items: readonly ConversationItem[]): ConversationMessage | undefined {
-	const lead = items[0];
-	if (!isWorkerLead(lead)) return undefined;
-	const reply = finalReply(items);
-	return reply && !asksUser(reply.text) ? reply : undefined;
 }
 
 export interface WorkerUpdateIndex {
@@ -572,80 +544,6 @@ export function TaskNamedLine({ title }: { title: string }) {
 				<Trans t={t} i18nKey="chat.taskNamed" values={{ title }} components={{ task: <span className="font-medium text-foreground" /> }} />
 			</span>
 		</p>
-	);
-}
-
-/**
- * The orchestrator's answer under the rows that prompted it. It keeps what the
- * reply would have — copy, rollback, the work behind it — but on one quiet line.
- */
-export function OrchestratorReply({
-	message,
-	work,
-	workOpen,
-	onWorkOpenChange,
-	onRollback,
-	rollbackDisabled,
-}: {
-	message: ConversationMessage;
-	work?: ReactNode;
-	workOpen: boolean;
-	onWorkOpenChange: (open: boolean) => void;
-	onRollback?: () => void;
-	rollbackDisabled?: boolean;
-}) {
-	const { t } = useTranslation();
-		return (
-		<div
-			className="group/message -mt-1.5 ml-6 min-w-0"
-			data-testid="orchestrator-reply"
-			data-chat-message-id={message.id}
-			data-chat-message-revision={message.revision}
-			data-chat-message-role={message.role}
-		>
-			<div className="flex min-w-0 items-start gap-2">
-				<CornerDownRight aria-hidden="true" className="mt-[3px] size-3 shrink-0 text-muted-foreground" />
-				{/* The timeline sizes chat markdown through these variables; a reply line sits at the rows' size. */}
-				<div
-					data-chat-message-body=""
-					className="min-w-0 flex-1 [--chat-readable-code-font-size:var(--font-size-caption)] [--chat-readable-font-size:var(--font-size-sm)]"
-				>
-					<ChatMarkdown text={message.text} />
-				</div>
-				<div className="-my-1 flex shrink-0 items-center">
-					{/* Revealed on hover or keyboard focus, so a list of quiet replies does not carry a toolbar each. */}
-					<div className="flex items-center opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none">
-						<CopyButton text={message.text} label="Copy message as markdown" compact size="icon-xs" />
-						{onRollback ? (
-							<Button
-								type="button"
-								variant="quiet"
-								size="icon-xs"
-								onClick={onRollback}
-								disabled={rollbackDisabled}
-								aria-label={t("chat.rollBackToHere")}
-								title={t("chat.rollBackToHere")}
-							>
-								<Undo2 aria-hidden="true" className="size-3" />
-							</Button>
-						) : null}
-					</div>
-					{work ? (
-						<Button
-							type="button"
-							variant="quiet"
-							size="icon-xs"
-							aria-expanded={workOpen}
-							aria-label={t("chat.showReplyWork")}
-							onClick={() => onWorkOpenChange(!workOpen)}
-						>
-							<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", workOpen && "rotate-90")} />
-						</Button>
-					) : null}
-				</div>
-			</div>
-			{workOpen && work ? <div className="mt-2 flex min-w-0 flex-col gap-2.5">{work}</div> : null}
-		</div>
 	);
 }
 

@@ -171,8 +171,8 @@ describe("orchestrator worker updates", () => {
 		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
 	});
 
-	it("draws a report batch as one line that opens to its rows, and an answer that asks nothing as one line that keeps copy and rollback", async () => {
-		const onRollback = renderOrchestrator([
+	it("draws a report batch as one line that opens to its rows, and the orchestrator's answer as a normal reply", async () => {
+		renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
 			command("t1", 1, "gh pr merge 7054"),
 			reply("t1", 2, "Merged [#7054](https://github.com/o/r/pull/7054)."),
@@ -187,18 +187,9 @@ describe("orchestrator worker updates", () => {
 		expect(row).toHaveTextContent("One strong candidate: #7043");
 		expect(screen.queryByText(/Reports since your previous turn/)).not.toBeInTheDocument();
 
-		const answer = screen.getByTestId("orchestrator-reply");
-		expect(answer).toHaveTextContent("Merged #7054.");
-		expect(screen.queryByRole("button", { name: /^Worked for/ })).not.toBeInTheDocument();
-		expect(within(answer).getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
-
-		const work = within(answer).getByRole("button", { name: "Show the work behind this reply" });
-		await userEvent.click(work);
-		expect(work).toHaveAttribute("aria-expanded", "true");
-
-		await userEvent.click(within(answer).getByRole("button", { name: "Roll back to here" }));
-		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Roll back" }));
-		expect(onRollback).toHaveBeenCalledWith("t1");
+		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
+		expect(screen.getByText("#7054").closest("[data-chat-message-role]")).toHaveAttribute("data-chat-message-role", "assistant");
 	});
 
 	it("keeps an answer that asks the user something as the full reply", () => {
