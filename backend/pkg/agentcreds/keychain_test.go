@@ -3,6 +3,9 @@ package agentcreds
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os/exec"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -52,8 +55,15 @@ func TestAccountKeychainDoesNotFallBackToComputerLogin(t *testing.T) {
 	}
 }
 
+// securityExit is a `security` failure with its exit status.
+type securityExit int
+
+func (e securityExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e securityExit) ExitCode() int { return int(e) }
+
 // fakeKeychain answers like `security`: items are searched in the order they
-// were added, and a lookup without -a returns the first one for the service.
+// were added, a lookup without -a returns the first one for the service, and a
+// miss exits 44.
 func fakeKeychain(items ...[3]string) commandRunner {
 	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		service := args[slices.Index(args, "-s")+1]
@@ -66,7 +76,7 @@ func fakeKeychain(items ...[3]string) commandRunner {
 				return []byte(item[2]), nil
 			}
 		}
-		return nil, errors.New("item not found")
+		return nil, securityExit(keychainExitItemNotFound)
 	}
 }
 
@@ -126,5 +136,54 @@ func TestKeychainAccountFollowsClaudeCodeRule(t *testing.T) {
 		if got := keychainAccount(ResolveOptions{Env: envFrom(map[string]string{"USER": tc.user})}); got != tc.want {
 			t.Errorf("USER=%q account = %q, want %q", tc.user, got, tc.want)
 		}
+	}
+}
+
+// Only a missing item may widen the lookup. Asking again after a read that
+// failed could prompt a second time or return the stale item.
+func TestKeychainDoesNotWidenLookupAfterAccountReadFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"prompt denied", securityExit(51)},
+		{"not an exit status", errors.New("security could not start")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stale := fakeKeychain([3]string{"Claude Code-credentials", "unknown", `{"claudeAiOauth":{"accessToken":"stale-token"}}`})
+			var unscoped []string
+			_, found := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
+				Env: envFrom(map[string]string{"USER": "someone"}), GOOS: "darwin", AllowKeychain: true,
+				Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+					if slices.Contains(args, "-a") {
+						return nil, tc.err
+					}
+					unscoped = append(unscoped, args[2])
+					return stale(ctx, name, args...)
+				},
+			})
+			if found || len(unscoped) != 0 {
+				t.Fatalf("found = %v, lookups without an account = %v", found, unscoped)
+			}
+		})
+	}
+}
+
+// The real runner reports a miss through *exec.ExitError, not the test double.
+func TestKeychainItemMissingRecognizesARealExitStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell")
+	}
+	for _, tc := range []struct {
+		script string
+		want   bool
+	}{{"exit 44", true}, {"exit 51", false}} {
+		err := exec.Command("sh", "-c", tc.script).Run()
+		if got := keychainItemMissing(err); got != tc.want {
+			t.Errorf("%s: missing = %v, want %v (err = %v)", tc.script, got, tc.want, err)
+		}
+	}
+	if keychainItemMissing(nil) {
+		t.Error("no error reported as a missing item")
 	}
 }

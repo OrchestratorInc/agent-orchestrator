@@ -3,6 +3,7 @@ package agentcreds
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os/user"
 	"regexp"
@@ -31,9 +32,18 @@ const (
 	// keychainFallbackAccount is the account Claude Code files its credential
 	// under when the user's name is unavailable or not usable as one.
 	keychainFallbackAccount = "claude-code-user"
+	// keychainExitItemNotFound is how `security` reports errSecItemNotFound.
+	keychainExitItemNotFound = 44
 )
 
 var keychainAccountName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// keychainItemMissing reports that `security` ran and found no such item, as
+// opposed to finding one it could not read (a denied prompt, a locked keychain).
+func keychainItemMissing(err error) bool {
+	var exit interface{ ExitCode() int }
+	return errors.As(err, &exit) && exit.ExitCode() == keychainExitItemNotFound
+}
 
 // keychainAccount names the account Claude Code reads and writes its credential
 // under, by the same rule: $USER, then the OS user.
@@ -84,10 +94,12 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	// One service can hold items under several accounts, and a lookup without an
 	// account returns whichever was added first, so an item left by an old login
 	// would shadow the current one. Ask for Claude Code's own account first. The
-	// lookup without one remains for an item filed under another account name.
+	// lookup without one remains for an item filed under another account name, so
+	// it runs only when that account has no item: repeating a read that failed
+	// could prompt again or return the stale item.
 	lookup := func(service string) ([]byte, error) {
 		out, err := runner(probeCtx, "security", "find-generic-password", "-s", service, "-a", account, "-w")
-		if err == nil || probeCtx.Err() != nil {
+		if probeCtx.Err() != nil || !keychainItemMissing(err) {
 			return out, err
 		}
 		return runner(probeCtx, "security", "find-generic-password", "-s", service, "-w")
