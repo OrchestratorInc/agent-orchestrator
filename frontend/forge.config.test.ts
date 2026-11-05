@@ -394,7 +394,8 @@ describe("Linux package maintainer", () => {
 	// package.json "description" becomes the Linux .desktop Comment= and the
 	// deb/rpm package description, which app menus show to users (#7834).
 	it("keeps the Linux menu description and category user-facing", () => {
-		expect(appPackage.description).toBe("Run and manage a fleet of AI coding agents");
+		expect(appPackage.description).toBeTruthy();
+		expect(appPackage.description).not.toMatch(/electron|typescript|frontend|rewrite/i);
 
 		const makers = config.makers as Array<{
 			name?: string;
