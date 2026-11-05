@@ -3709,16 +3709,27 @@ func (c *Controller) reportInteractionResolved(ctx context.Context, event string
 
 // LoginConfirmed settles a Chat session that a refused login left waiting on
 // the user, once a later reading of its account found the login working and
-// cleared the conversation's sign-in demand. The refusal reported
-// waiting_input (chat.account.reauth). Clearing the demand updates only the
-// conversation's account, so without this an idle chat keeps reading as
-// needing input until another turn starts.
+// cleared the conversation's sign-in demand, and replaces the refused provider
+// process. The refusal reported waiting_input (chat.account.reauth). Clearing
+// the demand updates only the conversation's account, so without this an idle
+// chat keeps reading as needing input until another turn starts.
 func (s *Service) LoginConfirmed(ctx context.Context, id domain.SessionID) {
 	controller, err := s.Controller(id)
 	if err != nil {
 		return
 	}
 	controller.settleConfirmedLogin(ctx, s.sessions)
+	// The refused provider process can keep credentials another process has
+	// since replaced, and refuse every later turn while fresh processes on
+	// the same login work. Stop it once quiet, like a version refresh, so the
+	// next message resumes the conversation in a process that reads the
+	// current login. Nothing is retried: the failed turn stays failed.
+	stopped, err := s.hibernateChat(ctx, id, hibernateOptions{loginRefresh: true, ignoreViews: true})
+	if err != nil {
+		s.log.Warn("stop chat provider after confirmed login", "session", id, "error", err)
+	} else if !stopped {
+		s.log.Debug("chat provider kept running after confirmed login", "session", id)
+	}
 }
 
 func (c *Controller) settleConfirmedLogin(ctx context.Context, sessions SessionReader) {

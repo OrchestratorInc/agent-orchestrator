@@ -189,10 +189,15 @@ type hibernateOptions struct {
 	// ignoreViews lets a refresh run under an open view: the user's next
 	// message is about to wake the session anyway.
 	ignoreViews bool
+	// loginRefresh stops a provider its login refused once a fresh reading
+	// found that login working, so the next message starts a process that
+	// reads the current credentials. Messages a failed turn holds back stay
+	// queued across the stop.
+	loginRefresh bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.loginRefresh {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -202,7 +207,7 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+	if (o.forUpdate || o.versionRefresh || o.loginRefresh) && candidate.Kind == domain.KindOrchestrator {
 		// Idle hibernation keeps orchestrators running. An update or a move to
 		// a new release stops them only to start them again, so they go too,
 		// under the same turn, queue and approval checks.
@@ -316,9 +321,18 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		controller.sendMu.Unlock()
 		return false, nil
 	}
+	// With the dispatch lock held and nothing running, a queued turn is one a
+	// failed turn is holding back. A login refresh still stops the provider, or
+	// a held message would keep the refused process for every later retry. The
+	// message stays queued: a wake does not drain, so it waits for the retry to
+	// succeed or for the user's next message, as it would have anyway.
+	heldQueue := false
 	if _, err := s.store.NextQueuedTurn(ctx, controller.conversation.ID); err == nil {
-		controller.sendMu.Unlock()
-		return false, nil
+		if !opts.loginRefresh {
+			controller.sendMu.Unlock()
+			return false, nil
+		}
+		heldQueue = true
 	} else if !errors.Is(err, domain.ErrNoQueuedTurn) {
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check queued chat turns: %w", err)
@@ -342,7 +356,8 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check latest chat turn: %w", err)
 	}
-	if !settled {
+	// The latest user turn of a held queue is the queued message itself.
+	if !settled && !heldQueue {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -368,6 +383,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 	if err != nil || !applied {
 		controller.sendMu.Unlock()
 		return false, err
+	}
+	if opts.loginRefresh && heldQueue {
+		s.noteHeldQueueStop(id)
 	}
 	controller.mu.Lock()
 	controller.handoff = controllerHandoffHibernate
@@ -410,6 +428,10 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
 		return true, nil
 	}
+	if opts.loginRefresh {
+		s.log.Info("chat session stopped to pick up a confirmed login", "session", id, "harness", fresh.Harness)
+		return true, nil
+	}
 	if opts.forUpdate {
 		// The update starts it again once installed. Until then a wake can
 		// time out on the installer, so what queues meanwhile must not fail.
@@ -431,6 +453,7 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 func (s *Service) clearHibernation(ctx context.Context, id domain.SessionID) error {
 	s.wakeMu.Lock()
 	delete(s.updateStops, id)
+	delete(s.heldQueueStops, id)
 	s.wakeMu.Unlock()
 	if s.sessions == nil {
 		return nil
@@ -691,6 +714,10 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			if s.versionSwitchFailed(ctx, id, err) {
 				return
 			}
+			if s.stoppedWithHeldQueue(id) {
+				s.log.Warn("chat session could not wake after a confirmed login; queued messages kept for its resume", "session", id, "err", err)
+				return
+			}
 			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
@@ -735,6 +762,29 @@ func (s *Service) isWaking(id domain.SessionID) bool {
 		delete(s.updateStops, id)
 	}
 	return s.waking[id] > 0 || s.updateStops[id]
+}
+
+func (s *Service) noteHeldQueueStop(id domain.SessionID) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	if s.heldQueueStops == nil {
+		s.heldQueueStops = make(map[domain.SessionID]bool)
+	}
+	s.heldQueueStops[id] = true
+}
+
+func (s *Service) clearHeldQueueStop(id domain.SessionID) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	delete(s.heldQueueStops, id)
+}
+
+// stoppedWithHeldQueue reports whether a login refresh stopped id with messages
+// held back and no provider has started since.
+func (s *Service) stoppedWithHeldQueue(id domain.SessionID) bool {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	return s.heldQueueStops[id]
 }
 
 // stoppedForUpdate reports whether an update stopped id and nothing has

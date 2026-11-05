@@ -104,6 +104,10 @@ type Service struct {
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
+	// heldQueueStops are sessions a login refresh stopped with messages a failed
+	// turn is holding back. Those messages never reached a provider, so a failed
+	// wake and the start after it keep them queued. Guarded by wakeMu.
+	heldQueueStops map[domain.SessionID]bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -713,6 +717,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
 		waking = true
 	}
+	// So did a session a login refresh stopped with a held queue, even after a
+	// failed wake cleared its sleep marker.
+	if s.stoppedWithHeldQueue(cfg.SessionID) {
+		waking = true
+	}
 	hadProviderHistory := false
 	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
 		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
@@ -1230,6 +1239,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	delete(s.awakeInterrupted, owner)
 	controller.start()
 	s.mu.Unlock()
+	if owner.Kind == domain.ConversationOwnerSession {
+		s.clearHeldQueueStop(cfg.SessionID)
+	}
 
 	// Drop the registry entry when the provider stream ends, so a later command
 	// reports ErrNoController instead of writing into a dead controller.
