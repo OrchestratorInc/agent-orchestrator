@@ -123,6 +123,51 @@ func TestKimiStopFailureEndsTheTurnUnanswered(t *testing.T) {
 	}
 }
 
+// Kimi fires StopFailure per agent with no agent id. A child's failure must not
+// end the parent's turn: the parent keeps working and its own Stop answers the
+// turn. Once the child is closed, the parent's own failure still ends a turn.
+func TestKimiChildStopFailureKeepsTheParentWorking(t *testing.T) {
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
+	manager := New(store, nil)
+	apply := func(signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ExpectedHarness = signal.State != "", "launch", domain.HarnessKimi
+		signal.AgentSessionID = "kimi-1"
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"})
+	apply(ports.ActivitySignal{Event: "subagent-start"})
+	// The Explore child's provider request fails; the parent continues.
+	apply(ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityActive {
+		t.Fatalf("activity after the child's stop-failure = %q, want active", got)
+	}
+	apply(ports.ActivitySignal{Event: "stop", State: domain.ActivityIdle, FinalAssistantMessage: "importer mapped"})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after the parent's stop = %q, want idle", got)
+	}
+
+	apply(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the exporter"})
+	apply(ports.ActivitySignal{Event: "subagent-start"})
+	apply(ports.ActivitySignal{Event: "subagent-stop"})
+	apply(ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after the parent's stop-failure = %q, want idle", got)
+	}
+
+	want := []string{
+		"request:kimi:kimi-1:map the importer", "response:importer mapped",
+		"request:kimi:kimi-1:map the exporter", "response:",
+	}
+	if !reflect.DeepEqual(store.calls, want) {
+		t.Fatalf("recorded %q, want %q", store.calls, want)
+	}
+}
+
 // After a provider switch the previous agent's hook config can still be in the
 // workspace. A signal that names an agent the session no longer runs is dropped
 // before it can record a turn or change activity.

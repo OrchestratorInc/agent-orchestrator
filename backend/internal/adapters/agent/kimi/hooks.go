@@ -383,6 +383,11 @@ func kimiHooksConfigBlock() string {
 		// invalid API key, a rate limit) ends the turn. Without it that turn
 		// leaves the session active, reading "working" forever.
 		kimiHookEntry("StopFailure", "", "ao hooks kimi stop-failure") +
+		// Kimi runs hooks per agent with no agent id, so a child's
+		// StopFailure reads like the parent's. These bracket each child so
+		// lifecycle can tell them apart. Both predate PermissionRequest.
+		kimiHookEntry("SubagentStart", "", "ao hooks kimi subagent-start") +
+		kimiHookEntry("SubagentStop", "", "ao hooks kimi subagent-stop") +
 		kimiHooksSentinelEnd + "\n"
 }
 

@@ -378,6 +378,10 @@ timeout = 7
 		`command = "ao hooks kimi stop"`,
 		`event = "StopFailure"`,
 		`command = "ao hooks kimi stop-failure"`,
+		`event = "SubagentStart"`,
+		`command = "ao hooks kimi subagent-start"`,
+		`event = "SubagentStop"`,
+		`command = "ao hooks kimi subagent-stop"`,
 		kimiHooksSentinelEnd,
 	} {
 		if !strings.Contains(text, want) {
