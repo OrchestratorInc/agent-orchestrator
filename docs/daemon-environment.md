@@ -30,8 +30,22 @@ session (it execs `tmux`, which runs `claude`/`codex`, etc.), and the agent's
 AO keeps an AO-only directory first after adding agent and Node runtime
 directories, including Codex Chat provider launches, and applies the same pin
 to reviewer and shell-terminal launches.
-Interactive login shells can still reorder `PATH` through user startup files,
-so this is a launch invariant and a best-effort convenience inside a shell.
+Login shells run the user's startup files after that pin, and Codex runs every
+agent command through one, so the same launches also get wrappers under
+`<data dir>/runtime/login-shell`. `ZDOTDIR` points zsh at files that run the
+user's own `.zshenv`, `.zprofile`, `.zshrc`, `.zlogin` and `.zlogout` (from
+their `ZDOTDIR`, or `$HOME`) and then put the pinned directory back first.
+`BASH_ENV` does the same after a non-interactive bash reads its profile, after
+running the user's own `BASH_ENV`, and a one-shot `PROMPT_COMMAND` does it
+before an interactive bash's first prompt. A stale `ao` that a startup file
+prepends (a legacy npm or Homebrew install, or the `scripts/daemon-build.sh`
+link in `~/.local/bin`) therefore no longer wins in zsh or bash. sh, dash, ksh
+and fish offer no such hook: `ao doctor`'s `ao-login-shell` check starts the
+user's login shell exactly as a session does and names whichever `ao` wins.
+An AppImage mounts under a new `/tmp/.mount_*` path on every launch, so a
+daemon running from one pins, and gives Codex and Auggie hooks,
+`<data dir>/runtime/ao-current/ao` instead: a link it moves to its own mount at
+every start, so sessions that outlive an app restart still reach the app.
 When the install directory contains other executable tools, AO creates an
 `ao` shim under its resolved absolute data directory instead of promoting those
 sibling tools. Windows provides both command-shell and Git Bash compatible

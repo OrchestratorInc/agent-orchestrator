@@ -23,6 +23,7 @@ import (
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
@@ -74,6 +75,9 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
+		// One delivery recorder for every owner of a session end; services
+		// reach it through lcm.DeliveryTelemetry().
+		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
 		lifecycle.WithContainerReaper(dockerreap.New(), store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
@@ -202,15 +206,18 @@ func (l *lifecycleStack) Stop() {
 // depending on the concrete manager type.
 //
 // SaveAndTeardownAll is deliberately ABSENT from this interface so the daemon
-// cannot tear down live sessions on shutdown. Sessions survive the daemon exit
-// and Reconcile on the next boot adopts them, preserving session IDs. Re-adding
-// the method here is a visible, reviewable interface change.
+// cannot remove worktrees on shutdown. Explicit desktop quit may stop agent
+// processes; ordinary daemon replacement still preserves them for adoption.
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
+	// ReconcileWorkspaceCleanup finishes interrupted workspace cleanups and
+	// records sessions with nothing left on disk; it never deletes a worktree
+	// the user has not asked to remove.
+	ReconcileWorkspaceCleanup(ctx context.Context) error
 	RefreshStaleChats(ctx context.Context, minIdle time.Duration) error
 	RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
@@ -218,6 +225,7 @@ type sessionLifecycle interface {
 	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
+	SetComputerUseEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
@@ -225,6 +233,7 @@ type sessionLifecycle interface {
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
+	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
@@ -350,6 +359,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		DataDir:           cfg.DataDir,
 		Tracker:           tracker,
 		Telemetry:         telemetry,
+		Milestones:        installMilestones(cfg),
+		Delivery:          lcm.DeliveryTelemetry(),
 		Logger:            log,
 		BackgroundContext: ctx,
 		AgentReadiness:    agentReadiness,
@@ -723,6 +734,10 @@ func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
+}
+
 func (c chatLauncher) PreflightChat(
 	ctx context.Context,
 	harness domain.AgentHarness,
@@ -812,7 +827,8 @@ func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.Sessio
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
-		Text: text,
+		Text:               text,
+		SpawnOpeningPrompt: true,
 		// The opening prompt is the user's own task brief, whatever carries it.
 		Origin: domain.MessageOriginHuman,
 	})
@@ -898,7 +914,13 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 type reviewPRRefresher struct {
 	sessions interface {
 		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+		FindBranchPRs(ctx context.Context, id domain.SessionID) (sessionsvc.BranchPRs, error)
 	}
+}
+
+func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.SessionID) (reviewsvc.BranchPRs, error) {
+	found, err := r.sessions.FindBranchPRs(ctx, workerID)
+	return reviewsvc.BranchPRs{Own: found.Own, OtherAuthor: found.OtherAuthor}, err
 }
 
 func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {

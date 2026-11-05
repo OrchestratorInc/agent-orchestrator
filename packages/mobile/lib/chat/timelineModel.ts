@@ -3,6 +3,7 @@ import type {
 	ConversationItem,
 	ConversationMessage,
 	ConversationSnapshot,
+	ConversationPlan,
 	ConversationTurn,
 } from "./types";
 import { stagedAttachmentParts } from "./messageAttachments";
@@ -13,6 +14,8 @@ export type ConversationGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	turn?: ConversationTurn;
+	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
+	plan?: ConversationPlan;
 };
 
 export type ConversationMarker = {
@@ -66,7 +69,9 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
-		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
+		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
+		// An older copy of a list that spans turns; a later turn or run carries it.
+		!(item.activityKind === "plan" && item.detail?.superseded)
 	));
 }
 
@@ -100,7 +105,21 @@ export function groupConversationByTurn(
 			groups.push(group);
 		}
 	}
-	return groups.sort((left, right) => left.anchor - right.anchor);
+	groups.sort((left, right) => left.anchor - right.anchor);
+	attachCurrentPlans(groups);
+	return groups;
+}
+
+/**
+ * Gives each turn group the plan it should show, as the desktop does: the turn's
+ * plan, unless the daemon marked it superseded. That is an older copy of a list the
+ * agent keeps across turns (Claude's task list), which a later turn or run carries.
+ */
+function attachCurrentPlans(groups: ConversationGroup[]): void {
+	for (const group of groups) {
+		const plan = group.turn?.plan;
+		if (plan?.steps.length && !plan.superseded) group.plan = plan;
+	}
 }
 
 export type TurnItemPartition = {

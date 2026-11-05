@@ -72,6 +72,22 @@ Review the draft and attachments before submitting. A clear observation is usefu
 New PRs are prefilled from [`.github/pull_request_template.md`](.github/pull_request_template.md).
 Also follow **PR hygiene** in [AGENTS.md](AGENTS.md): branch from `main`, one issue per PR, conventional commits, explain intentional omissions, and keep CI green for the area you touched.
 
+The AO Cloud control plane (the hosted service behind Cloud Agents) is not in this repository and does not take outside contributions. Changes to the desktop's cloud features, the CLI, and the cloud contract in `contracts/cloud/` are welcome here.
+
+### Native CI coverage
+
+Ready PRs targeting `main` run the Linux suites. Ask a maintainer to add
+`ci:macos` for macOS helpers, updater or packaging changes, or `ci:full` for
+Windows paths, process handling, or other cross-platform changes. `ci:full`
+also enables the frontend macOS jobs.
+
+Apply labels before the next push. Label changes alone do not restart CI;
+the next push evaluates the current labels. Rerunning an old run can retain its
+original event payload, so do not rely on a rerun to pick up a new label.
+Draft and stacked PRs still skip heavy suites. Main pushes retain full native
+coverage. CLI macOS and Windows check names remain present on ready PRs even
+without `ci:full`, but their test steps are intentionally skipped.
+
 ### Weekly contributor call
 
 The weekly contributor call is open to everyone. Share your work, discuss PRs,

@@ -172,8 +172,9 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
-		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
-		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		pathWritable:          pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes:    map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		privateInstallerHomes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/installer"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
@@ -232,8 +233,9 @@ func TestPlanFor(t *testing.T) {
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
 		// cloudflared is what makes a phone reachable from outside the local
-		// network. Nothing installed it before, so a machine without it showed a
-		// normal QR that only ever worked on Wi-Fi.
+		// network. These are the package-manager fallbacks: newTestService has
+		// no downloader, so AO's own pinned copy is not on offer (see
+		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},
@@ -307,7 +309,6 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode v2 legacy route uses official installer", target: TargetOpencodeV2, goos: "linux", found: []string{"bash"},
-			wantNoticeHas: "replaces the default OpenCode 1",
 		},
 	}
 
@@ -2034,5 +2035,34 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 	final, _ := s.Status(context.Background(), TargetKimi)
 	if !strings.Contains(final.Output, "brew update failed") {
 		t.Fatalf("output %q does not note the failed refresh", final.Output)
+	}
+}
+
+// Without the shell AO runs Cua's installer with, Settings must offer Cua's
+// own one-line command to copy, not an Install button that fails again.
+func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
+	for goos, want := range map[string]string{
+		"windows": "irm https://cua.ai/driver/install.ps1 | iex",
+		"darwin":  "curl -fsSL https://cua.ai/driver/install.sh | bash",
+		"linux":   "curl -fsSL https://cua.ai/driver/install.sh | bash",
+	} {
+		t.Run(goos, func(t *testing.T) {
+			job, err := newTestService(goos).Status(context.Background(), TargetCuaDriver)
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if job.Status != StatusUnsupported || job.Command != want {
+				t.Fatalf("job = %+v, want unsupported with command %q", job, want)
+			}
+			if !strings.Contains(job.Error, "was not found on PATH") || !strings.Contains(job.Error, cuaDriverDocs) {
+				t.Fatalf("Error = %q, want the missing shell and the install guide", job.Error)
+			}
+		})
+	}
+
+	// With the shell present, AO runs the installer itself.
+	job, err := newTestService("darwin", "bash").Status(context.Background(), TargetCuaDriver)
+	if err != nil || job.Status == StatusUnsupported {
+		t.Fatalf("with bash: job = %+v, err = %v", job, err)
 	}
 }

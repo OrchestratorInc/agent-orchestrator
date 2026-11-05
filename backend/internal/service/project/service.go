@@ -77,6 +77,7 @@ type Service struct {
 	sessions       SessionTeardowner
 	clock          func() time.Time
 	telemetry      ports.EventSink
+	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
 	logger         *slog.Logger
 	// addMu serialises the whole body of Add. Workspace registration performs
@@ -99,6 +100,9 @@ type Deps struct {
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
 	Telemetry      ports.EventSink
+	// Milestones durably records the install's first added project, so
+	// ao.projects.created carries first_for_install. Left nil, it is omitted.
+	Milestones ports.InstallMilestones
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
@@ -120,6 +124,7 @@ func NewWithDeps(d Deps) *Service {
 		sessions:       d.Sessions,
 		clock:          d.Clock,
 		telemetry:      d.Telemetry,
+		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
 		logger:         d.Logger,
 	}
@@ -211,6 +216,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}
 
 	projectCountBefore := len(activeProjects)
+	// first_for_install must also see archived rows: Remove archives, so an
+	// install upgraded after removing its projects is not on its first project.
+	// A failed count only omits the durable flag; it never fails the add.
+	allProjectsBefore, countErr := m.store.CountProjectsIncludingArchived(ctx)
+	prior := priorProjects{none: countErr == nil && allProjectsBefore == 0, known: countErr == nil}
 
 	name := string(id)
 	if in.Name != nil {
@@ -310,7 +320,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
 		}
-		m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+		m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 		p := m.projectFromRow(ctx, row)
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 		return p, nil
@@ -358,7 +368,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
-	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+	m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -569,7 +579,20 @@ func nestedGitRepositoryPaths(root string) ([]string, error) {
 	return nested, nil
 }
 
-func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool) {
+// priorProjects is whether any project row, archived included, existed before
+// an add; known is false when that could not be read.
+type priorProjects struct{ none, known bool }
+
+// emitProjectAdded reports an add. firstProject (no active projects before)
+// drives the deprecated first_project_added event; prior drives the durable
+// first_for_install flag.
+func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool, prior priorProjects) {
+	// Claimed even when telemetry is off: the marker describes the install. An
+	// unreadable prior count leaves the marker unclaimed and the flag omitted.
+	var firstForInstall, firstKnown bool
+	if prior.known {
+		firstForInstall, firstKnown = ports.FirstForInstall(m.milestones, "project_added", prior.none)
+	}
 	if m.telemetry == nil {
 		return
 	}
@@ -591,6 +614,11 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 	if owner := githubOwner(row.RepoOriginURL); owner != "" {
 		payload["github_org"] = owner
 	}
+	// Only ao.projects.created allowlists first_for_install; the deprecated
+	// first_project_added event below drops it at export.
+	if firstKnown {
+		payload["first_for_install"] = firstForInstall
+	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.projects.created",
 		Source:     "project_service",
@@ -600,6 +628,9 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		RequestID:  reqid.FromContext(ctx),
 		Payload:    payload,
 	})
+	// Deprecated: first_project_added fires whenever the projects table is
+	// empty. Use ao.projects.created with first_for_install=true. Kept for
+	// dashboard continuity.
 	if !firstProject {
 		return
 	}

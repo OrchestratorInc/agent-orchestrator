@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Client-facing contract for AO Cloud. The Cloud server implementation lives
-    under `cloud/` in this repository, while this file is the versioned contract
+    in a separate private repository, while this file is the versioned contract
     used to generate the runtime-neutral client types. The worker surface
     documents the exact outbound HTTP protocol used by sandbox workers,
     including one-time bootstrap, rotating credentials, fenced turn execution,
@@ -30,6 +30,7 @@ tags:
   - name: Worker Execution
   - name: Worker Orchestration
   - name: Worker Transport
+  - name: Remote Hosts
 paths:
   /api/cloud/v1/me:
     get:
@@ -107,9 +108,12 @@ paths:
       tags: [Artifacts]
       description: >-
         Lists the signed-in user's public artifact share links, newest first,
-        with how many they may hold. Revoked links are listed with revokedAt:
-        they no longer serve but still use a slot, so used counts them. Available only when the development-only
-        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+        with how many they may hold. Revoked links are listed with revokedAt
+        so they can be published again; they serve nothing and use no slot,
+        so used counts only active links. unlimited is true when the user is
+        an active member of a paid, contract or otherwise entitled
+        organization: the limit then does not apply. Available only when the
+        development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
       responses:
         "200":
           description: The user's share links.
@@ -119,42 +123,121 @@ paths:
                 $ref: "#/components/schemas/ArtifactShareList"
         default:
           $ref: "#/components/responses/Error"
-    post:
-      operationId: createArtifactShare
+  /api/cloud/v1/me/artifact-shares/{shareId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteArtifactShare
       tags: [Artifacts]
       description: >-
-        Publishes the request body, one file from a local session, as the
-        link of the document named by project, feature and name. A new
-        document gets a new public link at <project>-<feature>-<email> under
-        the share origin; a taken name gets a -2, -3, ... suffix. Publishing
-        a document that already has a link replaces the version that link
-        serves: the URL and slot stay, the earlier version is no longer
-        served, and the response is 200 with replaced true. A revoked link
-        is restored the same way.
-        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
-        artifact_share_limit_reached when a new document would exceed the
-        user's limit of links; revoked links count toward it.
-      parameters:
-        - $ref: "#/components/parameters/ArtifactShareName"
-        - name: project
-          in: query
-          schema:
-            type: string
-        - name: feature
-          in: query
-          schema:
-            type: string
-        - $ref: "#/components/parameters/ArtifactShareSHA256"
+        Revokes a link: it stops serving at once, its stored file is deleted
+        at once, and it frees its slot for another
+        document. Publishing the same document again uploads it again and
+        restores the link, under a new URL, when a slot is free; the revoked
+        URL never serves again. A link already revoked returns 404.
+      responses:
+        "204":
+          description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads:
+    post:
+      operationId: createArtifactShareUpload
+      tags: [Artifacts]
+      description: >-
+        Starts uploading one file from a local session straight to storage,
+        for a new document (project, feature, name), a revoked document to
+        restore, or an update of an active link (shareId, same name). The
+        file goes in partCount parts of partSize bytes, the last one shorter:
+        presign them with presignArtifactShareParts, PUT each, then
+        finalizeArtifactShare. There is no file size limit. Nothing reaches
+        storage when the upload is refused: 415
+        artifact_share_type_unsupported for video, 409
+        artifact_share_limit_reached for a new or restored document over the
+        free plan's link limit, 409 artifact_share_name_changed for an update
+        with another name. Paid plans have no link limit.
       requestBody:
         required: true
         content:
-          application/octet-stream:
+          application/json:
             schema:
-              type: string
-              format: binary
+              $ref: "#/components/schemas/ArtifactShareUploadInput"
+      responses:
+        "201":
+          description: The upload, ready for its parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareUpload"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/parts:
+    post:
+      operationId: presignArtifactShareParts
+      tags: [Artifacts]
+      description: >-
+        Presigns up to 100 parts of an upload. Each URL signs its part's
+        length and SHA-256: send method to url with exactly headers and the
+        part's bytes, and keep the response's ETag for finalizing. A URL
+        works until expiresAt; presign again after that.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareUploadPartsInput"
       responses:
         "200":
-          description: The document's existing link, now serving the new version.
+          description: The presigned parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePresignedParts"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/abort:
+    post:
+      operationId: abortArtifactShareUpload
+      tags: [Artifacts]
+      description: Cancels an upload and discards its parts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareUploadRef"
+      responses:
+        "204":
+          description: The upload was cancelled.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/finalize:
+    post:
+      operationId: finalizeArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Finishes an upload from every one of its parts, in order, and
+        publishes it: 201 with a new link, or 200 with replaced true when it
+        updated or restored the document's link. The link limit is checked
+        again, so 409 artifact_share_limit_reached can still come back here.
+        400 artifact_share_parts_invalid when the parts do not make up the
+        upload; 409 artifact_share_upload_gone when it was already finalized,
+        cancelled or expired (start again); 400 artifact_share_upload_invalid
+        for a token that is not this user's or has expired.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFinalizeInput"
+      responses:
+        "200":
+          description: The document's existing link, now serving the uploaded file.
           content:
             application/json:
               schema:
@@ -167,53 +250,70 @@ paths:
                 $ref: "#/components/schemas/ArtifactSharePublishResult"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/me/artifact-shares/{shareId}:
+  /api/cloud/v1/artifact-shares/{linkId}:
     parameters:
-      - name: shareId
+      - name: linkId
+        in: path
+        required: true
+        description: The link's public ID, the slug of an ArtifactShare.
+        schema:
+          type: string
+    get:
+      operationId: getPublicArtifactShare
+      tags: [Artifacts]
+      security: []
+      description: >-
+        Returns what the public viewer page shows for a share link: its
+        file's name, type and size, its owner's display name, and the URL
+        its file is served at. Needs no sign-in and never returns the
+        owner's email. Readable from a browser only by the configured viewer
+        origin, and rate-limited per client (429 rate_limited). An unknown or
+        revoked link returns 404. Available only when the development-only
+        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+      responses:
+        "200":
+          description: The link's public details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicArtifactShare"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: agent
         in: path
         required: true
         schema:
           type: string
-          format: uuid
-    put:
-      operationId: updateArtifactShare
-      tags: [Artifacts]
+          enum: [claude-code, codex, cursor, opencode]
+    get:
+      operationId: listUserAgentModels
+      tags: [Providers]
       description: >-
-        Replaces the file an existing link serves. The link keeps its URL and
-        does not count against the limit again. name must match the link's
-        file name, which is part of its document; another name returns 409
-        artifact_share_name_changed, and the renamed file is published as a
-        new link with POST.
-      parameters:
-        - $ref: "#/components/parameters/ArtifactShareName"
-        - $ref: "#/components/parameters/ArtifactShareSHA256"
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
+        The models and reasoning efforts a new Cloud task for this agent runs
+        with, for the authenticated user in this organization. The list is
+        what the next task's worker runs, not a suggestion, and needs no live
+        worker: `source` says whether a Cloud worker running the same CLI
+        version with the user's current credential reported it, or it is the
+        list the control plane's pinned CLI version supports. A task that
+        names no model keeps the project's or the agent's default. A listed
+        model without `efforts` takes no reasoning effort; every model that
+        takes one lists its levels.
       responses:
         "200":
-          description: The updated share link.
+          description: The model catalog for the next task. It lists at least one model.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactShareEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
-    delete:
-      operationId: deleteArtifactShare
-      tags: [Artifacts]
-      description: >-
-        Revokes a link: it stops serving at once and its stored file is
-        deleted after a grace period. The link still uses its slot, so
-        revoking never makes room for a new document. Publishing the same
-        document again restores it. A link already revoked returns 404.
-      responses:
-        "204":
-          description: The link was revoked.
+                $ref: "#/components/schemas/ChatModelsResponse"
+        "409":
+          description: MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
@@ -413,6 +513,164 @@ paths:
                 $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/environment:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProjectEnvironment
+      tags: [Projects]
+      description: >-
+        The project's environment variables, which every session of the project
+        gets (its coding agent, shells, and Setup and Cleanup commands), except
+        sessions issue intake starts. They are stored encrypted. Only an
+        organization owner or admin sees their values here; other members see
+        their names. That is not a secrecy boundary: everyone who can use one of
+        the project's sessions, and its coding agent, can read every value.
+      responses:
+        "200":
+          description: The project's environment variables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvironment"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putProjectEnvironment
+      tags: [Projects]
+      description: >-
+        Replace the project's environment variables as a whole; an empty map
+        removes them. Organization owners and admins only. They are delivered
+        into the sandbox of every new session of the project, except sessions
+        issue intake starts, where everyone using the session and its coding
+        agent can read them. A reserved name, in any case, is refused with 422
+        validation_error and a message naming it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutProjectEnvironmentInput"
+      responses:
+        "200":
+          description: The saved environment variables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEnvironment"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/intake:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProjectIntakeStatus
+      tags: [Projects]
+      description: How the project's issue intake (config.trackerIntake) last went.
+      responses:
+        "200":
+          description: The project's issue intake status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectIntakeStatus"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/cues:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectCues
+      tags: [Projects]
+      responses:
+        "200":
+          description: The project's cues, by name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectCue
+      tags: [Projects]
+      description: Add a cue. A name the project already has is refused with CUE_NAME_TAKEN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueDefinitionInput"
+      responses:
+        "201":
+          description: The created cue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/cues/{cueId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CueId"
+    patch:
+      operationId: updateProjectCue
+      tags: [Projects]
+      description: Replace a cue's whole definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueDefinitionInput"
+      responses:
+        "200":
+          description: The updated cue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteProjectCue
+      tags: [Projects]
+      responses:
+        "204":
+          description: The cue was deleted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/cues/{cueId}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CueId"
+    post:
+      operationId: invokeProjectCue
+      tags: [Projects]
+      description: >-
+        Run a cue into one of its project's sessions. An agent cue's prompt is
+        sent to the session as the caller's message (a shared session's composer
+        lease applies). A command cue is returned for the client to run in a new
+        shell of the session's sandbox. Accepts an optional Idempotency-Key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeCueInput"
+      responses:
+        "200":
+          description: What the cue did.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeCueResult"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/installations:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -590,6 +848,42 @@ paths:
                 $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/chat-search:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: searchChats
+      tags: [Sessions]
+      description: >-
+        Returns, newest first, the chat messages of the organization's
+        sessions in live projects whose text contains q, case insensitively:
+        prompts, and assistant replies assembled from their streamed text.
+        Only the organization's most recent chat events are searched.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 200
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: The matching messages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSearchResults"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -681,6 +975,12 @@ paths:
     delete:
       operationId: deleteSession
       tags: [Sessions]
+      parameters:
+        - name: deleteArtifacts
+          in: query
+          description: Also delete the session's artifact files. A restored session comes back without them.
+          schema:
+            type: boolean
       responses:
         "202":
           description: Session sandbox deletion was requested; durable history is retained.
@@ -688,6 +988,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteSessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateSession
+      tags: [Sessions]
+      description: >-
+        Renames the session: the title every viewer sees. Anyone who may write
+        in the session may rename it; a viewer is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionInput"
+      responses:
+        "200":
+          description: The renamed session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: pinSession
+      tags: [Sessions]
+      description: >-
+        Pins the session in the caller's sidebar. A pin is one person's:
+        nobody else sees the session move. Pinning a pinned session keeps its
+        first pin time.
+      responses:
+        "200":
+          description: The caller's pin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPinResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: unpinSession
+      tags: [Sessions]
+      responses:
+        "200":
+          description: The session is no longer pinned for the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionPinResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
@@ -832,6 +1189,30 @@ paths:
                 $ref: "#/components/schemas/SessionArtifactList"
         default:
           $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Deletes one of the session's artifact files: its row, its stored
+        object version, and, through a request to a connected worker, the file
+        on the worker's disk (a worker that is not connected removes it when
+        it next starts). An invalid path answers 400 invalid_path. Only the
+        person who started the session (Session.createdByUserId) deletes a
+        file; anyone else gets 403 artifact_not_owner, as for
+        saveSessionArtifact. Present only when the deployment reports
+        offering.artifacts; otherwise 404.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "204":
+          description: The file was deleted.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -853,6 +1234,213 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionArtifactAccess"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/content:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    put:
+      operationId: saveSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Replaces the text of one committed artifact file with an edit made in
+        the app, when the committed file still has expectedSha256 (409
+        artifact_changed otherwise). The save is kept as the file's newest
+        version and reaches the session's worker, which writes it to its disk
+        unless the file changed there since. Only the person who started the
+        session (Session.createdByUserId) saves an edit: any other member of
+        its organization, who may still read the file, gets 403
+        artifact_not_owner, as does everyone for a session with no creator on
+        record. Present only when the deployment reports offering.artifacts;
+        otherwise 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveSessionArtifactInput"
+      responses:
+        "200":
+          description: The saved artifact file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionArtifactVersions
+      tags: [Artifacts]
+      description: >-
+        Lists the kept versions of one artifact file, newest first; the first
+        is the committed file. A session keeps the newest twenty versions of
+        each file.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: The file's kept versions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactVersionList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+    get:
+      operationId: getSessionArtifactVersion
+      tags: [Artifacts]
+      description: >-
+        Returns one kept version of an artifact file with the start of its
+        UTF-8 text (the first 256 KiB; truncated says when it was cut).
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 1024
+      responses:
+        "200":
+          description: The version and its text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactVersion"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/restore:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restoreSessionArtifactVersion
+      tags: [Artifacts]
+      description: >-
+        Makes a kept version the committed file again, kept as its newest
+        version (restoredFrom names the one it restored), and hands it to the
+        session's worker. Restoring the committed version changes nothing.
+        Only the person who started the session restores a version; anyone
+        else gets 403 artifact_not_owner, as for saveSessionArtifact.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [path, version]
+              properties:
+                path:
+                  type: string
+                  maxLength: 1024
+                version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+      responses:
+        "200":
+          description: The restored artifact file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent/restart:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: restartSessionAgent
+      tags: [Sessions]
+      description: >-
+        Starts a live session's terminal agent again in its worker after it
+        exited (Ctrl+C, /exit, a crash), resuming its conversation where the
+        agent keeps one, and reads the session as idle rather than exited.
+        requested is false when the agent is still running or starting. A
+        session in Chat starts its agent with its next message instead; a
+        session viewer cannot restart it.
+      responses:
+        "200":
+          description: Whether a start was requested.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [requested]
+                properties:
+                  requested:
+                    type: boolean
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: shareSessionArtifact
+      tags: [Artifacts]
+      description: >-
+        Publishes one of this session's committed artifact files as a share
+        link, as finalizeArtifactShare publishes a local file: the same link
+        limit (409 artifact_share_limit_reached), one link per file, and
+        shareId to point an existing link at the file's current version. The
+        link serves a copy of the file, so it outlives the session's file;
+        unpublishing deletes only the copy. 404 when the caller is not a
+        member of the organization or the session holds no file at path; 409
+        artifact_share_source_changed when the session's file is no longer
+        the sha256 the caller was shown (inspect it again); 415
+        artifact_share_type_unsupported for a video.
+
+        Only a person publishes: the route accepts only a signed-in account
+        session, the bearer token of every user route. Worker, sandbox and
+        host credentials get 401, so a cloud session's agent cannot publish
+        its own files. Only the person who created the session shares its
+        files, under their own link limit: another member of the organization,
+        who may read them, gets 403 artifact_share_not_owner, as does anyone
+        for a session with no creator on record; a guest of a shared project
+        gets 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionArtifactShareInput"
+      responses:
+        "200":
+          description: The file's existing link, now serving the file's current version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests:
@@ -951,6 +1539,105 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/UserMessageEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat-events:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    get:
+      operationId: listReviewChatEvents
+      tags: [Reviews]
+      description: One review conversation's events after a sequence, for a review whose run reports interfaceMode chat.
+      parameters:
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/EventLimit"
+      responses:
+        "200":
+          description: The review conversation's events after the supplied sequence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewChatEventPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/messages:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    post:
+      operationId: sendReviewChatMessage
+      tags: [Reviews]
+      description: Queues a message to the reviewer of a review that runs in Chat. A conversation that stopped after its verdict starts again.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+      responses:
+        "202":
+          description: The message was queued for the reviewer.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/ReviewChatEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/interrupt:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ReviewRunId"
+    post:
+      operationId: interruptReviewChat
+      tags: [Reviews]
+      responses:
+        "202":
+          description: The reviewer's running turn was asked to stop and its queued messages were dropped.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: suggestChatPrompt
+      tags: [Chat]
+      description: |
+        The next message the person could send after a settled turn. The
+        session's agent reads the supplied recent transcript once, with no
+        tools. An empty prompt means no clear next step; a worker that cannot
+        suggest fails the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromptSuggestionInput"
+      responses:
+        "200":
+          description: The suggestion, or an empty prompt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromptSuggestion"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences:
@@ -2958,8 +3645,184 @@ paths:
           description: Every unread notification for the current recipient was marked read.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts:
+    get:
+      operationId: listRemoteHosts
+      tags: [Remote Hosts]
+      responses:
+        "200":
+          description: The account's machines.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts/{hostId}:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    put:
+      operationId: putRemoteHost
+      tags: [Remote Hosts]
+      description: |
+        Lists a machine in the account, or updates its listing. A new `token`,
+        or listing a removed machine again, retires its standing fixed tunnel:
+        a run token fetched with the old credential stops working, and the
+        machine gets a new tunnel at the same address. A registration that
+        makes a tunnel can take more than a minute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostRegistration"
+      responses:
+        "204":
+          description: Listed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds."
+          $ref: "#/components/responses/Error"
+        "422":
+          description: "`validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses."
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`."
+          $ref: "#/components/responses/Error"
+        "502":
+          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRemoteHost
+      tags: [Remote Hosts]
+      description: |
+        Removes the machine from the account and deletes its fixed tunnel;
+        when Cloudflare fails, a later cleanup deletes it. The fixed address
+        counts against the account's limit until that cleanup, usually within
+        15 minutes.
+      responses:
+        "204":
+          description: Removed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/address:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: publishRemoteHostAddress
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+          hostSignature: []
+        - hostDigest: []
+      description: |
+        The machine publishes the address it serves now to every account that
+        lists it under this credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostAddress"
+      responses:
+        "204":
+          description: Published.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: ensureRemoteHostTunnel
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+          hostSignature: []
+        - hostDigest: []
+      description: |
+        The machine fetches the run token of the fixed tunnel an account gives
+        it: the account that lists the machine under the credential it
+        presents. If several do, one with a standing tunnel is preferred. The
+        deployment makes the tunnel when there is none. A deployment that
+        predates this route answers 404 without an error envelope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostTunnelRequest"
+      responses:
+        "200":
+          description: The machine's fixed tunnel.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostTunnel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
+          $ref: "#/components/responses/Error"
+        "404":
+          description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope."
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
+          $ref: "#/components/responses/Error"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later."
+          $ref: "#/components/responses/Error"
+        "502":
+          description: "`tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place."
+          $ref: "#/components/responses/Error"
+        "503":
+          description: "`fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
+    hostDigest:
+      type: http
+      scheme: bearer
+      description: |
+        Lowercase hex SHA-256 of the machine's account token (the ASCII bytes
+        of its 64-character hex form), the credential the account lists the
+        machine under. It is a bearer credential with no expiry, as strong on
+        these routes as the account token itself. It is not an account
+        session. A listing with a host key also needs `hostSignature`.
+    hostSignature:
+      type: apiKey
+      in: header
+      name: X-AO-Host-Signature
+      description: |
+        `<t>.<signature>`: `t` is the Unix time in seconds, and `signature`
+        is the unpadded base64url Ed25519 signature, by the listing's host key,
+        of `ao-host-v1`, the method, the path, `t` and the lowercase hex
+        SHA-256 of the request body, each followed by a newline. Required,
+        with `hostDigest`, on a listing that has a host key, and accepted
+        within 5 minutes of `t`. Only the machine holds the private key, so a
+        device that has the account token cannot act as the machine.
     bearerAuth:
       type: http
       scheme: bearer
@@ -2982,22 +3845,28 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
-    ArtifactShareName:
-      name: name
-      in: query
+    CueId:
+      name: cueId
+      in: path
       required: true
-      description: The file name, without a directory.
       schema:
         type: string
-        maxLength: 255
-    ArtifactShareSHA256:
-      name: X-AO-Artifact-SHA256
-      in: header
+        format: uuid
+    ReviewRunId:
+      name: reviewRunId
+      in: path
       required: true
-      description: Lowercase hex SHA-256 of the body.
       schema:
         type: string
-        pattern: "^[0-9a-f]{64}$"
+        format: uuid
+    RemoteHostId:
+      name: hostId
+      in: path
+      required: true
+      description: The machine's stable identity, `h_` followed by a UUID.
+      schema:
+        type: string
+        pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     OrgId:
       name: orgId
       in: path
@@ -3170,6 +4039,92 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    RemoteHost:
+      type: object
+      additionalProperties: false
+      required: [hostId, label, url, token, updatedAt]
+      properties:
+        hostId:
+          type: string
+        label:
+          type: string
+        url:
+          type: string
+          description: The address devices reach the machine at.
+        token:
+          type: string
+          description: The credential a device presents to the machine.
+        updatedAt:
+          type: string
+          format: date-time
+    RemoteHostList:
+      type: object
+      additionalProperties: false
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemoteHost"
+        fixedAddresses:
+          type: boolean
+          description: Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`.
+        hostKeys:
+          type: boolean
+          description: Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one.
+    RemoteHostRegistration:
+      type: object
+      additionalProperties: false
+      required: [label, token]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          description: At most 64 bytes, after surrounding whitespace is trimmed.
+        url:
+          type: string
+          description: The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes.
+        token:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        hostKey:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it.
+    RemoteHostAddress:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+          description: An https origin with no path, query, fragment or user info.
+    RemoteHostTunnelRequest:
+      type: object
+      properties:
+        repair:
+          type: boolean
+          description: Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset.
+    RemoteHostTunnel:
+      type: object
+      additionalProperties: false
+      required: [hostname, runToken, since]
+      properties:
+        hostname:
+          type: string
+          description: The fixed address's host name.
+        runToken:
+          type: string
+          description: The Cloudflare run token for the machine's connector.
+        since:
+          type: string
+          format: date-time
+          description: When the address was made; it may not resolve for a short time after.
+        repaired:
+          type: boolean
+          description: Set when a repair request got a new tunnel.
     EmptyObject:
       type: object
       additionalProperties: false
@@ -3401,9 +4356,19 @@ components:
             allowed.
         features:
           type: array
-          description: Plan feature flags; empty when none apply.
+          description: >-
+            The organization's product features (share lets it share
+            sessions) and the deployment's own: attachments when the session
+            attachment routes are on. Empty when none apply.
           items:
             type: string
+        maxAttachmentBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The largest file one session attachment may be, in bytes. Sent
+            with attachments in features and omitted without it.
         customCoder:
           type: boolean
           description: >-
@@ -3623,6 +4588,10 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         orchestratorRules:
           $ref: "#/components/schemas/ProjectRules"
+        workersRequestReview:
+          $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        trackerIntake:
+          $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
           type: string
           description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
@@ -4047,6 +5016,181 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         orchestratorRules:
           $ref: "#/components/schemas/ProjectRules"
+        workersRequestReview:
+          $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        trackerIntake:
+          $ref: "#/components/schemas/ProjectTrackerIntake"
+    ProjectWorkersRequestReview:
+      type: boolean
+      description: >-
+        Workers request AO's review of their own pull request once it is pushed
+        and ready, instead of waiting to be asked. Defaults to off.
+    ProjectTrackerIntake:
+      type: object
+      additionalProperties: false
+      description: >-
+        Issue intake: while enabled, every open GitHub issue of the project's
+        repository (or repo) that assignee matches gets one worker session,
+        started as the organization owner or admin who last saved the rule.
+        Only issues opened by the repository's owners, members and
+        collaborators are taken; an issue anyone else opens is skipped. The
+        sessions intake starts get none of the project's environment
+        variables. An enabled rule needs an assignee. A patch merges into the
+        stored rule. Setting it requires an organization owner or admin.
+      properties:
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [github]
+        repo:
+          type: string
+          maxLength: 200
+          description: owner/name; empty uses the project's repository.
+        assignee:
+          type: string
+          maxLength: 200
+          description: A GitHub login, "*" for any assigned issue, or "none" for unassigned issues.
+    ProjectEnvironment:
+      type: object
+      additionalProperties: false
+      required: [variables, editable]
+      properties:
+        variables:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectEnvironmentVariable"
+        editable:
+          type: boolean
+          description: Whether the caller may change the variables (an organization owner or admin).
+    ProjectEnvironmentVariable:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+          description: Omitted for a member who cannot change the variables.
+    PutProjectEnvironmentInput:
+      type: object
+      additionalProperties: false
+      required: [variables]
+      properties:
+        variables:
+          type: object
+          maxProperties: 100
+          description: >-
+            Name to value. Names are shell variable names, unique without case;
+            AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved, and so
+            are coding-agent logins and model relay settings (ANTHROPIC_API_KEY,
+            OPENAI_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the like), which belong
+            in the coding agent's connection instead. Values are text of at most
+            32 KB, 64 KB in all, readable by everyone who can use the project's
+            sessions.
+          additionalProperties:
+            type: string
+    ProjectIntakeStatus:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        lastPolledAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+          description: Why the last poll failed; absent when it did not.
+    Cue:
+      type: object
+      additionalProperties: false
+      required: [id, projectId, name, type, createdAt, updatedAt]
+      description: One of a project's reusable quick actions, run into a session from the desktop's top bar.
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          type: string
+          enum: [command, agent]
+        command:
+          type: string
+        prompt:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CueDefinitionInput:
+      type: object
+      additionalProperties: false
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique within the project; trimmed.
+        type:
+          type: string
+          enum: [command, agent]
+        command:
+          type: string
+          maxLength: 4096
+          description: The shell command of a command cue; cleared for an agent cue.
+        prompt:
+          type: string
+          maxLength: 16384
+          description: The agent instruction of an agent cue; cleared for a command cue.
+    CueList:
+      type: object
+      additionalProperties: false
+      required: [cues]
+      properties:
+        cues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cue"
+    CueEnvelope:
+      type: object
+      additionalProperties: false
+      required: [cue]
+      properties:
+        cue:
+          $ref: "#/components/schemas/Cue"
+    InvokeCueInput:
+      type: object
+      additionalProperties: false
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: A session of the cue's project.
+    InvokeCueResult:
+      type: object
+      additionalProperties: false
+      required: [kind, sessionId]
+      properties:
+        kind:
+          type: string
+          enum: [agent, command]
+        sessionId:
+          type: string
+          format: uuid
+        command:
+          type: string
+          description: For a command cue, the command to run in a new shell of the session.
     ProjectSettingsInput:
       type: object
       additionalProperties: false
@@ -5108,8 +6252,15 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 65536
+          description: The message. It may be empty only when attachmentIds names at least one file.
+        attachmentIds:
+          type: array
+          maxItems: 10
+          description: Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message.
+          items:
+            type: string
+            format: uuid
         model:
           type: string
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
@@ -5126,6 +6277,41 @@ components:
           format: int64
           minimum: 0
           description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+        displayText:
+          type: string
+          maxLength: 65536
+          description: How the message reads in the transcript when `text` carries quoted messages or file selections inlined for the agent. Recorded on the chat.user_message event only; the agent receives `text`.
+        content:
+          type: array
+          maxItems: 64
+          description: The quoted messages and file selections the message attaches, as the transcript shows them. Recorded on the chat.user_message event only.
+          items:
+            type: object
+            required: [type]
+            additionalProperties: true
+            properties:
+              type:
+                type: string
+                minLength: 1
+    MessageAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, size, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false
@@ -5172,6 +6358,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChatModel"
+        source:
+          description: >-
+            Where the list came from. worker: reported by a Cloud worker
+            running this CLI version with the user's current credential.
+            release: the models the control plane's pinned CLI version
+            supports.
+          type: string
+          enum: [worker, release]
+        cliVersion:
+          description: The harness CLI version the list is for.
+          type: string
+        accountListed:
+          description: >-
+            On a session's list, true when its worker listed the models for
+            the signed-in account rather than from the CLI's built-in list.
+            Only such a list becomes the user's catalog.
+          type: boolean
     SendMessageInput:
       type: object
       additionalProperties: false
@@ -5583,6 +6786,9 @@ components:
             desiredState:
               type: string
               const: deleted
+        artifactsDeleted:
+          type: boolean
+          description: Whether the session's artifact files were deleted.
     SessionResponse:
       type: object
       additionalProperties: false
@@ -5757,6 +6963,16 @@ components:
           type: boolean
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
+        createdByUserId:
+          type: string
+          format: uuid
+          description: >-
+            The person who started the session (for a spawned worker, its
+            orchestrator's). Only they share its files as public links
+            (shareSessionArtifact) and change them (saveSessionArtifact,
+            restoreSessionArtifactVersion, deleteSessionArtifact); every other
+            member of the organization sees them read-only. Omitted when none
+            is on record.
         requestedBy:
           type: object
           additionalProperties: false
@@ -5790,6 +7006,16 @@ components:
             artifactCount; listSessionArtifacts returns the files.
           items:
             $ref: "#/components/schemas/SessionArtifact"
+        pinned:
+          type: boolean
+          description: >-
+            Whether the caller pinned the session in their sidebar, on the
+            session read, list and rename routes. A pin is one person's; absent
+            means not pinned.
+        pinnedAt:
+          type: string
+          format: date-time
+          description: When the caller pinned the session; present only while pinned.
         createdAt:
           type: string
           format: date-time
@@ -5833,6 +7059,115 @@ components:
           format: date-time
           description: >-
             When the control plane last committed a new version of the file.
+    SessionArtifactResult:
+      type: object
+      additionalProperties: false
+      required: [artifact]
+      properties:
+        artifact:
+          $ref: "#/components/schemas/SessionArtifact"
+    SaveSessionArtifactInput:
+      type: object
+      additionalProperties: false
+      required: [path, content, expectedSha256]
+      properties:
+        path:
+          type: string
+          maxLength: 1024
+        content:
+          type: string
+          description: The file's new UTF-8 text, 8 MiB at most.
+        expectedSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The committed file's SHA-256 the edit started from.
+    SessionArtifactVersionSummary:
+      type: object
+      additionalProperties: false
+      required: [version, createdAt, fileFingerprint, size, source]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        fileFingerprint:
+          type: string
+          description: Hex SHA-256 of the version's content.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        source:
+          type: string
+          enum: [agent, user]
+          description: Who wrote it, the session's agent or a person through a save or restore.
+        harness:
+          type: string
+          description: The session's agent when the version was recorded.
+        restoredFrom:
+          type: integer
+          format: int64
+          description: The version this one restored, when it is a restore.
+    SessionArtifactVersionList:
+      type: object
+      additionalProperties: false
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionArtifactVersionSummary"
+    SessionArtifactVersion:
+      allOf:
+        - $ref: "#/components/schemas/SessionArtifactVersionSummary"
+        - type: object
+          required: [path, content]
+          properties:
+            path:
+              type: string
+            content:
+              type: string
+              description: The version's UTF-8 text, cut short when truncated is set.
+            truncated:
+              type: boolean
+    ChatSearchHit:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sessionTitle, projectId, sequence, role, snippet, createdAt]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        sessionTitle:
+          type: string
+        projectId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          description: The message's first event in the session's chat.
+        role:
+          type: string
+          enum: [user, assistant]
+        snippet:
+          type: string
+          description: The matched text around the match, on one line.
+        createdAt:
+          type: string
+          format: date-time
+    ChatSearchResults:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatSearchHit"
     SessionArtifactList:
       type: object
       additionalProperties: false
@@ -5858,17 +7193,30 @@ components:
     ArtifactShare:
       type: object
       additionalProperties: false
-      required: [id, slug, url, name, contentType, size, sha256, createdAt, updatedAt]
+      required: [id, slug, url, contentUrl, name, contentType, size, sha256, createdAt, updatedAt]
       properties:
         id:
           type: string
           format: uuid
         slug:
           type: string
-          description: The link's subdomain label.
+          description: >-
+            The link's public ID, 26 random characters of a-z and 2-7, and its
+            subdomain label under the share origin.
         url:
           type: string
-          description: The public link, for example http://<slug>.share.localhost:8081/.
+          description: The same as contentUrl, kept for clients that predate it.
+        contentUrl:
+          type: string
+          description: >-
+            Where the link's file is served, for example
+            https://<slug>.orchestratorusercontent.com/.
+        viewerUrl:
+          type: string
+          description: >-
+            The public page that shows the link, for example
+            https://orchestrator.inc/artifact/<slug>. Absent when the control
+            plane has no viewer configured; share contentUrl instead.
         name:
           type: string
         contentType:
@@ -5880,6 +7228,12 @@ components:
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The file's SHA-256 as declared when it was published. For a local
+            file it is the uploader's claim, not checked against the bytes
+            (each part is checked against its own declared SHA-256); for a
+            cloud session's file it is the committed file's. It names no link
+            and no version: ETags come from the link and its stored version.
         createdAt:
           type: string
           format: date-time
@@ -5889,14 +7243,7 @@ components:
         revokedAt:
           type: string
           format: date-time
-          description: When the link was revoked. A revoked link serves nothing but still uses a slot.
-    ArtifactShareEnvelope:
-      type: object
-      additionalProperties: false
-      required: [share]
-      properties:
-        share:
-          $ref: "#/components/schemas/ArtifactShare"
+          description: When the link was revoked. A revoked link serves nothing and uses no slot.
     ArtifactSharePublishResult:
       type: object
       additionalProperties: false
@@ -5919,9 +7266,193 @@ components:
         limit:
           type: integer
           minimum: 1
+          description: The free plan's limit of active links; it does not apply when unlimited is true.
+        unlimited:
+          type: boolean
+          description: >-
+            True when the user's plan has no limit of active links. Absent or
+            false means limit applies.
         used:
           type: integer
           minimum: 0
+          description: How many active links the user holds; revoked links do not count.
+    ArtifactShareUploadInput:
+      type: object
+      additionalProperties: false
+      required: [name, size, sha256]
+      properties:
+        name:
+          type: string
+          description: The file name, without a directory.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The whole file's SHA-256, as the uploader computed it. The
+            control plane records it on the link but does not check it against
+            the bytes; each part is checked against its own SHA-256.
+        project:
+          type: string
+        feature:
+          type: string
+        shareId:
+          type: string
+          format: uuid
+          description: Set to update this active link instead of publishing a document.
+    ArtifactShareUpload:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, expiresAt, partSize, partCount]
+      properties:
+        uploadToken:
+          type: string
+          description: Names the upload in the calls that follow; opaque.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the upload can no longer be finalized.
+        partSize:
+          type: integer
+          format: int64
+        partCount:
+          type: integer
+          minimum: 1
+    ArtifactShareUploadRef:
+      type: object
+      additionalProperties: false
+      required: [uploadToken]
+      properties:
+        uploadToken:
+          type: string
+    ArtifactShareUploadPartsInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      properties:
+        uploadToken:
+          type: string
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, sha256]
+            properties:
+              partNumber:
+                type: integer
+                minimum: 1
+              sha256:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
+                description: The part's SHA-256.
+    ArtifactSharePresignedParts:
+      type: object
+      additionalProperties: false
+      required: [parts, expiresAt]
+      properties:
+        parts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, method, url, headers, size]
+            properties:
+              partNumber:
+                type: integer
+              method:
+                type: string
+              url:
+                type: string
+              headers:
+                type: object
+                additionalProperties:
+                  type: string
+              size:
+                type: integer
+                format: int64
+                description: The part's length in bytes.
+        expiresAt:
+          type: string
+          format: date-time
+    ArtifactShareFinalizeInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      properties:
+        uploadToken:
+          type: string
+        parts:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, sha256, etag]
+            properties:
+              partNumber:
+                type: integer
+                minimum: 1
+              sha256:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
+              etag:
+                type: string
+                description: The ETag the part's PUT returned.
+    SessionArtifactShareInput:
+      type: object
+      additionalProperties: false
+      required: [path, sha256]
+      properties:
+        path:
+          type: string
+          minLength: 1
+          description: The file's path in the session's artifact directory, as SessionArtifact.path.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The SessionArtifact.sha256 the person was shown. When the session
+            has committed another version since, the route answers 409
+            artifact_share_source_changed and shares nothing.
+        shareId:
+          type: string
+          format: uuid
+          description: An active link of the caller's, for a file of the same name, to point at this file.
+    PublicArtifactShare:
+      type: object
+      additionalProperties: false
+      required: [linkId, name, contentType, size, updatedAt, owner, contentUrl]
+      properties:
+        linkId:
+          type: string
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        owner:
+          type: object
+          additionalProperties: false
+          required: [displayName]
+          properties:
+            displayName:
+              type: string
+              description: The owner's display name; empty when they set none.
+        contentUrl:
+          type: string
+          description: Where the link's file is served; the viewer frames it.
     WorkerArtifactFile:
       type: object
       additionalProperties: false
@@ -5934,7 +7465,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 26214400
+          maximum: 104857600
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -5982,7 +7513,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 26214400
+          maximum: 104857600
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -6065,7 +7596,7 @@ components:
         displayName:
           type: string
           minLength: 1
-          maxLength: 80
+          maxLength: 100
         prompt:
           type: string
           maxLength: 65536
@@ -6078,6 +7609,26 @@ components:
           description: >-
             Coding-agent model the session launches with (harness-native id, e.g.
             "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the opening prompt runs with. Optional; empty uses
+            the model's default.
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+          description: >-
+            Approval mode the opening prompt's turn runs with in a session that
+            starts in chat. Optional; empty lets the worker derive it from the
+            session's mode, as for any turn sent without one.
+        provider:
+          type: string
+          description: >-
+            Sandbox provider the session runs on, one the deployment offers
+            (see /me). Optional; empty uses the organization's default. A
+            project set up for a provider, or a worker linked to the project's
+            orchestrator, runs there instead.
         deniedCommands:
           type: array
           items:
@@ -6111,6 +7662,29 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+    UpdateSessionInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: The session's new title, trimmed.
+    SessionPinResponse:
+      type: object
+      additionalProperties: false
+      required: [sessionId, pinned]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        pinnedAt:
+          type: string
+          format: date-time
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false
@@ -6460,6 +8034,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PullRequestSummary"
+        linkedPullRequests:
+          type: array
+          description: >-
+            GitHub pull requests the session's agent reported that AO does not
+            track, such as one in a repository the session has no grant for.
+          items:
+            $ref: "#/components/schemas/LinkedPullRequest"
+    LinkedPullRequest:
+      type: object
+      additionalProperties: false
+      required: [url, repository, number]
+      properties:
+        url:
+          type: string
+        repository:
+          type: string
+          description: owner/name
+        number:
+          type: integer
     AOReviewRunStatus:
       type: string
       enum: [running, complete, delivered, failed, cancelled]
@@ -6521,6 +8114,13 @@ components:
           format: date-time
         autoInjectReview:
           type: boolean
+        reviewerTerminalId:
+          type: string
+          description: The reviewer terminal of a review that runs in a terminal.
+        interfaceMode:
+          type: string
+          enum: [chat]
+          description: chat for a review that runs as a Chat conversation; absent for one in a reviewer terminal.
     AOPullRequestReviewState:
       type: object
       additionalProperties: false
@@ -6567,6 +8167,104 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AOReviewRun"
+        reviewerSurface:
+          $ref: "#/components/schemas/ReviewerSurface"
+    ReviewerSurface:
+      type: object
+      additionalProperties: false
+      description: The reviewer conversation the session shows, its newest review that runs in Chat.
+      required: [mode, reviewId, harness]
+      properties:
+        mode:
+          type: string
+          enum: [chat]
+        reviewId:
+          type: string
+          description: The review run whose conversation this is.
+        harness:
+          type: string
+    ReviewChatEvent:
+      type: object
+      additionalProperties: false
+      description: |
+        One event of a review conversation. Payloads carry reviewRunId and
+        reviewTurnId (never turnId), plus what the session's own chat event of
+        the same name carries: text and authorUserId for a message, text and
+        itemId for assistant text, activity for an activity, error for an
+        aborted turn.
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          type: string
+          enum:
+            - review.user_message
+            - review.turn_started
+            - review.assistant_delta
+            - review.activity
+            - review.turn_completed
+            - review.turn_interrupted
+            - review.turn_aborted
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    ReviewChatEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, hasMore, nextAfter]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewChatEvent"
+        hasMore:
+          type: boolean
+        nextAfter:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+    PromptSuggestionInput:
+      type: object
+      additionalProperties: false
+      required: [turnId, messages]
+      properties:
+        turnId:
+          type: string
+          maxLength: 200
+          description: The settled turn the suggestion follows; echoed back.
+        messages:
+          type: array
+          maxItems: 8
+          description: The conversation's most recent text messages, oldest first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [role, text]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              text:
+                type: string
+    PromptSuggestion:
+      type: object
+      additionalProperties: false
+      required: [turnId, prompt]
+      properties:
+        turnId:
+          type: string
+        prompt:
+          type: string
+          maxLength: 240
     SessionViewer:
       type: object
       additionalProperties: false
@@ -6835,6 +8533,11 @@ components:
             authorName:
               type: string
               description: The sender's display name when the message was sent. Never an email address, so a share guest can see it.
+            attachments:
+              type: array
+              description: The files the message carries.
+              items:
+                $ref: "#/components/schemas/MessageAttachment"
         createdAt:
           type: string
           format: date-time

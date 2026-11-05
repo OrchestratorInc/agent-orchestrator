@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
+import { useUiStore } from "../stores/ui-store";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -17,23 +18,48 @@ const actions: ProjectOrchestratorAction = {
 };
 
 describe("ProjectBoardActions", () => {
-	it("keeps the cloud Task plain without changing the Orchestrator button", () => {
+	// The simplified top bar is a Developer Mode preview.
+	beforeEach(() => useUiStore.setState({ developerMode: true }));
+	afterEach(() => useUiStore.setState({ developerMode: false }));
+
+	it("keeps the previous header (Orchestrator filled, New task first) without Developer Mode", () => {
+		useUiStore.setState({ developerMode: false });
+		render(
+			<TooltipProvider>
+				<ProjectBoardActions actions={actions} placement="header" />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.indexOf(screen.getByRole("button", { name: "New task" }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i })));
+	});
+
+	it("keeps New task the one filled header action on a cloud board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} cloud placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--secondary");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		// Orchestrator leads, matching the session top bar.
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});
 
-	it("preserves the existing empty local board controls", () => {
+	it("keeps New task the one filled header action on an empty local board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} placement="header" quiet />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--secondary");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--secondary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("bg-accent-strong");
+		// Orchestrator leads, matching the session top bar.
+		const buttons = screen.getAllByRole("button");
+		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});
 });

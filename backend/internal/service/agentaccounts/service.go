@@ -60,6 +60,7 @@ type Service struct {
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
 	defaultChanged func(domain.AgentAccountProvider)
+	loginConfirmed func(domain.AgentAccount, time.Time)
 }
 
 // reading is the last identity and limits read for one account.
@@ -227,7 +228,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
+	confirmed := s.loginConfirmed
 	s.mu.Unlock()
+	// The limits come from the provider's API under this login, so a reading
+	// that has them shows the login worked when the reading began.
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+		confirmed(account, r.at)
+	}
 	return r
 }
 
@@ -338,12 +345,35 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	return identity, true
 }
 
+// DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
+func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return nil, nil
+	}
+	account, err := s.newSessionAccount(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.providers[p].LaunchEnv(account.Home), nil
+}
+
 // SetDefaultChanged late-binds what must hear that the account new sessions of
 // a provider start on, or its sign-in, may have changed (agent readiness).
 func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultChanged = changed
+}
+
+// SetLoginConfirmed late-binds what must hear that a reading found an
+// account's login working, with the time the reading began: chat sessions on
+// it that were refused their credentials can stop asking for a sign-in, however
+// the login came back (AO's sign-in, the CLI's own, or a renewed token).
+func (s *Service) SetLoginConfirmed(confirmed func(domain.AgentAccount, time.Time)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loginConfirmed = confirmed
 }
 
 func (s *Service) notifyDefaultChanged(p domain.AgentAccountProvider) {
@@ -512,7 +542,9 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
-	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title})
+	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
+		Owner: "agentaccounts:" + string(p), Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title,
+	})
 	if err != nil {
 		discard()
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)

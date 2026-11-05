@@ -44,6 +44,15 @@ func TestDenylistSinkDropsNamedEvents(t *testing.T) {
 	}
 }
 
+func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
+	next := &recordingSink{}
+	sink := NewDenylistSink(next, []string{"ao.sessions.ended", "ao.prs.closed"})
+	emitAll(sink, "ao.sessions.ended", "ao.prs.closed", "ao.session.spawned")
+	if got := forwardedNames(next); len(got) != 1 || got[0] != "ao.session.spawned" {
+		t.Fatalf("forwarded = %v", got)
+	}
+}
+
 // An operator reading PostHog sees the exported alias, not the internal name.
 // Typing either one must silence the stream, or the switch is a trap.
 func TestDenylistSinkMatchesEitherInternalOrExportedName(t *testing.T) {

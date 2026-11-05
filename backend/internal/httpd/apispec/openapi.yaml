@@ -57,6 +57,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -70,6 +76,200 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Open the fixed native authentication flow for one agent
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations:
+    post:
+      operationId: startAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAgentUILoginRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a fixed native login in the background without exposing a terminal
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}:
+    delete:
+      operationId: cancelAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Cancel a background login and wait for its native process to stop
+      tags:
+      - agents
+    get:
+      operationId: getAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read recognized login prompts and background process state
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/code:
+    post:
+      operationId: submitAgentUILoginCode
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAgentUILoginCodeRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Submit a one-time Claude sign-in code to the existing native login
       tags:
       - agents
   /api/v1/agents/{agent}/chat/prewarm:
@@ -252,6 +452,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -2552,6 +2758,238 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/computer-use/agent-tools:
+    get:
+      operationId: listComputerUseAgentTools
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseAgentToolsResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the Cua Driver tools AO offers agents as MCP tools, with their
+        input schemas
+      tags:
+      - computer-use
+  /api/v1/computer-use/call:
+    post:
+      operationId: callComputerUseTool
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComputerUseCallRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseCallResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run one Cua Driver tool; screenshots are saved to files and returned
+        as paths
+      tags:
+      - computer-use
+  /api/v1/computer-use/daemon/start:
+    post:
+      operationId: startComputerUseDaemon
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start Cua Driver's background service and wait briefly for it to answer
+      tags:
+      - computer-use
+  /api/v1/computer-use/doctor:
+    get:
+      operationId: getComputerUseDoctor
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseDoctorResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run Cua Driver's environment report
+      tags:
+      - computer-use
+  /api/v1/computer-use/permissions/grant:
+    post:
+      operationId: grantComputerUsePermissions
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ask macOS for Cua Driver's Accessibility and Screen Recording permissions;
+        progress shows in status
+      tags:
+      - computer-use
+  /api/v1/computer-use/status:
+    get:
+      operationId: getComputerUseStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Report whether Cua Driver is installed, its version and update, its
+        background service, and macOS permissions
+      tags:
+      - computer-use
   /api/v1/conversations/search:
     get:
       operationId: searchConversations
@@ -5524,6 +5962,60 @@ paths:
       tags:
       - sessions
   /api/v1/sessions/{sessionId}:
+    delete:
+      operationId: deleteSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: When true, a worktree that is still on disk is cleaned up first,
+          the way session cleanup does it; a dirty or locked worktree is never forced
+          and refuses the delete.
+        in: query
+        name: cleanup
+        schema:
+          description: When true, a worktree that is still on disk is cleaned up first,
+            the way session cleanup does it; a dirty or locked worktree is never forced
+            and refuses the delete.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Permanently delete a terminated session whose workspace is released
+      tags:
+      - sessions
     get:
       operationId: getSession
       parameters:
@@ -5798,6 +6290,45 @@ paths:
                 type: string
           description: Bad Gateway
       summary: Upload a file into the host's agent browser
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-events:
+    get:
+      operationId: streamSessionArtifactChanges
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream changes to the files in a session's artifact directory
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/artifact-files:
@@ -12078,14 +12609,14 @@ paths:
       summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
-  /api/v1/settings/cloud-offering:
+  /api/v1/settings/computer-use:
     patch:
-      operationId: updateCloudOffering
+      operationId: updateComputerUse
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ControllersUpdateCloudOfferingRequest'
+              $ref: '#/components/schemas/UpdateComputerUseRequest'
         required: true
       responses:
         "200":
@@ -12100,6 +12631,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -12112,7 +12649,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Turn the cloud offering on or off for this machine
+      summary: Choose whether new chat sessions get tools to drive desktop apps through
+        Cua Driver
       tags:
       - settings
   /api/v1/settings/harness-defaults/{agent}:
@@ -12201,6 +12739,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Choose the default interface for new sessions
+      tags:
+      - settings
+  /api/v1/settings/session-retention:
+    patch:
+      operationId: updateSessionRetention
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRetentionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
   /api/v1/settings/version-refresh:
@@ -12540,13 +13115,13 @@ paths:
       operationId: getSystemInstallStatus
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, or cloudflared.'
+          opencode-v2, copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            opencode-v2, copilot, or cloudflared.'
+            opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
           - gh
@@ -12556,6 +13131,7 @@ paths:
           - opencode-v2
           - copilot
           - cloudflared
+          - cua-driver
           type: string
       responses:
         "200":
@@ -12589,13 +13165,13 @@ paths:
       operationId: startSystemInstall
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, or cloudflared.'
+          opencode-v2, copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            opencode-v2, copilot, or cloudflared.'
+            opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
           - gh
@@ -12605,6 +13181,7 @@ paths:
           - opencode-v2
           - copilot
           - cloudflared
+          - cua-driver
           type: string
       responses:
         "202":
@@ -13189,6 +13766,10 @@ components:
           type: string
         logoutCommand:
           type: string
+        methods:
+          items:
+            $ref: '#/components/schemas/AgentLoginMethod'
+          type: array
         reason:
           type: string
       required:
@@ -13408,6 +13989,51 @@ components:
       required:
       - agents
       type: object
+    AgentLoginMethod:
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        secret:
+          type: boolean
+      required:
+      - id
+      - label
+      - secret
+      type: object
+    AgentLoginSnapshot:
+      properties:
+        acceptsCode:
+          type: boolean
+        agentId:
+          type: string
+        deviceCode:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        loginUrl:
+          type: string
+        method:
+          type: string
+        status:
+          enum:
+          - running
+          - succeeded
+          - failed
+          - cancelled
+          - timed_out
+          type: string
+      required:
+      - id
+      - agentId
+      - method
+      - status
+      - expiresAt
+      type: object
     AgentModelInfo:
       properties:
         contextWindow:
@@ -13436,8 +14062,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -13822,16 +14452,38 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
           type: string
         updatedAt:
           format: date-time
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - id
       - projectId
       - displayName
       - prompt
+      - useCase
+      - templateId
       - kind
       - rrule
       - timezone
@@ -14481,12 +15133,29 @@ components:
       type: object
     CleanupSkippedSession:
       properties:
+        code:
+          enum:
+          - dirty
+          - locked_worktree
+          - missing_repo
+          - archived_project_unresolvable
+          - permission_error
+          - cleanup_script_failed
+          - worktree_busy
+          - in_use_by_live_session
+          - shell_terminal_open
+          - cleanup_running
+          - attachment_preservation_failed
+          - outside_managed_root
+          - teardown_failed
+          type: string
         reason:
           type: string
         sessionId:
           type: string
       required:
       - sessionId
+      - code
       - reason
       type: object
     ClearNotificationsResponse:
@@ -15124,6 +15793,153 @@ components:
       - incomplete
       - estimatedCost
       type: object
+    ComputerUseAgentTool:
+      properties:
+        description:
+          type: string
+        inputSchema:
+          additionalProperties: {}
+          description: The tool's JSON Schema input, without the arguments AO sets
+            itself.
+          type:
+          - object
+          - "null"
+        name:
+          type: string
+      required:
+      - name
+      - description
+      - inputSchema
+      type: object
+    ComputerUseAgentToolsResponse:
+      properties:
+        tools:
+          items:
+            $ref: '#/components/schemas/ComputerUseAgentTool'
+          type: array
+      required:
+      - tools
+      type: object
+    ComputerUseCallRequest:
+      properties:
+        arguments:
+          additionalProperties: {}
+          description: Tool arguments as a JSON object.
+          type: object
+        sessionId:
+          description: AO session the call is made for. Screenshots are saved under
+            it, and calls for the same AO session share one Cua Driver session unless
+            arguments.session names another.
+          type: string
+        tool:
+          description: Driver tool name, e.g. list_windows or get_window_state.
+          type: string
+      required:
+      - tool
+      type: object
+    ComputerUseCallResult:
+      properties:
+        images:
+          description: Screenshots this call saved. Open them with an image viewer.
+          items:
+            $ref: '#/components/schemas/ComputerUseImage'
+          type: array
+        result:
+          description: 'The tool''s JSON output. Inline images are replaced by *_file_path
+            fields. After an action, observation holds AO''s read of the window: the
+            tree diff and a screenshot file.'
+        tool:
+          type: string
+      required:
+      - tool
+      - result
+      - images
+      type: object
+    ComputerUseDoctorResponse:
+      properties:
+        report:
+          description: Cua Driver's own environment report (cua-driver doctor).
+          type: string
+      required:
+      - report
+      type: object
+    ComputerUseImage:
+      properties:
+        mimeType:
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - mimeType
+      type: object
+    ComputerUsePermissions:
+      properties:
+        accessibility:
+          description: Accessibility, needed to read and operate app controls.
+          enum:
+          - granted
+          - missing
+          - unknown
+          type: string
+        grantError:
+          description: Why the last permission request failed.
+          type: string
+        granting:
+          description: A permission request is waiting on the user in System Settings.
+          type: boolean
+        screenRecording:
+          description: Screen Recording, needed for screenshots.
+          enum:
+          - granted
+          - missing
+          - unknown
+          type: string
+      required:
+      - accessibility
+      - screenRecording
+      - granting
+      type: object
+    ComputerUseStatus:
+      properties:
+        binaryPath:
+          description: The cua-driver executable AO runs.
+          type: string
+        daemon:
+          description: Whether Cua Driver's background service answers.
+          enum:
+          - running
+          - stopped
+          - unknown
+          type: string
+        imageDirectory:
+          description: Where screenshots from computer-use calls are saved.
+          type: string
+        installed:
+          type: boolean
+        latestVersion:
+          description: Newest release on the driver's update channel, when it could
+            be checked.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/ComputerUsePermissions'
+          description: macOS only.
+        platform:
+          description: 'Operating system the daemon runs on: darwin, linux, or windows.'
+          type: string
+        releaseNotesUrl:
+          type: string
+        updateAvailable:
+          type: boolean
+        version:
+          type: string
+      required:
+      - platform
+      - installed
+      - updateAvailable
+      - daemon
+      - imageDirectory
+      type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:
         idempotencyKey:
@@ -15238,11 +16054,14 @@ components:
       properties:
         hostId:
           type: string
+        hostKey:
+          type: string
         token:
           type: string
       required:
       - hostId
       - token
+      - hostKey
       type: object
     ControllersRequestRereviewRequest:
       properties:
@@ -15541,6 +16360,8 @@ components:
           - failed
           - not_applicable
           type: string
+        workspaceCleanupReportOnly:
+          type: boolean
       required:
       - id
       - kind
@@ -15585,15 +16406,6 @@ components:
       properties:
         enabled:
           type: boolean
-      required:
-      - enabled
-      type: object
-    ControllersUpdateCloudOfferingRequest:
-      properties:
-        enabled:
-          type:
-          - "null"
-          - boolean
       required:
       - enabled
       type: object
@@ -15942,6 +16754,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        authoredByUser:
+          type: boolean
         clientMessageId:
           type: string
         content:
@@ -16063,6 +16877,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
           type: array
+        superseded:
+          type: boolean
       required:
       - steps
       type: object
@@ -16338,6 +17154,10 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failureCode:
+          enum:
+          - provider_key_missing
+          type: string
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -16474,7 +17294,27 @@ components:
           type: string
         rrule:
           type: string
+        templateId:
+          enum:
+          - custom
+          - daily_pr_review_v1
+          - daily_issue_triage_v1
+          - weekly_release_notes_v1
+          type: string
         timezone:
+          type: string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
           type: string
       required:
       - projectId
@@ -16673,6 +17513,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        branch:
+          maxLength: 255
+          type: string
         brief:
           maxLength: 16384
           type: string
@@ -16711,6 +17554,16 @@ components:
       required:
       - ok
       - workerId
+      type: object
+    DeleteSessionResponse:
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     DesktopArtifactLocationResponse:
       properties:
@@ -17296,8 +18149,12 @@ components:
           type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
-            to the last ~4000 bytes.
+            to the last ~4000 bytes. Published while the command runs.
           type: string
+        progress:
+          $ref: '#/components/schemas/InstallProgress'
+          description: While installing, the phase and percentage the installer's
+            output reports. Absent in every other status.
         startedAt:
           format: date-time
           type:
@@ -17362,6 +18219,7 @@ components:
           - memcode
           - hermes
           - cloudflared
+          - cua-driver
           type: string
         updatedAt:
           format: date-time
@@ -17377,6 +18235,27 @@ components:
       required:
       - target
       - status
+      type: object
+    InstallProgress:
+      properties:
+        detail:
+          description: The installer's latest output line.
+          type: string
+        percent:
+          description: Progress through the current phase, present only when the installer's
+            output states sizes or counts.
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        phase:
+          description: Installer phase the output names. Absent until a line names
+            one.
+          enum:
+          - downloading
+          - installing
+          type: string
       type: object
     InvokeCueRequest:
       properties:
@@ -17942,6 +18821,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinked:
+          type: boolean
         browserRemoteAccess:
           type: boolean
         enabled:
@@ -17974,6 +18855,7 @@ components:
           type: string
       required:
       - enabled
+      - accountLinked
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
@@ -17990,8 +18872,12 @@ components:
       type: object
     MobileTunnelStatus:
       properties:
+        fixed:
+          type: boolean
         hostname:
           type: string
+        installing:
+          type: boolean
         lastError:
           type: string
         location:
@@ -18004,8 +18890,10 @@ components:
           type: boolean
       required:
       - supported
+      - installing
       - running
       - ready
+      - fixed
       - hostname
       - location
       - lastError
@@ -18096,10 +18984,18 @@ components:
       type: object
     OpenShellTerminalRequest:
       properties:
+        cols:
+          description: Initial terminal columns. With rows, the shell starts immediately
+            at this grid instead of waiting for the client to attach (startOnAttach
+            is then ignored).
+          type: integer
         projectId:
           description: Project whose root the shell starts in. Omitted opens the shell
             in the daemon data dir.
           type: string
+        rows:
+          description: Initial terminal rows. See cols.
+          type: integer
         sessionId:
           description: Agent session the shell is scoped to, so it appears only in
             that session's tab strip. Omitted makes it a standalone shell.
@@ -18302,6 +19198,8 @@ components:
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorRules:
+          type: string
+        orchestratorRulesFile:
           type: string
         postCreate:
           items:
@@ -20172,7 +21070,9 @@ components:
           type: string
         cloudEnabled:
           type: boolean
-        cloudOffering:
+        computerUse:
+          description: New chat sessions get tools to drive desktop apps through Cua
+            Driver (Settings, Computer use agents).
           type: boolean
         defaultSessionMode:
           enum:
@@ -20185,6 +21085,10 @@ components:
           type: object
         localEnabled:
           type: boolean
+        sessionRetentionDays:
+          description: Days an archived session whose worktree is released is kept
+            before the daemon deletes it permanently; 0 keeps it.
+          type: integer
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -20196,9 +21100,10 @@ components:
       - chatHarnesses
       - client
       - localEnabled
-      - cloudOffering
       - chatHibernationEnabled
       - versionRefresh
+      - computerUse
+      - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -20879,6 +21784,15 @@ components:
           - update
           type: string
       type: object
+    StartAgentUILoginRequest:
+      properties:
+        method:
+          type: string
+        secret:
+          type: string
+      required:
+      - method
+      type: object
     StartAwakeRequest:
       properties:
         boundId:
@@ -21029,6 +21943,13 @@ components:
       required:
       - outcome
       - duplicate
+      type: object
+    SubmitAgentUILoginCodeRequest:
+      properties:
+        code:
+          type: string
+      required:
+      - code
       type: object
     SubmitReviewInput:
       properties:
@@ -21197,6 +22118,14 @@ components:
           type: string
         installId:
           type: string
+        isSignedIn:
+          type:
+          - "null"
+          - boolean
+        lifetimeSessions:
+          type:
+          - "null"
+          - integer
         optedOut:
           type: boolean
       required:
@@ -21402,8 +22331,32 @@ components:
           type:
           - "null"
           - string
+        useCase:
+          enum:
+          - pr_review
+          - issue_triage
+          - repo_digest
+          - ci_triage
+          - release_notes
+          - security_audit
+          - dependency_maintenance
+          - docs_maintenance
+          - other
+          - unknown
+          type:
+          - "null"
+          - string
       type: object
     UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UpdateComputerUseRequest:
       properties:
         enabled:
           type:
@@ -21445,6 +22398,19 @@ components:
           type: string
       required:
       - defaultSessionMode
+      type: object
+    UpdateSessionRetentionRequest:
+      properties:
+        days:
+          description: Days to keep an archived session whose worktree is released;
+            0 keeps it.
+          maximum: 3650
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - days
       type: object
     UpdateShellTerminalRequest:
       properties:
@@ -22364,6 +23330,9 @@ tags:
 - description: Local machine readiness checks the desktop app runs before showing
     the board
   name: system
+- description: Cua Driver computer-use integration behind Settings and the agents'
+    computer-use tools (loopback only)
+  name: computer-use
 - description: Server-side unfurl of external links for the CSP-locked renderer
   name: link-preview
 - description: Local GitHub personal access token storage and repository listing

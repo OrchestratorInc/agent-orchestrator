@@ -1,6 +1,7 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -8,8 +9,14 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
+		firstRunClone?: boolean;
+		onFirstRunDismiss?: (action?: "local_folder" | "standalone" | "dismissed") => void;
+		onFirstRunProgress?: () => void;
+		onCreateProject?: (input: never) => Promise<void>;
 		existingProjectPaths?: readonly string[];
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
 		sourceSignal?: { source: string; nonce: number } | null;
@@ -21,8 +28,13 @@ const routeMocks = vi.hoisted(() => ({
 	startGitHubAuth: vi.fn(),
 	markAutoLoginOffered: vi.fn(),
 	closeTerminal: vi.fn(),
+	createProject: vi.fn(),
 	cloudEnabled: false,
+	migrationOfferShown: false,
+	captureRendererEvent: vi.fn().mockResolvedValue(true),
 }));
+
+vi.mock("../lib/telemetry", () => ({ captureRendererEvent: routeMocks.captureRendererEvent }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -35,6 +47,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: routeMocks.cloudEnabled }),
+}));
+
+vi.mock("../hooks/useMigrationOffer", () => ({
+	useMigrationOffer: () => ({ isPending: false, data: { show: routeMocks.migrationOfferShown } }),
 }));
 
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
@@ -54,7 +70,7 @@ vi.mock("../lib/shell-context", () => ({
 		daemonStatus: { state: "ready" },
 		workspaceStartupState: "ready",
 		cloneProject: vi.fn(),
-		createProject: vi.fn(),
+		createProject: routeMocks.createProject,
 		initializeProjectRepository: vi.fn(),
 	}),
 	useShellMaybe: () => ({ daemonStatus: { state: "ready" } }),
@@ -83,6 +99,7 @@ const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSessi
 });
 
 beforeEach(() => {
+	vi.restoreAllMocks();
 	useUiStore.setState({ developerMode: false, newTaskRequest: null });
 	routeMocks.navigate.mockReset();
 	routeMocks.workspaces = [];
@@ -92,10 +109,144 @@ beforeEach(() => {
 	routeMocks.startGitHubAuth.mockReset();
 	routeMocks.markAutoLoginOffered.mockReset();
 	routeMocks.closeTerminal.mockReset();
+	routeMocks.createProject.mockReset().mockResolvedValue(undefined);
 	routeMocks.cloudEnabled = false;
+	routeMocks.migrationOfferShown = false;
+	routeMocks.captureRendererEvent.mockClear();
+	vi.spyOn(aoBridge.appState, "getExperimentCohort").mockResolvedValue(0);
+	vi.spyOn(aoBridge.appState, "claimFirstRunExperimentExposure").mockResolvedValue(true);
 });
 
 describe("shell index route", () => {
+	it("offers the clone prompt once to a fresh empty install", async () => {
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
+		expect(markSeen).not.toHaveBeenCalled();
+		await waitFor(() => expect(routeMocks.captureRendererEvent).toHaveBeenCalledWith("ao.onboarding.first_run_experiment_exposed", { variant: "prompt" }));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.());
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+		expect(routeMocks.captureRendererEvent).toHaveBeenCalledWith("ao.onboarding.first_run_prompt_action", { action: "dismissed" });
+		expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
+	});
+
+	it.each([50, 99, null])("keeps cohort %s on the control cards and records exposure", async (cohort) => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		vi.mocked(aoBridge.appState.getExperimentCohort).mockResolvedValue(cohort);
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+		expect(routeMocks.createProjectFlowProps?.sourceSignal).toBeNull();
+		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeVisible();
+		expect(routeMocks.captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.onboarding.first_run_experiment_exposed", { variant: "control" });
+	});
+
+	it("waits for the cohort before deciding without marking seen early", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		let resolveCohort!: (cohort: number) => void;
+		vi.mocked(aoBridge.appState.getExperimentCohort).mockImplementation(() => new Promise((resolve) => { resolveCohort = resolve; }));
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getExperimentCohort).toHaveBeenCalledOnce());
+		expect(markSeen).not.toHaveBeenCalled();
+		expect(routeMocks.captureRendererEvent).not.toHaveBeenCalled();
+		await act(async () => resolveCohort(49));
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true);
+	});
+
+	it("does not repeat exposure when a pending prompt remounts", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		vi.mocked(aoBridge.appState.claimFirstRunExperimentExposure).mockResolvedValueOnce(true).mockResolvedValue(false);
+		const view = render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		view.unmount();
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.claimFirstRunExperimentExposure).toHaveBeenCalledTimes(2));
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true);
+		expect(routeMocks.captureRendererEvent).toHaveBeenCalledExactlyOnceWith("ao.onboarding.first_run_experiment_exposed", { variant: "prompt" });
+	});
+
+	it("ignores a late cohort after an existing project makes the install ineligible", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		let resolveCohort!: (cohort: number) => void;
+		vi.mocked(aoBridge.appState.getExperimentCohort).mockImplementation(() => new Promise((resolve) => { resolveCohort = resolve; }));
+		const view = render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getExperimentCohort).toHaveBeenCalledOnce());
+		routeMocks.workspaces = [{ id: "project", name: "Project", kind: "single_repo", path: "/repo", sessions: [] }];
+		view.rerender(<HomePage />);
+		await act(async () => resolveCohort(0));
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+		expect(aoBridge.appState.claimFirstRunExperimentExposure).not.toHaveBeenCalled();
+		expect(routeMocks.captureRendererEvent).not.toHaveBeenCalled();
+	});
+
+	it.each(["local_folder", "standalone"] as const)("reports the accepted %s action once", async (action) => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.(action));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.(action));
+		expect(routeMocks.captureRendererEvent.mock.calls.filter(([event]) => event === "ao.onboarding.first_run_prompt_action")).toEqual([["ao.onboarding.first_run_prompt_action", { action }]]);
+	});
+
+	it("keeps dismissal across a home remount", async () => {
+		let status: "pending" | "seen" = "pending";
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockImplementation(async () => status);
+		vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockImplementation(async () => { status = "seen"; });
+		const view = render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.());
+		await waitFor(() => expect(status).toBe("seen"));
+		view.unmount();
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getFirstRunProjectPrompt).toHaveBeenCalledTimes(2));
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
+
+	it("marks a clone complete only after project registration succeeds", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		routeMocks.createProject.mockRejectedValueOnce(new Error("registration failed"));
+		render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunProgress?.());
+		await expect(routeMocks.createProjectFlowProps?.onCreateProject?.({} as never)).rejects.toThrow("registration failed");
+		expect(markSeen).not.toHaveBeenCalled();
+		await routeMocks.createProjectFlowProps?.onCreateProject?.({} as never);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.captureRendererEvent.mock.calls.filter(([event]) => event === "ao.onboarding.first_run_prompt_action")).toEqual([["ao.onboarding.first_run_prompt_action", { action: "clone" }]]);
+	});
+
+	it("does not offer the prompt to existing users with no projects", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("seen");
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getFirstRunProjectPrompt).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+		expect(aoBridge.appState.getExperimentCohort).not.toHaveBeenCalled();
+		expect(routeMocks.captureRendererEvent).not.toHaveBeenCalled();
+	});
+
+	it("marks a preexisting project as seen without opening the prompt", async () => {
+		routeMocks.workspaces = [{ id: "project", name: "Project", kind: "single_repo", path: "/repo", sessions: [] }];
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
+
+	it("lets the legacy import offer take priority", async () => {
+		routeMocks.migrationOfferShown = true;
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
 	it("shows the home actions when no projects exist", () => {
 		render(<HomePage />);
 
@@ -116,8 +267,9 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
-	it("swaps standalone for cloud project creation when Developer Mode and Cloud are enabled", () => {
-		useUiStore.setState({ developerMode: true });
+	// Cloud is on for everyone: Developer Mode does not decide it.
+	it.each([{ developerMode: false }, { developerMode: true }])("swaps standalone for cloud project creation whenever Cloud is on: %j", ({ developerMode }) => {
+		useUiStore.setState({ developerMode });
 		routeMocks.cloudEnabled = true;
 		render(<HomePage />);
 
@@ -126,12 +278,9 @@ describe("shell index route", () => {
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 	});
 
-	it.each([
-		{ developerMode: false, cloudEnabled: true },
-		{ developerMode: true, cloudEnabled: false },
-	])("keeps standalone creation when either toggle is off: %j", ({ developerMode, cloudEnabled }) => {
+	it.each([{ developerMode: false }, { developerMode: true }])("keeps standalone creation while Cloud is off: %j", ({ developerMode }) => {
 		useUiStore.setState({ developerMode });
-		routeMocks.cloudEnabled = cloudEnabled;
+		routeMocks.cloudEnabled = false;
 		render(<HomePage />);
 
 		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
@@ -140,7 +289,6 @@ describe("shell index route", () => {
 	});
 
 	it("shows cloud creation when standalone sessions exist without a registered project", () => {
-		useUiStore.setState({ developerMode: true });
 		routeMocks.cloudEnabled = true;
 		routeMocks.workspaces = [{
 			id: STANDALONE_WORKSPACE_ID,
@@ -175,26 +323,6 @@ describe("shell index route", () => {
 		expect(screen.queryByRole("button", { name: "Start a standalone agent" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Connect mobile" })).not.toBeInTheDocument();
 		expect(routeMocks.navigate).not.toHaveBeenCalled();
-	});
-
-	it("surfaces missing GitHub authentication on the seeded first-run home page", () => {
-		routeMocks.workspaces = [
-			{ id: "scratch", name: "Scratch", kind: "scratch", path: "/scratch", sessions: [] },
-		];
-		routeMocks.requirements = [
-			{ id: "gh", label: "gh", satisfied: true, required: false, detail: "/usr/bin/gh" },
-		];
-		routeMocks.authRequirement = { id: "github-auth", label: "GitHub access", satisfied: false, required: false, detail: "Sign in." };
-
-		render(<HomePage />);
-
-		expect(screen.getByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(
-			screen.getByRole("button", { name: /Scratch/ }).compareDocumentPosition(
-				screen.getByText("Connect GitHub for pull requests"),
-			) & Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
 	});
 
 	it("opens a project from the recent-project list", async () => {

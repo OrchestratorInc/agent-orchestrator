@@ -12,6 +12,11 @@ for (const [locale, catalog] of Object.entries(appCatalogs)) {
 	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
 }
 import { appShortcutBus } from "./app-shortcut-bus";
+import { resetAgentLoginLifecycle } from "../lib/agent-login-lifecycle";
+
+// Login lifecycle state is module-wide; a retained disposal must not leak into
+// the next test.
+beforeEach(() => resetAgentLoginLifecycle());
 
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
@@ -128,16 +133,24 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
 			getGitHubLogin: async (_repoPath?: string) => "",
-			getCachedGitHubOwners: async () => [],
+			listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 			refreshGitHubOwners: async () => [],
 			checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
@@ -190,8 +203,18 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		cloudShare: {
+			available: async () => true,
+			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+			publish: async () => ({ status: "cancelled" as const }),
+			cancel: async () => undefined,
+			unpublish: async () => undefined,
+			onProgress: () => () => undefined,
+		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
+			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
@@ -201,6 +224,7 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			getState: async () => ({
@@ -231,8 +255,8 @@ if (typeof window !== "undefined") {
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
-			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
-			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
@@ -387,6 +411,10 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
+			getFirstRunProjectPrompt: async () => "seen",
+			markFirstRunProjectPromptSeen: async () => undefined,
 		},
 		cliLink: {
 			setEnabled: async () => undefined,
@@ -427,7 +455,7 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			importAccountHost: async () => undefined,
 			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => "",
+			issueAccountToken: async () => ({ token: "" }),
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -458,6 +486,8 @@ if (typeof window !== "undefined") {
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
+			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+			cancelBinary: () => undefined,
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

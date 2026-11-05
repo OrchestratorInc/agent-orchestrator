@@ -32,9 +32,10 @@ import {
 import { isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
-import { rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
+import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
-import { activeHost, loadHosts, sameHostConnections, setActiveHost, type Host } from "./hosts";
+import { activeHost, loadHosts, sameHostConnections, setActiveHost, updateHostEndpoints, type Host } from "./hosts";
+import { knowsRemoteAddress, learnRemoteAddress, LEARN_REMOTE_EVERY_MS, LEARN_REMOTE_FOR_MS } from "./learnRemoteAddress";
 import { loadAccount } from "./account";
 import { cancelAccountHostSync, syncAccountHosts } from "./accountHosts";
 import { shouldReRace } from "./reRace";
@@ -675,6 +676,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			clearInterval(id);
 		};
 	}, [config, appActive, reloadConfig]);
+
+	// A code scanned before the machine's internet address was ready holds only
+	// this network's addresses. While connected, ask the machine every
+	// LEARN_REMOTE_EVERY_MS until the phone knows one that works from anywhere,
+	// so leaving the network keeps working without scanning again. A failed ask
+	// stops it: the request carries the password, so repeated refusals would
+	// count toward the machine's lockout, and off its network nothing answers.
+	useEffect(() => {
+		if (!config || !isConfigured(config) || !appActive) return;
+		let stopped = false;
+		let id: ReturnType<typeof setInterval> | undefined;
+		const started = Date.now();
+		const stop = () => {
+			stopped = true;
+			clearInterval(id);
+		};
+		const tick = async () => {
+			if (stopped) return;
+			const host = await activeHost().catch(() => null);
+			if (stopped) return;
+			// The active machine can change before this config does; its
+			// addresses must not be saved into another machine.
+			if (!host || (config.hostId && host.id !== config.hostId) || knowsRemoteAddress(host.endpoints) || Date.now() - started > LEARN_REMOTE_FOR_MS) {
+				stop();
+				return;
+			}
+			const learned = await learnRemoteAddress(
+				host.endpoints,
+				() => fetchAdvertisedEndpoints(config),
+				(endpoints) => updateHostEndpoints(host.id, endpoints),
+			).catch(() => null);
+			if (learned === null) {
+				stop();
+				return;
+			}
+			if (!learned || stopped) return;
+			stop();
+			const hosts = await loadHosts().catch(() => null);
+			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
+		};
+		// The first ask waits one interval: connecting just read the addresses.
+		id = setInterval(() => void tick(), LEARN_REMOTE_EVERY_MS);
+		return stop;
+	}, [config, appActive]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
 	// or a 429 lockout). The poll loop uses that to STOP hammering: a phone that

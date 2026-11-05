@@ -28,19 +28,25 @@ type TerminateSessionOptions = {
 export const terminateSessionMutationKey = ["terminate-session"] as const;
 
 /**
- * The session to archive. `deleteArtifacts` asks the daemon to also delete the
- * session's artifact files; only the archive dialog sets it.
+ * The session to archive. `deleteArtifacts` asks the daemon, or the control
+ * plane for a cloud session, to also delete the session's artifact files; only
+ * the archive dialog sets it.
  */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
-/** Resolves to whether the daemon confirmed it deleted the artifacts. */
+/** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
 async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 		if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
-		await createRendererCloudCpClient(baseUrl).deleteSession(session.cloud.orgId, session.id);
-		return false;
+		const client = createRendererCloudCpClient(baseUrl);
+		if (!session.deleteArtifacts) {
+			await client.deleteSession(session.cloud.orgId, session.id);
+			return false;
+		}
+		const deleted = await client.deleteSession(session.cloud.orgId, session.id, { deleteArtifacts: true });
+		return deleted.artifactsDeleted === true;
 	}
 
 	const { data, error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
@@ -190,9 +196,17 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
+// `ao session cleanup` and the daemon's background pass record what they find
+// on sessions nobody archived; only a cleanup an archive started is the app's
+// to report.
+function archiveCleanup(session: WorkspaceSession | undefined): WorkspaceSession["workspaceCleanup"] {
+	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
+}
+
 function workspaceCleanupErrorKey(session: WorkspaceSession | undefined): "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty" | null {
-	if (session?.workspaceCleanup === "failed") return "shell.workspaceCleanupFailed";
-	if (session?.workspaceCleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
+	const cleanup = archiveCleanup(session);
+	if (cleanup === "failed") return "shell.workspaceCleanupFailed";
+	if (cleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
 	return null;
 }
 
@@ -214,7 +228,7 @@ export function useTerminateSessionState(sessionId: string, hostId?: string) {
 		error: (errorKey ? t(errorKey) : null) ??
 			(!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
 				? summary.latest.error.message : null),
-		isPending: summary?.isPending === true || session?.workspaceCleanup === "pending",
+		isPending: summary?.isPending === true || archiveCleanup(session) === "pending",
 	};
 }
 
@@ -232,7 +246,7 @@ export function useProjectTerminateSessionStates(workspaceId: string | undefined
 	for (const session of sessions) {
 		const errorKey = workspaceCleanupErrorKey(session);
 		const error = errorKey ? t(errorKey) : null;
-		const cleanupPending = session.workspaceCleanup === "pending";
+		const cleanupPending = archiveCleanup(session) === "pending";
 		if (!error && !cleanupPending) continue;
 		const previous = states.findIndex((state) => state.session.id === session.id);
 		const state = { error, isPending: cleanupPending, session, cleanupPending };

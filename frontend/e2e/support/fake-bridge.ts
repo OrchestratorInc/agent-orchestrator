@@ -74,16 +74,24 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+					dictation: {
+						start: async () => undefined,
+						stop: async () => undefined,
+						cancel: async () => undefined,
+						onEvent: unsubscribe,
+					},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
+						openChromeExtensions: async () => undefined,
 						scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
-						getCachedGitHubOwners: async () => [],
+						listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
@@ -133,8 +141,18 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				cloudShare: {
+					available: async () => true,
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
+				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
+					openFolder: async () => undefined,
 					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
@@ -147,6 +165,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
@@ -311,6 +330,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				appState: {
 					getMigration: async () => ({ status: "completed" }),
 					setMigration: async () => undefined,
+					getExperimentCohort: async () => null,
+					claimFirstRunExperimentExposure: async () => false,
+					getFirstRunProjectPrompt: async () => "seen",
+					markFirstRunProjectPromptSeen: async () => undefined,
 				},
 				cliLink: {
 					setEnabled: async () => undefined,
@@ -362,7 +385,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					list: async () => [],
 					importAccountHost: async () => undefined,
 					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => "",
+					issueAccountToken: async () => ({ token: "" }),
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -395,6 +418,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
+					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+					cancelBinary: () => undefined,
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
@@ -980,16 +1005,24 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+					dictation: {
+						start: async () => undefined,
+						stop: async () => undefined,
+						cancel: async () => undefined,
+						onEvent: unsubscribe,
+					},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
 						checkGitRepository: async () => true,
 						openExternal: async () => undefined,
+						openChromeExtensions: async () => undefined,
 						scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 						checkAncestorRepo: async () => undefined,
 						getRepositoryBranch: async () => undefined,
 						getGitHubLogin: async () => "",
-						getCachedGitHubOwners: async () => [],
+						listGitHubRepos: async () => [],
+		getCachedGitHubOwners: async () => [],
 						refreshGitHubOwners: async () => [],
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
@@ -1035,8 +1068,18 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				cloudShare: {
+					available: async () => true,
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
+				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
+					openFolder: async () => undefined,
 					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
@@ -1049,6 +1092,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
@@ -1208,7 +1252,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					reportSoundFailure: () => undefined,
 				},
 				tray: { setAttentionState: () => undefined, onOpenSession: unsubscribe },
-				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined },
+				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined, getExperimentCohort: async () => null, claimFirstRunExperimentExposure: async () => false, getFirstRunProjectPrompt: async () => "seen", markFirstRunProjectPromptSeen: async () => undefined },
 				cliLink: {
 					setEnabled: async () => undefined,
 					inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
@@ -1256,7 +1300,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					list: async () => [],
 					importAccountHost: async () => undefined,
 					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => "",
+					issueAccountToken: async () => ({ token: "" }),
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -1289,6 +1333,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
+					requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+					cancelBinary: () => undefined,
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,

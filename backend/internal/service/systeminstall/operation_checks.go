@@ -202,7 +202,7 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		// installed another copy since. The update runs on the resolved path,
 		// never on whichever copy PATH finds first.
 		job, statusErr := s.Status(ctx, target)
-		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.Method ||
+		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.ownershipMethod() ||
 			!s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
 			return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 		}
@@ -214,7 +214,7 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		return nil, fmt.Errorf("%w: AO could not resolve the %s that sessions run; update it manually", ErrInstallOwner, target)
 	default:
 		if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
-			return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
+			return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.ownershipMethod()))
 		}
 		version, _ := scheme.find(installedVersionText(target, verified.ResolvedPath, verified.Output))
 		baseline = &installedBaseline{target: target, path: verified.ResolvedPath, version: version.display, scheme: scheme}
@@ -228,10 +228,13 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 }
 
 func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) bool {
+	if plan.sourceMethod != "" {
+		plan.Method, plan.Package = plan.sourceMethod, plan.sourcePackage
+	}
 	if s.isManagedPath(path) {
 		// AO's own versioned install: the method that installed it owns it.
 		record, ok := s.readManagedRecord(plan.Target)
-		return ok && record.Method == plan.Method
+		return ok && s.managedRecordMatchesPlan(record, plan)
 	}
 	switch plan.Method {
 	case "npm", "homebrew", "bun", "uv", "pipx", "winget":

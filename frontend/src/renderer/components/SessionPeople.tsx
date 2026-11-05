@@ -3,11 +3,14 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSessionLive } from "../hooks/useCloudSessionLive";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { orderSessionPeople, personInitials, SESSION_PEOPLE_SHOWN, sessionPeopleFromLive, type SessionPerson } from "../lib/session-people";
 import { cn } from "../lib/utils";
+import { ShareLinkDialog } from "./ShareLinkDialog";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TopbarButton } from "./TopbarButton";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { Pressable } from "./ui/pressable";
 
 const circleClassName =
 	"inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-micro font-semibold leading-none text-muted-foreground ring-2";
@@ -58,8 +61,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 		<HoverCard>
 			<HoverCardTrigger asChild>
 				{onActivate ? (
-					<button
-						type="button"
+					<Pressable
 						aria-label={label}
 						className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 						onClick={(event) => {
@@ -69,7 +71,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 						data-session-people
 					>
 						{circles}
-					</button>
+					</Pressable>
 				) : (
 					<span role="group" aria-label={label} tabIndex={0} className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" data-session-people>
 						{circles}
@@ -120,6 +122,7 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: 
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
+	const teams = useTeamsEnabled();
 	const [open, setOpen] = useState(false);
 	const live = useCloudSessionLive(orgId, sessionId, true);
 	const me = live?.you || userId;
@@ -138,7 +141,10 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: 
 					<span data-compact-label>{t("share.button")}</span>
 				</TopbarButton>
 			)}
-			{canShare ? <ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} /> : null}
+			{/* Sharing with people and teams is Teams; without it, Share makes links. */}
+			{canShare ? (teams
+				? <ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />
+				: <ShareLinkDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />) : null}
 		</>
 	);
 }

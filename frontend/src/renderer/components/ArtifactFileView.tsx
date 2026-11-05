@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import type { ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
 import { isDelimitedTextPath } from "../lib/delimited-text";
@@ -42,9 +43,11 @@ export function ArtifactFileView({
 	cloud = false,
 	artifactRoot,
 	onAccessRefused,
+	save,
 	sendMessage,
 	sessionId,
 	toolbarHost,
+	onEditingChange,
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
@@ -55,12 +58,16 @@ export function ArtifactFileView({
 	rawUrl?: string;
 	/** Hides the edit action, as for a cloud session's artifacts. */
 	readOnly?: boolean;
+	/** Told whenever the file enters or leaves edit mode. */
+	onEditingChange?: (editing: boolean) => void;
 	/** Fetches rawUrl through the cloud control-plane bridge. */
 	cloud?: boolean;
 	/** The URL the file's relative links resolve against. */
 	artifactRoot?: string;
 	/** Called when a cloud media file fails to load, to take a fresh link. */
 	onAccessRefused?: () => void;
+	/** Saves an edit somewhere other than the local daemon, as for a cloud session's artifacts. */
+	save?: ArtifactSave;
 	/** Sends feedback to the worker; without it feedback goes through the daemon. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
@@ -69,8 +76,8 @@ export function ArtifactFileView({
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
 	const source = useMemo(
-		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused }),
-		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused],
+		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save }),
+		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save],
 	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -87,7 +94,7 @@ export function ArtifactFileView({
 		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
-				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
+				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} onEditingChange={onEditingChange} />
 			</div>
 			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>

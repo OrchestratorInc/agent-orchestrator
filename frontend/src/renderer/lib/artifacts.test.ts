@@ -6,7 +6,8 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactCount, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
 	return { kind, name, path: name, size: 10, updatedAt, ...(kind === "html" ? { previewUrl: `http://preview/${name}` } : {}) };
@@ -51,7 +52,6 @@ describe("groupArtifactsByProject", () => {
 			projectId: "ao",
 			kind: "html",
 			previewUrl: "http://preview/flow.html",
-			generating: false,
 		});
 		expect(artifactCount(groups)).toBe(4);
 	});
@@ -103,15 +103,6 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud", cloud: { orgId: "org-1" } });
 	});
 
-	it("marks rows from a working session as generating", () => {
-		const [group] = groupArtifactsByProject([
-			workspace("ao", "agent-orchestrator", [
-				session("ao-1", [artifact("draft.md", "2026-10-09T10:00:00Z")], { activity: { state: "active", lastActivityAt: "2026-10-09T10:00:00Z" } }),
-			]),
-		]);
-
-		expect(group.rows[0].generating).toBe(true);
-	});
 });
 
 describe("filterArtifactGroups", () => {
@@ -134,5 +125,35 @@ describe("filterArtifactGroups", () => {
 
 	it("returns nothing when no row matches", () => {
 		expect(filterArtifactGroups(groups, "pricing", "px0")).toEqual([]);
+	});
+});
+
+describe("artifactChangeError", () => {
+	it("reads the control plane's refusal as view only", () => {
+		const refused = new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" });
+		expect((artifactChangeError(refused, "View only.") as Error).message).toBe("View only.");
+	});
+
+	it("leaves every other failure as it is", () => {
+		const changed = new CloudCpError("The file changed since it was opened.", { status: 409, code: "artifact_changed" });
+		const offline = new Error("network down");
+		expect(artifactChangeError(changed, "View only.")).toBe(changed);
+		expect(artifactChangeError(offline, "View only.")).toBe(offline);
+	});
+});
+
+describe("canChangeSessionArtifacts", () => {
+	it("gives a cloud session's files to the person who started it, and only them", () => {
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, "u-1")).toBe(true);
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, "u-2")).toBe(false);
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, undefined)).toBe(false);
+	});
+
+	it("always gives a local session's files to this person", () => {
+		expect(canChangeSessionArtifacts(undefined, undefined)).toBe(true);
+	});
+
+	it("leaves the decision to a control plane too old to name the creator", () => {
+		expect(canChangeSessionArtifacts({ orgId: "org-1" }, "u-2")).toBe(true);
 	});
 });

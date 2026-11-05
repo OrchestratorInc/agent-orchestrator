@@ -14,6 +14,7 @@ import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
+import { useUiStore } from "../../stores/ui-store";
 
 /** A conversation with one failed turn and nothing in flight. */
 function failedSnapshot(): ConversationSnapshot {
@@ -186,6 +187,20 @@ describe("ChatWorkspace retry", () => {
 		// The failed turn in the fixture is turn-1; the daemon must be given AO's
 		// own turn id, which is what the snapshot exposes.
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("opens DeepSeek setup on the session host for a typed missing-key failure", async () => {
+		const snapshot = failedSnapshot();
+		snapshot.harness = "deepseek-harness";
+		snapshot.turns[0]!.failureCode = "provider_key_missing";
+		render(<ChatWorkspace snapshot={snapshot} remoteHostId="host-a" retryControl={{ retry: vi.fn() }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(useUiStore.getState().settingsModal).toMatchObject({
+			scope: "global", section: "harness", focusAgentId: "deepseek-harness",
+			hostId: "host-a", harnessView: "local", startLogin: true,
+		});
+		useUiStore.getState().closeSettings();
 	});
 
 	it.each([1, 2])("keeps one retry for a failed turn after %i steers", async (steerCount) => {

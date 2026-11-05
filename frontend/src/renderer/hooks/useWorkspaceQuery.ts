@@ -1,10 +1,13 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { rememberSharedSessions } from "../lib/shared-session-memory";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
@@ -30,6 +33,8 @@ import {
 	attentionZone,
 	workerSessions,
 	type WorkspaceSession,
+	type WorkspaceShare,
+	type WorkspaceShareSource,
 	type WorkspaceSummary,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -123,6 +128,7 @@ export function toWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -151,7 +157,8 @@ const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(h
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
-	if (![401, 403, 426, 502, 503].includes(status)) return;
+	// 530: Cloudflare answers for a fixed address whose machine is offline.
+	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 15_000) return;
@@ -228,6 +235,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -413,6 +421,33 @@ export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
+/**
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
+ */
+export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
+		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
+	]).then(() => undefined);
+}
+
+/**
+ * Adds a session the desktop just created to the sessions list, when it runs
+ * on Freestyle, so its view opens on the in-place start instead of the
+ * startup screen shown while a session it does not know yet resolves. Other
+ * providers (Coder) are left to the next list refresh, so their start is
+ * unchanged.
+ */
+export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
+	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
+	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
+		current === undefined || current.some((candidate) => candidate.id === session.id) ? current : [...current, session]);
+}
+
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
 // product-ui mappers apply; fields with no cloud analogue take safe defaults.
@@ -438,6 +473,9 @@ export function toCloudWorkspaceSession(
 		workspaceId: project.id,
 		workspaceName: project.displayName,
 		title: session.displayName || session.id,
+		// The caller's own pin; older control planes send none.
+		isPinned: session.pinned ?? false,
+		pinnedAt: session.pinnedAt,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
@@ -477,6 +515,7 @@ export function toCloudWorkspaceSession(
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
+			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
@@ -567,8 +606,8 @@ export function refetchCloudProjectsForUnknownSessions(
 }
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const { client, ready, baseUrl } = useCloudCp();
-	const { org } = useCloudOrg();
+	const { client, ready, baseUrl } = useCloudCp(options.enabled !== false);
+	const { org } = useCloudOrg(options.enabled !== false);
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudProjectsQueryKey, baseUrl, orgId ?? ""],
@@ -631,6 +670,8 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
+			// Sessions an earlier build started ahead of a brief and never used.
+			void cleanUpLegacyPreparedCloudSessions(client, orgId);
 			return response.items;
 		},
 	});
@@ -666,13 +707,106 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	return { ...list, data };
 }
 
+/** Who shared a project and its sessions, how, and through which team. */
+export function workspaceShareOf(items: CloudCpSharedProject[]): WorkspaceShare {
+	const source = (item: CloudCpSharedProject): WorkspaceShareSource => ({
+		byName: item.sharedByName || undefined,
+		viaTeamName: item.viaTeamName || undefined,
+		grantId: item.grant.id,
+		...(item.source ? { source: item.source } : {}),
+	});
+	const whole = items.find((item) => !item.sessionId);
+	const sessions: Record<string, WorkspaceShareSource> = {};
+	for (const item of items) {
+		if (item.sessionId) sessions[item.sessionId] = source(item);
+	}
+	const first = whole ?? items[0]!;
+	return {
+		byName: first.sharedByName || undefined,
+		viaTeamName: first.viaTeamName || undefined,
+		...(whole ? { wholeProject: source(whole) } : {}),
+		sessions,
+	};
+}
+
+/**
+ * The team a shared session reaches the person through: its own share's
+ * team when it was shared on its own (none when shared directly), else the
+ * whole project's.
+ */
+export function sharedSessionVia(share: WorkspaceShare, sessionId: string): string | undefined {
+	const own = share.sessions?.[sessionId];
+	return own ? own.viaTeamName : share.wholeProject?.viaTeamName;
+}
+
+/**
+ * A shared session whose files failed to load is read again after this, not
+ * on every refresh of the shared list.
+ */
+export const SHARED_ARTIFACT_RETRY_MS = 60_000;
+
+/**
+ * Per query client, for each shared session: the last files read for it, and
+ * the artifact version whose read last failed and when.
+ */
+const sharedArtifactReads = new WeakMap<QueryClient, {
+	last: Map<string, CloudCpSessionArtifact[]>;
+	failed: Map<string, { version: string; at: number }>;
+}>();
+
+/**
+ * A shared session with its artifact files, read once per artifact version as
+ * the organization's own sessions' files are. A session listed without
+ * artifacts (or by a control plane that does not count them) comes back as it
+ * is. One whose files cannot be read keeps the last files read for it, as an
+ * organization's own session does, and is read again a minute later.
+ */
+async function withSharedArtifactFiles(
+	queryClient: QueryClient,
+	client: Pick<CloudCpClient, "listSessionArtifacts">,
+	baseUrl: string,
+	session: CloudCpSession,
+): Promise<CloudCpSession> {
+	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	let reads = sharedArtifactReads.get(queryClient);
+	if (!reads) {
+		reads = { last: new Map(), failed: new Map() };
+		sharedArtifactReads.set(queryClient, reads);
+	}
+	const key = `${baseUrl}\n${session.orgId}\n${session.id}`;
+	const version = cloudArtifactVersion(session);
+	const withLastFiles = () => {
+		const files = reads.last.get(key);
+		return files ? { ...session, artifactFiles: files } : session;
+	};
+	const failed = reads.failed.get(key);
+	if (failed?.version === version && Date.now() - failed.at < SHARED_ARTIFACT_RETRY_MS) return withLastFiles();
+	try {
+		const artifactFiles = await queryClient.fetchQuery({
+			queryKey: cloudArtifactFilesQueryKey(baseUrl, session.orgId, session.id, version),
+			staleTime: Infinity,
+			retry: 1,
+			queryFn: ({ signal }) =>
+				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(session.orgId, session.id, { signal })).artifacts),
+		});
+		reads.failed.delete(key);
+		reads.last.set(key, artifactFiles);
+		return { ...session, artifactFiles };
+	} catch {
+		reads.failed.set(key, { version, at: Date.now() });
+		return withLastFiles();
+	}
+}
+
 /**
  * Cloud projects and sessions people in other organizations shared with this
  * person, as workspaces beside their own. A project shared both whole and
- * one session at a time shows once.
+ * one session at a time shows once. Each shared session carries its artifact
+ * files, so a guest sees them as the owner does.
  */
 export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
+	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl],
 		enabled: options.enabled !== false && ready,
@@ -681,20 +815,29 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 		refetchInterval: 15_000,
 		queryFn: async (): Promise<WorkspaceSummary[]> => {
 			const { shared } = await client.listSharedProjects();
-			const byProject = new Map<string, CloudCpSharedProject>();
+			const byProject = new Map<string, CloudCpSharedProject[]>();
 			for (const item of shared) {
 				const key = `${item.project.orgId}/${item.project.id}`;
-				if (!byProject.has(key)) byProject.set(key, item);
+				byProject.set(key, [...(byProject.get(key) ?? []), item]);
 			}
-			return Promise.all([...byProject.values()].map(async (item) => {
+			const workspaces = await Promise.all([...byProject.values()].map(async (items) => {
+				const item = items[0]!;
 				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
-				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
+				const withFiles = await Promise.all(sessions.map((session) => withSharedArtifactFiles(queryClient, client, baseUrl, session)));
+				const workspace = toCloudWorkspace(item.project, withFiles, item.project.orgId);
+				const share = workspaceShareOf(items);
 				return {
 					...workspace,
-					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
-					shared: { byName: item.sharedByName || undefined },
+					sessions: workspace.sessions.map((session) => {
+						if (!session.cloud) return session;
+						const via = sharedSessionVia(share, session.id);
+						return { ...session, cloud: { ...session.cloud, shared: true, ...(via ? { sharedVia: via } : {}) } };
+					}),
+					shared: share,
 				};
 			}));
+			rememberSharedSessions(baseUrl, userId, workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)));
+			return workspaces;
 		},
 	});
 }

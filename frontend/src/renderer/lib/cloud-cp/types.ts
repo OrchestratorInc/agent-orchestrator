@@ -63,8 +63,10 @@ export interface CloudCpOffering {
 	defaultProvider: string;
 	billingMode: CloudCpBillingMode;
 	kind: CloudCpOfferingKind;
-	/** Plan feature flags; empty when none. */
+	/** The org's product features and the deployment's own (attachments); empty when none. */
 	features: string[];
+	/** The largest file one attachment may be, sent with the attachments feature. */
+	maxAttachmentBytes?: number;
 	/**
 	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
 	 * it may connect its own Coder deployment, and its Coder sessions are not
@@ -215,9 +217,17 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
-import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer, ProjectEnvironment, ProjectIntakeStatus, ProjectTrackerIntake, Cue, CueDefinitionInput, InvokeCueResult } from "../../../../../packages/cloud-client/src/types";
 
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+/** A project's environment variables; `value` only for an owner or admin (`editable`). */
+export type CloudCpProjectEnvironment = ProjectEnvironment;
+export type CloudCpProjectIntakeStatus = ProjectIntakeStatus;
+/** A project's issue intake rule (config.trackerIntake). */
+export type CloudCpProjectTrackerIntake = ProjectTrackerIntake;
+export type CloudCpCue = Cue;
+export type CloudCpCueDefinition = CueDefinitionInput;
+export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
@@ -371,7 +381,7 @@ export interface CloudCpCreateSessionRequest {
 	kind: CloudCpSessionKind;
 	/** Coding-agent harness identifier (e.g. "claude-code"), 1-120 characters. */
 	harness: string;
-	/** 1-80 characters. */
+	/** 1-100 characters. */
 	displayName: string;
 	/** Up to 65536 bytes. */
 	prompt: string;
@@ -383,6 +393,11 @@ export interface CloudCpCreateSessionRequest {
 	 */
 	model?: string;
 	reasoningEffort?: string;
+	/**
+	 * Approval mode the opening prompt's turn runs with, for a session that
+	 * starts in Chat. Omitted lets the worker derive it from the session's mode.
+	 */
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
 	deniedCommands?: string[];
 	sandboxProviderConnectionId?: string;
 	/**
@@ -597,6 +612,8 @@ export interface CloudCpSession {
 	displayName: string;
 	branch: string;
 	mode: string;
+	/** Coding-agent model the session launched with; empty or absent means the harness default. */
+	model?: string;
 	interfaceMode: CloudCpInterfaceMode;
 	deniedCommands: string[];
 	activityState: string;
@@ -637,6 +654,8 @@ export interface CloudCpSession {
 	requestedOutput?: "artifact";
 	/** The guest the session was started for, when someone the project was shared with asked its orchestrator for it. */
 	requestedBy?: CloudCpPersonRef;
+	/** The person who started the session; only they share its files as public links. Absent when none is on record. */
+	createdByUserId?: string;
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
@@ -648,8 +667,19 @@ export interface CloudCpSession {
 	 * useCloudSessionsQuery for a listed session that has any.
 	 */
 	artifactFiles?: CloudCpSessionArtifact[];
+	/** Whether the caller pinned the session in their sidebar. A pin is one person's. Absent from older control planes. */
+	pinned?: boolean;
+	/** When the caller pinned the session; present only while pinned. */
+	pinnedAt?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** POST/DELETE /orgs/{orgId}/sessions/{sessionId}/pin */
+export interface CloudCpSessionPinResponse {
+	sessionId: string;
+	pinned: boolean;
+	pinnedAt?: string;
 }
 
 /** One committed artifact file of a cloud session. */
@@ -661,6 +691,54 @@ export interface CloudCpSessionArtifact {
 	size: number;
 	sha256: string;
 	updatedAt: string;
+}
+
+/** One kept version of a cloud artifact file, numbered per path; the newest is the committed file. */
+export interface CloudCpArtifactVersionSummary {
+	version: number;
+	createdAt: string;
+	/** Hex SHA-256 of the version's content. */
+	fileFingerprint: string;
+	size: number;
+	/** Who wrote it: the session's agent, or a person through a save or restore. */
+	source: "agent" | "user";
+	harness?: string;
+	/** The version this one restored, when it is a restore. */
+	restoredFrom?: number;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version} */
+export interface CloudCpArtifactVersion extends CloudCpArtifactVersionSummary {
+	path: string;
+	/** The version's text, cut short when truncated is set. */
+	content: string;
+	truncated?: boolean;
+}
+
+/** PUT /orgs/{orgId}/sessions/{sessionId}/artifacts/content */
+export interface CloudCpSaveArtifactRequest {
+	path: string;
+	content: string;
+	/** The committed file's SHA-256 the edit started from; a changed file answers 409 artifact_changed. */
+	expectedSha256: string;
+}
+
+/** One cloud chat message that matched a search, from GET /orgs/{orgId}/chat-search. */
+export interface CloudCpChatSearchHit {
+	sessionId: string;
+	sessionTitle: string;
+	projectId: string;
+	/** The matching event's sequence in the session's chat. */
+	sequence: number;
+	role: "user" | "assistant";
+	/** The matched text around the match. */
+	snippet: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/chat-search */
+export interface CloudCpChatSearchResponse {
+	results: CloudCpChatSearchHit[];
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
@@ -952,11 +1030,16 @@ export interface CloudCpWorkspaceReviewSearchQuery {
 	query: string;
 	cursor?: string;
 	limit?: number;
+	/** "content" also returns where each file's text matches; a worker that predates it returns paths only. */
+	mode?: "content";
 }
 
 export interface CloudCpWorkspaceReviewSearchResponse {
 	query: string;
-	results: Array<Pick<CloudCpWorkspaceReviewFileSummary, "path" | "status" | "size" | "binary" | "fileFingerprint">>;
+	results: Array<Pick<CloudCpWorkspaceReviewFileSummary, "path" | "status" | "size" | "binary" | "fileFingerprint"> & {
+		/** With mode "content": the matching lines, 1-based. */
+		matches?: Array<{ line: number; text: string }>;
+	}>;
 	nextCursor?: string;
 	truncated: boolean;
 }
@@ -1087,6 +1170,16 @@ export interface CloudCpPullRequestSummary {
 export interface CloudCpSessionPullRequestsResponse {
 	sessionId: string;
 	pullRequests: CloudCpPullRequestSummary[];
+	/** Pull requests the session's agent reported that AO does not track; absent from an older control plane. */
+	linkedPullRequests?: CloudCpLinkedPullRequest[];
+}
+
+/** A GitHub pull request a cloud session's agent reported that AO does not track. */
+export interface CloudCpLinkedPullRequest {
+	url: string;
+	/** owner/name */
+	repository: string;
+	number: number;
 }
 
 export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
@@ -1107,9 +1200,19 @@ export interface CloudCpAOReviewRun {
 	body: string;
 	providerReviewId: string;
 	reviewerTerminalId?: string;
+	/** "chat" for a review that runs as a Chat conversation (an older control plane omits it). */
+	interfaceMode?: "chat";
 	createdAt: string;
 	deliveredAt?: string;
 	autoInjectReview: boolean;
+}
+
+/** The reviewer conversation a Cloud session shows: its newest review that runs in Chat. */
+export interface CloudCpReviewerSurface {
+	mode: "chat";
+	/** The review run whose conversation this is. */
+	reviewId: string;
+	harness: string;
 }
 
 export interface CloudCpPRReviewState {
@@ -1129,6 +1232,8 @@ export interface CloudCpSessionReviewState {
 	availableReviewerHarnesses: string[];
 	reviews: CloudCpPRReviewState[];
 	runs: CloudCpAOReviewRun[];
+	/** Absent from an older control plane, whose reviews all run in a terminal. */
+	reviewerSurface?: CloudCpReviewerSurface;
 }
 
 export interface CloudCpHarnessStatus {
@@ -1152,6 +1257,8 @@ export interface CloudCpSessionDeletedResponse {
 		id: string;
 		desiredState: string;
 	};
+	/** Whether the session's artifact files were deleted. */
+	artifactsDeleted?: boolean;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/resume accepts user resume intent. */
@@ -1182,8 +1289,10 @@ export interface CloudCpRestoreSessionResponse {
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/messages (requires an Idempotency-Key header). */
 export interface CloudCpSendMessageRequest {
-	/** 1-65536 bytes. */
+	/** 1-65536 bytes; may be empty when the message carries attachments. */
 	text: string;
+	/** Files uploaded to the session (POST .../attachments) that the message carries. */
+	attachmentIds?: string[];
 	model?: string;
 	reasoningEffort?: string;
 	/** Per-turn permission mode, capped by the session and share grant. */
@@ -1195,6 +1304,10 @@ export interface CloudCpSendMessageRequest {
 	 * waiting for it; otherwise it fails with 409 COMPOSER_LOCKED.
 	 */
 	composerEpoch?: number;
+	/** How the message reads in the transcript when `text` carries quotes or file captures inlined for the agent. */
+	displayText?: string;
+	/** The quotes and file captures the message attaches, as the transcript shows them (at most 64 blocks). */
+	content?: Array<{ type: string }>;
 }
 
 export interface CloudCpChatModelsResponse {
@@ -1214,6 +1327,20 @@ export interface CloudCpChatModelsResponse {
 		 */
 		approvalModes?: Array<"default" | "accept-edits" | "auto" | "bypass-permissions">;
 	}>;
+	/**
+	 * Where a new task's catalog came from: a Cloud worker running this CLI
+	 * version with the user's current credential, or the models the control
+	 * plane's pinned CLI version supports. Absent from a session's own list,
+	 * which that session's worker reported.
+	 */
+	source?: "worker" | "release";
+	/** The harness CLI version the list is for. */
+	cliVersion?: string;
+	/**
+	 * On a session's own list, whether its worker listed the models for the
+	 * signed-in account rather than from the CLI's built-in list.
+	 */
+	accountListed?: boolean;
 }
 
 export interface CloudCpClientEvent {
@@ -1257,6 +1384,20 @@ export interface CloudCpChatEventsResponse {
 	events: CloudCpClientEvent[];
 	hasMore: boolean;
 	nextAfter: number;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion */
+export interface CloudCpPromptSuggestionRequest {
+	/** The settled turn the suggestion follows; echoed back. */
+	turnId: string;
+	/** The conversation's most recent text messages (at most 8), oldest first. */
+	messages: { role: "user" | "assistant"; text: string }[];
+}
+
+export interface CloudCpPromptSuggestionResponse {
+	turnId: string;
+	/** Empty when there is no clear next step. */
+	prompt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1651,6 +1792,11 @@ export interface CloudCpShareLink {
 	/** Only in the creation response: the raw token is never stored. */
 	token?: string;
 	url?: string;
+	/**
+	 * Only in the creation response, and only when the control plane has short
+	 * links turned on: the link's 22-character code (letters and digits).
+	 */
+	code?: string;
 }
 
 /** A project or session someone shared with the caller. */
@@ -1669,4 +1815,133 @@ export interface CloudCpSharedProject {
 	sessionId?: string;
 	sessionName?: string;
 	sharedByName?: string;
+	/** The team this reaches the caller through, when not shared with them directly. */
+	viaTeamId?: string;
+	viaTeamName?: string;
+	/** How the caller got it: from a link, shared directly, or through a team. */
+	source?: "link" | "direct" | "team";
+}
+
+/** A named group of people in a workspace that sessions and projects are shared with. */
+export interface CloudCpTeam {
+	id: string;
+	orgId: string;
+	/** The workspace's name, for teams the caller is in elsewhere. */
+	orgName?: string;
+	name: string;
+	/** Everyone in the team, invited emails included. */
+	memberCount: number;
+	/** The caller's role in the team; absent when they aren't in it. */
+	yourRole?: "owner" | "member";
+	/** Owners and workspace admins can change the team. */
+	canManage: boolean;
+	sharedSessions: number;
+	sharedProjects: number;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CloudCpTeamMember {
+	id: string;
+	teamId: string;
+	/** Set once the workspace knows who this is. */
+	userId?: string;
+	/** Absent for people outside the caller's workspace. */
+	email?: string;
+	/** Absent until the person is known to the workspace. */
+	name?: string;
+	role: "owner" | "member";
+	/** Added by email and hasn't opened AO since. */
+	invited: boolean;
+	you: boolean;
+	/** Already in the team's workspace, so shares can't change what they can do. */
+	workspaceMember: boolean;
+	addedAt: string;
+}
+
+export interface CloudCpShareSubject {
+	kind: "user" | "email" | "team";
+	userId?: string;
+	email?: string;
+	name?: string;
+	teamId?: string;
+	teamName?: string;
+	memberCount?: number;
+	workspaceMember?: boolean;
+}
+
+/** One grant as the share dialog lists it. */
+export interface CloudCpShareEntry {
+	grantId: string;
+	subject: CloudCpShareSubject;
+	scope: "session" | "project";
+	sessionId?: string;
+	sessionName?: string;
+	projectId: string;
+	projectName: string;
+	role: CloudCpShareRole;
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands: string[];
+	source: "link" | "direct" | "team";
+	sharedByName?: string;
+	createdAt: string;
+}
+
+export interface CloudCpTeamDetail {
+	team: CloudCpTeam;
+	members: CloudCpTeamMember[];
+	shares: CloudCpShareEntry[];
+}
+
+/** What removing someone, leaving, or deleting a team takes away. */
+export interface CloudCpTeamImpact {
+	people: number;
+	sessions: number;
+	projects: number;
+	/** What a removed person still reaches another way. */
+	keeps: string[];
+}
+
+export interface CloudCpShareAccess {
+	/** The session's creator; absent for a whole project. */
+	owner?: CloudCpShareSubject;
+	entries: CloudCpShareEntry[];
+}
+
+export interface CloudCpEffectiveAccess {
+	role?: "member" | "editor" | "viewer";
+	modeCap?: "read-only" | "standard" | "trusted";
+	source?: "workspace" | "team" | "direct" | "link" | "project";
+	teamId?: string;
+	teamName?: string;
+}
+
+export interface CloudCpTeamMemberAccess {
+	member: CloudCpTeamMember;
+	access: CloudCpEffectiveAccess;
+}
+
+export interface CloudCpShareCandidate {
+	kind: "team" | "user";
+	teamId?: string;
+	name: string;
+	email?: string;
+	memberCount?: number;
+	/** The first few people in a team, to tell similar teams apart. */
+	memberNames?: string[];
+	/** A person already in the workspace, who has full access without a share. */
+	workspaceMember?: boolean;
+}
+
+export interface CloudCpTeamMemberInput {
+	email: string;
+	role?: "owner" | "member";
+}
+
+export interface CloudCpCreateShareGrantsRequest {
+	sessionId?: string;
+	subjects: Array<{ teamId: string } | { email: string }>;
+	role: CloudCpShareRole;
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands?: string[];
 }

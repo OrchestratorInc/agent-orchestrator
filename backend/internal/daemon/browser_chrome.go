@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
@@ -82,6 +83,7 @@ func (m *chromeMode) serve(ctx context.Context, runFilePath string) error {
 	}
 	m.log.Info("browser chrome: listening", "addr", addr)
 	go func() {
+		defer sentryobs.RecoverBackground()
 		defer browserchrome.RemoveEndpoint(endpointPath, os.Getpid())
 		if err := m.broker.Serve(ctx, ln); err != nil {
 			m.log.Warn("browser chrome: serve stopped with error", "err", err)
@@ -90,6 +92,7 @@ func (m *chromeMode) serve(ctx context.Context, runFilePath string) error {
 	// Keep an enabled registration pointing at this daemon's binary and the
 	// extension bundled with it, so app updates and moves stay connected.
 	go func() {
+		defer sentryobs.RecoverBackground()
 		if err := m.installer.Refresh(); err != nil {
 			m.log.Warn("browser chrome: refresh registration", "err", err)
 		}

@@ -4,13 +4,16 @@ import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
 import { apiErrorMessage } from "../lib/api-client";
+import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
 import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
-import { TopbarButton } from "./TopbarButton";
+import { terminalTabActionClassName } from "./TerminalTabFrame";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
@@ -61,15 +64,17 @@ export function SessionTabMenu({
 				<ProviderMark provider={pending.harness} className="size-3.5" />
 				{/* The mark names the agent, so the model alone fits beside Switch. */}
 				<span className="min-w-0 flex-1 truncate" title={target}>{pending.modelLabel ?? agentLabel(pending.harness)}</span>
-				<button
+				<Button
 					type="button"
 					disabled={blocked || providerSwitch.isPending}
 					title={blocked ? t("agentSwitch.busy") : t("agentSwitch.switchTerminalTo", { target })}
 					onClick={switchNow}
-					className="shrink-0 rounded-md bg-primary px-2 py-px text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+					className="disabled:pointer-events-auto disabled:cursor-not-allowed"
+					size="xs"
+					variant="primary"
 				>
 					{providerSwitch.isPending ? t("agentSwitch.switchingNow") : t("agentSwitch.switchAction")}
-				</button>
+				</Button>
 				<DismissButton label={t("agentSwitch.cancel")} disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
 			</div>
 		</div>
@@ -77,16 +82,16 @@ export function SessionTabMenu({
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
-				<TopbarButton
+				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
+				<Pressable
 					aria-label={t("session.actionsMenu")}
-					className="size-7 !bg-transparent text-muted-foreground hover:!bg-transparent active:!bg-transparent focus:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground"
+					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={t("session.actionsMenu")}
 					type="button"
-					variant="icon"
 				>
-					<MoreVertical aria-hidden="true" className="size-icon-md" />
-				</TopbarButton>
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
+				</Pressable>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}

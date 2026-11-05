@@ -12,14 +12,17 @@ import (
 // remoteHostStatus mirrors the small part of the loopback mobile status API
 // needed to pair another client with a headless daemon.
 type remoteHostStatus struct {
-	Enabled      bool   `json:"enabled"`
-	LoopbackOnly bool   `json:"loopbackOnly"`
-	HostID       string `json:"hostId"`
-	Password     string `json:"password"`
-	Tunnel       struct {
-		Supported bool   `json:"supported"`
-		Running   bool   `json:"running"`
-		LastError string `json:"lastError"`
+	Enabled       bool   `json:"enabled"`
+	LoopbackOnly  bool   `json:"loopbackOnly"`
+	AccountLinked bool   `json:"accountLinked"`
+	HostID        string `json:"hostId"`
+	Password      string `json:"password"`
+	Tunnel        struct {
+		Supported  bool   `json:"supported"`
+		Installing bool   `json:"installing"`
+		Running    bool   `json:"running"`
+		Fixed      bool   `json:"fixed"`
+		LastError  string `json:"lastError"`
 	} `json:"tunnel"`
 	Endpoints []struct {
 		Kind   string `json:"kind"`
@@ -72,6 +75,11 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remote host enabled\nHost ID: %s\n", status.HostID); err != nil {
 					return err
 				}
+				if status.AccountLinked {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Linked to an AO account: its signed-in devices list this machine."); err != nil {
+						return err
+					}
+				}
 				publicAddress := false
 				for _, endpoint := range status.Endpoints {
 					scheme := "http"
@@ -85,12 +93,24 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
-				if (tunnel || tunnelOnly) && action.name == "enable" {
-					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Cloudflare terminates TLS and can see the connection password and traffic. Quick-tunnel URLs change on restart and have no uptime guarantee."); err != nil {
+				if publicAddress {
+					message := "Fixed address: it stays the same after restarts."
+					if !status.Tunnel.Fixed {
+						message = "Quick tunnel: the address changes on restart and has no uptime guarantee."
+						if !status.AccountLinked {
+							message += " Run `ao remote-host link` to add this machine to your AO account, which gives it a fixed address when the account has one free."
+						}
+					}
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
 						return err
 					}
 				}
-				if !publicAddress && ((tunnel || tunnelOnly) && action.name == "enable" || status.LoopbackOnly || status.Tunnel.Running || status.Tunnel.LastError != "") {
+				if (tunnel || tunnelOnly) && action.name == "enable" {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Cloudflare terminates TLS and can see the connection password and traffic."); err != nil {
+						return err
+					}
+				}
+				if !publicAddress && ((tunnel || tunnelOnly) && action.name == "enable" || status.LoopbackOnly || status.Tunnel.Running || status.Tunnel.LastError != "" || status.Tunnel.Installing) {
 					message := "Tunnel: starting; run `ao remote-host status` for the HTTPS address"
 					if !status.Tunnel.Supported {
 						flag := "--tunnel"
@@ -98,6 +118,11 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 							flag = "--tunnel-only"
 						}
 						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
+						// AO downloads its own cloudflared where it has a pinned
+						// build; the tunnel starts by itself when it lands.
+						if status.Tunnel.Installing {
+							message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address"
+						}
 					} else if status.Tunnel.LastError != "" && !status.Tunnel.Running {
 						message = "Tunnel unavailable: " + status.Tunnel.LastError
 					}
@@ -119,6 +144,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 		}
 		root.AddCommand(cmd)
 	}
+	root.AddCommand(newRemoteHostLinkCommand(ctx))
 	return root
 }
 

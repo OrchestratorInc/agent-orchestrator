@@ -15,7 +15,6 @@ import {
 } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { useNavigateToSession } from "../lib/navigate-to-session";
-import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
@@ -23,7 +22,8 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -36,6 +36,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
@@ -47,7 +48,6 @@ const MAX_LIVE_PREVIEWS = 4;
  */
 export function ArtifactsView() {
 	const { t } = useTranslation();
-	const showPageTitle = hidesShellTopbar();
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
@@ -56,6 +56,13 @@ export function ArtifactsView() {
 	const [projectId, setProjectId] = useState("");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	// The open preview follows its row as the list refreshes, so a file an
+	// agent rewrites shows its new content.
+	const previewRow = useMemo(() => {
+		if (!preview) return null;
+		const key = artifactKey(preview.row);
+		return groups.flatMap((group) => group.rows).find((row) => artifactKey(row) === key) ?? preview.row;
+	}, [groups, preview]);
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
@@ -91,8 +98,8 @@ export function ArtifactsView() {
 		];
 		for (const section of sections) {
 			for (const row of section.rows) {
-				const page = row.kind === "html" && row.inlineUrl && row.rawUrl;
-				const pdf = !row.cloud && /\.pdf$/i.test(row.path) && row.rawUrl;
+				const page = row.kind === "html" && (row.cloud || (row.inlineUrl && row.rawUrl));
+				const pdf = /\.pdf$/i.test(row.path) && (row.cloud || row.rawUrl);
 				if (!page && !pdf) continue;
 				const key = artifactKey(row);
 				if (!owners.has(key) && owners.size < MAX_LIVE_PREVIEWS) owners.set(key, section.id);
@@ -108,77 +115,74 @@ export function ArtifactsView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			{/* The controls sit the same distance from the top, the right edge, and
-			    each other: half the gap between the toolbar and a control. */}
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <File className="size-icon-md" aria-hidden="true" /> : null}
-					{t("artifacts.title")}
-				</h1>
-				<div className="workspace-topbar-actions flex min-w-0 flex-1 items-center justify-end gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-					{hasArtifacts ? (
-						<>
-						{/* Same field as the inspector's Files filter and browser address bar. */}
-						<label className="relative block w-56 min-w-0 shrink">
-							<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
-							<Input
-								aria-label={t("artifacts.search")}
-								className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-								onChange={(event) => setQuery(event.target.value)}
-								placeholder={t("artifacts.search")}
-								type="search"
-								value={query}
-							/>
-						</label>
-						<DropdownMenu>
-							<DropdownMenuTrigger asChild>
-								<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
-									<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
-									<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
-									<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
-								</TopbarButton>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
-								<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
-									<DropdownMenuRadioItem value="">{t("artifacts.allProjects")}</DropdownMenuRadioItem>
-									<DropdownMenuSeparator />
-									{groups.map((group) => <DropdownMenuRadioItem key={group.id} value={group.id}>{group.isScratchpad ? scratchpadName : group.name}</DropdownMenuRadioItem>)}
-								</DropdownMenuRadioGroup>
-							</DropdownMenuContent>
-						</DropdownMenu>
-						<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
-							{([
-								{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
-								{ value: "list", label: t("artifacts.listView"), icon: List },
-							] as const).map(({ value, label, icon: Icon }) => (
-								<Tooltip key={value}>
-									<TooltipTrigger asChild>
-										<TopbarButton
-											variant="icon"
-											aria-label={label}
-											aria-pressed={view === value}
-											onClick={() => setView(value)}
-											className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
-										>
-											<Icon aria-hidden="true" className="size-icon-sm" />
-										</TopbarButton>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{label}</TooltipContent>
-								</Tooltip>
-							))}
-						</div>
-						</>
-					) : null}
-					<CreateArtifactMenu
-						workspaces={workspaces ?? []}
-						create={createArtifact.create}
-						pending={createArtifact.pending}
-						label="new"
-						align="end"
-						localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
-					/>
-				</div>
-			</header>
+			<PageTopbar
+				lead={<PageTopbarTitle as="h1" icon={<File className="size-icon-md" aria-hidden="true" />}>{t("artifacts.title")}</PageTopbarTitle>}
+				actions={
+					<>
+						{hasArtifacts ? (
+							<>
+							{/* Same field as the inspector's Files filter and browser address bar. */}
+							<label className="relative block w-56 min-w-0 shrink">
+								<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
+								<Input
+									aria-label={t("artifacts.search")}
+									className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
+									onChange={(event) => setQuery(event.target.value)}
+									placeholder={t("artifacts.search")}
+									type="search"
+									value={query}
+								/>
+							</label>
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<TopbarButton variant="secondary" aria-label={t("artifacts.projectFilter")} className="max-w-44 transition-none!">
+										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
+										<span className="truncate">{projectId ? (projectId === STANDALONE_WORKSPACE_ID ? scratchpadName : groups.find((group) => group.id === projectId)?.name) : t("artifacts.allProjects")}</span>
+										<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0" />
+									</TopbarButton>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" data-browser-native-overlay="true">
+									<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+										<DropdownMenuRadioItem value="">{t("artifacts.allProjects")}</DropdownMenuRadioItem>
+										<DropdownMenuSeparator />
+										{groups.map((group) => <DropdownMenuRadioItem key={group.id} value={group.id}>{group.isScratchpad ? scratchpadName : group.name}</DropdownMenuRadioItem>)}
+									</DropdownMenuRadioGroup>
+								</DropdownMenuContent>
+							</DropdownMenu>
+							<div role="group" aria-label={t("artifacts.view")} className="inline-flex shrink-0 items-center gap-0 rounded-md transition-none hover:bg-interactive-hover">
+								{([
+									{ value: "gallery", label: t("artifacts.galleryView"), icon: LayoutGrid },
+									{ value: "list", label: t("artifacts.listView"), icon: List },
+								] as const).map(({ value, label, icon: Icon }) => (
+									<Tooltip key={value}>
+										<TooltipTrigger asChild>
+											<TopbarButton
+												variant="icon"
+												aria-label={label}
+												aria-pressed={view === value}
+												onClick={() => setView(value)}
+												className={cn("transition-none! duration-0", view === value ? "bg-interactive-active text-foreground hover:bg-interactive-active" : "hover:bg-transparent")}
+											>
+												<Icon aria-hidden="true" className="size-icon-sm" />
+											</TopbarButton>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">{label}</TooltipContent>
+									</Tooltip>
+								))}
+							</div>
+							</>
+						) : null}
+						<CreateArtifactMenu
+							workspaces={workspaces ?? []}
+							create={createArtifact.create}
+							pending={createArtifact.pending}
+							label="new"
+							align="end"
+							localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+						/>
+					</>
+				}
+			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
@@ -192,7 +196,7 @@ export function ArtifactsView() {
 							) : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
-									<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={clearFilters}>
+									<Button variant="quiet" size="sm" onClick={clearFilters}>
 										{t("artifacts.clearFilters")}
 									</Button>
 								</div>
@@ -235,7 +239,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
-			<ArtifactPreviewModal artifact={preview?.row ?? null} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
+			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
@@ -254,7 +258,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
 	const headerContent = <>
-		<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
+		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
 			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
 			<span className="truncate">{name}</span>
 		</span>
@@ -268,17 +272,16 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 		<section aria-label={name} className={expanded ? "mb-3" : undefined}>
 			<header>
 				<h2 aria-label={name}>
-					{collapsible ? <button
-						type="button"
+					{collapsible ? <Pressable
 						aria-label={name}
 						aria-expanded={expanded}
 						aria-controls={gridId}
 						onClick={() => toggleSection(sectionId)}
-						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md text-left transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md"
 					>
 						{headerContent}
 						<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground", !expanded && "-rotate-90")} />
-					</button> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
+					</Pressable> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
 				</h2>
 			</header>
 			<ul id={gridId} aria-label={name} hidden={!expanded} className={expanded ? (view === "gallery" ? ARTIFACT_GRID_CLASS : "grid gap-2") : "hidden"}>
@@ -289,7 +292,6 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 }
 
 function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
-	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -309,20 +311,17 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 		return (
 			<li>
 				<div className="group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent">
-					<button
-						type="button"
-						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch text-left outline-none after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
+					<Pressable
+						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
 						onClick={open}
 						title={`${row.sessionTitle} · ${row.path}`}
 					>
-						{row.generating ? (
-							<Loader2 aria-label={t("artifacts.generating")} className="relative z-[1] size-icon-sm shrink-0 animate-spin text-status-working motion-reduce:animate-none" />
-						) : <KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />}
+						<KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="relative z-[1] min-w-0 shrink truncate text-control font-medium text-foreground">{row.name}</span>
 						<span className="relative z-[1] min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 						</span>
-					</button>
+					</Pressable>
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
@@ -438,7 +437,7 @@ function CreateArtifactMenu({
 			// Anchors the menu, so it must not scale on press.
 			<TopbarButton
 				variant="primary"
-				className={cn("topbar-control--labeled topbar-control--static-press", className)}
+				className={cn("topbar-control--labeled", className)}
 				disabled={disabled}
 				aria-busy={pending}
 			>

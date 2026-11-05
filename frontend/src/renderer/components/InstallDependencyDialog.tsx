@@ -8,6 +8,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
 import { requirementDetailText, requirementDisplayLabel, type SystemRequirement } from "./SystemRequirementsChecklist";
 import {
 	Dialog,
@@ -66,7 +67,7 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
  *  which command is running. */
-function useInstallRunner(onSucceeded: () => void) {
+export function useInstallRunner(onSucceeded: () => void) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
@@ -158,7 +159,6 @@ export function InstallDependencyDialog({
 }) {
 	const { t } = useTranslation();
 	const [selectedAgent, setSelectedAgent] = useState<AgentInstallTarget | null>(null);
-	const [ghDismissed, setGhDismissed] = useState(false);
 	const [isCheckingAgain, setIsCheckingAgain] = useState(false);
 	const [checkAgainError, setCheckAgainError] = useState<string | undefined>();
 	const install = useInstallRunner(() => void onRefetchRequirements());
@@ -167,19 +167,13 @@ export function InstallDependencyDialog({
 	const git = byId.get("git");
 	const tmux = byId.get("tmux");
 	const harness = byId.get("harness");
-	const gh = byId.get("gh");
 	const gitBlocking = Boolean(git && git.required && !git.satisfied);
 	const tmuxBlocking = Boolean(tmux && tmux.required && !tmux.satisfied);
 	const harnessBlocking = Boolean(harness && harness.required && !harness.satisfied);
-	const ghAdvisory = Boolean(gh && !gh.satisfied);
 
 	useEffect(() => {
 		if (tmuxBlocking) void install.inspect("tmux");
 	}, [install.inspect, tmuxBlocking]);
-
-	useEffect(() => {
-		if (ghAdvisory) void install.inspect("gh");
-	}, [ghAdvisory, install.inspect]);
 
 	useEffect(() => {
 		if (selectedAgent) void install.inspect(selectedAgent);
@@ -200,9 +194,7 @@ export function InstallDependencyDialog({
 	};
 
 	const title = harnessBlocking ? t("startup.blockedTitleAgent") : t("startup.blockedTitleDependency");
-	const opencodeV2Notice = selectedAgent === "opencode-v2"
-		? install.jobFor("opencode-v2")?.notice ?? t("startup.installOpencodeV2ReplacementWarning")
-		: undefined;
+	const opencodeV2Notice = selectedAgent === "opencode-v2" ? install.jobFor("opencode-v2")?.notice : undefined;
 
 	return (
 		<Dialog open onOpenChange={() => {}}>
@@ -288,31 +280,6 @@ export function InstallDependencyDialog({
 							</div>
 						</IssueSection>
 					) : null}
-
-					{ghAdvisory && gh && !ghDismissed ? (
-						<div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-body-md">
-							<p className="font-medium text-settings-title">{t("startup.recommendedInstallGh")}</p>
-							<p className="mt-0.5 text-settings-muted">{requirementDetailText(gh, t)}</p>
-							<div className="mt-2">
-								<InstallAction
-									primaryLabel={t("startup.installGh")}
-									disabled={install.running && install.target !== "gh"}
-									job={install.jobFor("gh")}
-									planChecked={install.inspectionFinished("gh")}
-									error={install.target === "gh" ? install.startError : undefined}
-									onInstall={() => void install.start("gh")}
-									t={t}
-								/>
-							</div>
-							<button
-								type="button"
-								className="mt-2 text-caption text-settings-muted underline-offset-2 hover:underline"
-								onClick={() => setGhDismissed(true)}
-							>
-								{t("startup.dismissGhSession")}
-							</button>
-						</div>
-					) : null}
 				</div>
 
 				<div className={settingsDialogFooterClass}>
@@ -321,21 +288,21 @@ export function InstallDependencyDialog({
 							{checkAgainError}
 						</p>
 					) : null}
-					<button
+					<Button
 						type="button"
-						className="settings-footer-button"
+						variant="footer"
 						onClick={() => void window.ao?.menu?.action("app.quit")}
 					>
 						{t("startup.quit")}
-					</button>
-					<button
+					</Button>
+					<Button
 						type="button"
-						className="settings-footer-button settings-footer-button-primary"
+						variant="footer-primary"
 						disabled={isCheckingAgain || install.running}
 						onClick={() => void checkAgain()}
 					>
 						{isCheckingAgain ? t("startup.checkingAgain") : t("startup.checkAgain")}
-					</button>
+					</Button>
 				</div>
 			</DialogContent>
 		</Dialog>
@@ -365,7 +332,7 @@ function IssueSection({
 	);
 }
 
-function InstallAction({
+export function InstallAction({
 	primaryLabel,
 	disabled,
 	job,
@@ -414,14 +381,15 @@ function InstallAction({
 
 	return (
 		<div className="flex flex-col gap-1.5">
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button settings-footer-button-primary self-start"
+				variant="footer-primary"
+				className="self-start"
 				disabled={disabled}
 				onClick={onInstall}
 			>
 				{failed ? t("startup.retryPrefix", { label: primaryLabel }) : primaryLabel}
-			</button>
+			</Button>
 			{error ? <p className="text-caption text-error">{error}</p> : null}
 			{failed ? (
 				<>
@@ -459,15 +427,16 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 			<code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-caption text-settings-title">
 				{command}
 			</code>
-			<button
+			<Button
 				type="button"
-				className="settings-footer-button shrink-0"
+				variant="footer"
+				className="shrink-0"
 				aria-label={copied ? t("startup.commandCopied") : t("startup.copyCommand")}
 				onClick={copy}
 			>
 				{copied ? <Check className="size-icon-sm" aria-hidden="true" /> : <Copy className="size-icon-sm" aria-hidden="true" />}
 				{copied ? t("startup.commandCopied") : t("startup.copyCommand")}
-			</button>
+			</Button>
 		</div>
 	);
 }

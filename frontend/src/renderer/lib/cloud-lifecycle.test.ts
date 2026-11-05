@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, resumeCloudSession } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -52,6 +52,37 @@ describe("cloudLifecycleStage", () => {
 		const local = session("running", "running", true);
 		delete local.cloud;
 		expect(cloudLifecycleStage(local)).toBeUndefined();
+	});
+});
+
+describe("cloudChatStartingInPlace", () => {
+	const freestyleChat = (desired: string, observed: string, connected = false): WorkspaceSession => {
+		const base = session(desired, observed, connected);
+		return { ...base, mode: "chat", cloud: { ...base.cloud!, sandboxProvider: "freestyle" } };
+	};
+
+	it.each([
+		["running", "requested"],
+		["running", "provisioning"],
+		["running", "bootstrapping"],
+		["running", "stopped"],
+		["running", "restoring"],
+	] as const)("holds a Freestyle Chat session on its conversation while %s/%s", (desired, observed) => {
+		expect(cloudChatStartingInPlace(freestyleChat(desired, observed))).toBe(true);
+	});
+
+	it("lets go once the worker connects, and while the session is paused", () => {
+		expect(cloudChatStartingInPlace(freestyleChat("running", "bootstrapping", true))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("paused", "stopped"))).toBe(false);
+		// A session being deleted or archived is going away, not getting ready.
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "stopped"))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
+	});
+
+	it("leaves other providers and terminal sessions to the startup screen", () => {
+		expect(cloudChatStartingInPlace({ ...freestyleChat("running", "provisioning"), mode: "tui" })).toBe(false);
+		const coder = freestyleChat("running", "provisioning");
+		expect(cloudChatStartingInPlace({ ...coder, cloud: { ...coder.cloud!, sandboxProvider: "coder" } })).toBe(false);
 	});
 });
 
@@ -140,5 +171,32 @@ describe("cloudStartupProblem", () => {
 		const local = session("running", "terminated");
 		delete local.cloud;
 		expect(cloudStartupProblem(local)).toBeUndefined();
+	});
+});
+
+describe("resumeCloudSession", () => {
+	it("sends one request for a session however many views ask while it is in flight", async () => {
+		const answers: ((value: unknown) => void)[] = [];
+		const resumeSession = vi.fn(() => new Promise((resolve) => { answers.push(resolve); }));
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		const first = resumeCloudSession(client, "org", "session-a");
+		const second = resumeCloudSession(client, "org", "session-a");
+		const other = resumeCloudSession(client, "org", "session-b");
+		expect(resumeSession).toHaveBeenCalledTimes(2);
+		expect(second).toBe(first);
+		expect(other).not.toBe(first);
+		answers.forEach((answer) => answer({}));
+		await first;
+		// Once it answered, a later open asks again.
+		void resumeCloudSession(client, "org", "session-a");
+		expect(resumeSession).toHaveBeenCalledTimes(3);
+	});
+
+	it("shares a refusal with every caller and asks again afterwards", async () => {
+		const resumeSession = vi.fn().mockRejectedValueOnce(new Error("terminated")).mockResolvedValue({});
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		await expect(Promise.all([resumeCloudSession(client, "org", "s"), resumeCloudSession(client, "org", "s")])).rejects.toThrow("terminated");
+		await expect(resumeCloudSession(client, "org", "s")).resolves.toEqual({});
+		expect(resumeSession).toHaveBeenCalledTimes(2);
 	});
 });

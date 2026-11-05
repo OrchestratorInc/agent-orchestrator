@@ -376,6 +376,39 @@ func TestHooks_ReviewerRoutesToReviewActivity(t *testing.T) {
 	}
 }
 
+func TestHooks_ClineReviewerUsesResumableIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"task ID", `{"taskId":"conv_123"}`, ""},
+		{"snake task ID", `{"task_id":"conv_123"}`, ""},
+		{"root ID", `{"taskId":"conv_123","sessionContext":{"rootSessionId":"native-root"}}`, "native-root"},
+		{"legacy ID", `{"taskResume":{"taskMetadata":{"ulid":"native-legacy"}}}`, "native-legacy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_HARNESS", "cline")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setReviewActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if capture.path != "/api/v1/reviews/review-7/activity" || req.AgentSessionID != tc.want || req.State != "active" {
+				t.Fatalf("review hook = %s, %+v; want native ID %q and active state", capture.path, req, tc.want)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
@@ -1202,7 +1235,7 @@ func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
 	}
 }
 
-func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
+func TestHooks_ClineSessionStartIgnoresTaskID(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1219,7 +1252,7 @@ func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
-	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-task-abc123"}
+	want := setActivityAPIRequest{State: "active", Event: "session-start"}
 	assertActivityRequest(t, req, want)
 }
 
@@ -1325,6 +1358,58 @@ func TestHooks_PostToolUseCarriesCorrelationFields(t *testing.T) {
 	}
 	want := setActivityAPIRequest{State: "active", Event: "post-tool-use", ToolName: "Bash", ToolUseID: "toolu_42"}
 	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_ClineTaskIDDoesNotBecomeAgentSessionID(t *testing.T) {
+	for _, payload := range []string{`{"taskId":"conv_123"}`, `{"task_id":"conv_123"}`, `{"session_id":"conv_123"}`} {
+		t.Run(payload, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "" || req.State != "active" {
+				t.Fatalf("hook must report activity without replacing native ID: %+v", req)
+			}
+		})
+	}
+}
+
+func TestHooks_ClineTaskStartCarriesAgentSessionID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_123","sessionContext":{"rootSessionId":"cline-session-123"},"hookName":"agent_start","taskStart":{"task":"fix restore"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.ObservedAt.IsZero() {
+		t.Fatal("hook omitted its observation time")
+	}
+	req.ObservedAt = time.Time{}
+	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-session-123", Harness: "cline"}
+	if req != want {
+		t.Errorf("body = %+v, want %+v", req, want)
+	}
 }
 
 func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {

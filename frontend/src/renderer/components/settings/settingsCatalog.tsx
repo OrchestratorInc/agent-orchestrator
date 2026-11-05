@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -9,6 +9,7 @@ import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
+import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -17,6 +18,8 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+import { teamsUnavailable } from "../../hooks/useTeams";
+import { TeamsSection } from "./TeamsSection";
 
 /** The memory window's own blocks, loaded only when the page is opened: it
  * samples the machine every two seconds while it is on screen. */
@@ -30,6 +33,25 @@ const UpdatesSection = lazy(async () => {
 	return { default: module.UpdatesSection };
 });
 
+/** What Settings › Teams offers; see `teams` below. */
+export type TeamsPage = "manage" | "member" | "none";
+
+/**
+ * Teams in a workspace that can share; only the person's teams in other
+ * workspaces where it can't; nothing until their teams are known (so the
+ * rail never shows an item that then goes away) or against a control plane
+ * from before teams.
+ */
+export function teamsPageFor({ share, orgId, mine }: {
+	share: boolean;
+	orgId: string | undefined;
+	mine: { isPending: boolean; error: unknown; data?: Array<{ orgId: string }> };
+}): TeamsPage {
+	if (mine.isPending || teamsUnavailable(mine.error)) return "none";
+	if (share) return "manage";
+	return (mine.data ?? []).some((team) => team.orgId !== orgId) ? "member" : "none";
+}
+
 type CatalogContext = {
 	cloudEnabled: boolean;
 	developerMode: boolean;
@@ -39,6 +61,12 @@ type CatalogContext = {
 	customCoder: boolean;
 	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
 	selfServeBilling: boolean;
+	/**
+	 * Teams: "manage" in a workspace with sharing on, "member" when it is off
+	 * but the person is in teams of other workspaces (to see or leave them),
+	 * "none" otherwise (also against a control plane from before teams).
+	 */
+	teams?: TeamsPage;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
@@ -84,6 +112,16 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
+		id: "teams",
+		icon: Users,
+		label: (t) => t("settings.teams"),
+		// Teams share cloud sessions and projects, so they need AO Cloud and an
+		// org that can share, like the Share button.
+		visible: ({ cloudEnabled, teams }) => cloudEnabled && (teams === "manage" || teams === "member"),
+		pageOnly: true,
+		render: (_t, titleHidden, { teams }) => <TeamsSection titleHidden={titleHidden} manage={teams === "manage"} />,
+	},
+	{
 		id: "billing",
 		icon: CreditCard,
 		label: (t) => t("settings.billing.navLabel"),
@@ -101,6 +139,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 				<BrowserChromeSection />
 			</>
 		),
+	},
+	{
+		id: "computerUse",
+		icon: MousePointerClick,
+		label: (t) => t("settings.computerUse"),
+		render: (_t, titleHidden) => <ComputerUseSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "coder",

@@ -19,7 +19,7 @@ describe("DaemonStartupLoader", () => {
 	it("shows only the mascot and announces startup to assistive tech", () => {
 		render(<DaemonStartupLoader />);
 
-		const status = screen.getByRole("status", { name: "Agent Orchestrator is starting" });
+		const status = screen.getByRole("status", { name: "Orchestrator is starting" });
 		expect(status.textContent).toBe("");
 		expect(status.querySelector(".ao-startup-logo")).not.toBeNull();
 	});

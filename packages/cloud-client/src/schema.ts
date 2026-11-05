@@ -61,11 +61,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt: they no longer serve but still use a slot, so used counts them. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. A revoked link is restored the same way. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links; revoked links count toward it. */
-        post: operations["createArtifactShare"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -82,11 +81,118 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
-        put: operations["updateArtifactShare"];
+        put?: never;
         post?: never;
-        /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no link limit. */
+        post: operations["createArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Presigns up to 100 parts of an upload. Each URL signs its part's length and SHA-256: send method to url with exactly headers and the part's bytes, and keep the response's ETag for finalizing. A URL works until expiresAt; presign again after that. */
+        post: operations["presignArtifactShareParts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Cancels an upload and discards its parts. */
+        post: operations["abortArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired. */
+        post: operations["finalizeArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["getPublicArtifactShare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/providers/{agent}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether a Cloud worker running the same CLI version with the user's current credential reported it, or it is the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
+        get: operations["listUserAgentModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -213,6 +319,107 @@ export interface paths {
         head?: never;
         /** @description Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected. */
         patch: operations["updateProjectSettings"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's environment variables, which every session of the project gets (its coding agent, shells, and Setup and Cleanup commands), except sessions issue intake starts. They are stored encrypted. Only an organization owner or admin sees their values here; other members see their names. That is not a secrecy boundary: everyone who can use one of the project's sessions, and its coding agent, can read every value. */
+        get: operations["getProjectEnvironment"];
+        /** @description Replace the project's environment variables as a whole; an empty map removes them. Organization owners and admins only. They are delivered into the sandbox of every new session of the project, except sessions issue intake starts, where everyone using the session and its coding agent can read them. A reserved name, in any case, is refused with 422 validation_error and a message naming it. */
+        put: operations["putProjectEnvironment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/intake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description How the project's issue intake (config.trackerIntake) last went. */
+        get: operations["getProjectIntakeStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/cues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listProjectCues"];
+        put?: never;
+        /** @description Add a cue. A name the project already has is refused with CUE_NAME_TAKEN. */
+        post: operations["createProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteProjectCue"];
+        options?: never;
+        head?: never;
+        /** @description Replace a cue's whole definition. */
+        patch: operations["updateProjectCue"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Run a cue into one of its project's sessions. An agent cue's prompt is sent to the session as the caller's message (a shared session's composer lease applies). A command cue is returned for the client to run in a new shell of the session's sandbox. Accepts an optional Idempotency-Key. */
+        post: operations["invokeProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
@@ -362,6 +569,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/chat-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Returns, newest first, the chat messages of the organization's sessions in live projects whose text contains q, case insensitively: prompts, and assistant replies assembled from their streamed text. Only the organization's most recent chat events are searched. */
+        get: operations["searchChats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions": {
         parameters: {
             query?: never;
@@ -413,6 +639,27 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        /** @description Renames the session: the title every viewer sees. Anyone who may write in the session may rename it; a viewer is refused. */
+        patch: operations["updateSession"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Pins the session in the caller's sidebar. A pin is one person's: nobody else sees the session move. Pinning a pinned session keeps its first pin time. */
+        post: operations["pinSession"];
+        delete: operations["unpinSession"];
         options?: never;
         head?: never;
         patch?: never;
@@ -511,7 +758,8 @@ export interface paths {
         get: operations["listSessionArtifacts"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** @description Deletes one of the session's artifact files: its row, its stored object version, and, through a request to a connected worker, the file on the worker's disk (a worker that is not connected removes it when it next starts). An invalid path answers 400 invalid_path. Only the person who started the session (Session.createdByUserId) deletes a file; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        delete: operations["deleteSessionArtifact"];
         options?: never;
         head?: never;
         patch?: never;
@@ -531,6 +779,128 @@ export interface paths {
         put?: never;
         /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. A prefix lasts ten minutes and stops working when the caller leaves the organization; request a new one before expiresAt. */
         post: operations["createSessionArtifactAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Only the person who started the session (Session.createdByUserId) saves an edit: any other member of its organization, who may still read the file, gets 403 artifact_not_owner, as does everyone for a session with no creator on record. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        put: operations["saveSessionArtifact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the kept versions of one artifact file, newest first; the first is the committed file. A session keeps the newest twenty versions of each file. */
+        get: operations["listSessionArtifactVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        /** @description Returns one kept version of an artifact file with the start of its UTF-8 text (the first 256 KiB; truncated says when it was cut). */
+        get: operations["getSessionArtifactVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. Only the person who started the session restores a version; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. */
+        post: operations["restoreSessionArtifactVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        post: operations["restartSessionAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video.
+         *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
+        post: operations["shareSessionArtifact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -627,6 +997,92 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        /** @description One review conversation's events after a sequence, for a review whose run reports interfaceMode chat. */
+        get: operations["listReviewChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Queues a message to the reviewer of a review that runs in Chat. A conversation that stopped after its verdict starts again. */
+        post: operations["sendReviewChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["interruptReviewChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The next message the person could send after a settled turn. The
+         *     session's agent reads the supplied recent transcript once, with no
+         *     tools. An empty prompt means no clear next step; a worker that cannot
+         *     suggest fails the request.
+         *      */
+        post: operations["suggestChatPrompt"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1932,10 +2388,153 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRemoteHosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/hosts/{hostId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Lists a machine in the account, or updates its listing. A new `token`,
+         *     or listing a removed machine again, retires its standing fixed tunnel:
+         *     a run token fetched with the old credential stops working, and the
+         *     machine gets a new tunnel at the same address. A registration that
+         *     makes a tunnel can take more than a minute.
+         *      */
+        put: operations["putRemoteHost"];
+        post?: never;
+        /** @description Removes the machine from the account and deletes its fixed tunnel;
+         *     when Cloudflare fails, a later cleanup deletes it. The fixed address
+         *     counts against the account's limit until that cleanup, usually within
+         *     15 minutes.
+         *      */
+        delete: operations["deleteRemoteHost"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine publishes the address it serves now to every account that
+         *     lists it under this credential.
+         *      */
+        post: operations["publishRemoteHostAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine fetches the run token of the fixed tunnel an account gives
+         *     it: the account that lists the machine under the credential it
+         *     presents. If several do, one with a standing tunnel is preferred. The
+         *     deployment makes the tunnel when there is none. A deployment that
+         *     predates this route answers 404 without an error envelope.
+         *      */
+        post: operations["ensureRemoteHostTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RemoteHost: {
+            hostId: string;
+            label: string;
+            /** @description The address devices reach the machine at. */
+            url: string;
+            /** @description The credential a device presents to the machine. */
+            token: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RemoteHostList: {
+            hosts: components["schemas"]["RemoteHost"][];
+            /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
+            fixedAddresses?: boolean;
+            /** @description Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one. */
+            hostKeys?: boolean;
+        };
+        RemoteHostRegistration: {
+            /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
+            label: string;
+            /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
+            url?: string;
+            token: string;
+            /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
+            hostKey?: string;
+        };
+        RemoteHostAddress: {
+            /**
+             * Format: uri
+             * @description An https origin with no path, query, fragment or user info.
+             */
+            url: string;
+        };
+        RemoteHostTunnelRequest: {
+            /** @description Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset. */
+            repair?: boolean;
+        };
+        RemoteHostTunnel: {
+            /** @description The fixed address's host name. */
+            hostname: string;
+            /** @description The Cloudflare run token for the machine's connector. */
+            runToken: string;
+            /**
+             * Format: date-time
+             * @description When the address was made; it may not resolve for a short time after.
+             */
+            since: string;
+            /** @description Set when a repair request got a new tunnel. */
+            repaired?: boolean;
+        };
         EmptyObject: Record<string, never>;
         AgentNotificationEvent: {
             eventId: string;
@@ -2046,8 +2645,13 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description Plan feature flags; empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on. Empty when none apply. */
             features: string[];
+            /**
+             * Format: int64
+             * @description The largest file one session attachment may be, in bytes. Sent with attachments in features and omitted without it.
+             */
+            maxAttachmentBytes?: number;
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
             /** @description Whether cloud sessions keep artifact files. When false the artifact routes return 404 and requestedOutput "artifact" is rejected. Older control planes omit it. */
@@ -2154,6 +2758,8 @@ export interface components {
             workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
             agentRules?: components["schemas"]["ProjectRules"];
             orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
         } & {
@@ -2332,6 +2938,90 @@ export interface components {
             workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
             agentRules?: components["schemas"]["ProjectRules"];
             orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
+        };
+        /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
+        ProjectWorkersRequestReview: boolean;
+        /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. Only issues opened by the repository's owners, members and collaborators are taken; an issue anyone else opens is skipped. The sessions intake starts get none of the project's environment variables. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
+        ProjectTrackerIntake: {
+            enabled?: boolean;
+            /** @enum {string} */
+            provider?: "github";
+            /** @description owner/name; empty uses the project's repository. */
+            repo?: string;
+            /** @description A GitHub login, "*" for any assigned issue, or "none" for unassigned issues. */
+            assignee?: string;
+        };
+        ProjectEnvironment: {
+            variables: components["schemas"]["ProjectEnvironmentVariable"][];
+            /** @description Whether the caller may change the variables (an organization owner or admin). */
+            editable: boolean;
+        };
+        ProjectEnvironmentVariable: {
+            name: string;
+            /** @description Omitted for a member who cannot change the variables. */
+            value?: string;
+        };
+        PutProjectEnvironmentInput: {
+            /** @description Name to value. Names are shell variable names, unique without case; AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved, and so are coding-agent logins and model relay settings (ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the like), which belong in the coding agent's connection instead. Values are text of at most 32 KB, 64 KB in all, readable by everyone who can use the project's sessions. */
+            variables: {
+                [key: string]: string;
+            };
+        };
+        ProjectIntakeStatus: {
+            enabled: boolean;
+            /** Format: date-time */
+            lastPolledAt?: string;
+            /** @description Why the last poll failed; absent when it did not. */
+            lastError?: string;
+        };
+        /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
+        Cue: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            command?: string;
+            prompt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CueDefinitionInput: {
+            /** @description Unique within the project; trimmed. */
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            /** @description The shell command of a command cue; cleared for an agent cue. */
+            command?: string;
+            /** @description The agent instruction of an agent cue; cleared for a command cue. */
+            prompt?: string;
+        };
+        CueList: {
+            cues: components["schemas"]["Cue"][];
+        };
+        CueEnvelope: {
+            cue: components["schemas"]["Cue"];
+        };
+        InvokeCueInput: {
+            /**
+             * Format: uuid
+             * @description A session of the cue's project.
+             */
+            sessionId: string;
+        };
+        InvokeCueResult: {
+            /** @enum {string} */
+            kind: "agent" | "command";
+            /** Format: uuid */
+            sessionId: string;
+            /** @description For a command cue, the command to run in a new shell of the session. */
+            command?: string;
         };
         ProjectSettingsInput: {
             displayName?: string;
@@ -2825,7 +3515,10 @@ export interface components {
             branch?: string;
         };
         ChatMessageInput: {
+            /** @description The message. It may be empty only when attachmentIds names at least one file. */
             text: string;
+            /** @description Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message. */
+            attachmentIds?: string[];
             model?: string;
             /** @enum {string} */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -2837,6 +3530,23 @@ export interface components {
              * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
              */
             composerEpoch?: number;
+            /** @description How the message reads in the transcript when `text` carries quoted messages or file selections inlined for the agent. Recorded on the chat.user_message event only; the agent receives `text`. */
+            displayText?: string;
+            /** @description The quoted messages and file selections the message attaches, as the transcript shows them. Recorded on the chat.user_message event only. */
+            content?: ({
+                type: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+        };
+        MessageAttachment: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -2853,6 +3563,15 @@ export interface components {
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
+            /**
+             * @description Where the list came from. worker: reported by a Cloud worker running this CLI version with the user's current credential. release: the models the control plane's pinned CLI version supports.
+             * @enum {string}
+             */
+            source?: "worker" | "release";
+            /** @description The harness CLI version the list is for. */
+            cliVersion?: string;
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            accountListed?: boolean;
         };
         SendMessageInput: {
             text: string;
@@ -3065,6 +3784,8 @@ export interface components {
                 /** @constant */
                 desiredState: "deleted";
             };
+            /** @description Whether the session's artifact files were deleted. */
+            artifactsDeleted?: boolean;
         };
         SessionResponse: {
             session: components["schemas"]["Session"];
@@ -3143,6 +3864,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
+             */
+            createdByUserId?: string;
             /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
             requestedBy?: {
                 userId: string;
@@ -3158,6 +3884,13 @@ export interface components {
             artifactsUpdatedAt?: string;
             /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
             artifactFiles?: components["schemas"]["SessionArtifact"][];
+            /** @description Whether the caller pinned the session in their sidebar, on the session read, list and rename routes. A pin is one person's; absent means not pinned. */
+            pinned?: boolean;
+            /**
+             * Format: date-time
+             * @description When the caller pinned the session; present only while pinned.
+             */
+            pinnedAt?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -3189,6 +3922,68 @@ export interface components {
              */
             updatedAt: string;
         };
+        SessionArtifactResult: {
+            artifact: components["schemas"]["SessionArtifact"];
+        };
+        SaveSessionArtifactInput: {
+            path: string;
+            /** @description The file's new UTF-8 text, 8 MiB at most. */
+            content: string;
+            /** @description The committed file's SHA-256 the edit started from. */
+            expectedSha256: string;
+        };
+        SessionArtifactVersionSummary: {
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote it, the session's agent or a person through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description The session's agent when the version was recorded. */
+            harness?: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+        };
+        SessionArtifactVersionList: {
+            versions: components["schemas"]["SessionArtifactVersionSummary"][];
+        };
+        SessionArtifactVersion: components["schemas"]["SessionArtifactVersionSummary"] & {
+            path: string;
+            /** @description The version's UTF-8 text, cut short when truncated is set. */
+            content: string;
+            truncated?: boolean;
+        };
+        ChatSearchHit: {
+            /** Format: uuid */
+            sessionId: string;
+            sessionTitle: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: int64
+             * @description The message's first event in the session's chat.
+             */
+            sequence: number;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            /** @description The matched text around the match, on one line. */
+            snippet: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ChatSearchResults: {
+            results: components["schemas"]["ChatSearchHit"][];
+        };
         SessionArtifactList: {
             artifacts: components["schemas"]["SessionArtifact"][];
         };
@@ -3201,14 +3996,19 @@ export interface components {
         ArtifactShare: {
             /** Format: uuid */
             id: string;
-            /** @description The link's subdomain label. */
+            /** @description The link's public ID, 26 random characters of a-z and 2-7, and its subdomain label under the share origin. */
             slug: string;
-            /** @description The public link, for example http://<slug>.share.localhost:8081/. */
+            /** @description The same as contentUrl, kept for clients that predate it. */
             url: string;
+            /** @description Where the link's file is served, for example https://<slug>.orchestratorusercontent.com/. */
+            contentUrl: string;
+            /** @description The public page that shows the link, for example https://orchestrator.inc/artifact/<slug>. Absent when the control plane has no viewer configured; share contentUrl instead. */
+            viewerUrl?: string;
             name: string;
             contentType: string;
             /** Format: int64 */
             size: number;
+            /** @description The file's SHA-256 as declared when it was published. For a local file it is the uploader's claim, not checked against the bytes (each part is checked against its own declared SHA-256); for a cloud session's file it is the committed file's. It names no link and no version: ETags come from the link and its stored version. */
             sha256: string;
             /** Format: date-time */
             createdAt: string;
@@ -3216,12 +4016,9 @@ export interface components {
             updatedAt: string;
             /**
              * Format: date-time
-             * @description When the link was revoked. A revoked link serves nothing but still uses a slot.
+             * @description When the link was revoked. A revoked link serves nothing and uses no slot.
              */
             revokedAt?: string;
-        };
-        ArtifactShareEnvelope: {
-            share: components["schemas"]["ArtifactShare"];
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -3230,8 +4027,102 @@ export interface components {
         };
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
+            /** @description The free plan's limit of active links; it does not apply when unlimited is true. */
             limit: number;
+            /** @description True when the user's plan has no limit of active links. Absent or false means limit applies. */
+            unlimited?: boolean;
+            /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+        };
+        ArtifactShareUploadInput: {
+            /** @description The file name, without a directory. */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
+            sha256: string;
+            project?: string;
+            feature?: string;
+            /**
+             * Format: uuid
+             * @description Set to update this active link instead of publishing a document.
+             */
+            shareId?: string;
+        };
+        ArtifactShareUpload: {
+            /** @description Names the upload in the calls that follow; opaque. */
+            uploadToken: string;
+            /**
+             * Format: date-time
+             * @description When the upload can no longer be finalized.
+             */
+            expiresAt: string;
+            /** Format: int64 */
+            partSize: number;
+            partCount: number;
+        };
+        ArtifactShareUploadRef: {
+            uploadToken: string;
+        };
+        ArtifactShareUploadPartsInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                /** @description The part's SHA-256. */
+                sha256: string;
+            }[];
+        };
+        ArtifactSharePresignedParts: {
+            parts: {
+                partNumber: number;
+                method: string;
+                url: string;
+                headers: {
+                    [key: string]: string;
+                };
+                /**
+                 * Format: int64
+                 * @description The part's length in bytes.
+                 */
+                size: number;
+            }[];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShareFinalizeInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                sha256: string;
+                /** @description The ETag the part's PUT returned. */
+                etag: string;
+            }[];
+        };
+        SessionArtifactShareInput: {
+            /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
+            path: string;
+            /** @description The SessionArtifact.sha256 the person was shown. When the session has committed another version since, the route answers 409 artifact_share_source_changed and shares nothing. */
+            sha256: string;
+            /**
+             * Format: uuid
+             * @description An active link of the caller's, for a file of the same name, to point at this file.
+             */
+            shareId?: string;
+        };
+        PublicArtifactShare: {
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            updatedAt: string;
+            owner: {
+                /** @description The owner's display name; empty when they set none. */
+                displayName: string;
+            };
+            /** @description Where the link's file is served; the viewer frames it. */
+            contentUrl: string;
         };
         WorkerArtifactFile: {
             path: string;
@@ -3285,6 +4176,18 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
             model?: string;
+            /**
+             * @description Reasoning effort the opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Approval mode the opening prompt's turn runs with in a session that starts in chat. Optional; empty lets the worker derive it from the session's mode, as for any turn sent without one.
+             * @enum {string}
+             */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sandbox provider the session runs on, one the deployment offers (see /me). Optional; empty uses the organization's default. A project set up for a provider, or a worker linked to the project's orchestrator, runs there instead. */
+            provider?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
@@ -3294,6 +4197,17 @@ export interface components {
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
+        UpdateSessionInput: {
+            /** @description The session's new title, trimmed. */
+            displayName: string;
+        };
+        SessionPinResponse: {
+            /** Format: uuid */
+            sessionId: string;
+            pinned: boolean;
+            /** Format: date-time */
+            pinnedAt?: string;
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
@@ -3441,6 +4355,14 @@ export interface components {
         SessionPullRequests: {
             sessionId: string;
             pullRequests: components["schemas"]["PullRequestSummary"][];
+            /** @description GitHub pull requests the session's agent reported that AO does not track, such as one in a repository the session has no grant for. */
+            linkedPullRequests?: components["schemas"]["LinkedPullRequest"][];
+        };
+        LinkedPullRequest: {
+            url: string;
+            /** @description owner/name */
+            repository: string;
+            number: number;
         };
         /** @enum {string} */
         AOReviewRunStatus: "running" | "complete" | "delivered" | "failed" | "cancelled";
@@ -3467,6 +4389,13 @@ export interface components {
             /** Format: date-time */
             deliveredAt?: string;
             autoInjectReview: boolean;
+            /** @description The reviewer terminal of a review that runs in a terminal. */
+            reviewerTerminalId?: string;
+            /**
+             * @description chat for a review that runs as a Chat conversation; absent for one in a reviewer terminal.
+             * @enum {string}
+             */
+            interfaceMode?: "chat";
         };
         AOPullRequestReviewState: {
             pullRequestUrl: string;
@@ -3486,6 +4415,53 @@ export interface components {
             availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
+            reviewerSurface?: components["schemas"]["ReviewerSurface"];
+        };
+        /** @description The reviewer conversation the session shows, its newest review that runs in Chat. */
+        ReviewerSurface: {
+            /** @enum {string} */
+            mode: "chat";
+            /** @description The review run whose conversation this is. */
+            reviewId: string;
+            harness: string;
+        };
+        /** @description One event of a review conversation. Payloads carry reviewRunId and
+         *     reviewTurnId (never turnId), plus what the session's own chat event of
+         *     the same name carries: text and authorUserId for a message, text and
+         *     itemId for assistant text, activity for an activity, error for an
+         *     aborted turn.
+         *      */
+        ReviewChatEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @enum {string} */
+            type: "review.user_message" | "review.turn_started" | "review.assistant_delta" | "review.activity" | "review.turn_completed" | "review.turn_interrupted" | "review.turn_aborted";
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ReviewChatEventPage: {
+            events: components["schemas"]["ReviewChatEvent"][];
+            hasMore: boolean;
+            /** Format: int64 */
+            nextAfter: number;
+        };
+        PromptSuggestionInput: {
+            /** @description The settled turn the suggestion follows; echoed back. */
+            turnId: string;
+            /** @description The conversation's most recent text messages, oldest first. */
+            messages: {
+                /** @enum {string} */
+                role: "user" | "assistant";
+                text: string;
+            }[];
+        };
+        PromptSuggestion: {
+            turnId: string;
+            prompt: string;
         };
         SessionViewer: {
             /** Format: uuid */
@@ -3641,6 +4617,8 @@ export interface components {
                 authorUserId?: string;
                 /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
                 authorName?: string;
+                /** @description The files the message carries. */
+                attachments?: components["schemas"]["MessageAttachment"][];
             };
             /** Format: date-time */
             createdAt: string;
@@ -3961,10 +4939,10 @@ export interface components {
         };
     };
     parameters: {
-        /** @description The file name, without a directory. */
-        ArtifactShareName: string;
-        /** @description Lowercase hex SHA-256 of the body. */
-        ArtifactShareSHA256: string;
+        CueId: string;
+        ReviewRunId: string;
+        /** @description The machine's stable identity, `h_` followed by a UUID. */
+        RemoteHostId: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -4112,28 +5090,114 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    createArtifactShare: {
+    deleteArtifactShare: {
         parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-                project?: string;
-                feature?: string;
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
             };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link was revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/octet-stream": string;
+                "application/json": components["schemas"]["ArtifactShareUploadInput"];
             };
         };
         responses: {
-            /** @description The document's existing link, now serving the new version. */
+            /** @description The upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignArtifactShareParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadPartsInput"];
+            };
+        };
+        responses: {
+            /** @description The presigned parts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePresignedParts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    abortArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadRef"];
+            };
+        };
+        responses: {
+            /** @description The upload was cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finalizeArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFinalizeInput"];
+            };
+        };
+        responses: {
+            /** @description The document's existing link, now serving the uploaded file. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4154,56 +5218,59 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
-    updateArtifactShare: {
-        parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-            };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
-            };
-            path: {
-                shareId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/octet-stream": string;
-            };
-        };
-        responses: {
-            /** @description The updated share link. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    deleteArtifactShare: {
+    getPublicArtifactShare: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                shareId: string;
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The link was revoked. */
-            204: {
+            /** @description The link's public details. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserAgentModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The model catalog for the next task. It lists at least one model. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
+                };
+            };
+            /** @description MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -4484,6 +5551,212 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutProjectEnvironmentInput"];
+            };
+        };
+        responses: {
+            /** @description The saved environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectIntakeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's issue intake status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectIntakeStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectCues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's cues, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The created cue. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cue was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    invokeProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvokeCueInput"];
+            };
+        };
+        responses: {
+            /** @description What the cue did. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvokeCueResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listGitHubInstallations: {
         parameters: {
             query?: never;
@@ -4708,6 +5981,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    searchChats: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching messages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSearchResults"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -4823,7 +6122,10 @@ export interface operations {
     };
     deleteSession: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete the session's artifact files. A restored session comes back without them. */
+                deleteArtifacts?: boolean;
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -4840,6 +6142,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionInput"];
+            };
+        };
+        responses: {
+            /** @description The renamed session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's pin. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unpinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session is no longer pinned for the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -5025,6 +6405,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    deleteSessionArtifact: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     createSessionArtifactAccess: {
         parameters: {
             query?: never;
@@ -5044,6 +6448,182 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionArtifactAccess"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    saveSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveSessionArtifactInput"];
+            };
+        };
+        responses: {
+            /** @description The saved artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionArtifactVersions: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's kept versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersionList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionArtifactVersion: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version and its text. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSessionArtifactVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    path: string;
+                    /** Format: int64 */
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The restored artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartSessionAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether a start was requested. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requested: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    shareSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionArtifactShareInput"];
+            };
+        };
+        responses: {
+            /** @description The file's existing link, now serving the file's current version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
                 };
             };
             default: components["responses"]["Error"];
@@ -5181,6 +6761,124 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listReviewChatEvents: {
+        parameters: {
+            query?: {
+                /** @description Return events with a sequence strictly greater than this value. */
+                after?: components["parameters"]["After"];
+                limit?: components["parameters"]["EventLimit"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review conversation's events after the supplied sequence. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewChatEventPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendReviewChatMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The message was queued for the reviewer. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["ReviewChatEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    interruptReviewChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reviewer's running turn was asked to stop and its queued messages were dropped. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    suggestChatPrompt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromptSuggestionInput"];
+            };
+        };
+        responses: {
+            /** @description The suggestion, or an empty prompt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptSuggestion"];
                 };
             };
             default: components["responses"]["Error"];
@@ -7230,6 +8928,157 @@ export interface operations {
                 };
                 content?: never;
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    listRemoteHosts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's machines. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostRegistration"];
+            };
+        };
+        responses: {
+            /** @description Listed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
+            422: components["responses"]["ValidationError"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working. */
+            502: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    publishRemoteHostAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostAddress"];
+            };
+        };
+        responses: {
+            /** @description Published. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    ensureRemoteHostTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description The machine's fixed tunnel. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostTunnel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope. */
+            404: components["responses"]["Error"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
+            502: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error. */
+            503: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

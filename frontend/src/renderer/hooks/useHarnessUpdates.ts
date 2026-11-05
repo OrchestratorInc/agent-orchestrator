@@ -50,7 +50,7 @@ export function isActiveInstallJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "running" || job?.status === "waiting_for_idle" || job?.status === "installing" || job?.status === "verifying";
 }
 
-/** An update queued until the harness's sessions are idle (Windows). */
+/** An update queued until the harness's sessions are idle. */
 export function isWaitingForIdleJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "waiting_for_idle";
 }
@@ -154,8 +154,8 @@ export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: 
 /**
  * The sessions an update must wait for, when the advisory says it cannot run
  * alongside them. Otherwise an update installs while sessions
- * run, and they restart on the new release once idle; on Windows the daemon
- * waits for them itself.
+ * run, and they restart on the new release once idle; or the daemon waits for
+ * them to be idle, stops them, updates and resumes them.
  */
 export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
 	const inUse = advisory?.inUse;
