@@ -2288,3 +2288,29 @@ func mustNoError(t testing.TB, err error, context ...string) {
 		t.Fatal(err)
 	}
 }
+
+func TestCollectorUnlimitedPassIncludesEarlierBinding(t *testing.T) {
+	ctx := context.Background()
+	store := collectorTestStore(t)
+	first := collectorTestSession(t, store, domain.HarnessCodex, "native-review-first", false)
+	collectorTestSession(t, store, domain.HarnessCodex, "native-review-second", false)
+	root := filepath.Join(t.TempDir(), "sessions")
+	collector := NewCollector(store, SourceRoots{CodexSessions: root}, nil)
+	mustNoError(t, collector.BackfillActive(ctx), "backfill")
+	// Establish a bounded-pass cursor past the first pending binding.
+	mustNoError(t, collector.ReconcileSources(ctx, 1), "bounded pass")
+	path := filepath.Join(root, "2026", "11", "05", "rollout-native-review-first.jsonl")
+	writeUsageFixture(t, path, codexSessionMetaFixture(t, "native-review-first", ""))
+	// Negative limit promises all eligible bindings, including the first one.
+	mustNoError(t, collector.ReconcileSources(ctx, -1), "unlimited pass")
+	bindings, err := store.ListUsageBindingsForSession(ctx, first.ID)
+	mustNoError(t, err)
+	if len(bindings) != 1 {
+		t.Fatalf("bindings=%d", len(bindings))
+	}
+	sources, err := store.ListUsageSourcesForBinding(ctx, bindings[0].ID)
+	mustNoError(t, err)
+	if len(sources) != 1 {
+		t.Fatalf("unlimited pass skipped the earlier binding: sources=%d want=1", len(sources))
+	}
+}

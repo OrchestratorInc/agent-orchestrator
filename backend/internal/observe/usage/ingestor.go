@@ -168,15 +168,17 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	if !parserCheckpointsEqual(cursorSample.checkpoint, parserState.Integrity.Checkpoint) {
 		return i.resetSourceGeneration(ctx, source, identity, now)
 	}
-	// A source stopped on a conflicting event keeps its cursor short of EOF,
-	// so it looks like it has unread bytes forever. Re-reading it replays the
-	// same conflict and flips its binding through finalizing on every pass.
+	// A conflict leaves unread bytes. Suppress repeated ingestion only while
+	// that file snapshot is unchanged, so in-place corrections can recover.
+	conflict := parserState.Integrity.ConflictSnapshot
 	if source.Source.State == domain.UsageSourceComplete &&
 		source.BindingState != domain.UsageBindingFinalizing &&
 		(info.Size() == source.Source.ByteOffset ||
-			source.Source.LastErrorCode == domain.UsageErrorSourceEventConflict) {
+			(source.Source.LastErrorCode == domain.UsageErrorSourceEventConflict &&
+				conflict != nil && conflict.Size == info.Size() && conflict.ModTime.Equal(info.ModTime()))) {
 		return result, nil
 	}
+	parserState.Integrity.ConflictSnapshot = nil
 	if (source.BindingState == domain.UsageBindingComplete || source.BindingState == domain.UsageBindingPartial) &&
 		info.Size() > source.Source.ByteOffset {
 		if _, err := i.store.UpdateUsageBindingState(
@@ -355,13 +357,31 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	}
 	if err := apply(); err != nil {
 		if errors.Is(err, domain.ErrUsageSourceEventConflict) {
-			if _, markErr := i.store.MarkUsageSourceState(
+			// The failed transaction did not advance the cursor or parser.
+			// Persist the quarantine against that original state, with the
+			// same revision check used for a successful chunk.
+			conflictState, stateErr := decodeParserState(source.Source)
+			if stateErr != nil {
+				return result, errors.Join(err, stateErr)
+			}
+			conflictState.Integrity.ConflictSnapshot = &conflictSnapshotV1{
+				Size: snapshot.size, ModTime: snapshot.modTime,
+			}
+			encoded, stateErr := json.Marshal(conflictState)
+			if stateErr != nil {
+				return result, errors.Join(err, stateErr)
+			}
+			conflictCursor := cursorFromSource(source.Source, source.Source.ByteOffset, now)
+			conflictCursor.State = domain.UsageSourceComplete
+			conflictCursor.ParserStateJSON = string(encoded)
+			conflictCursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+			if markErr := i.store.ApplyUsageChunk(
 				ctx,
 				source.Source.ID,
-				domain.UsageSourceComplete,
-				domain.UsageErrorSourceEventConflict,
+				source.Source.ByteOffset,
+				source.Source.UpdatedAt,
+				conflictCursor,
 				nil,
-				now,
 			); markErr != nil {
 				return result, errors.Join(err, markErr)
 			}

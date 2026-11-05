@@ -679,7 +679,11 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 	if limit == 0 {
 		limit = defaultDiscoveryLimit
 	}
-	bindings, err := c.store.ListUsageDiscoveryBindings(ctx, c.discoveryAfterID, limit)
+	afterID := c.discoveryAfterID
+	if limit < 0 {
+		afterID = 0
+	}
+	bindings, err := c.store.ListUsageDiscoveryBindings(ctx, afterID, limit)
 	if err != nil {
 		return err
 	}
