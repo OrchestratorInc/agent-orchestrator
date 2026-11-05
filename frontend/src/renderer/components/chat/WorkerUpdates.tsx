@@ -15,7 +15,7 @@ import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
-import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
+import { isSteer, type ConversationItem, type ConversationMessage, type ConversationTurn } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
@@ -169,6 +169,54 @@ export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 		.trim();
 	return parseReports(envelope, item.createdAt, `${item.id}:reports`);
 });
+
+/** Reports AO batched into another message's provider input, by the message or steer they travelled with. */
+export interface BatchedReports {
+	/** Updates to draw under a human message (by message id) or a steer (by activity id). */
+	under: ReadonlyMap<string, readonly WorkerUpdate[]>;
+	/** Queued turns whose report now draws under that message, so the turn draws nothing itself. */
+	moved: ReadonlySet<string>;
+}
+
+export const BatchedReportsContext = createContext<BatchedReports | null>(null);
+
+/**
+ * Where each batched report turn was delivered, from what the daemon recorded:
+ * a steer lists the queued turns it carried; any other batched turn joined the
+ * input of the turn it names, with that batch's last human message. A batch
+ * with no human message keeps its reports on their own line.
+ */
+export function placeBatchedReports(turns: readonly ConversationTurn[], items: readonly ConversationItem[]): BatchedReports {
+	const under = new Map<string, WorkerUpdate[]>();
+	const moved = new Set<string>();
+	const steerFor = new Map<string, string>();
+	const byTurn = new Map<string, ConversationItem[]>();
+	for (const item of items) {
+		if (item.kind === "activity" && isSteer(item)) {
+			for (const turnId of item.detail?.providerInputSourceTurnIds ?? []) steerFor.set(turnId, item.id);
+		}
+		if (!item.turnId) continue;
+		const inTurn = byTurn.get(item.turnId);
+		if (inTurn) inTurn.push(item);
+		else byTurn.set(item.turnId, [item]);
+	}
+	const isHumanPrompt = (item: ConversationItem) => item.kind === "message" && item.role === "user" && item.origin === "human";
+	for (const turn of turns) {
+		const into = turn.deliveredWithTurnId;
+		if (!into) continue;
+		const reports = (byTurn.get(turn.id) ?? []).flatMap((item) => workerUpdatesOf(item).filter((update) => update.state !== undefined));
+		if (reports.length === 0) continue;
+		let target = steerFor.get(turn.id);
+		if (!target) {
+			const members = new Set([into, ...turns.filter((other) => other.deliveredWithTurnId === into && !steerFor.has(other.id)).map((other) => other.id)]);
+			target = items.filter((item) => item.turnId && members.has(item.turnId) && isHumanPrompt(item)).at(-1)?.id;
+		}
+		if (!target) continue;
+		under.set(target, [...(under.get(target) ?? []), ...reports]);
+		moved.add(turn.id);
+	}
+	return { under, moved };
+}
 
 /** True when a reply asks the user something. A `?` in code or a link, or one running into more text (`a?.b`), is not a question. */
 // ponytail: punctuation is a guess at intent; a structured ask from the orchestrator would replace it.
@@ -380,6 +428,40 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 			{updates.map((update) => (
 				<WorkerUpdateRow key={update.key} update={update} />
 			))}
+		</div>
+	);
+}
+
+/**
+ * Reports AO delivered together, as one line that opens to their rows: under the
+ * human message they travelled with, or alone for a batch that woke the
+ * orchestrator. A report whose worker still waits on the user (stuck counts too)
+ * keeps its count on the closed line; a newer update from that worker clears it.
+ */
+export function ReportsLine({ updates, withMessage, open, onOpenChange }: {
+	updates: readonly WorkerUpdate[];
+	withMessage: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const index = useContext(WorkerUpdateIndexContext);
+	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
+	return (
+		<div className="min-w-0 text-xs" data-testid="worker-reports">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				// As tall as the hover actions that float under a message, so opened rows start below them.
+				className="inline-flex h-7 max-w-full items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+				<span className="truncate">{t(withMessage ? "chat.reports.sentWith" : "chat.reports.count", { count: updates.length })}</span>
+				{needsYou > 0 ? (
+					<span className="shrink-0 font-medium text-status-needs-you">· {t("chat.reports.needsYou", { count: needsYou })}</span>
+				) : null}
+			</Pressable>
+			{open ? <WorkerUpdateRows updates={updates} /> : null}
 		</div>
 	);
 }

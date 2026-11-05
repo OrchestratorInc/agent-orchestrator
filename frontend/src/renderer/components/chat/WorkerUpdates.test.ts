@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationTurn } from "../../types/conversation";
 import {
 	asksUser,
 	isWorkerLead,
 	isDuplicateSpawnAction,
 	piggybackedUpdates,
+	placeBatchedReports,
 	quietWorkerReply,
 	renamedTitle,
 	spawnedSessionIds,
@@ -135,5 +136,37 @@ describe("worker updates", () => {
 		expect(quietWorkerReply([message({ text: batch }), reply("Tunnel or loopback?")])).toBeUndefined();
 		expect(quietWorkerReply([message({ text: batch }), command("gh pr merge 7054")])).toBeUndefined();
 		expect(quietWorkerReply([message({ origin: "human", text: "Hi" }), reply("Noted.")])).toBeUndefined();
+	});
+});
+
+describe("placeBatchedReports", () => {
+	const turn = (id: string, deliveredWithTurnId?: string) => ({ id, state: "completed", requestedAt: createdAt, deliveredWithTurnId }) as ConversationTurn;
+	const human = (id: string, turnId: string) => message({ id, turnId, origin: "human", text: "hi" });
+	const report = (id: string, turnId: string) => message({ id, turnId, text: batch });
+
+	it("puts a drained report under the batch's last human message and hides its turn", () => {
+		const placed = placeBatchedReports(
+			[turn("lead"), turn("t-human", "lead"), turn("t-report", "lead")],
+			[report("r0", "lead"), human("h1", "t-human"), report("r1", "t-report")],
+		);
+		expect(placed.under.get("h1")?.map((update) => update.key)).toEqual(["r1:0", "r1:1"]);
+		expect([...placed.moved]).toEqual(["t-report"]);
+	});
+
+	it("puts a steered report under the steer that carried it, not the turn's prompt", () => {
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", sequence: 9, revision: 0, activityKind: "steer", status: "completed", summary: "go",
+			detail: { event: "steer", providerInputSourceTurnIds: ["t-report"] }, createdAt, turnId: "running",
+		};
+		const placed = placeBatchedReports(
+			[turn("running"), turn("t-report", "running")],
+			[human("h0", "running"), steer, report("r1", "t-report")],
+		);
+		expect([...placed.under.keys()]).toEqual(["steer-1"]);
+	});
+
+	it("leaves a report batched with no human message on its own line", () => {
+		const placed = placeBatchedReports([turn("lead"), turn("t-report", "lead")], [report("r0", "lead"), report("r1", "t-report")]);
+		expect(placed.moved.size).toBe(0);
 	});
 });

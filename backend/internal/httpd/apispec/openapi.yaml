@@ -17559,6 +17559,8 @@ components:
           type:
           - "null"
           - string
+        deliveredWithTurnId:
+          type: string
         diff:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:

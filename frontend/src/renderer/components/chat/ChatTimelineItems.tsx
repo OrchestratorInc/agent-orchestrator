@@ -21,7 +21,6 @@ import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
-import { ProviderMark } from "./ProviderMark";
 import { useChatSessionId } from "./chat-image-source";
 import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";

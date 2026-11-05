@@ -163,6 +163,11 @@ import {
 	TaskNamedLine,
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
+	BatchedReportsContext,
+	type BatchedReports,
+	placeBatchedReports,
+	ReportsLine,
+	type WorkerUpdate,
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
@@ -3929,6 +3934,10 @@ export function Timeline({
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
+	const batchedReports = useMemo(
+		() => workerUpdates ? placeBatchedReports(snapshot.turns, snapshot.items) : NO_BATCHED_REPORTS,
+		[snapshot.items, snapshot.turns, workerUpdates],
+	);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -3940,12 +3949,13 @@ export function Timeline({
 					? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 					: group);
 		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return groups;
-		return groups
+		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
+		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return placed;
+		return placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [batchedReports, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
@@ -4876,6 +4886,7 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<BatchedReportsContext.Provider value={batchedReports}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
@@ -4924,6 +4935,7 @@ export function Timeline({
 									busy={busy}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -5253,6 +5265,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
+	const batched = useContext(BatchedReportsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -5403,16 +5416,32 @@ const TurnGroup = memo(function TurnGroup({
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
 	// report batch, or reports folded into the user's message) draws as rows, and
 	// AO's task-naming prompt as the name it produced.
+	const reportsLine = (key: string, updates: readonly WorkerUpdate[], withMessage: boolean) => (
+		<ReportsLine
+			key={key}
+			updates={updates}
+			withMessage={withMessage}
+			open={Boolean(activityDisclosureOverrides[key])}
+			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
+		/>
+	);
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
+		// Reports AO batched into this message's (or steer's) provider input travel with it.
+		const carried = batched?.under.get(item.id) ?? [];
 		const updates = workerUpdatesOf(item);
-		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		// A direct send or steer is one row; a batch of reports is one line that opens to them.
+		if (updates.length > 0 && updates[0]?.state === undefined) {
+			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
+			return carried.length > 0 ? [rows, reportsLine(`${run.key}:reports`, carried, true)] : rows;
+		}
+		if (updates.length > 0) return reportsLine(run.key, updates, false);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		const piggybacked = piggybackedUpdates(item);
-		if (piggybacked.length === 0) return renderRun(run);
-		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+		const reports = [...piggybackedUpdates(item), ...carried];
+		if (reports.length === 0) return renderRun(run);
+		return [renderRun(run), reportsLine(`${run.key}:reports`, reports, true)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
@@ -5451,8 +5480,13 @@ const TurnGroup = memo(function TurnGroup({
 	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
+	// Agents the turn spawned are part of its work, so they fold with its steps.
+	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
+	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
 	const showsWorked = Boolean(
-		outcome && !quietReply && !onlyRead && (foldedRuns.length > 0 || workedDurationMs !== undefined),
+		outcome && !quietReply && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -5460,7 +5494,10 @@ const TurnGroup = memo(function TurnGroup({
 	const promptBubble = group.items.some(
 		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
 	);
-	const reservesActionRow = promptBubble && !quietReply && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
+	// The reports line under the prompt takes that row itself.
+	const reportsUnderPrompt = Boolean(workerUpdates) && humanRuns.some((run) => run.kind === "single"
+		&& (piggybackedUpdates(run.items[0]).length > 0 || Boolean(batched?.under.has(run.items[0].id))));
+	const reservesActionRow = promptBubble && !quietReply && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	// The empty row is exactly as tall as "Worked for", which takes its place as the
 	// turn settles, so the handover moves nothing. Only one of the two is ever in the
 	// DOM, so the turn's row gap is never counted twice.
@@ -5482,7 +5519,7 @@ const TurnGroup = memo(function TurnGroup({
 						open={Boolean(activityDisclosureOverrides[disclosureKey])}
 						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 					>
-						{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
+						{hasFoldedWork ? foldedWork() : undefined}
 					</TurnWorkSummary>
 				</motion.div>
 			) : null}
@@ -5499,7 +5536,7 @@ const TurnGroup = memo(function TurnGroup({
 			<OrchestratorReply
 				key={finalRun.key}
 				message={quietReply}
-				work={foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
+				work={foldedRuns.length > 0 || spawnedLine ? foldedWork() : undefined}
 				workOpen={Boolean(activityDisclosureOverrides[disclosureKey])}
 				onWorkOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 				onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
@@ -5509,8 +5546,6 @@ const TurnGroup = memo(function TurnGroup({
 	} else if (finalRun) {
 		body.push(renderRun(finalRun));
 	}
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
@@ -6293,6 +6328,8 @@ const quietWorkerGroups = new WeakMap<TimelineGroup, boolean>();
  * tight against its neighbours. Groups keep their identity while unchanged, so
  * each is judged once rather than on every streamed delta.
  */
+const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
+
 function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
 	if (!group) return false;
 	let quiet = quietWorkerGroups.get(group);
@@ -6301,8 +6338,7 @@ function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
 			&& !group.plan
 			&& !group.diff
 			&& quietWorkerReply(group.items) !== undefined
-			&& !group.items.some(isNoticeItem)
-			&& spawnedSessionIds(group.items).length === 0;
+			&& !group.items.some(isNoticeItem);
 		quietWorkerGroups.set(group, quiet);
 	}
 	return quiet;
