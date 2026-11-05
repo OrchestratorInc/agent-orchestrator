@@ -86,11 +86,10 @@ describe("settling under a reader who scrolled up", () => {
 	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
 	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
-		// The empty row reserved under the prompt is 28px until "Worked for" takes its
-		// place, and has collapsed once it has.
-		const reservedRow = (row: Element) => (row.parentElement?.querySelector(":scope > [data-turn-worked]") ? 0 : 28);
+		// The empty row reserved under the prompt is as tall as "Worked for", which
+		// takes its place as the turn settles.
 		const height = (row: Element) =>
-			row.hasAttribute("data-turn-worked") ? 28 : row.hasAttribute("data-turn-worked-gap") ? reservedRow(row) : 100;
+			row.hasAttribute("data-turn-worked") || row.hasAttribute("data-turn-worked-gap") ? 28 : 100;
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
