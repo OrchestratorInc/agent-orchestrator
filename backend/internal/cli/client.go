@@ -10,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
@@ -197,6 +199,10 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
+	}
+	// The daemon files an action this call takes under the caller's running turn.
+	if callerID := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); callerID != "" {
+		req.Header.Set(caller.Header, callerID)
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)

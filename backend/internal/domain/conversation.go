@@ -558,6 +558,9 @@ type ConversationTurn struct {
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	// It remains present after rollback so the source cannot offer a dead action.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
+	// DeliveredWithTurnID is the turn whose provider input carried this queued
+	// turn's messages, when AO batched them into it (a queue drain or a steer).
+	DeliveredWithTurnID string `json:"deliveredWithTurnId,omitempty"`
 	// HasRetryAttempt is a snapshot-only fact derived from every durable retry
 	// relation, including attempts outside the active provider branch.
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`

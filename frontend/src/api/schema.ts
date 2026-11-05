@@ -5950,6 +5950,7 @@ export interface components {
         };
         ConversationTurnResponse: {
             completedAt?: null | string;
+            deliveredWithTurnId?: string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
             /** @enum {string} */

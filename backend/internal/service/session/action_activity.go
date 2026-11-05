@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -94,9 +95,32 @@ func (s *Service) recordAction(ctx context.Context, audience domain.SessionID, d
 		Detail:         encoded,
 		ProviderItemID: providerItemID,
 	}
-	if err := writer.UpsertActivity(ctx, conversation.ID, "", activity, s.now()); err != nil && s.logger != nil {
+	if err := writer.UpsertActivity(ctx, conversation.ID, s.callerTurn(ctx, audience, conversation.ID), activity, s.now()); err != nil && s.logger != nil {
 		s.logger.Warn("action activity: write failed", "session", audience, "action", detail.Action, "err", err)
 	}
+}
+
+type runningTurnLister interface {
+	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
+}
+
+// callerTurn names the turn an action belongs to: the audience's one running
+// turn, when the audience itself ran the command (its shell sent the caller
+// header). A click in the desktop, another session's command, or an ambiguous
+// set of running turns leaves the action turn-less, shown on its own.
+func (s *Service) callerTurn(ctx context.Context, audience domain.SessionID, conversationID string) string {
+	if caller.From(ctx) != string(audience) {
+		return ""
+	}
+	lister, ok := s.store.(runningTurnLister)
+	if !ok {
+		return ""
+	}
+	turns, err := lister.ListVisibleRunningTurnProviderIDs(ctx, conversationID)
+	if err != nil || len(turns) != 1 {
+		return ""
+	}
+	return turns[0]
 }
 
 func actionSummary(action string) string {
