@@ -61,9 +61,9 @@ type securityExit int
 func (e securityExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 func (e securityExit) ExitCode() int { return int(e) }
 
-// fakeKeychain answers like `security`: items are searched in the order they
-// were added, a lookup without -a returns the first one for the service, and a
-// miss exits 44.
+// fakeKeychain answers like `security`: items are listed least recently written
+// first, a lookup without -a returns the first one for the service, and a miss
+// exits 44.
 func fakeKeychain(items ...[3]string) commandRunner {
 	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		service := args[slices.Index(args, "-s")+1]
@@ -80,7 +80,7 @@ func fakeKeychain(items ...[3]string) commandRunner {
 	}
 }
 
-func TestKeychainPrefersClaudeCodeAccountOverItemAddedFirst(t *testing.T) {
+func TestKeychainPrefersClaudeCodeAccountOverOlderItem(t *testing.T) {
 	const service = "Claude Code-credentials"
 	current := [3]string{service, "someone", `{"claudeAiOauth":{"accessToken":"current-token"}}`}
 	for _, tc := range []struct {

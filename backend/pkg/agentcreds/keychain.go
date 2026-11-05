@@ -92,8 +92,8 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	}
 	account := keychainAccount(opts)
 	// One service can hold items under several accounts, and a lookup without an
-	// account returns whichever was added first, so an item left by an old login
-	// would shadow the current one. Ask for Claude Code's own account first. The
+	// account returns the least recently written, so an item left by an old login
+	// shadows the one Claude Code keeps refreshing. Ask for its own account first. The
 	// lookup without one remains for an item filed under another account name, so
 	// it runs only when that account has no item: repeating a read that failed
 	// could prompt again or return the stale item.
