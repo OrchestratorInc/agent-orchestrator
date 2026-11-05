@@ -2080,6 +2080,7 @@
 	"shortcut.new-session": "新建会话",
 	"shortcut.new-shell-terminal": "新建终端",
 	"shortcut.split-shell-terminal": "在右侧新建终端",
+	"shortcut.split-shell-terminal-down": "在下方新建终端",
 	"shortcut.next-attention-session": "下一个需要关注的会话",
 	"shortcut.next-session": "下一个会话",
 	"shortcut.next-tab": "下一个标签页",

@@ -2054,6 +2054,7 @@
 	"shortcut.new-session": "Nouvelle session",
 	"shortcut.new-shell-terminal": "Nouveau terminal",
 	"shortcut.split-shell-terminal": "Nouveau terminal à droite",
+	"shortcut.split-shell-terminal-down": "Nouveau terminal en dessous",
 	"shortcut.next-attention-session": "Session suivante à traiter",
 	"shortcut.next-session": "Session suivante",
 	"shortcut.next-tab": "Onglet suivant",

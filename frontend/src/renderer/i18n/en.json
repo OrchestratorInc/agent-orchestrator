@@ -2425,6 +2425,7 @@
 	"shortcut.new-session": "New session",
 	"shortcut.new-shell-terminal": "New terminal",
 	"shortcut.split-shell-terminal": "New terminal on the right",
+	"shortcut.split-shell-terminal-down": "New terminal below",
 	"shortcut.next-attention-session": "Next session needing attention",
 	"shortcut.next-session": "Next session",
 	"shortcut.next-tab": "Next tab",

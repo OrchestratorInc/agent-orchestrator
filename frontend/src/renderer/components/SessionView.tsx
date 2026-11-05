@@ -1814,10 +1814,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	};
 	const closeFocusedPane = useCallback(() => closeFocusedPaneRef.current(), []);
 
-	// ⌘D opens a new terminal to the right of the focused pane, splitting the
-	// tab on screen if it is not split yet.
-	const splitNewTerminalRef = useRef<() => void>(() => undefined);
-	splitNewTerminalRef.current = () => {
+	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
+	// below it, splitting the tab on screen if it is not split yet.
+	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
+	splitNewTerminalRef.current = (side) => {
 		if (!session || isOrchestrator) return;
 		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
 		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
@@ -1827,10 +1827,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const group = groupContaining(current, anchor);
 			if (group) {
 				return current.map((candidate) =>
-					candidate.id === group.id ? { ...candidate, root: insertBeside(candidate.root, anchor, key, "right"), focus: key } : candidate,
+					candidate.id === group.id ? { ...candidate, root: insertBeside(candidate.root, anchor, key, side), focus: key } : candidate,
 				);
 			}
-			return [...current, { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, "right"), focus: key }];
+			return [...current, { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, side), focus: key }];
 		});
 		setReviewerChatId(null);
 		setFileTabsBySession((current) => ({
@@ -1840,7 +1840,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setActiveShellTerminal(key);
 		setTerminalTarget({ generation: shell.createdAt, kind: "shell", handleId: key, sessionId, title: shell.title });
 	};
-	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current(), Boolean(session) && !isOrchestrator);
+	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), Boolean(session) && !isOrchestrator);
+	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), Boolean(session) && !isOrchestrator);
 
 	// Dragging the tab that is on screen splits it with the tab seen before it
 	// (else the session's own tab), so there is always something to drop beside.

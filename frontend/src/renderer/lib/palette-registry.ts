@@ -28,6 +28,7 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "next-tab", keywords: ["switch tab"] },
 	{ id: "new-shell-terminal", keywords: ["shell", "console", "pty"] },
 	{ id: "split-shell-terminal", keywords: ["split", "side by side", "pane", "shell"] },
+	{ id: "split-shell-terminal-down", keywords: ["split", "horizontal", "below", "pane", "shell"] },
 	{ id: "close-shell-terminal", keywords: ["close terminal"] },
 	{ id: "reopen-closed-tab", keywords: ["undo close", "restore tab"] },
 	{ id: "archive-session", keywords: ["hide", "done", "remove"] },

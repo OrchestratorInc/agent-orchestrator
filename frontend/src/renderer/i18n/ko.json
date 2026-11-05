@@ -2021,6 +2021,7 @@
 	"shortcut.new-session": "새 세션",
 	"shortcut.new-shell-terminal": "새 터미널",
 	"shortcut.split-shell-terminal": "오른쪽에 새 터미널",
+	"shortcut.split-shell-terminal-down": "아래에 새 터미널",
 	"shortcut.next-attention-session": "다음 주의 필요 세션",
 	"shortcut.next-session": "다음 세션",
 	"shortcut.next-tab": "다음 탭",
