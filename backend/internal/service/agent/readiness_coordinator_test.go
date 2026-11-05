@@ -212,7 +212,7 @@ func TestReadinessCoordinatorKeepsUnsupportedInstallationChecksDistinct(t *testi
 		t.Fatal(err)
 	}
 	installation := got[0].Installation
-	if installation.State != domain.AgentInstallationUnknown || installation.Freshness != domain.AgentReadinessFresh || installation.ReasonCode != domain.AgentReadinessReasonInstallCheckUnsupported || installation.Reason != "Installation checks are not supported for this harness." {
+	if installation.State != domain.AgentInstallationUnknown || installation.Freshness != domain.AgentReadinessFresh || installation.ReasonCode != domain.AgentReadinessReasonInstallCheckUnsupported || installation.Reason != "Installation checks are not supported for this agent." {
 		t.Fatalf("installation = %#v", installation)
 	}
 }

@@ -1,7 +1,7 @@
 # ao session
 
 Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
-agent, switch harnesses, clean up, and claim PRs.
+agent, switch agents, clean up, and claim PRs.
 
 ## In-app session links
 

@@ -228,7 +228,7 @@ func TestPromptSuggestionOmitsExpectedOptionalRunnerFailures(t *testing.T) {
 	turnID := settledSuggestionTurn(t, h)
 	for _, runErr := range []error{
 		errors.New("provider unavailable"), errors.New("background task requested user interaction"),
-		errors.New("background task returned no text"), errors.New("session: harness install active"), context.DeadlineExceeded,
+		errors.New("background task returned no text"), errors.New("session: agent install active"), context.DeadlineExceeded,
 	} {
 		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) { return "", runErr })
 		if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, turnID); prompt != "" || err != nil {

@@ -30,7 +30,7 @@ type IncompatibleVersionError struct {
 }
 
 func (e *IncompatibleVersionError) Error() string {
-	return fmt.Sprintf("opencode: selected harness requires OpenCode %d, but %q reports OpenCode %d (%s); select the matching harness or put OpenCode %d on PATH", e.ExpectedMajor, e.Path, e.FoundMajor, e.FoundVersion, e.ExpectedMajor)
+	return fmt.Sprintf("opencode: selected agent requires OpenCode %d, but %q reports OpenCode %d (%s); select the matching agent or put OpenCode %d on PATH", e.ExpectedMajor, e.Path, e.FoundMajor, e.FoundVersion, e.ExpectedMajor)
 }
 
 // ReplacedOpenCode1Message explains an OpenCode 1 check that found only

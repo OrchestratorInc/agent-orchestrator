@@ -1092,14 +1092,14 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		const expectedError = errorCode === "AGENT_BINARY_NOT_FOUND"
-			? "This agent is not installed. Open Agent Harnesses settings to install it, then try again."
+			? "This agent is not installed. Open Agents settings to install it, then try again."
 			: "Codex is not ready";
 		expect(screen.queryByText(expectedError)).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
 		expect(await screen.findByText(expectedError)).toBeInTheDocument();
 		if (errorCode === "AGENT_BINARY_NOT_FOUND") {
-			fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+			fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 		}
 		expect(queryClient.getQueryData(agentReadinessQueryKey)).toEqual({ agents: [completed] });
@@ -1362,7 +1362,7 @@ describe("TaskComposer", () => {
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		// Only connected harnesses, with "Manage harness connections…" (Harness settings' Cloud view).
+		// Only connected harnesses, with "Manage agent connections…" (Harness settings' Cloud view).
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
 		unmount();
 

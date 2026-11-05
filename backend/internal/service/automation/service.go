@@ -132,7 +132,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_KIND", "Automation kind must be worker or orchestrator", nil)
 	}
 	if input.Harness != "" && !input.Harness.IsKnown() {
-		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
+		return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation agent", nil)
 	}
 	now := s.clock().UTC()
 	schedule, err := CanonicalizeSchedule(ScheduleInput{
@@ -259,7 +259,7 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	}
 	if input.Harness != nil {
 		if *input.Harness != "" && !input.Harness.IsKnown() {
-			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
+			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation agent", nil)
 		}
 		if rec.Harness != *input.Harness {
 			// Model capabilities belong to the harness; explicit replacements below survive.
