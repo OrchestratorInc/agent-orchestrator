@@ -110,7 +110,8 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab, startSessionTabPaneDrag } from "../CenterPane";
+import { useSplitHiddenTabKeys } from "../split-pane-context";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -982,6 +983,7 @@ function ChatWorkspaceContent({
 	// session temporarily becomes terminated and later returns.
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -992,8 +994,8 @@ function ChatWorkspaceContent({
 				: []),
 			...(shellTerminals ?? []).map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableTabKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
@@ -2432,7 +2434,7 @@ function ChatHeader({
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
-								<div className="flex shrink-0 self-stretch">
+								<div className="flex shrink-0 self-stretch" onPointerDown={startSessionTabPaneDrag}>
 									{session ? (
 										<SessionPaneTab
 											isActive={timelineActive}

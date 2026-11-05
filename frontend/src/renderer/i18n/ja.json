@@ -2195,6 +2195,8 @@
 	"terminal.shellAria": "シェルターミナル",
 	"terminal.startingSession": "セッションを開始中",
 	"terminal.tabsAria": "開いているターミナル",
+	"splitPane.label": "分割ペイン",
+	"splitPane.resize": "分割サイズを変更",
 	"terminal.unableRestore": "セッションを復元できません",
 	"terminal.cloudConnectTitle": "ターミナルに接続できません",
 	"terminal.cloudConnectDescription": "ターミナルチケットは発行されましたが、WebSocket接続が繰り返し失敗しました。これは通常、ブラウザのコンテンツセキュリティポリシー、ファイアウォール、またはプロキシがWebSocketトラフィックをブロックしていることが原因です。",

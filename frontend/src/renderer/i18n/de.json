@@ -2195,6 +2195,8 @@
 	"terminal.shellAria": "Shell-Terminal",
 	"terminal.startingSession": "Sitzung wird gestartet",
 	"terminal.tabsAria": "Offene Terminals",
+	"splitPane.label": "Geteilter Bereich",
+	"splitPane.resize": "Teilung anpassen",
 	"terminal.unableRestore": "Sitzung konnte nicht wiederhergestellt werden",
 	"terminal.cloudConnectTitle": "Verbindung zum Terminal nicht möglich",
 	"terminal.cloudConnectDescription": "Das Terminal-Ticket wurde ausgestellt, aber die WebSocket-Verbindung ist wiederholt fehlgeschlagen. Dies wird normalerweise durch eine Browser-Content-Security-Policy, eine Firewall oder einen Proxy verursacht, der den WebSocket-Datenverkehr blockiert.",

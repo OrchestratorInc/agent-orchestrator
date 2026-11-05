@@ -2230,6 +2230,8 @@
 	"terminal.shellAria": "Terminal do shell",
 	"terminal.startingSession": "Iniciando sessão",
 	"terminal.tabsAria": "Terminais abertos",
+	"splitPane.label": "Painel dividido",
+	"splitPane.resize": "Redimensionar divisão",
 	"terminal.unableRestore": "Não foi possível restaurar a sessão",
 	"terminal.cloudConnectTitle": "Não foi possível conectar ao terminal",
 	"terminal.cloudConnectDescription": "O tíquete do terminal foi emitido, mas a conexão WebSocket falhou repetidamente. Isso geralmente é causado por uma política de segurança de conteúdo do navegador, firewall ou proxy bloqueando o tráfego WebSocket.",

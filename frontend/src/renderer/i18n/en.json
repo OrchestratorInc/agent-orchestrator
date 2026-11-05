@@ -2599,6 +2599,8 @@
 	"terminal.shellAria": "Shell terminal",
 	"terminal.startingSession": "Starting session",
 	"terminal.tabsAria": "Open terminals",
+	"splitPane.label": "Split pane",
+	"splitPane.resize": "Resize split",
 	"terminal.unableRestore": "Unable to restore session",
 	"terminal.cloudConnectTitle": "Cannot connect to terminal",
 	"terminal.cloudConnectDescription": "The terminal ticket was issued but the WebSocket connection failed repeatedly. This is usually caused by a browser Content Security Policy, firewall, or proxy blocking WebSocket traffic.",

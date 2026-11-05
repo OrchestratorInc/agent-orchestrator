@@ -2195,6 +2195,8 @@
 	"terminal.shellAria": "셸 터미널",
 	"terminal.startingSession": "세션 시작 중",
 	"terminal.tabsAria": "열린 터미널",
+	"splitPane.label": "분할 창",
+	"splitPane.resize": "분할 크기 조정",
 	"terminal.unableRestore": "세션을 복원할 수 없습니다",
 	"terminal.cloudConnectTitle": "터미널에 연결할 수 없습니다",
 	"terminal.cloudConnectDescription": "터미널 티켓이 발급되었지만 WebSocket 연결에 반복해서 실패했습니다. 이는 일반적으로 브라우저 콘텐츠 보안 정책, 방화벽 또는 프록시가 WebSocket 트래픽을 차단하여 발생합니다.",

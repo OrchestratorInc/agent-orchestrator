@@ -2687,6 +2687,8 @@
 	"terminal.shellAria": "Терминал оболочки",
 	"terminal.startingSession": "Запуск сессии",
 	"terminal.tabsAria": "Открытые терминалы",
+	"splitPane.label": "Разделённая панель",
+	"splitPane.resize": "Изменить размер разделения",
 	"terminal.unableRestore": "Не удалось восстановить сессию",
 	"terminal.cloudConnectTitle": "Не удалось подключиться к терминалу",
 	"terminal.cloudConnectDescription": "Билет терминала выдан, но соединение WebSocket неоднократно завершалось ошибкой. Обычно причина — Content Security Policy браузера, брандмауэр или прокси, блокирующий трафик WebSocket.",

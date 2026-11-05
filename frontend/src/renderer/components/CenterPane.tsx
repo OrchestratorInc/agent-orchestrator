@@ -41,6 +41,9 @@ import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { beginPaneTabDrag } from "../lib/pane-drag";
+import { SESSION_TAB_KEY } from "../lib/pane-split";
+import { useSplitHiddenTabKeys } from "./split-pane-context";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -103,8 +106,18 @@ const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
+const PANE_DRAG_IGNORE = "[data-terminal-tab-action],input,a";
+
+// The session's own tab does not reorder, but it can still be dragged out of
+// the strip into a split.
+export function startSessionTabPaneDrag(event: PointerEvent<HTMLElement>) {
+	if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
+	beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
+}
+
 // A reorderable strip tab. It stays inside its group, so it never covers the
 // pinned session tab or the toolbar, and keeps its hover look while dragged.
+// Pulled out of the strip vertically, it hands over to the split-pane drag.
 export function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
 	const dragControls = useDragControls();
 	const itemRef = useRef<HTMLDivElement>(null);
@@ -112,8 +125,10 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const [dragging, setDragging] = useState(false);
 	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
+		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
+		const item = itemRef.current;
+		if (item) beginPaneTabDrag(event, value, item, () => dragControls.stop());
 	};
 	// While dragging, the tab's x is derived from the pointer and the group's
 	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
@@ -231,6 +246,7 @@ export function CenterPane({
 	);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -247,8 +263,8 @@ export function CenterPane({
 				: []),
 			...shellTerminals.map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const stripShellHandleIds = useMemo(() => shellTerminals.map((terminal) => terminal.handleId), [shellTerminals]);
@@ -539,7 +555,7 @@ export function CenterPane({
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									<div className="flex shrink-0 self-stretch">
+									<div className="flex shrink-0 self-stretch" onPointerDown={startSessionTabPaneDrag}>
 										{session ? (
 											<SessionPaneTab
 												isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
