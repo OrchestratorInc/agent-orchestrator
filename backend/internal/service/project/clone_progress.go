@@ -91,6 +91,11 @@ type cloneProgressTracker struct {
 // anything this long without a terminator is not progress output.
 const maxCloneProgressLine = 8 << 10
 
+// cloneSpeedStaleAfter is how long a reported speed stays current. git redraws
+// its progress line about once a second, and only while data arrives, so a
+// stalled network leaves the last rate standing unless the snapshot drops it.
+const cloneSpeedStaleAfter = 5 * time.Second
+
 func newCloneProgressTracker(now func() time.Time) *cloneProgressTracker {
 	if now == nil {
 		now = time.Now
@@ -143,6 +148,9 @@ func (t *cloneProgressTracker) snapshot() CloneProgress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	snap := t.snap
+	if t.now().Sub(snap.UpdatedAt) > cloneSpeedStaleAfter {
+		snap.SpeedBytesPerSecond = 0
+	}
 	if len(t.logTail) > 0 {
 		snap.Log = append([]string(nil), t.logTail...)
 	}

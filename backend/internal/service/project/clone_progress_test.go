@@ -154,6 +154,33 @@ func TestCloneProgressTrackerResetsCountersOnPhaseChange(t *testing.T) {
 	}
 }
 
+func TestCloneProgressTrackerDropsTheSpeedWhenProgressStalls(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tracker := newCloneProgressTracker(func() time.Time { return now })
+	tracker.applyLine("Receiving objects:  45% (1234/2748), 2.00 MiB | 1.50 MiB/s")
+
+	now = now.Add(cloneSpeedStaleAfter)
+	if got := tracker.snapshot(); got.SpeedBytesPerSecond == 0 {
+		t.Fatalf("snapshot = %+v, want the speed kept up to the limit", got)
+	}
+
+	now = now.Add(time.Second)
+	got := tracker.snapshot()
+	if got.SpeedBytesPerSecond != 0 {
+		t.Fatalf("snapshot = %+v, want no speed after a stall", got)
+	}
+	if got.Percent != 45 || got.TransferredBytes == 0 {
+		t.Fatalf("snapshot = %+v, want the stall to keep percent and bytes", got)
+	}
+
+	tracker.applyLine("Receiving objects:  46% (1264/2748), 2.10 MiB | 1.25 MiB/s")
+	if got := tracker.snapshot(); got.SpeedBytesPerSecond == 0 {
+		t.Fatalf("snapshot = %+v, want the speed back once git reports again", got)
+	}
+}
+
 func TestCloneProgressTrackerFinishReportsFinalizing(t *testing.T) {
 	t.Parallel()
 
