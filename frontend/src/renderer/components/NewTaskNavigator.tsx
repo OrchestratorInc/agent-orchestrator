@@ -28,7 +28,7 @@ export function NewTaskNavigator() {
 	useEffect(() => {
 		if (!newTaskRequest || newTaskRequest.nonce === lastNonce.current) return;
 		lastNonce.current = newTaskRequest.nonce;
-		const { projectId, hostId } = newTaskRequest;
+		const { projectId, hostId, report } = newTaskRequest;
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
 		if (cloudProject && projectSandboxProvider(cloudProject.config, cloudOffering) === CODER_PROVIDER) {
 			// An open dialog keeps its form rather than retargeting to another project.
@@ -40,6 +40,7 @@ export function NewTaskNavigator() {
 			search: {
 				project: projectId === STANDALONE_WORKSPACE_ID ? undefined : projectId,
 				host: hostId,
+				report,
 			},
 			// A new task from the new chat page replaces it rather than stacking history.
 			replace: Boolean(matchRoute({ to: "/new" })),

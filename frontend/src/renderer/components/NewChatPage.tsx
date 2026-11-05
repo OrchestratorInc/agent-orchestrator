@@ -8,6 +8,7 @@ import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho }
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
+import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
@@ -34,7 +35,8 @@ import { cn } from "../lib/utils";
  * session; the page keeps the brief on screen and hands it to the session's own
  * chat, so starting a task reads as one continuous conversation.
  */
-export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?: string }) {
+// A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
+export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -169,10 +171,10 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		if (!pendingLaunch || pendingLaunch.projectId === projectId) return;
 		void navigate({
 			to: "/new",
-			search: { project: pendingLaunch.projectId === STANDALONE_WORKSPACE_ID ? undefined : pendingLaunch.projectId, host: hostId },
+			search: { project: pendingLaunch.projectId === STANDALONE_WORKSPACE_ID ? undefined : pendingLaunch.projectId, host: hostId, report },
 			replace: true,
 		});
-	}, [hostId, navigate, pendingLaunch, projectId]);
+	}, [hostId, navigate, pendingLaunch, projectId, report]);
 	const resolveLaunch = (clientMessageId: string) => {
 		clearPendingLaunch(hostKey, clientMessageId);
 		setLaunchRevision((revision) => revision + 1);
@@ -329,6 +331,14 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const pending = Boolean(echo);
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
+	// A saved send took a report page to its project; once settled, the report goes back.
+	useEffect(() => {
+		if (!report || frozen || projectId === STANDALONE_WORKSPACE_ID) return;
+		void navigate({ to: "/new", search: { host: hostId, report }, replace: true });
+	}, [frozen, hostId, navigate, projectId, report]);
+	useEffect(() => {
+		if (!report && !frozen) dropReportPrompt(draftScope);
+	}, [draftScope, frozen, report]);
 	pendingRef.current = pending;
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
@@ -378,7 +388,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				snapshot={snapshot}
 				uiSessionId={draftId}
 				// The session is titled after its brief, so the tab already reads that way.
-				sessionTitle={echo ? echo.text.trim().slice(0, 100) : t("command.newTask")}
+				sessionTitle={echo ? sessionNameFromBrief(echo.text) : t("command.newTask")}
 				sessionRole="worker"
 				hideHeader
 				centerInWindow
@@ -393,7 +403,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}

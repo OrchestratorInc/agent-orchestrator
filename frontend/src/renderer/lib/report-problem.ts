@@ -3,7 +3,7 @@ import { appI18n } from "../i18n";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { aoBridge } from "./bridge";
-import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
+import { type ChatDraftScope, newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
 import { captureRendererEvent, routeSurface } from "./telemetry";
 
 export type ReportProblemDiagnostics = {
@@ -58,6 +58,19 @@ export function sanitizeReportText(value: string): string {
 		.replace(GITHUB_TOKEN_PATTERN, REDACTED_SECRET);
 }
 
+/** What a session started from this brief is called: a report goes by its action, not its long prompt. */
+export function sessionNameFromBrief(brief: string): string {
+	return brief.startsWith(REPORT_PROBLEM_PROMPT) ? appI18n.t("settings.reportProblem") : brief.trim().slice(0, 100);
+}
+
+/** Drafts are shared per host, so a normal new chat takes the report prompt out and keeps what was typed. */
+export function dropReportPrompt(scope: ChatDraftScope) {
+	const draft = readChatSessionDraft(scope).composer.text;
+	if (!draft.startsWith(REPORT_PROBLEM_PROMPT)) return;
+	if (!writeChatComposerText(scope, draft.slice(REPORT_PROBLEM_PROMPT.length).trimStart()).ok) return;
+	useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
+}
+
 /** Opens a standalone agent on the new chat page with the prompt above anything already typed. */
 function openReportAgent() {
 	const scope = newChatDraftScope();
@@ -69,7 +82,7 @@ function openReportAgent() {
 	useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
 	const ui = useUiStore.getState();
 	ui.closeSettings();
-	ui.requestNewTask(STANDALONE_WORKSPACE_ID);
+	ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, { report: true });
 }
 
 /**

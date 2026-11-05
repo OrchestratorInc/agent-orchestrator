@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { aoBridge } from "./bridge";
 import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
-import { collectReportProblemDiagnostics, formatReportTimestamp, REPORT_PROBLEM_PROMPT, reportProblemDestinationUrl, sanitizeReportText, startProblemReport, type ReportProblemDiagnostics } from "./report-problem";
+import { collectReportProblemDiagnostics, dropReportPrompt, sessionNameFromBrief, formatReportTimestamp, REPORT_PROBLEM_PROMPT, reportProblemDestinationUrl, sanitizeReportText, startProblemReport, type ReportProblemDiagnostics } from "./report-problem";
 
 const diagnostics: ReportProblemDiagnostics = {
 	appVersion: "1.2.3-test", buildMode: "dev", daemonState: "ready",
@@ -106,6 +107,32 @@ describe("startProblemReport", () => {
 		await startProblemReport("ready");
 		expect(draft()).toBe(REPORT_PROBLEM_PROMPT);
 		expect(useUiStore.getState().newChatDraftRevision).toBe(2);
+	});
+
+	it("asks for a new chat that only a report can use", async () => {
+		await startProblemReport("ready");
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID, report: true });
+	});
+
+	it("takes the prompt out of a draft for a normal new chat and keeps what was typed", async () => {
+		writeChatComposerText(newChatDraftScope(), "keep this draft");
+		await startProblemReport("ready");
+		dropReportPrompt(newChatDraftScope());
+		expect(draft()).toBe("keep this draft");
+		expect(useUiStore.getState().newChatDraftRevision).toBe(2);
+	});
+
+	it("leaves a draft without the prompt alone", () => {
+		writeChatComposerText(newChatDraftScope(), "just my words");
+		dropReportPrompt(newChatDraftScope());
+		expect(draft()).toBe("just my words");
+		expect(useUiStore.getState().newChatDraftRevision).toBe(0);
+	});
+
+	it("names a report session after the action, with or without typed text", () => {
+		expect(sessionNameFromBrief(REPORT_PROBLEM_PROMPT)).toBe("Report a problem");
+		expect(sessionNameFromBrief(`${REPORT_PROBLEM_PROMPT}\n\nThe sidebar froze`)).toBe("Report a problem");
+		expect(sessionNameFromBrief(`  ${"a".repeat(120)}`)).toBe("a".repeat(100));
 	});
 
 	it("leaves the draft alone when the daemon is down", async () => {
