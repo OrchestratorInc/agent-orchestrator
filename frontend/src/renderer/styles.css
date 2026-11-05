@@ -691,6 +691,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
+
 /* The inspector rail spans the bar's band too: its fill starts at the panel's
  * top edge, so the band above stays window chrome. Its divider line is drawn
  * by the session column (below). */
@@ -711,30 +712,57 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* Floating session tabs read like the inspector's tabs beside them: rounded
- * pills centered in the bar, a soft fill for the active tab, no slab
- * background, separators, or underline. */
+/* Floating session tabs. Resting tabs sit flat on the window chrome with
+ * short separators between them. Hover is a rounded pill around the label;
+ * the selected tab is the same pill, filled more strongly and outlined with
+ * the panel frame's line, so it reads as current at a glance (translucent
+ * windows included, where fills are faint). */
 [data-terminal-tab-frame] {
-	font-size: var(--font-size-base);
+	font-size: var(--font-size-md);
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+	/* A stacking context so the pill can sit behind the label. */
+	z-index: 0;
 	height: var(--size-topbar-control);
 	align-self: center;
-	margin-inline-end: var(--space-1);
+	margin-inline-end: 0;
+	padding-inline: var(--space-1);
 	border-right: 0;
+	border-radius: 0;
+	/* The separator, on the trailing edge. */
+	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
+	background: linear-gradient(var(--floating-tab-separator), var(--floating-tab-separator)) right center / 1px var(--space-4) no-repeat;
+}
+
+/* The pill. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 0 var(--space-0_5);
+	border: 1px solid transparent;
 	border-radius: var(--radius-topbar-control);
-	background: transparent;
+	pointer-events: none;
 }
 
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover,
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible) {
-	background: var(--color-interactive-hover);
+/* No separator against a pill: hovered and selected tabs drop their own, and
+ * the tab before one drops its. Each auxiliary tab is the only child of its
+ * reorder wrapper; the session tab's wrapper precedes the reorder group. */
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active]),
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] > [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active])) > [data-terminal-tab-frame],
+.center-panel-shell--floating-topbar [data-tab-scroll-region] > div > div:first-child:has(+ * > [data-terminal-tab-key]:first-child > [data-terminal-tab-frame]:is(:hover, :has(:focus-visible), [data-active])) [data-terminal-tab-frame] {
+	background: none;
 }
 
-.center-panel-shell--floating-topbar [data-terminal-tab-frame][aria-current="true"],
-.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button[aria-selected="true"]) {
-	background: var(--color-interactive-active);
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:hover::before,
+.center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(:focus-visible)::before {
+	background-color: var(--color-interactive-hover);
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	border-color: color-mix(in oklch, var(--color-foreground) 5%, transparent);
+	background-color: color-mix(in oklch, var(--color-foreground) 9%, transparent);
 }
 
 .center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
@@ -780,6 +808,17 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 /* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
 .center-panel-surface .new-chat-topbar .session-topbar-surface {
 	border-bottom: none;
+}
+
+/* The tab bar's header is 1px taller than the band; unfilled, it leaves the
+ * panel's top row to the panel. */
+.center-panel-shell--floating-topbar .workspace-topbar-container > header {
+	background: transparent;
+}
+
+/* The floating bar has no divider: the panel's own edge separates it. */
+.center-panel-shell--floating-topbar .center-panel-surface .session-topbar-surface {
+	border-bottom-color: transparent;
 }
 
 /* A persistent edge fade signals that the tab strip can scroll horizontally. */
@@ -3590,7 +3629,7 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	justify-content: center;
 	border-radius: var(--radius-topbar-control);
-	font-size: var(--font-size-base);
+	font-size: var(--font-size-md);
 	transition:
 		transform var(--duration-fast) ease-out,
 		background-color var(--duration-fast) ease,
