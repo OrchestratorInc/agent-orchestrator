@@ -4976,7 +4976,7 @@ const TurnGroup = memo(function TurnGroup({
 					data-turn-worked-gap=""
 				/>
 			) : null}
-			{showsWorked ? (
+			{outcome && showsWorked ? (
 				<motion.div
 					key="turn-worked-summary"
 					initial={{ height: 0, opacity: 0 }}

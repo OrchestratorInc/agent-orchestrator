@@ -408,7 +408,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		expect(container.querySelector(".cursor-chat-human-message > p")?.textContent).toBe(
+		expect(container.querySelector(".cursor-chat-human-message [data-chat-message-body]")?.textContent).toBe(
 			authoredBody,
 		);
 	});
@@ -458,7 +458,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
 		expect(paragraph).toHaveTextContent("before Image 1 after");
 		expect(paragraph).not.toHaveTextContent(".ao/attachments");
 		await userEvent.click(within(paragraph as HTMLElement).getByRole("button", { name: "Open image: Image 1" }));
@@ -481,7 +481,7 @@ describe("HumanMessage attachments", () => {
 		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
 		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
 		expect(paragraph).toHaveClass("whitespace-pre-wrap");
 		expect(paragraph?.textContent).toBe(text);
 		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
