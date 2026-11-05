@@ -185,21 +185,33 @@ export function registerRemotesIpc(
 	ipcMain.handle("remotes:importAccountHost", async (_event, expectedAccountId: string, input: RemoteEntry) => ordered(async () => {
 		const account = await accountID();
 		if (!account || account !== expectedAccountId || !input.hostId || !/^[0-9a-f]{64}$/.test(input.password)) throw new Error("Invalid account host credential.");
+		// This installation's own row is never used to connect; the account does not touch it.
+		if (input.hostId === await localIdentity()) return;
+		// The account holds the host's current credential: the host links itself
+		// again whenever its password changes. A password typed here goes stale on
+		// the first rotation, so the account's token replaces it.
 		const local = (await readRemotes(file)).find((entry) => entry.hostId === input.hostId);
-		// Keep the original password on the machine that performed pairing; a
-		// Cloud refresh must not replace it with the narrower account token.
-		if (local?.password && !/^[0-9a-f]{64}$/.test(local.password)) {
-			if (local.label !== input.label || local.url !== input.url) await updateRemote(file, local.url, { label: input.label, url: input.url });
-			return;
+		const entry = { label: input.label, url: input.url, password: input.password, hostId: input.hostId, accountUserId: account };
+		if (local && !/^[0-9a-f]{64}$/.test(local.password)) {
+			// Only once the token is seen to work: a listing lags a host since
+			// linked to another account, whose typed password still works.
+			let health: RemoteHealth = "offline";
+			try { health = await checkedProbe(entry, account); } catch { /* keep the typed password */ }
+			if (health !== "online") {
+				if (local.label !== input.label || local.url !== input.url) await updateRemote(file, local.url, { label: input.label, url: input.url });
+				if (local.url !== input.url) await disconnect(local.url);
+				return;
+			}
 		}
-		await addRemote(file, { ...input, accountUserId: account });
+		await addRemote(file, entry);
+		if (local && local.url !== input.url) await disconnect(local.url);
 	}));
 	ipcMain.handle("remotes:pruneAccountHosts", async (_event, expectedAccountId: string, currentHostIds: string[]) => ordered(async () => {
 		if (await accountID() !== expectedAccountId) throw new Error("Account changed during host sync.");
 		const current = new Set(currentHostIds);
 		for (const entry of await owned()) {
-			// Only account-imported credentials are directory-managed. A machine
-			// paired here with its original password remains a local pairing.
+			// Only account credentials are directory-managed. A password typed here
+			// for a machine the account never listed stays a local pairing.
 			if (entry.hostId && !current.has(entry.hostId) && /^[0-9a-f]{64}$/.test(entry.password)) {
 				await removeSavedRemote(file, entry.url, disconnect);
 			}

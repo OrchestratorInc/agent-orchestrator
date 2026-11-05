@@ -11,26 +11,31 @@ type Props = {
 	failedHostIds?: string[];
 	renderProject: (host: RemoteHost, workspace: WorkspaceSummary) => ReactNode;
 	onRetry: () => void;
+	/** A host that rejected its password opens its edit form instead of retrying. */
+	onUpdatePassword: (host: RemoteHost) => void;
 };
 
 /** Only host-specific chrome lives here; project and session rows are shared. */
-export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], renderProject, onRetry }: Props) {
+export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], renderProject, onRetry, onUpdatePassword }: Props) {
 	const { t } = useTranslation();
 	return <>
 		{hosts.map((host) => {
-			if (host.status !== "connected") return <SidebarMenuItem key={host.url} data-host-id={host.hostId}>
-				<SidebarMenuButton
-					aria-label={host.status === "offline" ? t("remote.retryHost", { label: host.label }) : undefined}
-					className="h-9 gap-2 rounded-lg px-2.5 text-sm text-muted-foreground hover:bg-interactive-hover [&_svg]:size-icon-md"
-					disabled={host.status === "connecting"}
-					onClick={onRetry}
-					title={host.status === "offline" ? t(host.failureReason === "incompatible" ? "remote.hostIncompatible" : "remote.hostOffline") : undefined}
-				>
-					{host.status === "offline" ? <AlertTriangle aria-hidden="true" /> : <Folder aria-hidden="true" />}
-					<span className="truncate">{host.label}</span>
-					<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : host.failureReason === "unauthorized" ? t("remote.passwordRejected") : host.failureReason === "incompatible" ? t("remote.updateAO") : t("remote.retryHost", { label: host.label })}</span>
-				</SidebarMenuButton>
-			</SidebarMenuItem>;
+			if (host.status !== "connected") {
+				const rejected = host.status === "offline" && host.failureReason === "unauthorized";
+				return <SidebarMenuItem key={host.url} data-host-id={host.hostId}>
+					<SidebarMenuButton
+						aria-label={rejected ? t("remote.updatePasswordFor", { label: host.label }) : host.status === "offline" ? t("remote.retryHost", { label: host.label }) : undefined}
+						className="h-9 gap-2 rounded-lg px-2.5 text-sm text-muted-foreground hover:bg-interactive-hover [&_svg]:size-icon-md"
+						disabled={host.status === "connecting"}
+						onClick={rejected ? () => onUpdatePassword(host) : onRetry}
+						title={rejected ? t("remote.hostUnauthorized") : host.status === "offline" ? t(host.failureReason === "incompatible" ? "remote.hostIncompatible" : "remote.hostOffline") : undefined}
+					>
+						{host.status === "offline" ? <AlertTriangle aria-hidden="true" /> : <Folder aria-hidden="true" />}
+						<span className="truncate">{host.label}</span>
+						<span className="ml-auto text-xs">{host.status === "connecting" ? t("terminal.connecting") : rejected ? t("remote.updatePassword") : host.failureReason === "incompatible" ? t("remote.updateAO") : t("remote.retryHost", { label: host.label })}</span>
+					</SidebarMenuButton>
+				</SidebarMenuItem>;
+			}
 			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
 			return <Fragment key={host.url}>
 				{projects.map((workspace) => <Fragment key={`${host.hostId}:${workspace.id}`}>{renderProject(host, workspace)}</Fragment>)}

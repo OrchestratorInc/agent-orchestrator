@@ -777,6 +777,7 @@ export function Sidebar({
 	const availableUpdateVersion = updateStatus.state === "available" ? updateStatus.version : undefined;
 	const updateDismissal = useSidebarUpdateDismissal(availableUpdateVersion);
 	const openUpdateInstallPrompt = useUiStore((state) => state.openUpdateInstallPrompt);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	// Daemon status for the smoke suite's sr-only mirror in the footer. Null when
 	// rendered outside the shell (unit tests) — the mirror simply doesn't render.
 	const daemonStatus = useShellMaybe()?.daemonStatus ?? null;
@@ -1327,6 +1328,7 @@ export function Sidebar({
 												/>;
 											}}
 											onRetry={onRetryRemoteHosts}
+											onUpdatePassword={(host) => openGlobalSettings("remoteHosts", { editRemoteHost: host.hostId })}
 										/>
 										{isIconRail && <CreateProjectListItem />}
 										<div
