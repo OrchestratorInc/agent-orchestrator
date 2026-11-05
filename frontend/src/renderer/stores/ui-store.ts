@@ -221,6 +221,12 @@ export type UiState = {
 	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
 	 */
 	newSidebarDesign: boolean;
+	/**
+	 * The simplified, floating top bar. Default on. The switch lives in
+	 * Developer mode, and turning it off only takes effect there: read it
+	 * through `isSimplifiedTopbar` (lib/simplified-topbar).
+	 */
+	simplifiedTopbar: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -285,6 +291,7 @@ export type UiState = {
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
 	setNewSidebarDesign: (enabled: boolean) => void;
+	setSimplifiedTopbar: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -368,6 +375,7 @@ const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
 const newSidebarDesignStorageKey = "ao.newSidebarDesign";
+const simplifiedTopbarStorageKey = "ao.simplifiedTopbar";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -470,6 +478,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
 	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
+	simplifiedTopbar: getLocalStorage()?.getItem(simplifiedTopbarStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -555,6 +564,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setNewSidebarDesign: (newSidebarDesign) => {
 		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
 		set({ newSidebarDesign });
+	},
+	setSimplifiedTopbar: (simplifiedTopbar) => {
+		getLocalStorage()?.setItem(simplifiedTopbarStorageKey, String(simplifiedTopbar));
+		set({ simplifiedTopbar });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);

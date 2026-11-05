@@ -42,6 +42,7 @@ export function TerminalTabFrame({
 					? "bg-overlay text-foreground"
 					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
+			data-active={active || undefined}
 			data-terminal-tab-frame
 			onClick={(event) => {
 				if (event.target !== event.currentTarget) return;
