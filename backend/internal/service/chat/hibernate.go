@@ -384,6 +384,9 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		controller.sendMu.Unlock()
 		return false, err
 	}
+	if opts.loginRefresh && heldQueue {
+		s.noteHeldQueueStop(id)
+	}
 	controller.mu.Lock()
 	controller.handoff = controllerHandoffHibernate
 	controller.suppressStoppedActivity = true
@@ -450,6 +453,7 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 func (s *Service) clearHibernation(ctx context.Context, id domain.SessionID) error {
 	s.wakeMu.Lock()
 	delete(s.updateStops, id)
+	delete(s.heldQueueStops, id)
 	s.wakeMu.Unlock()
 	if s.sessions == nil {
 		return nil
@@ -710,6 +714,10 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			if s.versionSwitchFailed(ctx, id, err) {
 				return
 			}
+			if s.stoppedWithHeldQueue(id) {
+				s.log.Warn("chat session could not wake after a confirmed login; queued messages kept for its resume", "session", id, "err", err)
+				return
+			}
 			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
@@ -754,6 +762,29 @@ func (s *Service) isWaking(id domain.SessionID) bool {
 		delete(s.updateStops, id)
 	}
 	return s.waking[id] > 0 || s.updateStops[id]
+}
+
+func (s *Service) noteHeldQueueStop(id domain.SessionID) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	if s.heldQueueStops == nil {
+		s.heldQueueStops = make(map[domain.SessionID]bool)
+	}
+	s.heldQueueStops[id] = true
+}
+
+func (s *Service) clearHeldQueueStop(id domain.SessionID) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	delete(s.heldQueueStops, id)
+}
+
+// stoppedWithHeldQueue reports whether a login refresh stopped id with messages
+// held back and no provider has started since.
+func (s *Service) stoppedWithHeldQueue(id domain.SessionID) bool {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	return s.heldQueueStops[id]
 }
 
 // stoppedForUpdate reports whether an update stopped id and nothing has

@@ -2,7 +2,9 @@ package chat_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,11 +218,10 @@ func TestConfirmedLoginReplacesRefusedProvider(t *testing.T) {
 	t.Fatalf("new provider received %v, refused one %v", resumed.sentTexts(), old.sentTexts())
 }
 
-// A message queued behind a refused turn stays held, and used to veto the stop:
-// Retry then went back to the refused process, and every later refusal hit the
-// same veto. The stop now keeps the held message queued, so an explicit Retry
-// reaches a new process, and the held message follows only once that succeeds.
-func TestConfirmedLoginReplacesRefusedProviderKeepingHeldQueue(t *testing.T) {
+// heldQueueAfterConfirmedLogin leaves "refused" failed on its login with "held"
+// queued behind it, the login confirmed, and the refused provider stopped.
+func heldQueueAfterConfirmedLogin(t *testing.T) (*harness, *hibernationConversation, *fakeConversation, domain.ConversationTurn) {
+	t.Helper()
 	resumed := newFakeConversation()
 	resumed.turnSeq = 1
 	var activity *storeActivity
@@ -278,6 +279,45 @@ func TestConfirmedLoginReplacesRefusedProviderKeepingHeldQueue(t *testing.T) {
 		t.Fatalf("refused provider stops = %d, hibernated at = %v; a held message must not keep it running", old.calls.Load(), rec.HibernatedAt)
 	}
 	assertTurnStaysQueued(t, h, "held")
+	return h, old, resumed, refused
+}
+
+// retrySucceedsThenReleases retries the refused turn on the new provider and
+// checks what was queued waits for that retry, then reaches the same provider.
+func retrySucceedsThenReleases(t *testing.T, h *harness, resumed *fakeConversation, retry domain.ConversationTurn, queued ...string) {
+	t.Helper()
+	if got := resumed.sentTexts(); len(got) != 1 || got[0] != "refused" {
+		t.Fatalf("new provider received %v, want only the retried message", got)
+	}
+	for _, text := range queued {
+		assertTurnStaysQueued(t, h, text)
+	}
+	resumed.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: retry.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted},
+	)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		delivered := strings.Join(resumed.sentTexts()[1:], "\n")
+		missing := false
+		for _, text := range queued {
+			missing = missing || !strings.Contains(delivered, text)
+		}
+		if !missing {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("queued messages %v did not follow the successful retry: new provider received %v", queued, resumed.sentTexts())
+}
+
+// A message queued behind a refused turn stays held, and used to veto the stop:
+// Retry then went back to the refused process, and every later refusal hit the
+// same veto. The stop now keeps the held message queued, so an explicit Retry
+// reaches a new process, and the held message follows only once that succeeds.
+func TestConfirmedLoginReplacesRefusedProviderKeepingHeldQueue(t *testing.T) {
+	h, old, resumed, refused := heldQueueAfterConfirmedLogin(t)
+	ctx := context.Background()
 
 	woke := wakeOnNewRelease(t, h, old, nil)
 	retry, err := h.svc.RetryTurn(ctx, testSession, refused.ID)
@@ -289,26 +329,99 @@ func TestConfirmedLoginReplacesRefusedProviderKeepingHeldQueue(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Retry did not wake a new provider process")
 	}
-	if got := resumed.sentTexts(); len(got) != 1 || got[0] != "refused" {
-		t.Fatalf("new provider received %v, want only the retried message", got)
-	}
 	if got := old.sentTexts(); len(got) != 1 {
 		t.Fatalf("refused provider received %v after it was replaced", got)
 	}
-	assertTurnStaysQueued(t, h, "held")
+	retrySucceedsThenReleases(t, h, resumed, retry, "held")
+}
 
-	resumed.emit(
-		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: retry.ProviderTurnID},
-		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted},
-	)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if got := resumed.sentTexts(); len(got) == 2 && got[1] == "held" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+// A wake after the stop can fail, for example on a provider that will not start.
+// Session Manager then clears the sleep marker and leaves the agent stopped for
+// the existing Resume action. That start must keep what was queued instead of
+// settling it as orphaned work: none of it ever reached a provider.
+func TestConfirmedLoginKeepsHeldQueueThroughFailedWake(t *testing.T) {
+	failWake := func(t *testing.T, h *harness, wakeDone chan<- struct{}) {
+		t.Helper()
+		h.svc.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+			defer close(wakeDone)
+			rec, _, err := h.st.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			if _, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil); err != nil {
+				return err
+			}
+			return errors.New("provider would not start")
+		})
 	}
-	t.Fatalf("held message did not follow the successful retry: new provider received %v", resumed.sentTexts())
+	resume := func(t *testing.T, h *harness, old *hibernationConversation) {
+		t.Helper()
+		if _, err := h.svc.Start(context.Background(), chatsvc.StartConfig{
+			SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+			WorkspacePath: t.TempDir(), ProviderConversationID: old.ProviderConversationID(),
+		}); err != nil {
+			t.Fatalf("resume: %v", err)
+		}
+	}
+	// The failed wake must leave the Resume action reachable.
+	assertStopped := func(t *testing.T, h *harness) {
+		t.Helper()
+		snapshot, err := h.svc.Snapshot(context.Background(), testSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Controller != ports.ChatControllerStopped {
+			t.Fatalf("controller after the failed wake = %q, want stopped", snapshot.Controller)
+		}
+	}
+
+	t.Run("a new message's wake fails", func(t *testing.T) {
+		h, old, resumed, refused := heldQueueAfterConfirmedLogin(t)
+		ctx := context.Background()
+		wakeDone := make(chan struct{})
+		failWake(t, h, wakeDone)
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: "next", ClientMessageID: "next", Origin: domain.MessageOriginHuman,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-wakeDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("background wake did not run")
+		}
+		assertTurnStaysQueued(t, h, "held")
+		assertTurnStaysQueued(t, h, "next")
+		assertStopped(t, h)
+
+		resume(t, h, old)
+		assertTurnStaysQueued(t, h, "held")
+		assertTurnStaysQueued(t, h, "next")
+		retry, err := h.svc.RetryTurn(ctx, testSession, refused.ID)
+		if err != nil {
+			t.Fatalf("RetryTurn: %v", err)
+		}
+		retrySucceedsThenReleases(t, h, resumed, retry, "held", "next")
+	})
+
+	t.Run("an explicit retry's wake fails", func(t *testing.T) {
+		h, old, resumed, refused := heldQueueAfterConfirmedLogin(t)
+		ctx := context.Background()
+		failWake(t, h, make(chan struct{}))
+		if _, err := h.svc.RetryTurn(ctx, testSession, refused.ID); err == nil {
+			t.Fatal("RetryTurn succeeded with a provider that would not start")
+		}
+		assertTurnStaysQueued(t, h, "held")
+		assertStopped(t, h)
+
+		resume(t, h, old)
+		assertTurnStaysQueued(t, h, "held")
+		retry, err := h.svc.RetryTurn(ctx, testSession, refused.ID)
+		if err != nil {
+			t.Fatalf("RetryTurn: %v", err)
+		}
+		retrySucceedsThenReleases(t, h, resumed, retry, "held")
+	})
 }
 
 func waitForActivityState(ctx context.Context, h *harness, want domain.ActivityState) error {
