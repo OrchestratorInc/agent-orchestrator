@@ -16,13 +16,13 @@ import {
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
-import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
+import { ApiError, getAgentModels, getAgents, getSettings, type AgentCatalog, type AgentModelCatalog, type SessionMode } from "../lib/api";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { modelOverride, resolveSpawnAgent, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -85,8 +85,6 @@ function SpawnModalContent() {
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
-	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
-	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
@@ -154,11 +152,8 @@ function SpawnModalContent() {
 	// copy of it — see app/sheets/agent.tsx.
 	const allAgents = useMemo(() => rankAgents(catalog), [catalog]);
 	const agents = useMemo(() => mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode]);
-	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
-	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
-	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
-	const displayedModel = modelTouched ? model : resolvedModel;
-	// "Automatic" when the project pins nothing, because that is the truth: the
+	const displayedModel = modelTouched ? model : "";
+	// "Automatic" unless the user picks one, because that is the truth: the
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
@@ -186,28 +181,10 @@ function SpawnModalContent() {
 	);
 
 	useEffect(() => {
-		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
-		let cancelled = false;
-		const generation = catalogGeneration.current;
-		setProjectDetailLoadedFor(null);
-		getProject(config, projectId)
-			.then((nextProject) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
-			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
-		return () => { cancelled = true; };
-	}, [config, projectId, reloadKey, selectedHostId]);
-
-	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
-		const nextHarness = resolveSpawnAgent({
-			projectWorkerAgent: projectDetail?.config?.worker?.agent,
-			projectAgent: projectDetail?.agent,
-			availableAgents: agents.filter((agent) => agent.selectable).map((agent) => agent.id),
-		});
+		const nextHarness = resolveSpawnAgent(agents.filter((agent) => agent.selectable).map((agent) => agent.id));
 		setHarness((current) => current === nextHarness ? current : nextHarness);
-	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
+	}, [agentTouched, agents, catalog, loading]);
 
 	useEffect(() => {
 		const requestedHostId = selectedHostId;
@@ -245,8 +222,6 @@ function SpawnModalContent() {
 		setCatalog(null);
 		setCatalogError(null);
 		setChatHarnesses([]);
-		setProjectDetail(undefined);
-		setProjectDetailLoadedFor(null);
 		setModelLoading(false);
 		resetModelSource();
 		setError(null);
@@ -258,8 +233,6 @@ function SpawnModalContent() {
 	const changeProject = (nextProjectId: string | null) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
-		setProjectDetail(undefined);
-		setProjectDetailLoadedFor(null);
 		setAgentTouched(false);
 		setProjectId(nextProjectId);
 	};

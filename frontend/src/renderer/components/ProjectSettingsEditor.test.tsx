@@ -7,10 +7,7 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const initialValues: ProjectSettingsDraft = {
 	displayName: "Project", defaultBranch: "main", sessionPrefix: "ao",
-	workerAgent: "codex", orchestratorAgent: "claude-code", reviewerHarness: "",
-	workerModel: "", orchestratorModel: "", reviewerModel: "",
-	workerMode: "", orchestratorMode: "", reviewerMode: "",
-	workerEffort: "", orchestratorEffort: "", reviewerEffort: "",
+	reviewerHarness: "", reviewerModel: "", reviewerMode: "", reviewerEffort: "",
 	workerPermissions: "auto", orchestratorPermissions: "auto", reviewerPermissions: "",
 	autoReview: true, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
 };
@@ -20,7 +17,7 @@ function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), section: "g
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	render(<QueryClientProvider client={client}><TooltipProvider>
 		<ProjectSettingsEditor initialValues={initialValues} section={section}
-			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud, roleAgents: cloud }}
+			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
 	</TooltipProvider></QueryClientProvider>);
 	return { save, onSaveState };
@@ -33,16 +30,11 @@ async function edit(label: string, value: string) {
 }
 
 describe("role agent rows", () => {
-	it("hides the worker and orchestrator agent rows for local projects but keeps approvals and the reviewer", () => {
-		setup(false, undefined, "agents");
+	it.each([false, true])("shows only approvals for the worker and orchestrator, and the reviewer agent, Cloud=%s", (cloud) => {
+		setup(cloud, undefined, "agents");
 		expect(screen.getAllByText("Agent")).toHaveLength(1);
 		expect(screen.getAllByText("Approval")).toHaveLength(3);
 		expect(screen.queryByRole("button", { name: "Worker model" })).toBeNull();
-	});
-
-	it("keeps an agent row per role for Cloud projects", () => {
-		setup(true, undefined, "agents");
-		expect(screen.getAllByText("Agent")).toHaveLength(3);
 	});
 });
 

@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent } from "../lib/agent-select-options";
+import { defaultCloudAgent, isCloudHarnessConnected } from "../lib/cloud-agents";
+import { readTaskComposerPreferences } from "../lib/task-composer-preferences";
 import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -19,7 +21,8 @@ type Harness = components["schemas"]["SpawnSessionRequest"]["harness"];
  * Starts a worker session whose output kind is artifact, in a project or the
  * Scratchpad (no projectId), and opens it. The agent is the first ready agent. A cloud
  * project (cloudOrgId set) starts the session on the control plane with the
- * project's worker agent, else Claude Code.
+ * remembered agent for the project when it is still connected, else the first
+ * connected cloud agent.
  */
 export function useCreateArtifactSession() {
 	const { t } = useTranslation();
@@ -45,14 +48,17 @@ export function useCreateArtifactSession() {
 			setPending(true);
 			try {
 				if (cloudOrgId && projectId) {
-					const { project } = await cloudClient.getProject(cloudOrgId, projectId);
+					const { providerConnections } = await cloudClient.listUserProviderConnections();
+					const remembered = readTaskComposerPreferences(projectId)?.lastAgent ?? "";
+					const harness = isCloudHarnessConnected(providerConnections, remembered) ? remembered : defaultCloudAgent(providerConnections);
+					if (harness === "") throw new Error(t("newTask.noReadyAgent"));
 					// Started like a task: in the user's default session interface,
 					// through createCloudSession, which retries without it for a
 					// control plane that predates the field.
 					const { session } = await createCloudSession(cloudClient, cloudOrgId, {
 						projectId,
 						kind: "worker",
-						harness: project.config?.worker?.agent || "claude-code",
+						harness,
 						displayName: t("artifacts.newSessionName"),
 						prompt: "",
 						requestedOutput: "artifact",

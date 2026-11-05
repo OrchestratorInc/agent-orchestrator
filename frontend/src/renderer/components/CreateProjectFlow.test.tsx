@@ -218,9 +218,7 @@ vi.mock("../hooks/useSettings", () => ({
 // Probe stand-in: the real sheet needs a QueryClientProvider + agent catalog to
 // render. These tests only care which path/kind CreateProjectFlow hands it and
 // whether it's open, so a thin stub keeps the suite fast and focused.
-// RequiredAgentField is left real (the cloud agent step below renders it
-// directly against provider-connection state); only the heavy local sheet,
-// which needs its own daemon-backed state, is stubbed.
+// Only the heavy local sheet, which needs its own daemon-backed state, is stubbed.
 vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./CreateProjectAgentSheet")>()),
 	CreateProjectAgentSheet: ({
@@ -2156,13 +2154,9 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/private-repo/ }));
 		// The picker already shows the repository; no second summary with its URL and branch.
 		expect(screen.queryByText(/github\.com\/acme\/private-repo/)).not.toBeInTheDocument();
-		// Only harnesses connected for cloud are offered, with a way to connect more.
-		await user.click(await screen.findByLabelText("Worker agent"));
-		expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
-		expect(screen.queryByRole("option", { name: /Codex/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
-		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
-		await user.keyboard("{Escape}");
+		// A session chooses its own agent, so the step has no agent pickers.
+		expect(screen.queryByLabelText("Worker agent")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Orchestrator agent")).not.toBeInTheDocument();
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
 		// The App path authorizes by repository id and never sends a repo URL or a
@@ -2171,10 +2165,7 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(cloudMocks.createGitHubProject).toHaveBeenCalledWith("org-1", {
 				githubRepositoryId: "555",
 				displayName: "private-repo",
-				config: {
-					worker: { agent: "claude-code" },
-					orchestrator: { agent: "claude-code" },
-				},
+				config: {},
 			}),
 		);
 		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
@@ -2753,7 +2744,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 
-		expect(await screen.findByLabelText("Worker agent")).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Create" })).toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("textbox", { name: "Workspace name prefix" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Create" }));
@@ -2784,7 +2775,7 @@ describe("CreateProjectFlow project import validation", () => {
 			await user.click(screen.getByRole("button", { name: "Cloud" }));
 			await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 			await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
-			await screen.findByLabelText("Worker agent");
+			await screen.findByRole("button", { name: "Create" });
 			return user;
 		}
 
@@ -2877,7 +2868,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		// A ready harness fills the agent fields, but create stays blocked until a
 		// template is chosen (there is no implicit organization default).
-		await screen.findByLabelText("Worker agent");
+		await screen.findByRole("button", { name: "Create" });
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
 
 		await user.click(screen.getByRole("combobox", { name: "Template" }));
@@ -2919,7 +2910,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
 		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
-		await screen.findByLabelText("Worker agent");
+		await screen.findByRole("button", { name: "Create" });
 
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
 		expect(prefix).toHaveAttribute("placeholder", "app");
@@ -2975,7 +2966,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
 		await user.click(await screen.findByRole("option", { name: "AO dev-kit" }));
-		await screen.findByLabelText("Worker agent");
+		await screen.findByRole("button", { name: "Create" });
 
 		expect(screen.queryByRole("textbox", { name: "Workspace name prefix" })).not.toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
@@ -3019,7 +3010,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Cloud" }));
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
-		await screen.findByLabelText("Worker agent");
+		await screen.findByRole("button", { name: "Create" });
 		// No section before a template is chosen.
 		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
 
@@ -3075,7 +3066,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
 		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
-		await screen.findByLabelText("Worker agent");
+		await screen.findByRole("button", { name: "Create" });
 		expect(screen.getByRole("textbox", { name: "Workspace name prefix" })).toHaveValue("");
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 		await user.click(screen.getByRole("button", { name: "Create" }));
@@ -3122,8 +3113,6 @@ describe("CreateProjectFlow project import validation", () => {
 			githubRepositoryId: "1",
 			displayName: "alice",
 			config: {
-				worker: { agent: "claude-code" },
-				orchestrator: { agent: "claude-code" },
 				repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }],
 			},
 		});
@@ -3185,7 +3174,9 @@ describe("CreateProjectFlow project import validation", () => {
 		const [orgId, body] = cloudMocks.createStandaloneProject.mock.calls[0];
 		expect(orgId).toBe("org-1");
 		expect(body.displayName).toBe("Platform template");
-		expect(body.config).toMatchObject({ worker: { agent: "claude-code" }, coder: { templateId: "tpl-1" } });
+		expect(body.config).toMatchObject({ coder: { templateId: "tpl-1" } });
+		expect(body.config).not.toHaveProperty("worker");
+		expect(body.config).not.toHaveProperty("orchestrator");
 		expect(body.config).not.toHaveProperty("repos");
 		expect(cloudMocks.createGitHubProject).not.toHaveBeenCalled();
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-standalone"));

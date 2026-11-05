@@ -2518,6 +2518,15 @@ describe("ChatWorkspace timeline", () => {
 		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
 	});
 
+	it("keeps the sample requests on screen while the orchestrator starts, without filling the composer", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
+
+		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
+		await user.click(prompts[0]);
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("Review my recent changes for bugs");
+	});
+
 	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
 
