@@ -2,6 +2,8 @@ package agentcreds
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -41,11 +43,24 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, keychainTimeout)
 	defer cancel()
+	configDir := opts.env("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+	if configDir == "" {
+		configDir = strings.TrimSpace(opts.ConfigDir)
+		if configDir == "" {
+			configDir = opts.env("CLAUDE_CONFIG_DIR")
+		}
+	}
+	suffix := ""
+	if configDir != "" {
+		// Claude keys account logins on the exact path text, without cleaning it.
+		hash := sha256.Sum256([]byte(configDir))
+		suffix = fmt.Sprintf("-%x", hash[:4])
+	}
 
 	// Try the older "Claude Code-credentials" service first. It stores a JSON
 	// document with an OAuth access token, or occasionally a bare token.
 	out, err := runner(probeCtx, "security",
-		"find-generic-password", "-s", keychainServiceCredentials, "-w")
+		"find-generic-password", "-s", keychainServiceCredentials+suffix, "-w")
 	if probeCtx.Err() != nil {
 		return storedOAuth{}, false
 	}
@@ -64,7 +79,7 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	// a setup token (sk-ant-oat*) could also land here, so the Kind is
 	// chosen by prefix rather than assumed.
 	apiKeyOut, apiKeyErr := runner(probeCtx, "security",
-		"find-generic-password", "-s", keychainServiceManagedKey, "-w")
+		"find-generic-password", "-s", keychainServiceManagedKey+suffix, "-w")
 	if probeCtx.Err() != nil {
 		return storedOAuth{}, false
 	}
