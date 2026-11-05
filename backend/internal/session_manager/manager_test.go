@@ -12203,7 +12203,7 @@ func TestAOSkillPointerNamesBugTriageSkill(t *testing.T) {
 	skill := filepath.ToSlash(filepath.Join(dir, "skills", "bug-triage", "SKILL.md"))
 	for _, chat := range []bool{false, true} {
 		pointer := m.aoSkillPointer(chat)
-		if !strings.Contains(pointer, "bug-triage skill") || !strings.Contains(pointer, "`"+skill+"`") {
+		if !strings.Contains(pointer, "To report Orchestrator bugs, read `"+skill+"`.") {
 			t.Fatalf("chat=%v pointer does not lead to the skill:\n%s", chat, pointer)
 		}
 	}
