@@ -109,6 +109,35 @@ describe("SharedProjectPanel", () => {
 		expect(quiet.container.querySelector("[data-shared-project-pending]")).toBeNull();
 	});
 
+	it.each([
+		{ who: "the owner", shared: false },
+		{ who: "a guest", shared: true },
+	])("shows $who nothing until the project has a pull request, then the control", ({ shared }) => {
+		const viewer = shared ? { ...orchestrator, cloud: { orgId: "org-1", shared: true } } : orchestrator;
+		const quietWork = { ...guestWork, prs: [] as WorkspaceSession["prs"] };
+		const { container, rerender } = render(<SharedProjectPanel orchestrator={viewer} sessions={[viewer, quietWork]} />);
+		expect(container.textContent).toBe("");
+		expect(screen.queryByRole("button")).toBeNull();
+		mocks.projectPRs = [{ number: 500, url: "https://github.com/owner/repo/pull/500", headSha: "head-5" }];
+		rerender(<SharedProjectPanel orchestrator={viewer} sessions={[viewer, quietWork]} />);
+		expect(screen.getByRole("button", { name: "Shared project: 1 pull request" })).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("closes its list when the last pull request goes, so it does not reopen on its own", () => {
+		mocks.projectPRs = [{ number: 500, url: "https://github.com/owner/repo/pull/500", headSha: "head-5" }];
+		const quietWork = { ...guestWork, prs: [] as WorkspaceSession["prs"] };
+		const { rerender } = render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		fireEvent.click(screen.getByRole("button", { name: "Shared project: 1 pull request" }));
+		expect(document.querySelector("[data-shared-project-list]")).not.toBeNull();
+		mocks.projectPRs = [];
+		rerender(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		expect(screen.queryByRole("button")).toBeNull();
+		mocks.projectPRs = [{ number: 501, url: "https://github.com/owner/repo/pull/501", headSha: "head-6" }];
+		rerender(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		expect(screen.getByRole("button", { name: "Shared project: 1 pull request" })).toHaveAttribute("aria-expanded", "false");
+		expect(document.querySelector("[data-shared-project-list]")).toBeNull();
+	});
+
 	it("lists who opened each pull request and in which session, and lets the owner approve or reject a request", () => {
 		mocks.requests = [request];
 		render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, guestWork]} />);

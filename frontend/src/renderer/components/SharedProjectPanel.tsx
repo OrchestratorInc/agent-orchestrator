@@ -1,5 +1,5 @@
 import { ChevronDown, GitPullRequest, Users } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -18,7 +18,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
  * every pull request the project's sessions opened, who opened it and in
  * which session, and the merge requests guests sent. Its owner approves
  * (which merges) or rejects a request here; a guest sees where theirs stands.
- * Nothing shows for a project nobody was given.
+ * Nothing shows for a project nobody was given, nor before the project has a
+ * pull request or a merge request.
  *
  * It lives in the header, not over the conversation or terminal, so it never
  * covers a message or terminal output; the list opens as a popover.
@@ -40,8 +41,6 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const shared = participants.length > 0;
 	const requests = useProjectMergeRequests(orgId, projectId, shared, orchestrator.id);
 	const projectPRs = useSessionScmSummary(orchestrator.id, shared, orgId, orchestrator.autoInjectCI === true, hostId);
-	if (!orgId || !shared) return null;
-
 	const guest = orchestrator.cloud?.shared === true;
 	const ownerName = participants.find((person) => person.role === "owner")?.name;
 	const workers = sessions.filter((session) => !isOrchestratorSession(session) && session.cloud);
@@ -51,6 +50,15 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const elsewhere = (projectPRs.data?.prs ?? []).filter((pr) => !listed.has(prDisplayKey(pr)));
 	const prCount = workers.reduce((count, session) => count + session.prs.length, 0) + elsewhere.length;
 	const pending = (requests.data ?? []).filter((request) => request.status === "pending");
+	// Only a project with something to show: a shared project with no pull
+	// requests and no merge requests has nothing to say in the header.
+	const visible = Boolean(orgId) && shared && (prCount > 0 || pending.length > 0);
+	// Hidden while open (its last pull request closed), it opens closed next time.
+	useEffect(() => {
+		if (!visible) setOpen(false);
+	}, [visible]);
+	if (!visible || !orgId) return null;
+
 	const summary = [
 		t("shareProject.prCount", { count: prCount }),
 		...(pending.length > 0 ? [guest ? t("shareProject.waiting", { count: pending.length }) : t("shareProject.toApprove", { count: pending.length })] : []),
