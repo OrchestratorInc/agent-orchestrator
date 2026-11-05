@@ -1,13 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { isWindowsPlatform } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false) }));
 vi.mock("../lib/platform", () => ({ isWindowsPlatform }));
+vi.mock("../stores/shell-agent-store", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../stores/shell-agent-store")>()),
+	useShellAgentStream: () => {},
+}));
 
-afterEach(() => isWindowsPlatform.mockReturnValue(false));
+afterEach(() => {
+	isWindowsPlatform.mockReturnValue(false);
+	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+});
 
 const shell: ShellTerminal = {
 	handleId: "shellterm-1",
@@ -203,5 +211,27 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 		fireEvent.contextMenu(tab);
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+});
+
+describe("ShellTerminalTab agent name", () => {
+	it("shows the agent's name on a default-named tab while it runs", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
+	});
+
+	it("keeps a name the user chose", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
+		renderTab({ appearance: "connected" });
+		expect(screen.getByRole("tab", { name: "ao" })).toBeInTheDocument();
+	});
+
+	it("renames from the stored title, not the agent's name", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code" }));
+		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toHaveValue("Terminal 3");
 	});
 });

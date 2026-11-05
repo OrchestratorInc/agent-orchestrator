@@ -41,8 +41,6 @@ export function ShellTerminalTab({
 	onRename,
 }: ShellTerminalTabProps) {
 	const { t } = useTranslation();
-	const title = shell.title;
-	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	const [isEditing, setIsEditing] = useState(false);
 	const [draft, setDraft] = useState(shell.title);
 	const inputRef = useRef<HTMLInputElement | null>(null);
@@ -55,6 +53,12 @@ export function ShellTerminalTab({
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
+	// While an agent runs, a default-named tab ("Terminal 3") reads as the
+	// agent ("Claude Code"). A name the user chose stays. This is display only:
+	// rename still edits the stored title, and the tab reads "Terminal 3" again
+	// once the agent exits.
+	const title = agent && isDefaultShellTitle(shell.title) ? agentLabel(agent.harness) : shell.title;
+	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
 	}, [isActive, markSeen, shell.handleId, unseenDone]);
@@ -71,7 +75,7 @@ export function ShellTerminalTab({
 
 	const beginEdit = () => {
 		if (!canEdit || isEditing) return;
-		setDraft(title);
+		setDraft(shell.title);
 		setIsEditing(true);
 	};
 
@@ -125,7 +129,7 @@ export function ShellTerminalTab({
 
 	const cancel = () => {
 		setIsEditing(false);
-		setDraft(title);
+		setDraft(shell.title);
 	};
 
 	const closeControl = {
@@ -257,6 +261,11 @@ export function ShellTerminalTab({
 			</Pressable>
 		</span>
 	);
+}
+
+// The daemon names new shells "Terminal N" (shellterm nextShellTerminalTitle).
+function isDefaultShellTitle(title: string): boolean {
+	return /^Terminal \d+$/.test(title);
 }
 
 // The agent's state in the tab, in the sidebar's vocabulary: a spinner while
