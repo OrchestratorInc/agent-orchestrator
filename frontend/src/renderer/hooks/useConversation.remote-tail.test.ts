@@ -120,6 +120,25 @@ describe("refreshRemoteConversation", () => {
 		expect(getMock.mock.calls[1][1].params.query).toEqual({ beforeSequence: undefined, limit: 30, outputLimit: 512 });
 	});
 
+	it("starts over from the new page when it does not reach the cached one", async () => {
+		const newest = { hasMoreBefore: true, oldestSequence: 200, latestSequence: 201, turns: [wireTurn("t9", "completed")], messages: [wireMessage("n1", "t9", 200), wireMessage("n2", "t9", 201)] };
+		getMock.mockResolvedValueOnce(wire({ afterSequence: 3, ...newest })).mockResolvedValueOnce(wire(newest));
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pageParams).toEqual([undefined]);
+		expect(data.pages[0].items.map((item) => item.id)).toEqual(["n1", "n2"]);
+		expect(data.pages[0]).toMatchObject({ oldestSequence: 200, hasMoreBefore: true });
+	});
+
+	it("keeps the rows that slid out of a new page that still reaches the cached one", async () => {
+		const newest = { hasMoreBefore: true, oldestSequence: 7, latestSequence: 8, turns: [wireTurn("t3", "completed")], messages: [wireMessage("n1", "t3", 7), wireMessage("n2", "t3", 8)] };
+		getMock.mockResolvedValueOnce(wire({ afterSequence: 3, ...newest })).mockResolvedValueOnce(wire(newest));
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages).toHaveLength(2);
+		expect(data.pages[0].items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "a2", "r2", "n1", "n2"]);
+	});
+
 	it("uses the answer of a daemon that ignores afterSequence as the live page", async () => {
 		getMock.mockResolvedValueOnce(wire({ oldestSequence: 4, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 4)] }));
 		await refreshRemoteConversation(client, "s1", "box");

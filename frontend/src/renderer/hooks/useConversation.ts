@@ -491,6 +491,8 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
 		const priorLive = previous.pages[0];
+		// The rows between these pages are unknown. Scrolling up reads them from here.
+		if (latest.oldestSequence > priorLive.latestSequence + 1) return { pages: [latest], pageParams: [undefined] };
 		const slidOut = latest.oldestSequence > priorLive.oldestSequence
 			? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
 			: [];
