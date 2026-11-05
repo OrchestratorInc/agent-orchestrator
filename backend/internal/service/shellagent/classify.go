@@ -89,7 +89,12 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 		}
 		flag, _, hasValue := strings.Cut(arg, "=")
 		switch flag {
-		case "-e", "--eval", "-p", "--print", "--check":
+		case "-", "-e", "--eval", "-p", "--print", "--check":
+			return ""
+		case "--":
+			if i+1 < len(argv) {
+				return classifyProgram(argv[i+1])
+			}
 			return ""
 		case "-c":
 			if interpreter != "bun" && interpreter != "deno" {
@@ -106,6 +111,14 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 			if strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-p") ||
 				(strings.HasPrefix(arg, "-c") && interpreter != "bun" && interpreter != "deno") {
 				return ""
+			}
+			if !hasValue {
+				switch arg {
+				case "--no-warnings", "--use-system-ca", "--smol", "--bun", "--allow-all", "-A", "-u", "-B", "-I", "-s", "-S", "-m":
+				default:
+					// An unknown option may consume the next argument as its value.
+					return ""
+				}
 			}
 			continue
 		}
