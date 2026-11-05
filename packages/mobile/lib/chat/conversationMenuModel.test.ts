@@ -24,6 +24,13 @@ describe("conversationMenuGroups", () => {
 		]);
 	});
 
+	// PR Review draws the app's pull-request glyph on both platforms, as the
+	// board's header does; nothing else replaces its symbol.
+	it("marks PR Review, and only it, for the app's pull-request glyph", () => {
+		const items = conversationMenuGroups({ ...base, artifactCount: 2, hasPullRequest: true }).flatMap((group) => group.items);
+		expect(items.filter((item) => item.glyph).map((item) => [item.label, item.glyph])).toEqual([["PR Review", "pullRequest"]]);
+	});
+
 	// On an empty session both led to an empty page.
 	it("offers Artifacts and PR Review only once there is something to open", () => {
 		expect(layout(base)).toEqual([

@@ -64,6 +64,11 @@ export type ConversationMenuItem = {
 	destructive?: boolean;
 	/** The row's glyph: an SF Symbol on iOS, a bundled Material Symbol on Android. */
 	icon: { ios: IOSSymbol; android: MaterialDrawableName };
+	/**
+	 * The app's own glyph in place of `icon`, on both platforms: the pull
+	 * request, which neither symbol set draws as the board's header does.
+	 */
+	glyph?: "pullRequest";
 	/** A ring at the row's end filled to this percentage: the context Compact would free. */
 	meter?: number;
 };
@@ -88,7 +93,7 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
 		case "artifacts": return { action, label: "Artifacts", subtitle: `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}`, icon: { ios: "doc.text", android: "description" } };
 		case "pin": return { action, label: state.pinned ? "Unpin" : "Pin", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };
-		case "pull_requests": return { action, label: "PR Review", icon: { ios: "arrow.triangle.pull", android: "rate_review" } };
+		case "pull_requests": return { action, label: "PR Review", icon: { ios: "arrow.triangle.pull", android: "rate_review" }, glyph: "pullRequest" };
 		case "compact": return {
 			action,
 			label: state.compacting ? "Compacting…" : "Compact",

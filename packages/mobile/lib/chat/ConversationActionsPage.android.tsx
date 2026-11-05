@@ -4,6 +4,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GroupedRow, GroupedSection, groupedListPadding } from "../composeGroupedList.android";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { materialDrawable } from "../toolbarIcon.android";
+// The app's pull-request glyph as a vector: Compose icons draw only vector
+// drawables, and failed on the PNG the iOS sheet and board header use.
+const PULL_REQUEST_GLYPH = require("../../assets/glyphs/pull_request.xml");
 import { font, iconSize, space } from "../tokens";
 import type { ConversationActionsPageProps } from "./ConversationActionsPage.types";
 
@@ -33,7 +36,7 @@ export function ConversationActionsPage({ groups, onSelect }: ConversationAction
 								key={item.action}
 								headline={item.label}
 								supporting={item.subtitle}
-								leading={<Icon source={materialDrawable(item.icon.android)} size={iconSize.xl} tint={item.destructive ? t.red : t.textSecondary} />}
+								leading={<Icon source={item.glyph === "pullRequest" ? PULL_REQUEST_GLYPH : materialDrawable(item.icon.android)} size={iconSize.xl} tint={item.destructive ? t.red : t.textSecondary} />}
 								trailing={item.meter === undefined ? undefined : <ContextRing percent={item.meter} />}
 								onPress={() => onSelect(item.action)}
 								disabled={item.disabled}
