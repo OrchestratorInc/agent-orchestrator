@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
+import type { WorkspaceSession } from "../../types/workspace";
 import { renderChat as render } from "../../test/render-chat";
 import { useUiStore } from "../../stores/ui-store";
 import { apiClient } from "../../lib/api-client";
@@ -231,7 +232,23 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).not.toHaveBeenCalled();
 		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
-		expect(within(band()).queryByRole("button")).toBeNull();
+		// Sending it again is the user's click, so they need not type it again.
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledOnce();
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("keeps a cloud chat open, since nothing here watches its login", () => {
+		const session = {
+			id: chatFixture.sessionId, workspaceId: "project-1", workspaceName: "agent-orchestrator", title: "Cloud chat",
+			provider: "claude-code", kind: "worker", mode: "chat", status: "working", updatedAt: "2026-08-15T00:00:00Z",
+			activity: { state: "active", lastActivityAt: "2026-08-15T00:00:00Z" }, prs: [], runtimeConnected: true,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "running" },
+		} satisfies WorkspaceSession;
+		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} session={session} retryControl={{ retry: vi.fn() }} />);
+
+		expect(band()).toHaveTextContent("Claude Code is signed out · send your message again once you’re in");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
 	});
 
 	it("waits for the login on the session's own host", async () => {

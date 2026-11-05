@@ -5722,11 +5722,12 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 		? latest
 		: undefined;
 	const refusedId = refused?.id;
+	const resendable = Boolean(refusedId && retryControl && retryable.has(refusedId));
 	// A message that ran no tool and changed nothing can be sent again on its own
 	// once the login takes: there is nothing it could do twice. Any other, and every
 	// cloud one (the cloud connection's login is not watched from here), is the
 	// user's to send again.
-	const queued = Boolean(refusedId && !cloud && retryControl && retryable.has(refusedId) && !turnDidWork(snapshot, refusedId));
+	const queued = resendable && !cloud && !turnDidWork(snapshot, refusedId!);
 	// Only a login for the account this session runs on fixes it.
 	const provider = agentAccountProviderFor(snapshot.harness);
 	const stored = useUiStore((state) => state.loginReturn);
@@ -5811,8 +5812,9 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 		lines,
 		logIn,
 		// Until the login takes (or the chat moves to another agent), nothing new can
-		// be sent: the agent would refuse it the same way.
-		locked: Boolean(refused) && (state === "signedOut" || state === "waiting"),
+		// be sent: the agent would refuse it the same way. A cloud login is not watched
+		// from here, so nothing would ever unlock it: a cloud chat stays open.
+		locked: Boolean(refused) && !cloud && (state === "signedOut" || state === "waiting"),
 		...(refused ? {
 			band: {
 				harness: snapshot.harness,
@@ -5821,7 +5823,9 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				state,
 				queued,
 				onLogin: logIn,
-				...(queued ? { onSendAgain: sendAgain } : {}),
+				// Offered once the user is in, also for a message that did work: sending
+				// it again is the user's click, never automatic.
+				...(resendable ? { onSendAgain: sendAgain } : {}),
 				...(sendError ? { error: sendError } : {}),
 			},
 		} : {}),
