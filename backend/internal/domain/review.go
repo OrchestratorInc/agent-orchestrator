@@ -86,9 +86,12 @@ type ReviewRun struct {
 	// Body is the review text the reviewer submitted. It is recorded for AO's
 	// own tracking; the reviewer also posts the review to the PR itself.
 	Body string `json:"body"`
+	// Publication records provider publication independently of the local verdict.
+	Publication *ReviewPublication `json:"publication,omitempty"`
 	// GithubReviewID is the id of the GitHub PR review the reviewer posted for
 	// this pass (the `gh api .../pulls/{n}/reviews` object id), recorded at
-	// submit time. It is empty when the reviewer could not post to the provider.
+	// submit time. It is empty for GitLab, whose note/discussion references
+	// belong in Publication, and when no GitHub review was confirmed.
 	// When the pass requests changes, AO includes it in the message to the
 	// worker so the worker knows exactly which review to address and reply to.
 	GithubReviewID string     `json:"githubReviewId"`

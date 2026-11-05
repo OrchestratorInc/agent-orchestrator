@@ -234,6 +234,17 @@ PR actions are available through `ao pr merge` and
 `ao review trigger` (also `execute` and `restart`), `ao review cancel` (also
 `stop`), and `ao review submit`.
 
+`ao review submit --reviews -` accepts each result's optional `publication`
+receipt alongside its local verdict. The receipt binds a provider, exact PR/MR
+and reviewed head to real typed object references. `published` requires confirmed
+references; `blocked` and `unconfirmed` require an explicit error and do not count
+as posted. A missing receipt does not confirm GitLab publication; legacy GitHub
+review IDs remain supported. The first result atomically records the receipt
+and the session's auto-inject policy. Retries preserve that snapshot. AO records
+the reviewer's readback and requests normal read-only SCM refresh for confirmed
+publication; this does not independently verify provider publication or worker
+delivery.
+
 ## Configuration
 
 The CLI and daemon share the same environment-driven config:

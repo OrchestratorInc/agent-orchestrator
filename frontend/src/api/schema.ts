@@ -6868,6 +6868,21 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        ReviewPublication: {
+            error?: string;
+            prUrl: string;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            refs?: components["schemas"]["ReviewPublicationRef"][];
+            /** @enum {string} */
+            status: "published" | "blocked" | "unconfirmed";
+            targetSha: string;
+        };
+        ReviewPublicationRef: {
+            id: string;
+            /** @enum {string} */
+            kind: "review" | "note" | "discussion" | "draft_note";
+        };
         ReviewRun: {
             autoInjectReview: boolean;
             batchId: string;
@@ -6880,6 +6895,7 @@ export interface components {
             harness: string;
             id: string;
             prUrl: string;
+            publication?: components["schemas"]["ReviewPublication"];
             reviewId: string;
             sessionId: string;
             status: string;
@@ -7706,6 +7722,7 @@ export interface components {
             body?: string;
             /** @description Id of the GitHub PR review the reviewer posted, if any. */
             githubReviewId?: string;
+            publication?: components["schemas"]["ReviewPublication"];
             /** @description Batched review results recorded by one reviewer CLI command. */
             reviews?: components["schemas"]["SubmitReviewItem"][];
             /** @description Review run id being completed. */
@@ -7718,6 +7735,7 @@ export interface components {
             body?: string;
             /** @description Id of the GitHub PR review the reviewer posted, if any. */
             githubReviewId?: string;
+            publication?: components["schemas"]["ReviewPublication"];
             /** @description Review run id being completed. */
             runId: string;
             /** @description Review verdict: approved or changes_requested. */

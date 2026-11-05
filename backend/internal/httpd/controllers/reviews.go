@@ -87,15 +87,19 @@ type SubmitReviewItem struct {
 	Verdict        string `json:"verdict" description:"Review verdict: approved or changes_requested."`
 	Body           string `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
 	GithubReviewID string `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	// Publication reports the reviewer's provider readback, separately from the verdict.
+	Publication *domain.ReviewPublication `json:"publication,omitempty"`
 }
 
 // SubmitReviewInput is the body of POST /api/v1/sessions/{sessionId}/reviews/submit.
 type SubmitReviewInput struct {
-	RunID          string             `json:"runId,omitempty" description:"Review run id being completed."`
-	Verdict        string             `json:"verdict,omitempty" description:"Review verdict: approved or changes_requested."`
-	Body           string             `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
-	GithubReviewID string             `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
-	Reviews        []SubmitReviewItem `json:"reviews,omitempty" description:"Batched review results recorded by one reviewer CLI command."`
+	RunID          string `json:"runId,omitempty" description:"Review run id being completed."`
+	Verdict        string `json:"verdict,omitempty" description:"Review verdict: approved or changes_requested."`
+	Body           string `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
+	GithubReviewID string `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	// Publication reports the reviewer's provider readback for a single result.
+	Publication *domain.ReviewPublication `json:"publication,omitempty"`
+	Reviews     []SubmitReviewItem        `json:"reviews,omitempty" description:"Batched review results recorded by one reviewer CLI command."`
 }
 
 // ReviewsController owns the session-scoped /reviews routes. A nil Svc returns 501.
@@ -407,6 +411,7 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 				Verdict:        domain.ReviewVerdict(item.Verdict),
 				Body:           item.Body,
 				GithubReviewID: item.GithubReviewID,
+				Publication:    item.Publication,
 			})
 		}
 	} else {
@@ -415,6 +420,7 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 			Verdict:        domain.ReviewVerdict(in.Verdict),
 			Body:           in.Body,
 			GithubReviewID: in.GithubReviewID,
+			Publication:    in.Publication,
 		})
 	}
 	runs, err := c.Svc.SubmitMany(r.Context(), sessionID(r), reviews)

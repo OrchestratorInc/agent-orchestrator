@@ -234,7 +234,7 @@ func (f *fakeStore) UpdateReviewAgentSessionID(_ context.Context, id, agentSessi
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool, publication ...*domain.ReviewPublication) (bool, error) {
 	for i := range f.runs {
 		if f.runs[i].ID == id {
 			if f.runs[i].Status != domain.ReviewRunRunning {
@@ -244,6 +244,9 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 			f.runs[i].Verdict = verdict
 			f.runs[i].Body = body
 			f.runs[i].GithubReviewID = githubReviewID
+			if len(publication) > 0 {
+				f.runs[i].Publication = publication[0]
+			}
 			f.runs[i].AutoInjectReview = autoInjectReview
 			return true, nil
 		}

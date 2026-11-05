@@ -97,7 +97,7 @@ func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.Sessi
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool, publication ...*domain.ReviewPublication) (bool, error) {
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
 			if f.batchRuns[i].Status != domain.ReviewRunRunning {
@@ -108,6 +108,9 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 			f.batchRuns[i].Verdict = verdict
 			f.batchRuns[i].Body = body
 			f.batchRuns[i].GithubReviewID = githubReviewID
+			if len(publication) > 0 {
+				f.batchRuns[i].Publication = publication[0]
+			}
 			f.batchRuns[i].AutoInjectReview = autoInjectReview
 			if f.run.ID == id {
 				f.run = f.batchRuns[i]
@@ -123,6 +126,9 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 	f.run.Verdict = verdict
 	f.run.Body = body
 	f.run.GithubReviewID = githubReviewID
+	if len(publication) > 0 {
+		f.run.Publication = publication[0]
+	}
 	f.run.AutoInjectReview = autoInjectReview
 	return true, nil
 }
