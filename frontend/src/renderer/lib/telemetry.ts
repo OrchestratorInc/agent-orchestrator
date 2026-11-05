@@ -476,6 +476,8 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 			// Storage is best-effort; capture is already gated on the flag.
 		}
 		if (posthogReady) {
+			// opt_out_capturing does not stop /flags requests; pausing reloads does.
+			posthog.featureFlags?.setReloadingPaused(true);
 			posthog.opt_out_capturing();
 			posthog.reset();
 		}
@@ -484,6 +486,7 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	}
 	if (posthogReady) {
 		posthog.opt_in_capturing({ captureEventName: false });
+		posthog.featureFlags?.setReloadingPaused(false);
 		registerBaseProperties();
 	} else {
 		initPromise = null;
@@ -1280,10 +1283,10 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		// recorder off in the client instead of relying on the project-side
 		// toggle staying off.
 		disable_session_recording: true,
-		// AO reads no feature flags and ships no surveys. Both of these poll
-		// PostHog on init, and /flags requests are billed, so every one of these
-		// requests is pure cost for data nothing consumes.
-		advanced_disable_flags: true,
+		// Feature flags load so experiments can target installs. An in-session
+		// analytics opt-out pauses flag reloads (applyAnalyticsOptOut); an
+		// opted-out launch never creates the client. AO ships no surveys.
+		advanced_disable_flags: false,
 		disable_surveys: true,
 		// AO owns the stable random installation ID. Memory-only SDK
 		// persistence prevents legacy identified state from replacing it after

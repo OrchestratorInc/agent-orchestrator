@@ -281,9 +281,8 @@ describe("telemetry sanitizers", () => {
 		// in this module entirely. Disabling it client-side means the project-side
 		// toggle cannot switch it back on for shipped builds.
 		expect(config.disable_session_recording).toBe(true);
-		// AO reads no flags and ships no surveys, and /flags requests are billed
-		// per request, so any request here is cost for data nothing reads.
-		expect(config.advanced_disable_flags).toBe(true);
+		// Feature flags load (experiments); AO ships no surveys.
+		expect(config.advanced_disable_flags).toBe(false);
 		expect(config.disable_surveys).toBe(true);
 		// Already-disabled capture paths that would otherwise autocapture volume.
 		expect(config.autocapture).toBe(false);
