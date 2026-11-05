@@ -403,7 +403,8 @@ export function AgentModelPicker({
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
-				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
+				{/* Chat names the model, not the agent's logo; the terminal picker switches agents, so it keeps the mark. */}
+				{terminal ? <ProviderMark provider={currentHarness} className="size-3.5" /> : null}
 				{loadingModels && !savedLabel && !pending && !terminal ? (
 					<span className="flex items-center gap-1.5 text-muted-foreground">
 						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
@@ -439,6 +440,7 @@ export function AgentModelPicker({
 							active={row.harness === shownHarness && row.model.id === source.modelId}
 							searchActive={row.id === searchActiveID}
 							disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
+							showMark={terminal}
 							onPick={pickFromSearch}
 						/>
 					)) : (
@@ -452,7 +454,7 @@ export function AgentModelPicker({
 									onSelect={(event) => { stayOpen(event); pickSetup(favorite); }}
 									className="group/model text-xs text-foreground"
 								>
-									<ProviderMark provider={favorite.harness} className="mr-2 size-3.5" />
+									{terminal ? <ProviderMark provider={favorite.harness} className="mr-2 size-3.5" /> : null}
 									<span className="min-w-0 truncate">{favorite.label}</span>
 									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
 									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
@@ -484,7 +486,7 @@ export function AgentModelPicker({
 													}}
 													className={cn("text-xs text-foreground", oneShot(agent.id) && "opacity-50")}
 												>
-													<ProviderMark provider={agent.id} className="mr-2 size-3.5" />
+													{terminal ? <ProviderMark provider={agent.id} className="mr-2 size-3.5" /> : null}
 													<span className="min-w-0 truncate">{agent.label}</span>
 												</OptionMenuItem>
 											))}
@@ -662,12 +664,13 @@ function claudeOrder<T extends { id: string; label: string }>(models: T[]): T[] 
 	return [...current, ...other];
 }
 
-const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive, disabled, onPick }: {
+const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive, disabled, showMark, onPick }: {
 	row: { id: string; harness: string; model: PickerModel };
 	optionId?: string;
 	active: boolean;
 	searchActive: boolean;
 	disabled: boolean;
+	showMark: boolean;
 	onPick: (event: Event, harness: string, id: string) => void;
 }) {
 	return (
@@ -680,7 +683,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 			onSelect={(event) => onPick(event, row.harness, row.model.id)}
 			className="text-xs text-foreground"
 		>
-			<ProviderMark provider={row.harness} className="mr-2 size-3.5" />
+			{showMark ? <ProviderMark provider={row.harness} className="mr-2 size-3.5" /> : null}
 			<span className="min-w-0 truncate" title={row.model.unavailableReason}>{row.model.label}</span>
 			<span className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(row.harness)}</span>
 		</OptionMenuItem>

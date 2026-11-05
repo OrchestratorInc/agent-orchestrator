@@ -5,7 +5,8 @@ import { Pressable } from "./ui/pressable";
 type TerminalTabFrameProps = {
 	active: boolean;
 	wide?: boolean;
-	icon: ReactNode;
+	/** None leaves the label alone at the tab's edge unless an action needs the slot. */
+	icon?: ReactNode;
 	label: string;
 	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
 	action?: ReactNode;
@@ -65,7 +66,7 @@ export function TerminalTabFrame({
 		>
 			{editingContent ? (
 				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-control leading-none">
-					<span className="grid size-icon-base shrink-0 place-items-center">{icon}</span>
+					{icon ? <span className="grid size-icon-base shrink-0 place-items-center">{icon}</span> : null}
 					<span className="relative flex min-w-0 flex-1">
 						<span aria-hidden="true" className="invisible min-w-0 truncate whitespace-pre">{editingValue || "\u200b"}</span>
 						{editingContent}
@@ -81,14 +82,17 @@ export function TerminalTabFrame({
 					{/* The open-menu rule reaches the icon through child combinators. The
 					    group-has-[[data-state=open]] form (`:has([attr]) *`) made Chromium
 					    restyle the whole document on every DOM change in the app. */}
-					<span
-						className={cn(
-							"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
-						)}
-					>
-						{icon}
-					</span>
+					{/* Without an icon the slot stays only as the place the hover action takes. */}
+					{icon || action ? (
+						<span
+							className={cn(
+								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
+								action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
+							)}
+						>
+							{icon}
+						</span>
+					) : null}
 					<span className="truncate">{label}</span>
 					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
