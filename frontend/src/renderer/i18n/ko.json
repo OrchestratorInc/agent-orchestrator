@@ -3018,7 +3018,7 @@
 	"chat.startup.retrying": "다시 시도하는 중",
 	"chat.edit.label": "메시지 편집",
 	"chat.edit.stopCurrentTurn": "분기하기 전에 현재 턴을 중지하세요",
-	"chat.edit.reconstructedContext": "재구성된 컨텍스트: 텍스트 메시지는 새 에이전트 세션에 재생됩니다. 도구 호출, 승인 및 작업 공간 기록은 재생되지 않으며 현재 워크트리 파일은 그대로 유지됩니다.",
+	"chat.edit.branchNote": "새 대화 분기를 시작합니다. 파일은 그대로 유지됩니다.",
 	"chat.edit.preservedContent": "보존된 메시지 내용",
 	"chat.edit.image": "이미지",
 	"chat.image.gallery": "이미지",

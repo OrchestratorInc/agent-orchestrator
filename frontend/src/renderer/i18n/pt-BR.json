@@ -3075,7 +3075,7 @@
 	"chat.startup.retrying": "Tentando novamente",
 	"chat.edit.label": "Editar mensagem",
 	"chat.edit.stopCurrentTurn": "Pare o turno atual antes de criar uma ramificação",
-	"chat.edit.reconstructedContext": "Contexto reconstruído: as mensagens de texto serão reproduzidas em uma nova sessão do agente. Chamadas de ferramentas, aprovações e o histórico do espaço de trabalho não serão reproduzidos; os arquivos atuais da worktree permanecerão como estão.",
+	"chat.edit.branchNote": "Inicia uma nova ramificação de conversa. Os arquivos permanecem como estão.",
 	"chat.edit.preservedContent": "Conteúdo preservado da mensagem",
 	"chat.edit.image": "Imagem",
 	"chat.image.gallery": "Imagens",
