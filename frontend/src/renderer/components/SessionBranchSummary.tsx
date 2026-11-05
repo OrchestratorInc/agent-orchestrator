@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
-import { InspectorSection } from "@aoagents/product-ui";
+import { InspectorSection, type BoardTrackerIssue } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
@@ -23,7 +23,7 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
-import { trackerIssueLink, type SessionBranchState, type TrackerIssueLink, type WorkspaceSession } from "../types/workspace";
+import { trackerIssueLink, type SessionBranchState, type WorkspaceSession } from "../types/workspace";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
@@ -192,7 +192,7 @@ export function SessionBranchSummary({
 	);
 }
 
-function IssueLine({ issue }: { issue: TrackerIssueLink }) {
+function IssueLine({ issue }: { issue: BoardTrackerIssue }) {
 	const { t } = useTranslation();
 	const id = `${issue.repo}#${issue.number}`;
 	return (

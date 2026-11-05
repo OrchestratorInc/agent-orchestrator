@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, CircleDot, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -27,21 +27,18 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { sessionArtifacts, sessionIsActive, trackerIssueLink } from "../types/workspace";
+import { sessionArtifacts, trackerIssueLink } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
-import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
-import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
-import { AppBrowserLinkContext } from "./AppLink";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -90,6 +87,7 @@ export function toBoardSessionPresentation(
 		statusReadiness: session.statusReadiness,
 		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
+		trackerIssue: trackerIssueLink(session.issueId),
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
@@ -295,18 +293,6 @@ function DesktopSessionCard({
 		</Tooltip>
 	) : undefined;
 
-	const trackerIssue = trackerIssueLink(session.issueId);
-	const openInSessionBrowser = useSessionBrowserLink(session);
-	// The board has no browser of its own, so the issue opens in its session's
-	// Browser tab. Finished and remote sessions fall back to the system browser.
-	const openIssueInSession = onOpen && session.kind === "worker" && !session.hostId && sessionIsActive(session)
-		? (url: string) => {
-			useUiStore.getState().initializeInspectorSession(sessionUiKey(session.id), Boolean(session.previewUrl), true);
-			openInSessionBrowser(url);
-			onOpen();
-		}
-		: undefined;
-
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
 		<SessionCardView
@@ -327,19 +313,6 @@ function DesktopSessionCard({
 				</>
 			}
 			interactive={interactive}
-			issue={trackerIssue ? (
-				<AppBrowserLinkContext.Provider value={openIssueInSession}>
-					<ProductExternalLink
-						ariaLabel={t("shell.intakeIssue", { id: `${trackerIssue.repo}#${trackerIssue.number}` })}
-						className="inline-flex min-w-0 max-w-full items-center gap-x-2 self-start py-0.5 hover:underline"
-						href={trackerIssue.url}
-						stopPropagation
-					>
-						<CircleDot aria-hidden="true" className="size-icon-sm shrink-0" />
-						<span className="truncate text-xs font-medium text-foreground">#{trackerIssue.number}</span>
-					</ProductExternalLink>
-				</AppBrowserLinkContext.Provider>
-			) : undefined}
 			labels={{
 				formatTime: formatTimeCompact,
 				intakeIssue: (id) => t("shell.intakeIssue", { id }),

@@ -5,6 +5,7 @@ import {
 	toSessionActivity,
 	toSessionStatus,
 	type AgentId,
+	type BoardTrackerIssue,
 	type KanbanColumn,
 	type SessionActivity,
 	type SessionActivityState,
@@ -262,13 +263,6 @@ export type WorkspaceSession = {
 	};
 };
 
-export type TrackerIssueLink = {
-	number: number;
-	/** owner/repo, or the GitLab group path. */
-	repo: string;
-	url: string;
-};
-
 // The ids tracker intake stamps on sessions (trackerintake.CanonicalIssueID):
 // "github:owner/repo#12" and "gitlab:group/sub/repo#7", with "@host" when the
 // forge is not github.com or gitlab.com.
@@ -280,7 +274,7 @@ const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(
  * issueId is free text typed at spawn that names no repository, so it gets no
  * link rather than a guessed one.
  */
-export function trackerIssueLink(issueId?: string): TrackerIssueLink | undefined {
+export function trackerIssueLink(issueId?: string): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
 	const github = GITHUB_ISSUE_ID.exec(issueId);
 	if (github) {

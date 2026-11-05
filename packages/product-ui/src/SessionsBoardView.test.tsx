@@ -406,11 +406,11 @@ describe("SessionsBoardView", () => {
 		expect(onOpen).toHaveBeenCalledOnce();
 	});
 
-	it("shows the tracker issue in the evidence row even before the session has a PR", () => {
+	it("links the session's tracker issue even before it has a PR", () => {
+		const onOpen = vi.fn();
 		render(
 			<SessionCardView
 				externalLink={ExternalLink}
-				issue={<a href="https://github.com/acme/demo/issues/42">#42</a>}
 				labels={{
 					formatTime: () => "5m ago",
 					intakeIssue: (id) => `Issue ${id}`,
@@ -420,12 +420,21 @@ describe("SessionsBoardView", () => {
 					},
 					updatedAt: (timestamp) => `Updated ${timestamp}`,
 				}}
+				onOpen={onOpen}
 				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
-				session={baseSession}
+				session={{
+					...baseSession,
+					trackerIssue: { number: 42, repo: "acme/demo", url: "https://github.com/acme/demo/issues/42" },
+				}}
 			/>,
 		);
 
-		expect(screen.getByRole("link", { name: "#42" })).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
+		const issue = screen.getByRole("link", { name: "Issue acme/demo#42" });
+		expect(issue).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
+		expect(issue).toHaveTextContent("#42");
+		issue.addEventListener("click", (event) => event.preventDefault());
+		fireEvent.click(issue);
+		expect(onOpen).not.toHaveBeenCalled();
 	});
 
 	it("keeps a crowded PR row wrapping instead of crushing entries past the card edge", () => {
