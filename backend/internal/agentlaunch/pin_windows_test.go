@@ -5,11 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestSharedWindowsInstallSelectsOnlyCanonicalAO(t *testing.T) {
@@ -201,6 +204,181 @@ func TestWindowsAOPathShimCopiesExecutable(t *testing.T) {
 
 func samePath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+// TestWindowsAOCmdRunsWhenInvokedQuoted runs the batch sibling instead of
+// grepping it. cmd expands %0 against the working directory when it resolves a
+// bare quoted `"ao.cmd"` from PATH, so the script has to embed the shim path.
+func TestWindowsAOCmdRunsWhenInvokedQuoted(t *testing.T) {
+	if os.Getenv("AO_TEST_PIN_CHILD") == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println("IDENTITY=" + exe)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installDir, dataDir := t.TempDir(), t.TempDir()
+	canonical := filepath.Join(installDir, "ao.exe")
+	if err := os.WriteFile(canonical, binary, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	pinned := PinnedDir(func() (string, error) { return canonical, nil }, dataDir)
+	if pinned == "" || samePath(pinned, installDir) {
+		t.Fatalf("PinnedDir = %q, want the shim directory", pinned)
+	}
+	shim := filepath.Join(pinned, "ao.exe")
+	comspec := os.Getenv("ComSpec")
+	run := "-test.run=TestWindowsAOCmdRunsWhenInvokedQuoted"
+	for name, command := range map[string]string{
+		"bare":   comspec + ` /d /c ao.cmd ` + run,
+		"quoted": comspec + ` /d /s /c ""ao.cmd" ` + run + `"`,
+	} {
+		cmd := exec.Command(comspec)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: command}
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if !strings.EqualFold(key, "PATH") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, "PATH="+pinned+";"+os.Getenv("PATH"), "AO_TEST_PIN_CHILD=1")
+		// A different working directory is what exposed the %~dp0 bug.
+		cmd.Dir = t.TempDir()
+		output, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(strings.ToLower(string(output)), strings.ToLower("IDENTITY="+shim)) {
+			t.Fatalf("%s ao.cmd invocation: %v\n%s", name, err, output)
+		}
+	}
+}
+
+// TestWindowsShimRefreshesWhileRunning keeps a shim ao.exe running, the way an
+// in-session `ao mcp` holds it, and updates the install executable underneath.
+// Windows refuses to delete a running image, so the refresh has to rename the
+// old copy aside instead of failing and dropping back to the install directory.
+func TestWindowsShimRefreshesWhileRunning(t *testing.T) {
+	if os.Getenv("AO_TEST_PIN_HOLD") == "1" {
+		fmt.Println("READY")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installDir, dataDir := t.TempDir(), t.TempDir()
+	canonical := filepath.Join(installDir, "ao.exe")
+	if err := os.WriteFile(canonical, binary, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	pinned := PinnedDir(func() (string, error) { return canonical, nil }, dataDir)
+	if pinned == "" || samePath(pinned, installDir) {
+		t.Fatalf("PinnedDir = %q, want the shim directory", pinned)
+	}
+	shim := filepath.Join(pinned, "ao.exe")
+	child := exec.Command(shim, "-test.run=TestWindowsShimRefreshesWhileRunning")
+	child.Env = append(os.Environ(), "AO_TEST_PIN_HOLD=1")
+	stdin, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatalf("start shim ao: %v", err)
+	}
+	ready := make([]byte, len("READY\n"))
+	if _, err := io.ReadFull(stdout, ready); err != nil {
+		t.Fatalf("shim ao did not start: %v", err)
+	}
+
+	updated := time.Now().Add(2 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(canonical, updated, updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWindowsAOExecutable(pinned, canonical); err != nil {
+		t.Fatalf("refresh while the shim runs: %v", err)
+	}
+	info, err := os.Stat(shim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(updated) {
+		t.Fatalf("shim modtime = %v, want %v", info.ModTime(), updated)
+	}
+
+	_ = stdin.Close()
+	_ = child.Wait()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		// The unchanged metadata takes the fast path, which also retries the
+		// copies an earlier pass had to leave behind.
+		if err := ensureWindowsAOExecutable(pinned, canonical); err != nil {
+			t.Fatalf("cleanup pass: %v", err)
+		}
+		stale, err := filepath.Glob(filepath.Join(pinned, "ao.exe.old-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stale) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stale shim copies survive the process that held them: %v", stale)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestWindowsShimReplacesHardLinkedCopy covers a shim written by an older AO
+// build: a hard link reports the install file's size and mtime, so the metadata
+// check would leave it in place with the install directory's ACLs.
+func TestWindowsShimReplacesHardLinkedCopy(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := filepath.Join(t.TempDir(), "ao.exe")
+	if err := os.WriteFile(canonical, binary, 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	shimDir := t.TempDir()
+	shim := filepath.Join(shimDir, "ao.exe")
+	if err := os.Link(canonical, shim); err != nil {
+		t.Fatalf("hard-link fixture: %v", err)
+	}
+	canonicalInfo, err := os.Stat(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWindowsAOExecutable(shimDir, canonical); err != nil {
+		t.Fatal(err)
+	}
+	shimInfo, err := os.Stat(shim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(canonicalInfo, shimInfo) {
+		t.Fatal("hard-linked shim survived the refresh; it still carries the install directory's ACLs")
+	}
 }
 
 // containsCanonicalAO reports whether the child resolved `ao` to a binary that

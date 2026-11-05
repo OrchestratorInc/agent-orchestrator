@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -69,7 +70,9 @@ func pinDirectory(exe, dataDir string) (string, error) {
 			return "", err
 		}
 		// A single-executable install directory is still a usable pin for any
-		// caller that can read it, and losing the pin breaks `ao hooks`.
+		// caller that can read it, and losing the pin breaks `ao hooks`. This is
+		// also the path that brings #7171 back, so it cannot fail silently.
+		slog.Warn("could not create the ao shim; pinning the install directory instead, which sandboxed agents may not be able to read", "dir", dir, "error", err)
 		return dir, nil
 	}
 	return shimDir, nil
@@ -91,10 +94,12 @@ func ensureShimDir(exe, dataDir string) (string, error) {
 	script := "#!/bin/sh\nexec '" + strings.ReplaceAll(absolute, "'", `'"'"'`) + "' \"$@\"\n"
 	if runtime.GOOS == "windows" {
 		name = "ao.cmd"
-		// The batch sibling runs the copy beside it rather than the install
-		// path: %PATHEXT% prefers ao.exe, but Git Bash and `call ao` reach this
-		// file, and the install directory stays unreadable to sandboxes.
-		script = "@echo off\r\n\"%~dp0ao.exe\" %*\r\n"
+		// The batch sibling runs the copy in the shim directory. It needs the
+		// absolute path, not %~dp0: when cmd resolves a bare quoted `"ao.cmd"`
+		// from PATH it expands %0 against the working directory, which pointed at
+		// a nonexistent <cwd>\ao.exe. %PATHEXT% prefers ao.exe, so only an
+		// explicit `ao.cmd` reaches this file.
+		script = "@echo off\r\n\"" + strings.ReplaceAll(filepath.Join(shimDir, "ao.exe"), "%", "%%") + "\" %*\r\n"
 	}
 	pinMu.Lock()
 	defer pinMu.Unlock()
@@ -149,7 +154,12 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	if err != nil {
 		return fmt.Errorf("stat AO executable: %w", err)
 	}
-	if targetInfo, targetErr := os.Stat(target); targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) {
+	if targetInfo, targetErr := os.Stat(target); targetErr == nil && targetInfo.Size() == sourceInfo.Size() && targetInfo.ModTime().Equal(sourceInfo.ModTime()) && !os.SameFile(sourceInfo, targetInfo) {
+		// Same size and mtime means same bytes. A shim left by an older AO build
+		// can be a hard link, which reports exactly the source's metadata while
+		// still carrying the install directory's ACLs, so that one is copied
+		// through instead of trusted.
+		removeStaleShimExecutables(shimDir)
 		return nil
 	}
 	temp, err := os.CreateTemp(shimDir, ".ao-exe-*")
@@ -167,13 +177,38 @@ func ensureWindowsAOExecutable(shimDir, executable string) error {
 	if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
 		return fmt.Errorf("copy AO executable: %w", err)
 	}
-	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("replace AO executable shim: %w", err)
+	// A running shim (for example `ao mcp` reading stdin) keeps its image open,
+	// so removing or replacing the file in place fails with access denied and
+	// the pin silently drops back to the unreadable install directory. Renaming
+	// the old file aside frees the name without disturbing the running image.
+	aside := ""
+	if _, statErr := os.Stat(target); statErr == nil {
+		aside = filepath.Join(shimDir, fmt.Sprintf("ao.exe.old-%d", time.Now().UnixNano()))
+		if err := os.Rename(target, aside); err != nil {
+			return fmt.Errorf("replace AO executable shim: %w", err)
+		}
 	}
 	if err := os.Rename(tempPath, target); err != nil {
+		if aside != "" {
+			_ = os.Rename(aside, target)
+		}
 		return fmt.Errorf("install AO executable shim: %w", err)
 	}
+	removeStaleShimExecutables(shimDir)
 	return nil
+}
+
+// removeStaleShimExecutables drops copies that an earlier pin renamed aside
+// while their process still held the image open. Removal keeps failing until
+// that process exits, so every pass retries and ignores the failures.
+func removeStaleShimExecutables(shimDir string) {
+	matches, err := filepath.Glob(filepath.Join(shimDir, "ao.exe.old-*"))
+	if err != nil {
+		return
+	}
+	for _, match := range matches {
+		_ = os.Remove(match)
+	}
 }
 
 func copyExecutable(source, target string, modTime time.Time) error {
