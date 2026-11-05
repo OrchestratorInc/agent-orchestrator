@@ -24,8 +24,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
-import { clientForSessionHost } from "../lib/host-clients";
-import { sessionUiKey } from "../lib/hosts";
+import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
+import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -479,7 +479,10 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			latest = await fetchConversationPage(sessionId, hostId);
 		}
 	} catch (error) {
-		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		// A host that did not answer already reads as offline. The alert is for one that did.
+		if (baseUrlForHost(hostId) && !HOST_UNREACHABLE_CODES.has(apiErrorCode(error))) {
+			queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		}
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);

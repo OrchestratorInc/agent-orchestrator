@@ -238,6 +238,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 						connection.pollTimer = undefined;
 						refreshRemote(hostId, true);
+						// Only a live-page read clears a failed read's alert, and an idle chat
+						// has no event to prompt one.
+						refreshOpenRemoteChats(hostId);
 					},
 					() => {
 						if (remoteSources.get(hostId) !== connection) return;

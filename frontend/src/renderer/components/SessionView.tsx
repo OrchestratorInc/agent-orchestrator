@@ -121,7 +121,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
-import { sessionUiKey } from "../lib/hosts";
+import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
@@ -532,7 +532,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// What a host showed last stays until a read replaces it, also across a failed
 	// read or a reconnect; only a host that refuses this device takes it away.
 	const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
-	const hostUnreachable = Boolean(hostId) && (!remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED");
+	const hostUnreachable = Boolean(hostId) && (!remoteBase || HOST_UNREACHABLE_CODES.has(remoteCode));
 	const hostRefused = remoteCode === "BAD_PASSWORD" || remoteCode === "HOST_API_INCOMPATIBLE";
 	const session = hostId ? (!hostRefused && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;

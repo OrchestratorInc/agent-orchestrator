@@ -2,8 +2,8 @@ import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationItem, ConversationSnapshot, ConversationTurn } from "../types/conversation";
 
-const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
-vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: getMock }) }));
+const { getMock, baseUrlMock } = vi.hoisted(() => ({ getMock: vi.fn(), baseUrlMock: vi.fn() }));
+vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlMock, clientForSessionHost: () => ({ GET: getMock }) }));
 
 import { conversationQueryKey, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
 
@@ -68,8 +68,25 @@ describe("refreshRemoteConversation", () => {
 	const key = conversationQueryKey("s1", "box");
 	beforeEach(() => {
 		getMock.mockReset();
+		baseUrlMock.mockReset().mockReturnValue("http://host");
 		client = new QueryClient();
 		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, page([], [])], pageParams: [undefined, 1] });
+	});
+
+	it("reports a failed read only from a host that answered", async () => {
+		const failed = () => client.getQueryData(["remote-conversation-refresh-error", "box", "s1"]);
+		getMock.mockResolvedValue({ error: { code: "UPSTREAM_UNAVAILABLE" } });
+		await expect(refreshRemoteConversation(client, "s1", "box")).rejects.toBeTruthy();
+		expect(failed()).toBeUndefined();
+
+		getMock.mockResolvedValue({ error: { code: "INTERNAL" } });
+		baseUrlMock.mockReturnValue(undefined);
+		await expect(refreshRemoteConversation(client, "s1", "box")).rejects.toBeTruthy();
+		expect(failed()).toBeUndefined();
+
+		baseUrlMock.mockReturnValue("http://host");
+		await expect(refreshRemoteConversation(client, "s1", "box")).rejects.toBeTruthy();
+		expect(failed()).toBe(true);
 	});
 
 	it("reads only the tail and merges it into the live page", async () => {

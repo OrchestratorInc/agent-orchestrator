@@ -35,6 +35,7 @@ vi.mock("./bridge", () => ({
 }));
 
 vi.mock("./api-client", () => ({
+	apiErrorCode: () => undefined,
 	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
 	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
@@ -271,6 +272,29 @@ describe("createEventTransport", () => {
 		vi.mocked(client.invalidateQueries).mockClear();
 		remoteA.onerror?.();
 		expect(client.invalidateQueries).not.toHaveBeenCalled();
+		disconnect();
+	});
+
+	it("clears an open chat's failed read when its host returns, with no event to prompt one", async () => {
+		const refreshFailed = ["remote-conversation-refresh-error", "box-a", "same"];
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+		const client = fakeQueryClient([["box-a", "same"]]);
+		const disconnect = createEventTransport(client).connect();
+		const hostsChanged = subscribeConnectedHostsMock.mock.calls[0][0] as () => void;
+		const stream = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/")).at(-1)!;
+		remoteGetMock.mockRejectedValueOnce(new Error("host away"));
+		stream().emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
+		await vi.waitFor(() => expect(client.setQueryData).toHaveBeenCalledWith(refreshFailed, true));
+
+		connectedHostsMock.mockReturnValue([]);
+		hostsChanged();
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		hostsChanged();
+		vi.mocked(client.setQueryData).mockClear();
+		// The stream answers at once, so the fallback poll never ticks.
+		stream().emit("cursor", "0");
+		await vi.waitFor(() => expect(client.setQueryData).toHaveBeenCalledWith(refreshFailed, false));
 		disconnect();
 	});
 
