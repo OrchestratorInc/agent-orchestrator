@@ -236,7 +236,21 @@ export function WorkerBoardList({
 	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, hostedSessionKey));
 	const freshLiveRef = useRef(freshLive);
 	freshLiveRef.current = freshLive;
-	const scrollAfterResort = useRef(false);
+	// The list's own handle when the page passes none (a project's page passes
+	// none), so the pill's scroll to the top is never a silent no-op that only
+	// re-sorts the rows under the reader.
+	const ownListRef = useRef<FlatList<BoardRow>>(null);
+	const list = listRef ?? ownListRef;
+	// Where the list's top rests: iOS insets a list under a clear header by the
+	// bars' share of its safe area (`contentInsetAdjustmentBehavior`), so the top
+	// is at minus that, and offset 0 leaves the first rows under the bar. Measured
+	// with the empty board's height below; zero where nothing covers the list.
+	const restingTop = useRef(0);
+	// One request per pill tap, so the scroll runs in the commit that installs the
+	// new order and only then. A flag read on the next snapshot change instead
+	// stayed armed when a tap changed nothing, then jumped the list on some later,
+	// unrelated re-sort.
+	const [latestRequest, setLatestRequest] = useState(0);
 	const held = useMemo(() => {
 		// Another machine's first load joins the held order rather than replacing
 		// it, so news already waiting behind the pill neither jumps nor vanishes.
@@ -260,10 +274,12 @@ export function WorkerBoardList({
 	}, [snapshot, freshLive, held.stale]);
 	const resort = useCallback(() => setSnapshot(previous => snapshotOrder(freshLiveRef.current, hostedSessionKey, previous)), []);
 	useLayoutEffect(() => {
-		if (!scrollAfterResort.current) return;
-		scrollAfterResort.current = false;
-		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
-	}, [snapshot, listRef]);
+		if (latestRequest === 0) return;
+		// Not animated: the rows have just re-sorted, and an animated scroll across
+		// them would draw recycled cells mid-move.
+		const top = restingTop.current;
+		list.current?.scrollToOffset({ offset: top ? -top : 0, animated: false });
+	}, [latestRequest, list]);
 	// Opening the board, coming back to the app, or a different set of workers
 	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
 	// visited screens mounted, so unmounting alone does not say the user moved on.
@@ -289,8 +305,8 @@ export function WorkerBoardList({
 		}
 	}, [onRefresh, resort]);
 	const showLatest = useCallback(() => {
-		scrollAfterResort.current = true;
 		resort();
+		setLatestRequest((request) => request + 1);
 	}, [resort]);
 
 	// The archive is the last section, rendered only when expanded so a collapsed
@@ -489,6 +505,9 @@ export function WorkerBoardList({
 	const [visibleHeight, setVisibleHeight] = useState(0);
 	const measureVisible = useCallback(({ insets, frame }: { insets: { top: number; bottom: number }; frame: { height: number } }) => {
 		setVisibleHeight(Math.max(0, frame.height - insets.top - insets.bottom));
+		// The listener has the list's frame, so its safe area is the one iOS
+		// insets the list by: the top is where "Show latest" scrolls back to.
+		restingTop.current = insets.top;
 	}, []);
 	const insetsForBars = Platform.OS === "ios" && contentInsetAdjustmentBehavior === "automatic";
 	const contentContainerStyle = insetsForBars && visibleHeight && listData.length === 0
@@ -504,8 +523,11 @@ export function WorkerBoardList({
 			    A new text size rebuilds it the same way, so every row is measured again. */}
 			<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>
 				<FlatList
-					ref={listRef}
+					ref={list}
 					data={listData}
+					// The native scrollTo clamps to the list's own inset, which leaves out
+					// the one iOS adds for the bars, so "Show latest" could not reach the top.
+					scrollToOverflowEnabled={insetsForBars}
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
