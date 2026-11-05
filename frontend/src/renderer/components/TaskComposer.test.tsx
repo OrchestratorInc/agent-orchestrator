@@ -3112,6 +3112,12 @@ describe("TaskComposer Cloud model catalog", () => {
 		// The account's own list arrives and lacks it: an explicit pick stays, with a clear warning.
 		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-agent-models"] }));
 		expect(await screen.findByText("chosen isn't available to your Codex account on Cloud, so it won't run. Pick another model.")).toBeInTheDocument();
+		// Cloud refuses it, so the task cannot be sent on it; another model can.
+		fireEvent.change(task(), { target: { value: "Run on the chosen model" } });
+		expect(startTask()).toBeDisabled();
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Other" }));
+		expect(startTask()).toBeEnabled();
 	});
 
 	it("preserves a configured model and effort when Cloud has no catalog", async () => {

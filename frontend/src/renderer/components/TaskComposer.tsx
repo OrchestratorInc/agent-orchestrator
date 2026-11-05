@@ -883,7 +883,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		selectedAgent !== "" &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
-		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
+		(!hostId || (agentsQuery.isSuccess && settings !== undefined)) &&
+		// Cloud refuses a model the account's own list lacks (MODEL_UNAVAILABLE),
+		// so the picker's warning asks for another before a send.
+		!cloudModelUnavailable(selectedModelOrMode);
 	// Named for its remote origins; a local project that failed to load reports here too.
 	// A cloud project is not read locally, so a lookup made before it was known to be
 	// a cloud project must not linger as its error.
