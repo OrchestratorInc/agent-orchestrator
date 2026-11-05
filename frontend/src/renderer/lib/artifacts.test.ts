@@ -56,6 +56,16 @@ describe("groupArtifactsByProject", () => {
 		expect(artifactCount(groups)).toBe(4);
 	});
 
+	it("leaves out files the session did not register", () => {
+		const registered = { ...artifact("brand.html", "2026-10-09T10:00:00Z", "html"), registered: true };
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [registered, artifact("draft.md", "2026-10-11T10:00:00Z")])]),
+		]);
+
+		expect(groups[0].rows.map((row) => row.name)).toEqual(["brand.html"]);
+		expect(artifactCount(groups)).toBe(1);
+	});
+
 	it("hides archived and terminated sessions and drops projects left empty", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [

@@ -217,7 +217,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type,
+    artifact_dir, session_output_type, registered_artifact_paths,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -271,6 +271,7 @@ type GetSessionRow struct {
 	BrowserCapabilityVerifier        string
 	ArtifactDir                      string
 	SessionOutputType                string
+	RegisteredArtifactPaths          string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
 	LatestInteractionAt              sql.NullTime
@@ -355,6 +356,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.BrowserCapabilityVerifier,
 		&i.ArtifactDir,
 		&i.SessionOutputType,
+		&i.RegisteredArtifactPaths,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
 		&i.LatestInteractionAt,
@@ -407,7 +409,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type,
+    artifact_dir, session_output_type, registered_artifact_paths,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -461,6 +463,7 @@ type GetSessionByAutomationRunIDRow struct {
 	BrowserCapabilityVerifier        string
 	ArtifactDir                      string
 	SessionOutputType                string
+	RegisteredArtifactPaths          string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
 	LatestInteractionAt              sql.NullTime
@@ -545,6 +548,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.BrowserCapabilityVerifier,
 		&i.ArtifactDir,
 		&i.SessionOutputType,
+		&i.RegisteredArtifactPaths,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
 		&i.LatestInteractionAt,
@@ -586,6 +590,17 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.RuntimeReleasedLaunchID,
 	)
 	return i, err
+}
+
+const getSessionRegisteredArtifactPaths = `-- name: GetSessionRegisteredArtifactPaths :one
+SELECT registered_artifact_paths FROM sessions WHERE id = ?1
+`
+
+func (q *Queries) GetSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSessionRegisteredArtifactPaths, id)
+	var registered_artifact_paths string
+	err := row.Scan(&registered_artifact_paths)
+	return registered_artifact_paths, err
 }
 
 const insertSession = `-- name: InsertSession :exec
@@ -760,7 +775,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type,
+    artifact_dir, session_output_type, registered_artifact_paths,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -814,6 +829,7 @@ type ListAllSessionsRow struct {
 	BrowserCapabilityVerifier        string
 	ArtifactDir                      string
 	SessionOutputType                string
+	RegisteredArtifactPaths          string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
 	LatestInteractionAt              sql.NullTime
@@ -904,6 +920,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.BrowserCapabilityVerifier,
 			&i.ArtifactDir,
 			&i.SessionOutputType,
+			&i.RegisteredArtifactPaths,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
 			&i.LatestInteractionAt,
@@ -1054,7 +1071,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type,
+    artifact_dir, session_output_type, registered_artifact_paths,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -1108,6 +1125,7 @@ type ListSessionsByProjectRow struct {
 	BrowserCapabilityVerifier        string
 	ArtifactDir                      string
 	SessionOutputType                string
+	RegisteredArtifactPaths          string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
 	LatestInteractionAt              sql.NullTime
@@ -1198,6 +1216,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.BrowserCapabilityVerifier,
 			&i.ArtifactDir,
 			&i.SessionOutputType,
+			&i.RegisteredArtifactPaths,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
 			&i.LatestInteractionAt,
@@ -2343,6 +2362,27 @@ type UpdateSessionModelParams struct {
 
 func (q *Queries) UpdateSessionModel(ctx context.Context, arg UpdateSessionModelParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateSessionModel, arg.Model, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateSessionRegisteredArtifactPaths = `-- name: UpdateSessionRegisteredArtifactPaths :execrows
+UPDATE sessions
+SET registered_artifact_paths = ?1
+WHERE id = ?2
+`
+
+type UpdateSessionRegisteredArtifactPathsParams struct {
+	RegisteredArtifactPaths string
+	ID                      domain.SessionID
+}
+
+// Narrow write for the same reason as UpdateSessionArtifactOutput: it can never
+// replay a stale SessionRecord over newer lifecycle state.
+func (q *Queries) UpdateSessionRegisteredArtifactPaths(ctx context.Context, arg UpdateSessionRegisteredArtifactPathsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionRegisteredArtifactPaths, arg.RegisteredArtifactPaths, arg.ID)
 	if err != nil {
 		return 0, err
 	}

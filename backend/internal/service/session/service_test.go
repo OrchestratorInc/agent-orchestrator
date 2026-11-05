@@ -375,6 +375,39 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	return r, ok, nil
 }
 
+func (f *fakeStore) AddSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID, paths []string) ([]string, bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return nil, false, nil
+	}
+	next := slices.Clone(rec.RegisteredArtifactPaths)
+	for _, path := range paths {
+		if !slices.Contains(next, path) {
+			next = append(next, path)
+		}
+	}
+	if len(next) > domain.MaxRegisteredArtifactPaths {
+		return nil, true, domain.ErrRegisteredArtifactLimit
+	}
+	rec.RegisteredArtifactPaths = next
+	f.sessions[id] = rec
+	return next, true, nil
+}
+
+func (f *fakeStore) RemoveSessionRegisteredArtifactPath(_ context.Context, id domain.SessionID, path string) error {
+	rec := f.sessions[id]
+	rec.RegisteredArtifactPaths = slices.DeleteFunc(rec.RegisteredArtifactPaths, func(p string) bool { return p == path })
+	f.sessions[id] = rec
+	return nil
+}
+
+func (f *fakeStore) ClearSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID) error {
+	rec := f.sessions[id]
+	rec.RegisteredArtifactPaths = nil
+	f.sessions[id] = rec
+	return nil
+}
+
 func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
 	for _, rec := range f.sessions {
 		if id != "" && rec.ClientRequestID == id {
