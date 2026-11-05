@@ -53,7 +53,7 @@ func PreparedCopyIn(ctx context.Context, layout Layout, root, source, cwd, id, e
 	if err != nil {
 		return "", false, err
 	}
-	target, err := layout.path(root, cwd, id)
+	target, err := layout.path(root, cwd, id, expected)
 	if err != nil {
 		return "", false, err
 	}
@@ -90,7 +90,7 @@ func PreparedCopyIn(ctx context.Context, layout Layout, root, source, cwd, id, e
 	if got != want {
 		return "", false, errors.New("cursor target belongs to a different import selection")
 	}
-	if err := Verify(ctx, root, target, id); err != nil {
+	if err := Verify(ctx, root, target, layout.SessionID(id, cwd, expected)); err != nil {
 		return "", false, err
 	}
 	return target, true, nil

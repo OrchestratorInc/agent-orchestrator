@@ -154,11 +154,12 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := cursorstore.ACPSessionPath(root, rec.Metadata.AgentSessionID)
+	copyID := cursorstore.LayoutACP.SessionID(rec.Metadata.AgentSessionID, launch, rec.Metadata.ImportSource.Fingerprint)
+	want, err := cursorstore.ACPSessionPath(root, copyID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.NativeSessionID != rec.Metadata.AgentSessionID || ref.TranscriptPath != want {
+	if copyID == rec.Metadata.AgentSessionID || ref.NativeSessionID != copyID || ref.TranscriptPath != want {
 		t.Fatalf("ref = %#v, want ACP copy %s", ref, want)
 	}
 	copied, err := cursorstore.Read(context.Background(), root, want)
@@ -169,7 +170,7 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if copied.ID != rec.Metadata.AgentSessionID || copied.CWD != resolved || len(copied.Messages) == 0 {
+	if copied.ID != copyID || copied.CWD != resolved || len(copied.Messages) == 0 {
 		t.Fatalf("ACP copy = %#v", copied)
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
@@ -180,8 +181,21 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd,
 		LaunchCWD: launch, Chat: true, SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
 	})
-	if err != nil || again.TranscriptPath != want {
+	if err != nil || again.TranscriptPath != want || again.NativeSessionID != copyID {
 		t.Fatalf("retry = %#v, %v", again, err)
+	}
+	// Importing the same chat again, into another workspace or AO data
+	// directory, gets its own copy instead of colliding with the first one.
+	other := t.TempDir()
+	second, err := cursor.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
+		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd,
+		LaunchCWD: other, Chat: true, SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
+	})
+	if err != nil || second.NativeSessionID == copyID || second.TranscriptPath == want {
+		t.Fatalf("second import = %#v, %v", second, err)
+	}
+	if err := cursorstore.Verify(context.Background(), root, second.TranscriptPath, second.NativeSessionID); err != nil {
+		t.Fatalf("second copy: %v", err)
 	}
 	// The ACP copy is not a terminal chat, so it is never offered for import.
 	files, err := discoverCursor(context.Background(), root)

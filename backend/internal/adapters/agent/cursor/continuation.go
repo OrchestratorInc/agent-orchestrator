@@ -55,11 +55,12 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// PrepareImportedSession copies the same native id to where the resume looks.
+// PrepareImportedSession copies the chat to where the resume looks.
 // Cursor's direct --resume path uses process.cwd() for this lookup and creates
 // tools from the launch workspace, independently of the saved conversation graph.
 // ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
-// there instead; the terminal CLI's own chat folder never holds the copy.
+// there under its own id (see Layout.SessionID); the terminal CLI's own chat
+// folder never holds the copy.
 func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	layout := cursorstore.LayoutTerminal
 	if r.Chat {
@@ -68,7 +69,7 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if path, found, err := cursorstore.PreparedCopyIn(ctx, layout, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
 		return ports.NativeSessionRef{}, err
 	} else if found {
-		return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+		return ports.NativeSessionRef{NativeSessionID: layout.SessionID(r.NativeSessionID, r.LaunchCWD, r.SourceFingerprint), ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 	}
 	archive, err := cursorstore.Read(ctx, r.ConfigDir, r.TranscriptPath)
 	if err != nil {
@@ -84,7 +85,7 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	return ports.NativeSessionRef{NativeSessionID: archive.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+	return ports.NativeSessionRef{NativeSessionID: layout.SessionID(archive.ID, r.LaunchCWD, r.SourceFingerprint), ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
 // PrepareRuntimeLaunch verifies the exact imported cwd bucket before Cursor
