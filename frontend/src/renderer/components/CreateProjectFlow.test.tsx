@@ -2072,6 +2072,23 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(githubDaemonMocks.listGitHubRepos).not.toHaveBeenCalled();
 	});
 
+	it("switches the cloud card between a project and a workspace", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "Cloud" }));
+		expect(screen.getByRole("tab", { name: "Project" })).toHaveAttribute("aria-selected", "true");
+		await user.click(screen.getByRole("tab", { name: "Workspace" }));
+
+		expect(screen.getByRole("heading", { name: "Create cloud workspace" })).toBeInTheDocument();
+		expect(screen.getByLabelText("Workspace name")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled();
+		await user.click(screen.getByRole("tab", { name: "Project" }));
+		expect(screen.getByRole("heading", { name: "Create cloud project" })).toBeInTheDocument();
+	});
+
 	it("creates a project from a connected GitHub App repository", async () => {
 		useSidebarOrderStore.getState().setProjectOrder(["existing-b", "existing-a", "cp-app-1"]);
 		cloudMocks.cloudEnabled = true;

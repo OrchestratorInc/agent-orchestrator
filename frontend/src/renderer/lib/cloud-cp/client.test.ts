@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCloudCpClient, retryAfterMs } from "./client";
+import { createCloudCpClient, MAX_GITHUB_REPOSITORY_DESCRIPTION, retryAfterMs } from "./client";
 import { CloudCpError } from "./errors";
 
 describe("Cloud control-plane interface transitions", () => {
@@ -274,6 +274,58 @@ describe("cloud control-plane session lifecycle", () => {
 				config: { worker: { agent: "codex" } },
 			}),
 		}));
+	});
+
+	it("creates a repository for a local folder and a workspace project from it", async () => {
+		const repository = { githubRepositoryId: "77", name: "notes", fullName: "acme/notes", htmlUrl: "https://github.com/acme/notes", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" };
+		const responses: Array<[number, unknown]> = [
+			[201, { repository, created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" }],
+			[201, { project: { id: "project-1", config: { layout: "workspace" } } }],
+		];
+		const fetchMock = vi.fn(async () => {
+			const [status, body] = responses.shift() ?? [500, {}];
+			return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+		});
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await expect(client.createGitHubRepository("org-1", { name: "notes", owner: "acme" })).resolves.toEqual({
+			repository,
+			created: true,
+			pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git",
+		});
+		await client.createGitHubProject("org-1", {
+			githubRepositoryId: "77",
+			displayName: "Platform",
+			config: { layout: "workspace", agentStartsIn: "parent", repos: [{ url: "https://github.com/acme/api" }] },
+		}, { idempotencyKey: "create-1" });
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		expect(calls[0]?.[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/github/repositories");
+		expect(calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "notes", owner: "acme" }) }));
+		expect(new Headers(calls[1]?.[1].headers).get("Idempotency-Key")).toBe("create-1");
+		expect(JSON.parse(calls[1]?.[1].body as string).config.layout).toBe("workspace");
+	});
+
+	it("never sends a project's layout in a settings write, and keeps a repository description within the limit", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ project: {} }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await client.updateProjectSettings("org-1", "p-1", { config: { layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] } as never });
+		await client.createGitHubRepository("org-1", { name: "notes", description: "é".repeat(400) });
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		expect(JSON.parse(calls[0]?.[1].body as string)).toEqual({ config: { repos: [{ url: "https://github.com/acme/web" }] } });
+		expect([...JSON.parse(calls[1]?.[1].body as string).description]).toHaveLength(MAX_GITHUB_REPOSITORY_DESCRIPTION);
+	});
+
+	it("surfaces a repository creation refusal with its code and message", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "unprocessable", code: "repository_owner_required", message: "Choose the GitHub account for the new repository." }), { status: 422, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		const error = await client.createGitHubRepository("org-1", { name: "notes" }).catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(CloudCpError);
+		expect(error).toMatchObject({ status: 422, code: "repository_owner_required", message: "Choose the GitHub account for the new repository." });
 	});
 
 	it("loads detailed pull requests for a cloud session", async () => {
