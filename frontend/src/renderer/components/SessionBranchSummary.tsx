@@ -7,6 +7,7 @@ import {
 	ArrowUpFromLine,
 	ChevronDown,
 	ChevronRight,
+	CircleDot,
 	GitBranch,
 	GitCommitHorizontal,
 	GitPullRequest,
@@ -22,7 +23,8 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
-import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
+import { trackerIssueLink, type SessionBranchState, type TrackerIssueLink, type WorkspaceSession } from "../types/workspace";
+import { ProductExternalLink } from "./ProductExternalLink";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -130,7 +132,8 @@ export function SessionBranchSummary({
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
 	const { branch, naming } = sessionBranchPresentation(session);
-	if (!branch && !naming && !pullRequests && !hasWork) return null;
+	const issue = trackerIssueLink(session.issueId);
+	if (!issue && !branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
 	let action: ReactNode = null;
@@ -155,6 +158,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
+				{issue ? <IssueLine issue={issue} /> : null}
 				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
@@ -185,6 +189,23 @@ export function SessionBranchSummary({
 				) : null}
 			</section>
 		</InspectorSection>
+	);
+}
+
+function IssueLine({ issue }: { issue: TrackerIssueLink }) {
+	const { t } = useTranslation();
+	const id = `${issue.repo}#${issue.number}`;
+	return (
+		<div className="flex min-w-0 pb-1.5 last:pb-0">
+			<ProductExternalLink
+				ariaLabel={t("shell.intakeIssue", { id })}
+				className="inline-flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				href={issue.url}
+			>
+				<CircleDot aria-hidden="true" className="size-icon-2xs shrink-0" />
+				<span className="min-w-0 truncate">{id}</span>
+			</ProductExternalLink>
+		</div>
 	);
 }
 

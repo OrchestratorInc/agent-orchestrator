@@ -68,7 +68,6 @@ export type BoardSessionPresentation = {
 	status: SessionStatus;
 	statusPresentation?: BoardSessionStatusPresentation;
 	title: string;
-	trackerIssueId?: string;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -239,6 +238,8 @@ export type SessionCardViewProps = {
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
 	interactive?: boolean;
+	/** The session's tracker issue link, shown above its PRs. */
+	issue?: ReactNode;
 	labels: {
 		formatTime: (timestamp: string) => string;
 		intakeIssue: (id: string) => string;
@@ -275,6 +276,7 @@ export function SessionCardView({
 	externalLink,
 	footer,
 	interactive = true,
+	issue,
 	labels,
 	onOpen,
 	overlay,
@@ -397,10 +399,11 @@ export function SessionCardView({
 					</div>
 				)}
 			</div>
-			{prs.length > 0 && (
+			{(issue || prs.length > 0) && (
 				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
-					{prs.length > 0 && (
+					{(issue || prs.length > 0) && (
 						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
+							{issue}
 							{groupBoardPullRequests(prs).flatMap((group) => {
 								const compact = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
 								const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);

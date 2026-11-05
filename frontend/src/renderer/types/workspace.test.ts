@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
 	attentionZone,
-	canonicalTrackerIssueId,
 	findProjectOrchestrator,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -18,6 +17,7 @@ import {
 	primaryPR,
 	sessionArtifacts,
 	sortedPRs,
+	trackerIssueLink,
 	type AttentionZone,
 	type PRState,
 	type PullRequestFacts,
@@ -27,11 +27,36 @@ import {
 	type WorkspaceSummary,
 } from "./workspace";
 
-describe("canonicalTrackerIssueId", () => {
-	it("keeps provider-prefixed intake ids and rejects manual task titles", () => {
-		expect(canonicalTrackerIssueId("github:acme/project#42")).toBe("github:acme/project#42");
-		expect(canonicalTrackerIssueId("Fix fallback renderer")).toBeUndefined();
-		expect(canonicalTrackerIssueId(undefined)).toBeUndefined();
+describe("trackerIssueLink", () => {
+	it.each([
+		["github:acme/project#42", { number: 42, repo: "acme/project", url: "https://github.com/acme/project/issues/42" }],
+		["github:acme/.github#3", { number: 3, repo: "acme/.github", url: "https://github.com/acme/.github/issues/3" }],
+		["gitlab:group/sub/repo#7", { number: 7, repo: "group/sub/repo", url: "https://gitlab.com/group/sub/repo/-/issues/7" }],
+		[
+			"github:team/app#12@acme.ghe.com",
+			{ number: 12, repo: "team/app", url: "https://acme.ghe.com/team/app/issues/12" },
+		],
+		[
+			"gitlab:group/repo#7@gitlab.local:8443",
+			{ number: 7, repo: "group/repo", url: "https://gitlab.local:8443/group/repo/-/issues/7" },
+		],
+	])("links intake id %s to its forge page", (issueId, link) => {
+		expect(trackerIssueLink(issueId)).toEqual(link);
+	});
+
+	it.each([
+		undefined,
+		"Fix fallback renderer",
+		"42",
+		"github:42",
+		"github:acme/project#0",
+		"github:acme/project/extra#42",
+		"github:acme/project#42@acme.ghe.com/path",
+		"gitlab:repo#7",
+		"gitlab:group/repo#7@evil.example/path",
+		"github:acme/project#42 extra",
+	])("leaves %s unlinked", (issueId) => {
+		expect(trackerIssueLink(issueId)).toBeUndefined();
 	});
 });
 

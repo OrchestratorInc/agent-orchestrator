@@ -369,7 +369,7 @@ describe("SessionsBoardView", () => {
 					{ number: 12, state: "merged", url: "https://example.com/pull/12" },
 				]}
 				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
-				session={{ ...baseSession, branch: "feat/portable", trackerIssueId: "github:42" }}
+				session={{ ...baseSession, branch: "feat/portable" }}
 				usage={{ accessibleLabel: "12,400 tokens", compactLabel: "12.4K tok" }}
 			/>,
 		);
@@ -401,10 +401,31 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText("5m ago")).toHaveAttribute("title", "Updated 2026-08-09T10:00:00Z");
 		expect(screen.getByText("feat/portable")).toHaveClass("text-muted-foreground");
 		expect(screen.getByText("5m ago")).toHaveClass("tabular-nums", "text-muted-foreground");
-		expect(screen.queryByText("github:42")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "portable task" }));
 		expect(onOpen).toHaveBeenCalledOnce();
+	});
+
+	it("shows the tracker issue in the evidence row even before the session has a PR", () => {
+		render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				issue={<a href="https://github.com/acme/demo/issues/42">#42</a>}
+				labels={{
+					formatTime: () => "5m ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={baseSession}
+			/>,
+		);
+
+		expect(screen.getByRole("link", { name: "#42" })).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
 	});
 
 	it("keeps a crowded PR row wrapping instead of crushing entries past the card edge", () => {

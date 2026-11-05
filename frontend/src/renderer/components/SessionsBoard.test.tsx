@@ -23,6 +23,7 @@ const {
 	sessionMemoryMock,
 	navigateMock,
 	notificationShowMock,
+	openExternalMock,
 	postMock,
 	patchMock,
 	workspaceQueryMock,
@@ -33,6 +34,7 @@ const {
 	sessionMemoryMock: vi.fn(),
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
+	openExternalMock: vi.fn(),
 	postMock: vi.fn(),
 	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
@@ -94,6 +96,7 @@ vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
 			onShortcut: () => () => {},
+			openExternal: (...args: unknown[]) => openExternalMock(...args),
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
@@ -1744,6 +1747,56 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		expect(screen.queryByText(appI18n.t("home.folderMissing"))).not.toBeInTheDocument();
+	});
+});
+
+describe("SessionsBoard issue links", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+		openExternalMock.mockReset().mockResolvedValue(undefined);
+	});
+
+	it("opens a live session's issue in that session's AO Browser tab", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "s-issue", title: "Fix intake", status: "working", kind: "worker", issueId: "github:acme/demo#12" }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await userEvent.click(screen.getByRole("link", { name: "Intake issue: acme/demo#12" }));
+
+		await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
+			params: { path: { sessionId: "s-issue" } },
+			body: { url: "https://github.com/acme/demo/issues/12" },
+		}));
+		expect(useUiStore.getState().inspectorSessions["s-issue"]).toMatchObject({ initialized: true, isOpen: true, view: "browser" });
+		expect(navigateMock).toHaveBeenCalledTimes(1);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "p1", sessionId: "s-issue" },
+		});
+		expect(openExternalMock).not.toHaveBeenCalled();
+	});
+
+	it("sends a finished session's issue to the system browser, which has no AO Browser", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				boardSession({ id: "s-done", title: "Shipped intake", status: "terminated", isTerminated: true, kind: "worker", issueId: "gitlab:acme/platform/api#7" }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		const archive = await expandArchive();
+
+		await userEvent.click(within(archive).getByRole("link", { name: "Intake issue: acme/platform/api#7" }));
+
+		await waitFor(() => expect(openExternalMock).toHaveBeenCalledWith("https://gitlab.com/acme/platform/api/-/issues/7"));
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 });
 
