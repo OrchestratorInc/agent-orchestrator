@@ -18,11 +18,11 @@ import (
 type State string
 
 const (
-	// StateWorking: the agent is drawing output (a turn is in progress).
+	// StateWorking means the agent is drawing output (a turn is in progress).
 	StateWorking State = "working"
-	// StateIdle: the agent is at its prompt with nothing to ask.
+	// StateIdle means the agent is at its prompt with nothing to ask.
 	StateIdle State = "idle"
-	// StateWaiting: the agent stopped on a question or a permission prompt.
+	// StateWaiting means the agent stopped on a question or a permission prompt.
 	StateWaiting State = "waiting"
 )
 

@@ -101,7 +101,8 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 		if harness := classifyProgram(arg); harness != "" {
 			return harness
 		}
-		if seen++; seen >= maxScriptArgs {
+		seen++
+		if seen >= maxScriptArgs {
 			break
 		}
 	}
