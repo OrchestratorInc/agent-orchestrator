@@ -348,6 +348,7 @@
 	"cloud.startupError.repositoryCheckoutFailedTitle": "L'extraction du dépôt a échoué",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Le répertoire de travail ne peut pas être utilisé",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Le dossier de travail est déjà utilisé",
+	"cloud.startupError.workerLostTitle": "Cette session ne répond plus",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Le dossier de travail n'est pas conservé lors des redémarrages",
 	"board.empty.body": "Décrivez une tâche et l'orchestrateur la planifie, crée des sessions worker et les suit ici au fur et à mesure de l'avancement.",
 	"board.empty.title": "Aucune session worker pour le moment",

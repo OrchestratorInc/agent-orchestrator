@@ -347,6 +347,7 @@
 	"cloud.startupError.repositoryCheckoutFailedTitle": "Der Checkout des Repositorys ist fehlgeschlagen",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Das Arbeitsverzeichnis kann nicht verwendet werden",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Der Arbeitsordner wird bereits verwendet",
+	"cloud.startupError.workerLostTitle": "Diese Sitzung reagiert nicht mehr",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Der Arbeitsordner bleibt bei Neustarts nicht erhalten",
 	"board.empty.body": "Beschreiben Sie eine Aufgabe — der Orchestrator plant sie, startet Worker-Sitzungen und verfolgt sie hier, während die Arbeit voranschreitet.",
 	"board.empty.title": "Noch keine Worker-Sitzungen",
