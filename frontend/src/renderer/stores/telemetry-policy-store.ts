@@ -6,7 +6,9 @@ type TelemetryPolicyState = {
 	view: TelemetryPolicyView | null;
 	loaded: boolean;
 	saving: boolean;
+	loadError: boolean;
 	saveError: boolean;
+	saveErrorView: TelemetryPolicyView | null;
 	load(): Promise<void>;
 	setEnabled(enabled: boolean): Promise<void>;
 };
@@ -14,8 +16,15 @@ type TelemetryPolicyState = {
 let pendingLoad: Promise<void> | null = null;
 let subscribed = false;
 
+// A save failure belongs to the view it was rejected against. The retry loop
+// republishes that view while cleanup is pending, which says nothing new about
+// the failure; a new consent generation or apply state replaces the attempt.
+function supersedesSaveError(next: TelemetryPolicyView, failedAgainst: TelemetryPolicyView | null): boolean {
+	return !failedAgainst || next.consentGeneration !== failedAgainst.consentGeneration || next.state !== failedAgainst.state;
+}
+
 export const useTelemetryPolicyStore = create<TelemetryPolicyState>((set, get) => ({
-	view: null, loaded: false, saving: false, saveError: false,
+	view: null, loaded: false, saving: false, loadError: false, saveError: false, saveErrorView: null,
 	load: async () => {
 		if (get().loaded) return;
 		if (pendingLoad) return pendingLoad;
@@ -25,17 +34,24 @@ export const useTelemetryPolicyStore = create<TelemetryPolicyState>((set, get) =
 				// This policy is the failure-reporting consent. PostHog product
 				// analytics keep their own once-a-day gates in localStorage and
 				// are not governed by it (see applyRendererTelemetryPolicy).
-				aoBridge.telemetry.onPolicy((view) => set({ view, loaded: true, saving: false }));
+				// Leaves `saving` alone: main publishes while a write is still in
+				// flight, and only that write's own settlement may end the attempt.
+				aoBridge.telemetry.onPolicy((view) => set((state) => ({
+					view,
+					loaded: true,
+					loadError: false,
+					...(supersedesSaveError(view, state.saveErrorView) && { saveError: false, saveErrorView: null }),
+				})));
 			}
 			try { set({ view: await aoBridge.telemetry.getPolicy(), loaded: true }); }
-			catch { set({ loaded: true, saveError: true }); }
+			catch { set((state) => ({ loaded: true, loadError: !state.view })); }
 		})();
 		try { await pendingLoad; } finally { pendingLoad = null; }
 	},
 	setEnabled: async (enabled) => {
 		if (get().saving) return;
-		set({ saving: true, saveError: false });
+		set({ saving: true, saveError: false, saveErrorView: null });
 		try { set({ view: await aoBridge.telemetry.setEventsEnabled(enabled), loaded: true, saving: false }); }
-		catch { set({ saving: false, saveError: true }); }
+		catch { set((state) => ({ saving: false, saveError: true, saveErrorView: state.view })); }
 	},
 }));
