@@ -2643,6 +2643,8 @@
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.newSidebarDesign": "新しいサイドバーデザイン",
 	"settings.newSidebarDesignHint": "左サイドバーのステータスアイコン、ホバープレビュー、リポジトリのアバターと、それに合わせたボードの色。オフにすると以前のサイドバーに戻ります。",
+	"settings.simplifiedTopbar": "シンプルなトップバー",
+	"settings.simplifiedTopbarHint": "コントロールを減らした浮動トップバー、ピル型タブ、バーのないページで高くなるパネル。オフにすると以前のトップバーに戻ります。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",
 	"settings.chromeAgents.hint": "サインイン状態のまま、エージェントがあなたの Chrome でブラウズできます。ブラウザ設定で設定してください。",
 	"settings.chromeAgents.goTo": "移動",

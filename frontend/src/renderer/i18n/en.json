@@ -1667,6 +1667,8 @@
 	"settings.sideChatsHint": "Open separate side conversations in the inspector, and use /btw to ask one a question.",
 	"settings.newSidebarDesign": "New sidebar design",
 	"settings.newSidebarDesignHint": "Status icons, hover previews and repository avatars in the left sidebar, with the matching board colours. Turn off to go back to the previous sidebar.",
+	"settings.simplifiedTopbar": "Simplified top bar",
+	"settings.simplifiedTopbarHint": "The floating top bar with fewer controls, pill tabs and a taller panel on pages without a bar. Turn off to return to the previous top bar.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
 	"settings.chromeAgents.hint": "Let agents browse in your own Chrome, signed in as you. Set it up in Browser settings.",
 	"settings.chromeAgents.goTo": "Go to",

@@ -2687,6 +2687,8 @@
 	"settings.sideChatsHint": "Abre conversaciones laterales independientes en el inspector y usa /btw para hacer una pregunta.",
 	"settings.newSidebarDesign": "Nuevo diseño de la barra lateral",
 	"settings.newSidebarDesignHint": "Iconos de estado, vistas previas al pasar el cursor y avatares de repositorio en la barra lateral izquierda, con los colores del tablero a juego. Desactívalo para volver a la barra lateral anterior.",
+	"settings.simplifiedTopbar": "Barra superior simplificada",
+	"settings.simplifiedTopbarHint": "La barra superior flotante con menos controles, pestañas en forma de píldora y un panel más alto en las páginas sin barra. Desactívala para volver a la barra superior anterior.",
 	"settings.chromeAgents.label": "Usar agentes en mi Chrome",
 	"settings.chromeAgents.hint": "Permite que los agentes naveguen en tu propio Chrome, con tus sesiones iniciadas. Configúralo en los ajustes del navegador.",
 	"settings.chromeAgents.goTo": "Ir",

@@ -2713,6 +2713,8 @@
 	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 提问。",
 	"settings.newSidebarDesign": "新侧边栏设计",
 	"settings.newSidebarDesignHint": "左侧边栏中的状态图标、悬停预览和仓库头像，以及与之匹配的看板颜色。关闭后恢复为之前的侧边栏。",
+	"settings.simplifiedTopbar": "简化顶栏",
+	"settings.simplifiedTopbarHint": "控件更少的悬浮顶栏、胶囊式标签页，以及在没有顶栏的页面上更高的面板。关闭后恢复之前的顶栏。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",
 	"settings.chromeAgents.hint": "让智能体以你的登录身份在你自己的 Chrome 中浏览。请在浏览器设置中进行设置。",
 	"settings.chromeAgents.goTo": "前往",

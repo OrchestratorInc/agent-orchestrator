@@ -2643,6 +2643,8 @@
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.newSidebarDesign": "Neues Seitenleisten-Design",
 	"settings.newSidebarDesignHint": "Statussymbole, Hover-Vorschauen und Repository-Avatare in der linken Seitenleiste, mit den passenden Board-Farben. Ausschalten, um zur vorherigen Seitenleiste zurückzukehren.",
+	"settings.simplifiedTopbar": "Vereinfachte obere Leiste",
+	"settings.simplifiedTopbarHint": "Die schwebende obere Leiste mit weniger Bedienelementen, Pillen-Tabs und einem höheren Panel auf Seiten ohne Leiste. Ausschalten, um zur vorherigen oberen Leiste zurückzukehren.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
 	"settings.chromeAgents.hint": "Agenten können in deinem eigenen Chrome surfen, mit deinen Anmeldungen. Richte es in den Browser-Einstellungen ein.",
 	"settings.chromeAgents.goTo": "Öffnen",
