@@ -26,7 +26,8 @@ export function SessionArchiveDialog({
 	onOpenChange: (open: boolean) => void;
 	open: boolean;
 	session?: WorkspaceSession;
-	trigger: ReactElement;
+	/** Omitted when a shortcut, not a visible control, opens the confirm. */
+	trigger?: ReactElement;
 }) {
 	const { t } = useTranslation();
 	const checkboxId = useId();

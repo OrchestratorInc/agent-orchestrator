@@ -91,6 +91,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug"] },
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
 	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
+	{ id: "simplified-topbar", section: "general", label: "settings.simplifiedTopbar", keywords: ["top bar", "topbar", "toolbar", "floating", "tabs"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
 	{ id: "accounts", section: "agents", label: "settings.agents", keywords: [] },
 	{ id: "add-account", section: "agents", label: "settings.codexAccounts.add", keywords: ["sign in"] },

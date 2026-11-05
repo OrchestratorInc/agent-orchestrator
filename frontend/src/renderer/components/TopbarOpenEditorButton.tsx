@@ -6,6 +6,8 @@ import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
+import type { TopbarView } from "../lib/topbar-actions";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
@@ -94,12 +96,15 @@ export function TopbarOpenEditorButton({
 	sessionCreatedAt,
 	sessionTerminated,
 	style,
+	telemetryView,
 }: {
 	sessionId: string;
 	projectId: string;
 	sessionCreatedAt?: string;
 	sessionTerminated?: boolean;
 	style?: React.CSSProperties;
+	/** Set when mounted in a session top bar, so its clicks are counted. */
+	telemetryView?: TopbarView;
 }) {
 	const { t } = useTranslation();
 	const stateQuery = useEditorHandoffState(sessionId, { sessionCreatedAt, sessionTerminated });
@@ -176,7 +181,10 @@ export function TopbarOpenEditorButton({
 							className="bg-transparent hover:bg-transparent"
 							highlight={false}
 							disabled={mainDisabled}
-							onClick={() => launch()}
+							onClick={() => {
+								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
+								launch();
+							}}
 							variant="icon"
 						>
 							<TargetIcon target={preferred} className="size-icon-md" />
@@ -187,6 +195,7 @@ export function TopbarOpenEditorButton({
 			</Tooltip>
 			<DropdownMenu onOpenChange={(isOpen) => {
 				setMenuOpen(isOpen);
+				if (isOpen && telemetryView) captureTopbarAction("editor_menu", telemetryView);
 				if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 			}}>
 				<span className="inline-flex">

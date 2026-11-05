@@ -25,6 +25,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
+import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
@@ -380,6 +381,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
+			{/* The placeholder bar above is its drag region; without it (bar-less panel) this keeps the top edge draggable. */}
+			<BareTopbarDragStrip />
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above). So does a draft written
@@ -387,6 +390,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				key={`${projectId}:${draftRevision}`}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				// The pending launch below tracks its own unanswered send.
+				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.
 				sessionTitle={echo ? sessionNameFromBrief(echo.text) : t("command.newTask")}
 				sessionRole="worker"

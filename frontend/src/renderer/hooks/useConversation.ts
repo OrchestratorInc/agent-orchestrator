@@ -357,6 +357,11 @@ const CONVERSATION_PAGE_SIZE = 200;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
 const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
+/**
+ * A send with no answer by now is treated as unanswered: the composer keeps it as
+ * an unsent message to retry with the same id, instead of waiting forever.
+ */
+const SEND_ANSWER_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
 /**
@@ -669,6 +674,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					// A stable id per attempt makes a retry idempotent: the daemon
 					// answers `duplicate` instead of opening a second provider turn.
 					body: { ...message, clientMessageId },
+					// ponytail: no timeout with attachments, whose upload can outlast it on a slow tunnel; scale it by size if those hang too.
+					signal: input.attachments?.length ? undefined : AbortSignal.timeout(SEND_ANSWER_TIMEOUT_MS),
 				},
 			);
 			if (error) throw error;

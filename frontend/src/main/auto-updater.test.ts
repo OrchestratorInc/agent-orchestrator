@@ -3567,9 +3567,9 @@ function stubProcess(platform: NodeJS.Platform, execPath: string): () => void {
 
 // Builds a real bundle-shaped tree so the writability checks run against the
 // filesystem rather than a stub. Returns the exec path inside it.
-function makeBundle(): { root: string; bundle: string; execPath: string } {
+function makeBundle(name = "Agent Orchestrator.app"): { root: string; bundle: string; execPath: string } {
   const root = mkdtempSync(nodePath.join(os.tmpdir(), "ao-updater-perm-"));
-  const bundle = nodePath.join(root, "Agent Orchestrator.app");
+  const bundle = nodePath.join(root, name);
   mkdirSync(nodePath.join(bundle, "Contents", "MacOS"), { recursive: true });
   return {
     root,
@@ -3647,6 +3647,188 @@ describe("quitAndInstallUpdate", () => {
       expect(failed).toHaveBeenCalledOnce();
       expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
     } finally { restore(); }
+  });
+
+  it("keeps native staging ready when Finder renamed the running app", async () => {
+    const bundle = makeBundle("Agent Orchestrator 2.app");
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      const periodicCheck = intervalWithDelay(setIntervalSpy, 15 * 60 * 1000);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+
+      periodicCheck();
+      await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2));
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+
+      startMacUpdateProgress.mockResolvedValueOnce({ assertAlive: vi.fn(), fail: vi.fn(async () => undefined) });
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops an in-process macOS stage whose native files disappeared and checks again", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      mkdirSync(extracted, { recursive: true });
+      writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+      writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+
+      rmSync(shipIt, { recursive: true });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      autoUpdater.checkForUpdates.mockImplementation(async () => ({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.2.0" },
+        downloadPromise: autoUpdater.autoDownload ? Promise.resolve() : undefined,
+      }));
+
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.autoDownload).toBe(true);
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a pending install when native staging disappears before the helper responds", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const abandoned = expect(install).rejects.toThrow(/staged update files are missing/);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await abandoned;
+      await flushMicrotasks();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(progress.assertAlive).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a pending install on the next periodic check without another click", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      const periodicCheck = intervalWithDelay(setIntervalSpy, 15 * 60 * 1000);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const handshake = deferred<Awaited<ReturnType<typeof startMacUpdateProgress>>>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const abandoned = expect(install).rejects.toThrow(/staged update files are missing/);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+
+      periodicCheck();
+      await flushMicrotasks();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+      rmSync(shipIt, { recursive: true });
+      periodicCheck();
+      await abandoned;
+      await vi.waitFor(() => expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2));
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+
+      handshake.resolve({ assertAlive: vi.fn(), fail: vi.fn(async () => undefined) });
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a retained restart request when its native staging disappears", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      startMacUpdateProgress.mockResolvedValueOnce(progress);
+      const restoreWindow = vi.fn();
+      module.setUpdateRestartFailureHandler(restoreWindow);
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(module.isUpdateRestartRequested()).toBe(true);
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      expect(module.isUpdateRestartRequested()).toBe(false);
+      expect(progress.fail).toHaveBeenCalledWith(expect.stringContaining("staged update files are missing"));
+      expect(restoreWindow).toHaveBeenCalledOnce();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
   });
 
   it("requires new confirmation before downloading a changed remembered target", async () => {

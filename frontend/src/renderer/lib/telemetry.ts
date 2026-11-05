@@ -3,6 +3,7 @@ import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
+import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
@@ -889,6 +890,8 @@ const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES
 
 const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
+const TOPBAR_ACTION_SET = new Set<string>(TOPBAR_ACTIONS);
+const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
 
 export async function sanitizeRendererProperties(
 	event: string,
@@ -991,6 +994,10 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
+			break;
+		case "ao.renderer.topbar_action_clicked":
+			if (typeof properties?.action === "string" && TOPBAR_ACTION_SET.has(properties.action)) safe.action = properties.action;
+			if (typeof properties?.view === "string" && TOPBAR_VIEW_SET.has(properties.view)) safe.view = properties.view;
 			break;
 		case "ao.renderer.notification_mark_read_succeeded":
 		case "ao.renderer.notification_mark_read_failed":
