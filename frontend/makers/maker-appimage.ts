@@ -19,6 +19,8 @@ export type MakerAppImageConfig = {
 	productName?: string;
 	// Path to the PNG icon used for the app and desktop entry.
 	icon?: string;
+	// freedesktop main category written to the desktop entry's Categories=.
+	category?: string;
 	// URL schemes written to the AppImage desktop entry.
 	protocols?: Array<{ name: string; schemes: string[] }>;
 	// Any extra electron-builder `appImage` options, merged over our defaults.
@@ -66,6 +68,7 @@ export default class MakerAppImage extends MakerBase<MakerAppImageConfig> {
 					publish: null,
 					linux: {
 						...(cfg.icon ? { icon: cfg.icon } : {}),
+						...(cfg.category ? { category: cfg.category } : {}),
 					},
 					appImage: {
 						...cfg.appImage,

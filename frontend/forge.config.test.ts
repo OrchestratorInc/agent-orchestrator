@@ -390,6 +390,21 @@ describe("Linux package maintainer", () => {
 		const deb = makers.find((maker) => maker.name === "@electron-forge/maker-deb");
 		expect(deb?.config?.options?.maintainer).toBe(appPackage.author);
 	});
+
+	// package.json "description" becomes the Linux .desktop Comment= and the
+	// deb/rpm package description, which app menus show to users (#7834).
+	it("keeps the Linux menu description and category user-facing", () => {
+		expect(appPackage.description).toBe("Run and manage a fleet of AI coding agents");
+
+		const makers = config.makers as Array<{
+			name?: string;
+			config?: { options?: { categories?: string[] } };
+		}>;
+		for (const name of ["@electron-forge/maker-deb", "@electron-forge/maker-rpm"]) {
+			const maker = makers.find((candidate) => candidate.name === name);
+			expect(maker?.config?.options?.categories).toEqual(["Development"]);
+		}
+	});
 });
 
 describe("packaged authentication callback registration", () => {
