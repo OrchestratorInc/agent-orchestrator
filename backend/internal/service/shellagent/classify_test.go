@@ -36,6 +36,10 @@ func TestClassifyArgv(t *testing.T) {
 		{"required module is not the script", []string{"node", "--require", "codex", "server.js"}, ""},
 		{"node preload before an agent script", []string{"node", "--require", "init.js", "/usr/local/bin/codex"}, domain.HarnessCodex},
 		{"Python module launch", []string{"python3", "-m", "aider"}, domain.HarnessAider},
+		{"bun config before an agent script", []string{"bun", "-c", "bunfig.toml", "codex.js"}, domain.HarnessCodex},
+		{"deno config before an agent script", []string{"deno", "--config", "deno.json", "codex.js"}, domain.HarnessCodex},
+		{"agent name is only a config value", []string{"bun", "-c", "codex", "server.js"}, ""},
+		{"inline config before a plain script", []string{"bun", "--config=codex", "server.js"}, ""},
 		{"json viewer fx is not an agent", []string{"fx", "data.json"}, ""},
 		{"empty", nil, ""},
 	}

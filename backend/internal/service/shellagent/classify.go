@@ -78,23 +78,30 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 	if harness := classifyProgram(argv[0]); harness != "" {
 		return harness
 	}
-	if !interpreters[strings.TrimRight(baseName(argv[0]), "0123456789.")] {
+	interpreter := strings.TrimRight(baseName(argv[0]), "0123456789.")
+	if !interpreters[interpreter] {
 		return ""
 	}
 	for i := 1; i < min(len(argv), 5); i++ {
 		arg := argv[i]
 		flag, _, hasValue := strings.Cut(arg, "=")
 		switch flag {
-		case "-e", "--eval", "-p", "--print", "-c", "--check":
+		case "-e", "--eval", "-p", "--print", "--check":
 			return ""
-		case "-r", "--require", "--import", "--loader", "--experimental-loader", "--title", "-W", "-X":
+		case "-c":
+			if interpreter != "bun" && interpreter != "deno" {
+				return ""
+			}
+			fallthrough
+		case "-r", "--require", "--import", "--loader", "--experimental-loader", "--title", "--config", "-W", "-X":
 			if !hasValue {
 				i++
 			}
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
-			if strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-p") || strings.HasPrefix(arg, "-c") {
+			if strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-p") ||
+				(strings.HasPrefix(arg, "-c") && interpreter != "bun" && interpreter != "deno") {
 				return ""
 			}
 			continue
