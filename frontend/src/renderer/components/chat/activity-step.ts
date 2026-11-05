@@ -1,8 +1,8 @@
 import type { ConversationActivity } from "../../types/conversation";
 
 /**
- * How a shell command reads in the chat: what it did, in the words a person would
- * use, instead of one "Ran command" for everything.
+ * How a shell command or an agent's built-in tool reads in the chat: what it did,
+ * in the words a person would use, instead of one "Ran command" for everything.
  *
  * This only names the step. Which rows group together is still decided by
  * `commandCategory` in activity-command.ts, so a new label never changes the
@@ -32,6 +32,7 @@ export type StepIcon =
 	| "check"
 	| "format"
 	| "wait"
+	| "tool"
 	| "run";
 
 export interface CommandStep {
@@ -58,13 +59,81 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
 
 	const summary = activity.summary.trim().replace(/^`+|`+$/g, "");
 	const web = /^Searched the web(?:\s+for\s+([\s\S]+))?$/i.exec(summary);
-	if (web) {
-		return { done: "Searched the web", live: "Searching the web", target: web[1]?.trim() || undefined, icon: "web" };
-	}
+	if (web) return webSearchStep(web[1]);
 	// Without a command line the summary may be a provider's prose title, so only
 	// a summary that starts with a program we know is read as a command.
 	const step = summary ? describeKnownCommand(summary) : undefined;
 	return step ?? GENERIC_STEP;
+}
+
+/**
+ * The step for one of an agent's built-in tools. Claude Code's Read, Grep,
+ * WebSearch and the rest reach AO over ACP as tool calls with the provider's own
+ * title, and a web search is titled with nothing but its query. Each is named
+ * here like the command that does the same job.
+ *
+ * A call to an MCP server returns undefined and keeps its own row, and so does a
+ * tool this does not know. For those, only the ACP category picks an icon.
+ */
+export function activityToolStep(activity: ConversationActivity): CommandStep | undefined {
+	const detail = activity.detail;
+	if (!detail || detail.server || detail.namespace) return undefined;
+	const input = (key: string): string | undefined => {
+		const value = isRecord(detail.input) ? detail.input[key] : undefined;
+		return typeof value === "string" && value.trim() ? value.trim() : undefined;
+	};
+	switch (detail.providerToolName) {
+		case "Read": {
+			const file = input("file_path") ?? input("path");
+			return readStep(file ? [file] : []);
+		}
+		case "Grep":
+			return searchStep(input("pattern"));
+		case "Glob":
+			return findStep(input("pattern"));
+		case "LS": {
+			const folder = input("path");
+			return folder ? { done: "Listed", live: "Listing", ...fileTarget(folder), icon: "list" } : listStep(undefined);
+		}
+		case "WebSearch":
+			return webSearchStep(input("query"));
+		case "WebFetch":
+			return urlStep(input("url"));
+		case "ToolSearch":
+			return toolSearchStep(input("query"));
+	}
+	const label = activity.summary.trim();
+	const icon = detail.toolKind ? TOOL_KIND_ICONS[detail.toolKind] : undefined;
+	return label && icon ? { done: label, live: label, icon } : undefined;
+}
+
+/**
+ * A tool call that only looks at things: a read, a search, a fetch. A run made
+ * only of these says "Explored", the way a run of `cat` and `rg` does.
+ */
+export function isExploratoryTool(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	if (activity.activityKind !== "mcp_tool" || !detail || detail.server || detail.namespace) return false;
+	return detail.toolKind === "read" || detail.toolKind === "search" || detail.toolKind === "fetch";
+}
+
+const TOOL_KIND_ICONS: Partial<Record<string, StepIcon>> = { read: "read", search: "search", fetch: "web" };
+
+function webSearchStep(query: string | undefined): CommandStep {
+	const target = query?.trim() || undefined;
+	return target
+		? { done: "Searched the web for", live: "Searching the web for", target, icon: "web" }
+		: { done: "Searched the web", live: "Searching the web", icon: "web" };
+}
+
+function toolSearchStep(query: string | undefined): CommandStep {
+	const names = query && /^select:/i.test(query) ? query.slice("select:".length).split(",").map((name) => name.trim()).filter(Boolean) : [];
+	if (names.length > 0) return { done: "Loaded tools", live: "Loading tools", target: names.join(", "), icon: "tool" };
+	return { done: "Searched tools", live: "Searching tools", target: query || undefined, icon: "tool" };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Name one shell command line. Anything unrecognized becomes "Ran <program>". */
@@ -102,6 +171,11 @@ function describeSegment(segment: Segment, depth: number): CommandStep | undefin
 	if (binary === "tee") {
 		const file = positionals(args)[0];
 		return file ? writeStep(file, args.includes("-a") || args.includes("--append")) : undefined;
+	}
+
+	if (isProbe(segment)) {
+		const names = positionals(binary === "command" ? args.slice(1) : args);
+		return { done: "Checked for", live: "Checking for", target: names.join(", ") || undefined, icon: "check" };
 	}
 
 	if (SHELLS.has(binary)) {
@@ -288,7 +362,10 @@ function copyStep(values: string[]): CommandStep | undefined {
 }
 
 function fetchStep(args: string[]): CommandStep {
-	const url = args.find((arg) => /^https?:\/\//i.test(arg));
+	return urlStep(args.find((arg) => /^https?:\/\//i.test(arg)));
+}
+
+function urlStep(url: string | undefined): CommandStep {
 	let host: string | undefined;
 	if (url) {
 		try {
@@ -571,14 +648,24 @@ function mainSegment(command: string): Segment | undefined {
 	return commandSegments(command)[0];
 }
 
-/** Every segment that does something, in order, without `cd` and the like. */
+/**
+ * Every segment that does something, in order, without `cd` and the like. A
+ * `command -v gh &&` check in front of the real work is left out too.
+ */
 function commandSegments(command: string): Segment[] {
 	const segments: Segment[] = [];
 	for (const words of splitSegments(tokenize(firstLogicalLine(command)))) {
 		const segment = toSegment(words);
 		if (segment && !NAVIGATION.has(segment.binary)) segments.push(segment);
 	}
-	return segments;
+	const work = segments.filter((segment) => !isProbe(segment));
+	return work.length > 0 ? work : segments;
+}
+
+/** `command -v gh`, `which node`: a check that a program exists. */
+function isProbe(segment: Segment): boolean {
+	if (segment.binary === "command") return segment.args[0] === "-v" || segment.args[0] === "-V";
+	return PROBES.has(segment.binary);
 }
 
 /** A heredoc's body is the file's content, not more arguments. */
@@ -796,6 +883,7 @@ function binaryName(value: string): string {
 
 const EMPTY: ReadonlySet<string> = new Set();
 const NAVIGATION = new Set(["cd", "pushd", "popd", "export", "set", "source", ".", "true", ":"]);
+const PROBES = new Set(["which", "type", "hash", "whereis"]);
 const WRAPPERS = new Set(["sudo", "env", "time", "nohup", "exec", "timeout", "nice"]);
 const WRITERS = new Set(["cat", "echo", "printf"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "fish"]);

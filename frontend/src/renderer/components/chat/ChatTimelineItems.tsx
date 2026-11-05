@@ -72,10 +72,11 @@ import {
 	Trash2,
 	Undo2,
 	User,
+	Wrench,
 	X,
 } from "lucide-react";
 
-/** The mark beside a command or file-edit step, by what the step did. */
+/** The mark beside a command, tool or file-edit step, by what the step did. */
 const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
 	list: FolderOpen,
 	read: FileText,
@@ -98,6 +99,7 @@ const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
 	check: CircleCheck,
 	format: Paintbrush,
 	wait: Clock,
+	tool: Wrench,
 	run: SquareTerminal,
 };
 
@@ -137,7 +139,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1275,7 +1277,11 @@ export function AssistantMessage({
 export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
-	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
+	if (activity.activityKind === "mcp_tool") {
+		const step = activityToolStep(activity);
+		if (!step) return activity.summary.trim() || "Using a tool";
+		return step.target ? `${step.live} ${step.target}` : step.live;
+	}
 	// The live row only ever names a step in progress, so it is always "Reading", never "Read".
 	const { label, path } = splitSummary(activity, "live");
 	return path ? `${label} ${path}` : label;
@@ -2255,9 +2261,19 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
-	const tool = detail?.toolName ?? activity.summary;
+	// An agent's built-in tool (a read, a web search) is named like a command step;
+	// a call to an MCP server keeps its tool and server name.
+	const step = activityToolStep(activity);
+	const StepMark = step ? stepIcon[step.icon] : undefined;
+	const tool = step ? (activity.status === "running" ? step.live : step.done) : detail?.toolName ?? activity.summary;
 	const server = detail?.server ?? detail?.namespace;
-	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
+	const sourceLabel = step
+		? undefined
+		: server
+			? `MCP · ${server}`
+			: detail?.progress
+				? lastLine(detail.progress)
+				: undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
 			detail?.arguments !== undefined ||
@@ -2279,15 +2295,32 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				<strong
-					className={cn(
-						"activity-row-label min-w-0 truncate text-xs font-normal",
-						failed ? "text-destructive" : "text-muted-foreground",
-					)}
-					title={tool}
-				>
-					<span>{tool}</span>
-				</strong>
+				{StepMark ? <StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" /> : null}
+				{step?.target ? (
+					// Laid out like a command step: verb, then what it acted on.
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+						<strong
+							className={cn(
+								"activity-row-label shrink-0 text-xs font-normal",
+								failed ? "text-destructive" : "text-muted-foreground group-hover/activity:text-foreground",
+							)}
+						>
+							{tool}
+						</strong>
+						{" "}
+						<StepTarget text={step.target} title={step.targetTitle} />
+					</span>
+				) : (
+					<strong
+						className={cn(
+							"activity-row-label min-w-0 truncate text-xs font-normal",
+							failed ? "text-destructive" : "text-muted-foreground",
+						)}
+						title={tool}
+					>
+						<span>{tool}</span>
+					</strong>
+				)}
 				{sourceLabel ? (
 					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
 						{sourceLabel}

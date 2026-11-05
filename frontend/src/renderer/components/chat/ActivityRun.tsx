@@ -27,6 +27,7 @@ import {
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { aoActionName, summarizeAOActions } from "./activity-action";
+import { isExploratoryTool } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
 export function ActivityRun({
@@ -304,7 +305,8 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 		return `Changed ${files} ${files === 1 ? "file" : "files"}`;
 	}
 	if (first.activityKind === "mcp_tool") {
-		return `Used ${activities.length} ${activities.length === 1 ? "tool call" : "tool calls"}`;
+		const verb = activities.every(isExploratoryTool) ? "Explored" : "Used";
+		return `${verb} ${activities.length} ${activities.length === 1 ? "tool call" : "tool calls"}`;
 	}
 	if (first.activityKind === "auto_review") {
 		return `Checked ${activities.length} ${activities.length === 1 ? "decision" : "decisions"}`;
@@ -429,8 +431,8 @@ function summarize(activities: ConversationActivity[]): string {
 			changedFiles += Math.max(1, fileChangeFiles(activity).length);
 			exploratory = false;
 		} else if (
-			activity.activityKind !== "command" ||
-			(category !== "read" && category !== "search")
+			!isExploratoryTool(activity) &&
+			(activity.activityKind !== "command" || (category !== "read" && category !== "search"))
 		) {
 			exploratory = false;
 		}

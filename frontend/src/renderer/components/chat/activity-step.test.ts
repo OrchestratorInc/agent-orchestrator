@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import { activityCommandStep, describeCommandStep, type CommandStep } from "./activity-step";
+import {
+	activityCommandStep,
+	activityToolStep,
+	describeCommandStep,
+	isExploratoryTool,
+	type CommandStep,
+} from "./activity-step";
 
 /** The finished row's text, as it reads: verb, then target. */
 function done(command: string): string {
@@ -139,6 +145,14 @@ describe("describeCommandStep", () => {
 	});
 });
 
+describe("program checks", () => {
+	it("names the work after a `command -v` check, and a check on its own", () => {
+		expect(done("command -v gh && gh pr list --state open --limit 1 --json number,title")).toBe("Listed pull requests");
+		expect(done("which node")).toBe("Checked for node");
+		expect(done("command -v gh")).toBe("Checked for gh");
+	});
+});
+
 describe("activityCommandStep", () => {
 	it("reads the command from detail when there is one", () => {
 		const step = activityCommandStep(commandActivity({ summary: "ls", detail: { command: "rg TODO" } }));
@@ -147,8 +161,8 @@ describe("activityCommandStep", () => {
 
 	it("names a Codex web search, which has only a summary", () => {
 		const step = activityCommandStep(commandActivity({ summary: "Searched the web for latest stable Node.js version" }));
-		expect(step).toMatchObject({ done: "Searched the web", live: "Searching the web", target: "latest stable Node.js version", icon: "web" });
-		expect(activityCommandStep(commandActivity({ summary: "Searched the web" })).target).toBeUndefined();
+		expect(step).toMatchObject({ done: "Searched the web for", live: "Searching the web for", target: "latest stable Node.js version", icon: "web" });
+		expect(text(activityCommandStep(commandActivity({ summary: "Searched the web" })), "done")).toBe("Searched the web");
 	});
 
 	it("reads a summary that is a known command line", () => {
@@ -158,5 +172,51 @@ describe("activityCommandStep", () => {
 	it("keeps the generic label for a prose summary", () => {
 		expect(text(activityCommandStep(commandActivity({ summary: "Ran a command" })), "done")).toBe("Ran command");
 		expect(text(activityCommandStep(commandActivity({ summary: "List files in the folder" })), "done")).toBe("Ran command");
+	});
+});
+
+/** Claude Code's built-in tools over ACP, with the detail its driver records. */
+function toolActivity(providerToolName: string | undefined, toolKind: string, input: unknown, summary = ""): ConversationActivity {
+	return commandActivity({
+		activityKind: "mcp_tool",
+		summary,
+		detail: { protocol: "acp", providerToolName, toolKind, input } as ConversationActivity["detail"],
+	});
+}
+
+describe("activityToolStep", () => {
+	it("names a web search by its query instead of showing the bare query", () => {
+		const search = toolActivity("WebSearch", "fetch", { query: "latest stable Node.js version" }, '"latest stable Node.js version"');
+		const step = activityToolStep(search)!;
+		expect(text(step, "done")).toBe("Searched the web for latest stable Node.js version");
+		expect(text(step, "live")).toBe("Searching the web for latest stable Node.js version");
+		expect(step.icon).toBe("web");
+	});
+
+	it("names reads, searches and fetches like the commands that do the same", () => {
+		const read = activityToolStep(toolActivity("Read", "read", { file_path: "/w/market-place/README.md", limit: 40 }, "Read README.md (1 - 40)"))!;
+		expect(read).toMatchObject({ done: "Read", target: "README.md", targetTitle: "/w/market-place/README.md", icon: "read" });
+		expect(text(activityToolStep(toolActivity("Grep", "search", { pattern: "TODO" }))!, "done")).toBe("Searched for TODO");
+		expect(text(activityToolStep(toolActivity("Glob", "search", { pattern: "**/*.test.ts" }))!, "done")).toBe("Found files **/*.test.ts");
+		const fetch = activityToolStep(toolActivity("WebFetch", "fetch", { url: "https://versionlog.com/nodejs/" }))!;
+		expect(fetch).toMatchObject({ done: "Fetched", target: "versionlog.com", targetTitle: "https://versionlog.com/nodejs/" });
+		expect(text(activityToolStep(toolActivity("ToolSearch", "other", { query: "select:WebSearch,TaskCreate" }))!, "done")).toBe(
+			"Loaded tools WebSearch, TaskCreate",
+		);
+	});
+
+	it("keeps an MCP server's tool and an unknown tool's title", () => {
+		const mcp = commandActivity({ activityKind: "mcp_tool", summary: "search_issues", detail: { server: "linear", toolName: "search_issues" } });
+		expect(activityToolStep(mcp)).toBeUndefined();
+		expect(activityToolStep(toolActivity("SubagentHandback", "other", {}, "SubagentHandback"))).toBeUndefined();
+		// Another ACP agent's read keeps its own title and gains only the icon.
+		expect(activityToolStep(toolActivity(undefined, "read", {}, "ReadFile src/app.ts"))).toMatchObject({ done: "ReadFile src/app.ts", icon: "read" });
+	});
+
+	it("counts reads, searches and fetches as exploring", () => {
+		expect(isExploratoryTool(toolActivity("Read", "read", {}))).toBe(true);
+		expect(isExploratoryTool(toolActivity("WebSearch", "fetch", {}))).toBe(true);
+		expect(isExploratoryTool(toolActivity("ToolSearch", "other", {}))).toBe(false);
+		expect(isExploratoryTool(commandActivity({ summary: "cat a.ts", detail: { command: "cat a.ts" } }))).toBe(false);
 	});
 });
