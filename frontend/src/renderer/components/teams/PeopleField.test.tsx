@@ -49,6 +49,24 @@ async function type(input: HTMLElement, text: string) {
 	});
 }
 
+// A field that goes away right after a blur (its dialog closed) leaves no
+// timer behind to set state on it, or to run after the page is torn down.
+it("leaves no pending timer after it unmounts following a blur", () => {
+	vi.useFakeTimers();
+	try {
+		const view = renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.click(input);
+		fireEvent.blur(input);
+		const pending = vi.getTimerCount();
+		view.unmount();
+		expect(vi.getTimerCount()).toBeLessThan(pending);
+		act(() => vi.runOnlyPendingTimers());
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
 describe("PeopleField", () => {
 	beforeEach(() => {
 		mocks.queries = [];

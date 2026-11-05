@@ -95,6 +95,10 @@ export function PeopleField({
 	}, []);
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
+	// The list closes a moment after blur, so a click on a suggestion lands first.
+	// The timer is cleared on unmount: a field that is gone sets no state.
+	const closeTimer = useRef<number | undefined>(undefined);
+	useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 	const [query, setQuery] = useState("");
 	// The suggestion the person moved to with the arrow keys or the pointer;
 	// until they do, the highlight is the default one below.
@@ -311,7 +315,8 @@ export function PeopleField({
 							// or an arrow key does.
 							onClick={() => setOpen(true)}
 							onBlur={() => {
-								window.setTimeout(() => setOpen(false), 120);
+								window.clearTimeout(closeTimer.current);
+								closeTimer.current = window.setTimeout(() => setOpen(false), 120);
 								commitTyped();
 							}}
 							onKeyDown={onKeyDown}
