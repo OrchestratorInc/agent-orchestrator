@@ -2657,9 +2657,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								</div>
 							) : null}
 							{/* Panes other than the focused one rest under a light veil, so
-							    the one taking keys stands out; the veil never takes the pointer. */}
+							    the one taking keys stands out; the veil never takes the pointer.
+							    The session's own chat or agent is never dimmed. */}
 							{shownGroup && shownLayout
-								? [...shownLayout.leaves.keys()].map((key) => (
+								? [...shownLayout.leaves.keys()].filter((key) => key !== SESSION_TAB_KEY).map((key) => (
 									<div
 										aria-hidden="true"
 										className="pane-split-dim"
@@ -2917,7 +2918,10 @@ function resolveSplitDrop(
 	y: number,
 ): PaneDropResolution | null {
 	if (!screen) return null;
-	const rect = screen.getBoundingClientRect();
+	// A plain box: a DOMRect's fields are prototype getters, so spreading one
+	// (as halfOf does) would drop them.
+	const bounds = screen.getBoundingClientRect();
+	const rect: ClientRect = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
 	if (y < rect.top) return resolveStripDrop(state, column, rect, key, x, y);
 	if (!containsPoint(rect, x, y)) return null;
 	const shown = state.shownGroup;
@@ -2967,7 +2971,7 @@ function resolveStripDrop(
 	column.querySelectorAll<HTMLElement>("[data-terminal-tab-key]").forEach((element) => {
 		const box = element.getBoundingClientRect();
 		if (!over && element.dataset.terminalTabKey && containsPoint(box, x, y)) {
-			over = { key: element.dataset.terminalTabKey, rect: box };
+			over = { key: element.dataset.terminalTabKey, rect: { left: box.left, top: box.top, width: box.width, height: box.height } };
 		}
 	});
 	const sourceGroup = groupContaining(state.groups, key);
