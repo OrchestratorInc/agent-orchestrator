@@ -24,7 +24,7 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"invalid env value", ProjectConfig{Env: map[string]string{"KEY": "bad\x00value"}}, true},
 		{"case-folded duplicate env", ProjectConfig{Env: map[string]string{"KEY": "first", "key": "second"}}, true},
 		{"good role override", ProjectConfig{Worker: RoleOverride{Harness: HarnessCodex}}, false},
-		{"unknown role harness", ProjectConfig{Orchestrator: RoleOverride{Harness: "nope"}}, true},
+		{"legacy unknown role harness is accepted", ProjectConfig{Orchestrator: RoleOverride{Harness: "nope"}}, false},
 		{"bad role agent config", ProjectConfig{Worker: RoleOverride{AgentConfig: AgentConfig{Permissions: "nope"}}}, true},
 		{"good symlinks", ProjectConfig{Symlinks: []string{".env", "configs/dev.toml"}}, false},
 		{"symlink absolute path", ProjectConfig{Symlinks: []string{"/etc/passwd"}}, true},

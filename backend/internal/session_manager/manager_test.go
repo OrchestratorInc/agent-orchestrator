@@ -1700,28 +1700,13 @@ func mkLive(id domain.SessionID) domain.SessionRecord {
 	return domain.SessionRecord{ID: id, ProjectID: "mer", Metadata: domain.SessionMetadata{WorkspacePath: "/ws/" + string(id), RuntimeHandleID: "h1"}, Activity: domain.Activity{State: domain.ActivityActive}}
 }
 
-func TestMemcodeIgnoresInheritedModelFromPreviousHarness(t *testing.T) {
-	cfg := domain.ProjectConfig{
-		AgentConfig: domain.AgentConfig{Model: "claude-opus-4-1"},
-		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-5"}},
-	}
-	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "" {
-		t.Fatalf("inherited foreign model = %q, want native selection", got)
-	}
-	cfg.Worker.Harness = domain.HarnessMemcode
-	cfg.Worker.AgentConfig.Model = "opus"
-	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "opus" {
-		t.Fatalf("memcode project choice = %q, want opus", got)
-	}
-}
-
 func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
 		DefaultBranch: "develop",
 		Env:           map[string]string{"FOO": "bar"},
 		AgentConfig:   domain.AgentConfig{Model: "base-model"},
-		// A worker role override wins over the base agent config for workers.
+		// Legacy model values are ignored at launch.
 		Worker: domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "worker-model"}},
 	}}
 	agent := &recordingAgent{}
@@ -1734,8 +1719,8 @@ func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastConfig.Model != "worker-model" {
-		t.Fatalf("launch model = %q, want role override worker-model", agent.lastConfig.Model)
+	if agent.lastConfig.Model != "" {
+		t.Fatalf("launch model = %q, want none: project config no longer carries a model", agent.lastConfig.Model)
 	}
 	if rec.Harness != domain.HarnessCodex {
 		t.Fatalf("harness = %q, want the explicit codex", rec.Harness)
@@ -1975,51 +1960,6 @@ func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 	}
 	if rec.Metadata.Model != "high" {
 		t.Fatalf("persisted metadata model = %q, want high", rec.Metadata.Model)
-	}
-}
-
-// TestSpawnAmpProjectDefaultModePersistsAsModel verifies that when Amp's mode
-// comes from project/role config (not an explicit spawn --model override), the
-// resolved value is still reported as metadata.Model instead of appearing as
-// the agent default.
-func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PATH setup differs on windows")
-	}
-	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
-		Worker: domain.RoleOverride{
-			Harness:     domain.HarnessAmp,
-			AgentConfig: domain.AgentConfig{Mode: "high"},
-		},
-	}}
-
-	dir := t.TempDir()
-	fakeAmp := filepath.Join(dir, "amp")
-	if err := os.WriteFile(fakeAmp, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write fake amp binary: %v", err)
-	}
-	t.Setenv("PATH", dir+string(filepath.ListSeparator)+os.Getenv("PATH"))
-
-	wsDir := t.TempDir()
-	rt := &fakeRuntime{}
-	ws := &fakeWorkspace{path: wsDir}
-	lookPath := func(string) (string, error) { return fakeAmp, nil }
-	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath,
-		Executable: func() (string, error) { return "/opt/ao", nil }, NewLaunchID: func() string { return "amp-launch" },
-	})
-
-	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{Harness: domain.HarnessAmp, ProjectID: "mer", Kind: domain.KindWorker})
-	if err != nil {
-		t.Fatalf("amp spawn with project default mode failed: %v", err)
-	}
-
-	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "amp-launch", "--", fakeAmp, "--mode", "high"}
-	if !reflect.DeepEqual(rt.lastCfg.Argv, want) {
-		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
-	}
-	if rec.Metadata.Model != "high" {
-		t.Fatalf("persisted metadata model = %q, want high (project default mode should be reported)", rec.Metadata.Model)
 	}
 }
 
@@ -3149,9 +3089,9 @@ func TestRestoreMemcodeModelFollowsNativeEndpointConfiguration(t *testing.T) {
 	}
 }
 
-func TestSpawnMemcodeCustomEndpointClearsOnlyInheritedModels(t *testing.T) {
+func TestSpawnMemcodeCustomEndpointRejectsExplicitModels(t *testing.T) {
 	for _, source := range []string{"project environment", "daemon environment", "global settings", "workspace settings", "no endpoint", "malformed settings"} {
-		for _, modelSource := range []string{"project default", "role default", "explicit override"} {
+		for _, modelSource := range []string{"no model", "explicit override"} {
 			t.Run(source+"/"+modelSource, func(t *testing.T) {
 				configHome := t.TempDir()
 				t.Setenv("XDG_CONFIG_HOME", configHome)
@@ -3161,12 +3101,7 @@ func TestSpawnMemcodeCustomEndpointClearsOnlyInheritedModels(t *testing.T) {
 				config.Worker.Harness = domain.HarnessMemcode
 				spawn := ports.SpawnConfig{Harness: domain.HarnessMemcode, ProjectID: "mer", Kind: domain.KindWorker}
 				switch modelSource {
-				case "project default":
-					config.AgentConfig.Model = "opus"
-				case "role default":
-					config.Worker.AgentConfig.Model = "opus"
 				case "explicit override":
-					config.AgentConfig.Model = "sonnet"
 					spawn.AgentConfig.Model = "opus"
 				}
 				endpoint := "http://127.0.0.1:11434/v1"
@@ -3217,7 +3152,7 @@ func TestSpawnMemcodeCustomEndpointClearsOnlyInheritedModels(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := ""
-				if source == "no endpoint" {
+				if source == "no endpoint" && modelSource == "explicit override" {
 					want = "opus"
 				}
 				if rt.created != 1 || agent.launchCalls != 1 || agent.lastConfig.Model != want || agent.hookModel != want || rec.Metadata.Model != want {

@@ -36,17 +36,13 @@ describe("project models", () => {
 		expect(
 			validateProjectSettings({
 				displayName: "",
-				workerAgent: "",
-				orchestratorAgent: "",
 				intakeEnabled: true,
 				intakeAssignee: "",
 			}),
-		).toBe("agents_required");
+		).toBe("name_required");
 		expect(
 			validateProjectSettings({
 				displayName: "Project",
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				intakeEnabled: true,
 				intakeAssignee: "",
 			}),
@@ -54,8 +50,6 @@ describe("project models", () => {
 		expect(
 			validateProjectSettings({
 				displayName: "a".repeat(101),
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				intakeEnabled: false,
 				intakeAssignee: "",
 			}),
@@ -63,8 +57,6 @@ describe("project models", () => {
 		expect(
 			validateProjectSettings({
 				displayName: "yandex-direct-mcp-plugin",
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				intakeEnabled: false,
 				intakeAssignee: "",
 			}),
@@ -73,8 +65,6 @@ describe("project models", () => {
 		expect(
 			validateProjectSettings({
 				displayName: "🚀".repeat(100),
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				intakeEnabled: false,
 				intakeAssignee: "",
 			}),
@@ -82,8 +72,6 @@ describe("project models", () => {
 		expect(
 			validateProjectSettings({
 				displayName: "🚀".repeat(101),
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				intakeEnabled: false,
 				intakeAssignee: "",
 			}),
@@ -92,8 +80,6 @@ describe("project models", () => {
 			validateProjectSettings(
 				{
 					displayName: "l".repeat(110),
-					workerAgent: "codex",
-					orchestratorAgent: "claude-code",
 					intakeEnabled: false,
 					intakeAssignee: "",
 				},
@@ -104,8 +90,6 @@ describe("project models", () => {
 			validateProjectSettings(
 				{
 					displayName: "l".repeat(110),
-					workerAgent: "codex",
-					orchestratorAgent: "claude-code",
 					intakeEnabled: false,
 					intakeAssignee: "",
 				},
@@ -114,17 +98,11 @@ describe("project models", () => {
 		).toBe("name_too_long");
 	});
 
-	it("gates project setup on agents and intake eligibility", () => {
-		expect(canSubmitProjectSetup({ workerAgent: "codex", orchestratorAgent: "claude-code" })).toBe(true);
-		expect(
-			canSubmitProjectSetup({
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
-				intakeEnabled: true,
-			}),
-		).toBe(false);
+	it("gates project setup on intake eligibility", () => {
+		expect(canSubmitProjectSetup({})).toBe(true);
+		expect(canSubmitProjectSetup({ intakeEnabled: true })).toBe(false);
+		expect(canSubmitProjectSetup({ intakeEnabled: true, intakeAssignee: "octocat" })).toBe(true);
 	});
-
 });
 
 describe("project presentation", () => {
@@ -143,12 +121,6 @@ describe("project presentation", () => {
 		const onSubmit = vi.fn();
 		render(
 			<ProjectSetupFormView
-				agentControls={{ worker: <span>Worker control</span>, orchestrator: <span>Orchestrator control</span> }}
-				agents={{
-					cacheMessage: "Cached",
-					loading: false,
-					loadingMessage: "Loading",
-				}}
 				canSubmit
 				intakeControl={<span>Intake control</span>}
 				isBusy={false}
@@ -163,36 +135,6 @@ describe("project presentation", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Create and start" }));
 		expect(onSubmit).toHaveBeenCalledOnce();
 		expect(screen.getByText("Nested repository")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-	});
-
-	it("can hide the normal refresh action while keeping an error retry", () => {
-		const onRetry = vi.fn();
-		render(
-			<ProjectSetupFormView
-				agentControls={{ worker: <span>Worker control</span>, orchestrator: <span>Orchestrator control</span> }}
-				agents={{
-					cacheMessage: "Cached",
-					error: "Could not load agents",
-					loading: false,
-					loadingMessage: "Loading",
-					onRetry,
-					retrying: false,
-					retryLabel: "Retry",
-				}}
-				canSubmit={false}
-				intakeControl={<span>Intake control</span>}
-				isBusy={false}
-				onCancel={vi.fn()}
-				onSubmit={vi.fn()}
-				submitLabel="Create and start"
-				cancelLabel="Cancel"
-			/>,
-		);
-
-		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-		expect(onRetry).toHaveBeenCalledOnce();
 	});
 
 	it("renders project identity and workspace repository summaries", () => {

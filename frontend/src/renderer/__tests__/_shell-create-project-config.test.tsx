@@ -2,28 +2,18 @@ import { describe, expect, it } from "vitest";
 import { createProjectConfig } from "../routes/_shell";
 
 describe("createProjectConfig", () => {
-	it("persists selected worker and orchestrator agents without tracker intake by default", () => {
-		expect(
-			createProjectConfig({
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
-			}),
-		).toEqual({
-			worker: { agent: "codex" },
-			orchestrator: { agent: "claude-code" },
-		});
+	it("sends no agent fields and no tracker intake by default", () => {
+		expect(createProjectConfig({})).toEqual({});
 	});
 
-	it("preserves tracker intake alongside selected agent defaults", () => {
+	it("keeps the default branch and tracker intake without any agent fields", () => {
 		expect(
 			createProjectConfig({
-				workerAgent: "cursor",
-				orchestratorAgent: "opencode",
+				defaultBranch: "trunk",
 				trackerIntake: { enabled: true, provider: "github", assignee: "octocat" },
 			}),
 		).toEqual({
-			worker: { agent: "cursor" },
-			orchestrator: { agent: "opencode" },
+			defaultBranch: "trunk",
 			trackerIntake: { enabled: true, provider: "github", assignee: "octocat" },
 		});
 	});

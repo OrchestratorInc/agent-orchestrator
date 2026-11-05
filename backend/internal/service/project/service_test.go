@@ -691,13 +691,13 @@ func TestManager_SetConfigRejectsScratchGitOnlyFields(t *testing.T) {
 	wantCode(t, err, "INVALID_PROJECT_CONFIG")
 
 	proj, err := m.SetConfig(ctx, "scratch", project.SetConfigInput{Config: domain.ProjectConfig{
-		AgentConfig: domain.AgentConfig{Model: "gpt-5"},
+		AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits},
 		Worker:      domain.RoleOverride{Harness: domain.HarnessCodex},
 	}})
 	if err != nil {
 		t.Fatalf("allowed SetConfig: %v", err)
 	}
-	if proj.DefaultBranch != "" || proj.Config == nil || proj.Config.AgentConfig.Model != "gpt-5" {
+	if proj.DefaultBranch != "" || proj.Config == nil || proj.Config.AgentConfig.Permissions != domain.PermissionModeAcceptEdits || proj.Config.Worker.Harness != "" {
 		t.Fatalf("scratch config result = %#v", proj)
 	}
 }
@@ -904,7 +904,7 @@ func TestManager_UpdateSettings(t *testing.T) {
 		Env:               map[string]string{"FOO": "bar"},
 		AgentRules:        "Run focused tests.",
 		OrchestratorRules: "Delegate implementation.",
-		AgentConfig:       domain.AgentConfig{Model: "claude-opus-4-5"},
+		AgentConfig:       domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits},
 	}
 	proj, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
 		DisplayName: "  AO Project  ",
@@ -913,7 +913,7 @@ func TestManager_UpdateSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
-	if proj.Name != "AO Project" || proj.Config == nil || proj.Config.AgentConfig.Model != "claude-opus-4-5" {
+	if proj.Name != "AO Project" || proj.Config == nil || proj.Config.AgentConfig.Permissions != domain.PermissionModeAcceptEdits {
 		t.Fatalf("returned project = %#v", proj)
 	}
 	if proj.DefaultBranch != "develop" {
@@ -942,7 +942,7 @@ func TestManager_UpdateSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after rejected update: %v", err)
 	}
-	if got.Project == nil || got.Project.Name != "AO Project" || got.Project.Config == nil || got.Project.Config.AgentConfig.Model != "claude-opus-4-5" {
+	if got.Project == nil || got.Project.Name != "AO Project" || got.Project.Config == nil || got.Project.Config.AgentConfig.Permissions != domain.PermissionModeAcceptEdits {
 		t.Fatalf("project changed after rejected update = %#v", got.Project)
 	}
 	_, err = m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{DisplayName: "  ", Config: cfg})
@@ -1067,9 +1067,54 @@ func TestManager_ListIncludesOnlySummarySafeProjectConfig(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("List len = %d, want 1", len(list))
 	}
-	if list[0].OrchestratorAgent != domain.HarnessCodex {
-		t.Fatalf("summary orchestrator agent = %q, want codex", list[0].OrchestratorAgent)
+}
+
+func TestManager_WritesStripLegacyAgentSettingsButKeepPermissions(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	legacy := domain.ProjectConfig{
+		AgentConfig:  domain.AgentConfig{Model: "base", Effort: "high", Mode: "low", Permissions: domain.PermissionModeDefault},
+		Worker:       domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "w", Effort: "low", Mode: "high", Permissions: domain.PermissionModeAcceptEdits}},
+		Orchestrator: domain.RoleOverride{Harness: "retired-agent", AgentConfig: domain.AgentConfig{Model: "o", Permissions: domain.PermissionModeBypassPermissions}},
 	}
+	check := func(label string, got *domain.ProjectConfig) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s: config missing", label)
+		}
+		want := domain.ProjectConfig{
+			AgentConfig:  domain.AgentConfig{Permissions: domain.PermissionModeDefault},
+			Worker:       domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits}},
+			Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeBypassPermissions}},
+		}
+		if got.AgentConfig != want.AgentConfig || got.Worker != want.Worker || got.Orchestrator != want.Orchestrator {
+			t.Fatalf("%s: stored agent settings = %#v, want only permissions", label, got)
+		}
+	}
+
+	added, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao"), Config: &legacy})
+	if err != nil {
+		t.Fatalf("Add with legacy config (unknown role harness must not fail): %v", err)
+	}
+	check("add", added.Config)
+
+	updated, err := m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{DisplayName: "AO", Config: legacy})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	check("update settings", updated.Config)
+
+	set, err := m.SetConfig(ctx, "ao", project.SetConfigInput{Config: legacy})
+	if err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	check("set config", set.Config)
+
+	got, err := m.Get(ctx, "ao")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	check("persisted", got.Project.Config)
 }
 
 func TestManager_ReaddAfterRemove(t *testing.T) {

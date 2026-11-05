@@ -78,7 +78,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		// A standalone project has no repository, so no branches or pull requests to configure.
-		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
+		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, roleAgents: true }}
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
@@ -95,7 +95,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
-		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
+		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent ?? "", true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}
 		// The control plane takes only issues from the repository's owners, members and collaborators.
 		intakeDescription={t("settings.cloudProject.intakeDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
@@ -268,7 +268,7 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
 	// Show the agent a reviewer actually runs with when none is chosen.
-	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent, true) : "");
+	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent ?? "", true) : "");
 	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}

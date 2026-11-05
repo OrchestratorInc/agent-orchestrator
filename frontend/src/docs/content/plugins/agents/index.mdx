@@ -110,7 +110,7 @@ Chat registration does not imply interface handoff support. Use the switch actio
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```
 
-To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It changes only the worker agent and keeps the rest of the project config.
+Projects do not set a default worker agent. A new chat picks its agent in the composer. See [Choosing and switching agents](/guides/choosing-agents).
 
 `--agent` and `--harness` are aliases. Use `ao project set-config --help` for supported fields.
 

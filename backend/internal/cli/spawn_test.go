@@ -75,7 +75,7 @@ func TestSpawnCommand_MissingProjectContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when project context is missing")
 	}
-	if !strings.Contains(err.Error(), "ao project add --path <repo-path> --worker-agent <agent>") {
+	if !strings.Contains(err.Error(), "ao project add --path <repo-path>") {
 		t.Fatalf("error = %v, want project add hint", err)
 	}
 	if want := []string{"GET /api/v1/projects"}; !reflect.DeepEqual(requests, want) {

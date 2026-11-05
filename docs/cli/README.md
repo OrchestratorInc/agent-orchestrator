@@ -147,8 +147,10 @@ projection. Consumers such as Project Summary can read ordered report facts
 and outputs through it without claiming, acknowledging, waking, or interrupting
 delivery.
 
-If `--agent` / `--harness` is omitted, `ao spawn` uses the resolved project's
-`worker.agent` config. Before spawning, the CLI performs one targeted launch
+If `--agent` / `--harness` is omitted, `ao spawn` uses the spawning session's
+agent, else the first ready agent. Projects do not pin an agent or model; the
+deprecated `--worker-agent` and `--orchestrator-agent` flags on `ao project`
+are accepted and ignored. Before spawning, the CLI performs one targeted launch
 ensure. It fails early for unsupported or definitely missing harnesses and
 warns-but-continues for unauthorized or unknown observations; daemon session
 creation repeats launch validation and native launch remains authoritative.

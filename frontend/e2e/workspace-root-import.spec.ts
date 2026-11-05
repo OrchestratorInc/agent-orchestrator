@@ -79,7 +79,6 @@ test(`renderer: workspace import preserves the root branch and explains unresolv
 	await expect(page.getByText("docs", { exact: true })).not.toBeVisible();
 	await expect(page.getByRole("button", { name: /Set up|Hide setup/ })).not.toBeVisible();
 	await page.getByRole("button", { name: "Continue", exact: true }).click();
-	await page.getByRole("button", { name: "Create workspace and start", exact: true }).click();
 	await expect(page).toHaveURL(/projects\/local-root/);
 	await expect(page.getByText(/AO could not determine the default branch for the workspace root repository/)).toBeVisible();
 	await expect(page.getByText(/Details:.*remote did not advertise a symbolic HEAD/)).toBeVisible();

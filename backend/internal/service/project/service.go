@@ -153,13 +153,12 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			folderMissing = !exists
 		}
 		out = append(out, Summary{
-			ID:                domain.ProjectID(row.ID),
-			Name:              projectDisplayName(row),
-			Path:              row.Path,
-			Kind:              row.Kind.WithDefault(),
-			SessionPrefix:     resolveSessionPrefix(row),
-			OrchestratorAgent: row.Config.Orchestrator.Harness,
-			FolderMissing:     folderMissing,
+			ID:            domain.ProjectID(row.ID),
+			Name:          projectDisplayName(row),
+			Path:          row.Path,
+			Kind:          row.Kind.WithDefault(),
+			SessionPrefix: resolveSessionPrefix(row),
+			FolderMissing: folderMissing,
 		})
 	}
 	return out, nil
@@ -289,10 +288,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 
 	var projectConfig domain.ProjectConfig
 	if in.Config != nil {
-		if err := in.Config.Validate(); err != nil {
+		projectConfig = in.Config.WithoutLegacyAgentSettings()
+		if err := projectConfig.Validate(); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
-		projectConfig = *in.Config
 	}
 
 	registeredAt := time.Now()
@@ -737,6 +736,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if inDisplayName == "" {
 		return Project{}, apierr.Invalid("DISPLAY_NAME_REQUIRED", "Display name is required", nil)
 	}
+	in.Config = in.Config.WithoutLegacyAgentSettings()
 	if err := in.Config.Validate(); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
@@ -776,6 +776,7 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := validateProjectID(id); err != nil {
 		return Project{}, err
 	}
+	in.Config = in.Config.WithoutLegacyAgentSettings()
 	if err := in.Config.Validate(); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}

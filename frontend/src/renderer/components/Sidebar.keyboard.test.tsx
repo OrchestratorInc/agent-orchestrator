@@ -56,7 +56,6 @@ const workspace: WorkspaceSummary = {
 	id: "proj-1",
 	name: "Project One",
 	path: "/repo/project-one",
-	orchestratorAgent: "claude-code",
 	sessions: [session("proj-1-1", "fix login"), session("proj-1-2", "second task")],
 };
 

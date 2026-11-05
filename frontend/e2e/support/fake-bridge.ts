@@ -629,7 +629,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				kind: "single_repo",
 				path: `/repos/${projectName}`,
 				type: "main",
-				orchestratorAgent: "codex",
 				sessions: [
 					{
 						id: `${projectId}-orchestrator`,

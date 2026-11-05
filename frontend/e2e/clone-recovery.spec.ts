@@ -54,9 +54,9 @@ test("clone URL is normalized and failed registration keeps the checkout @T0", a
 	});
 	await openClone(page);
 	await page.getByRole("button", { name: "Continue", exact: true }).click();
-	await expect(page.getByText(`Repository cloned to ${checkout}. This step adds the project.`)).toBeVisible();
-	await page.getByRole("button", { name: "Create and start", exact: true }).click();
+	// With nothing to configure, registration starts on its own; the sheet only appears once it fails.
 	await expect(page.getByRole("button", { name: "Retry project setup", exact: true })).toBeVisible();
+	await expect(page.getByText(`Repository cloned to ${checkout}. This step adds the project.`)).toBeVisible();
 	await testInfo.attach("registration-recovery", { body: await page.screenshot(), contentType: "image/png" });
 	await page.getByRole("button", { name: "Retry project setup", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Keep checkout and close", exact: true })).toBeVisible();
@@ -67,6 +67,10 @@ test("clone URL is normalized and failed registration keeps the checkout @T0", a
 
 test("destination conflict offers reuse without cloning @T0", async ({ page }, testInfo) => {
 	let clones = 0;
+	await page.route("**/api/v1/projects", async (route) => {
+		if (route.request().method() !== "POST") return route.fallback();
+		await route.fulfill({ status: 400, json: { code: "INVALID_PROJECT_CONFIG", message: "Project settings need attention.", error: "invalid" } });
+	});
 	await page.route("**/api/v1/projects/clone/check", (route) => route.fulfill({ json: { remoteUrl, path: checkout, exists: true, canUseExisting: true } }));
 	await page.route("**/api/v1/projects/clone/prepare", async (route) => { clones++; await route.abort(); });
 	await openClone(page);
@@ -74,11 +78,16 @@ test("destination conflict offers reuse without cloning @T0", async ({ page }, t
 	await expect(page.getByText(`A folder already exists at ${checkout}.`, { exact: false })).toBeVisible();
 	await testInfo.attach("destination-conflict", { body: await page.screenshot(), contentType: "image/png" });
 	await page.getByRole("button", { name: "Use existing checkout", exact: true }).click();
-	await expect(page.getByRole("button", { name: "Create and start", exact: true })).toBeVisible();
+	// Registration starts on its own once the checkout validates; the failed create brings the sheet back.
+	await expect(page.getByRole("button", { name: "Retry project setup", exact: true })).toBeVisible();
 	expect(clones).toBe(0);
 });
 
 test("reuse validation failure preserves inputs and offers retry @T0", async ({ page }) => {
+	await page.route("**/api/v1/projects", async (route) => {
+		if (route.request().method() !== "POST") return route.fallback();
+		await route.fulfill({ status: 400, json: { code: "INVALID_PROJECT_CONFIG", message: "Project settings need attention.", error: "invalid" } });
+	});
 	let validations = 0;
 	let clones = 0;
 	await page.route("**/api/v1/projects/clone/check", (route) => route.fulfill({ json: { remoteUrl, path: checkout, exists: true, canUseExisting: true } }));
@@ -98,7 +107,8 @@ test("reuse validation failure preserves inputs and offers retry @T0", async ({ 
 	await expect(dialog.getByRole("textbox", { name: "Repository URL" })).toHaveValue("https://github.com/acme/example");
 	await expect(dialog.getByRole("textbox", { name: "Clone into", exact: true })).toHaveValue("/clones");
 	await dialog.getByRole("button", { name: "Use existing checkout", exact: true }).click();
-	await expect(page.getByRole("button", { name: "Create and start", exact: true })).toBeVisible();
+	// Registration starts on its own once the checkout validates; the failed create brings the sheet back.
+	await expect(page.getByRole("button", { name: "Retry project setup", exact: true })).toBeVisible();
 	expect(validations).toBe(2);
 	expect(clones).toBe(0);
 });

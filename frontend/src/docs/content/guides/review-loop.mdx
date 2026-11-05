@@ -23,7 +23,7 @@ If feedback does not arrive, confirm the PR is claimed by this worker, the repos
 <span id="ao-reviewer-agents" />
 ## Orchestrator reviewer agents
 
-Select reviewers independently in project settings; the [agent catalog](/plugins/agents) distinguishes reviewer support from worker and Chat support. Without an explicit reviewer, Orchestrator reviews with the project's default worker agent and its model when that agent is Claude Code, Codex, OpenCode, Muse, or Kimchi; otherwise it inherits one of those from the worker, or falls back to Claude Code. Other reviewer harnesses must be selected explicitly.
+Select reviewers independently in project settings; the [agent catalog](/plugins/agents) distinguishes reviewer support from worker and Chat support. Without an explicit reviewer, Orchestrator reviews with the worker session's current agent when that agent is Claude Code, Codex, OpenCode, Muse, or Kimchi, and falls back to Claude Code otherwise. Other reviewer harnesses must be selected explicitly.
 
 From the desktop, open the worker and use the Reviews section in the inspector. From the CLI:
 

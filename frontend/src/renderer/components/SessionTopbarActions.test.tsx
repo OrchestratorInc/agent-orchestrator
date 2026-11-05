@@ -151,7 +151,6 @@ function renderTopbarSessions(
 			id: sessions[0].workspaceId,
 			name: sessions[0].workspaceName,
 			path: "/repo/my-app",
-			orchestratorAgent: "claude-code",
 			kind: projectKind,
 			sessions,
 		},
@@ -189,7 +188,6 @@ function renderBoardActions(sessions: WorkspaceSession[]) {
 		id: sessions[0].workspaceId,
 		name: sessions[0].workspaceName,
 		path: "/repo/my-app",
-		orchestratorAgent: "claude-code",
 		kind: "single_repo",
 		sessions,
 	};

@@ -21,12 +21,10 @@ export type ExecutionContextViewProps = {
 	error?: string;
 	labels: ExecutionContextLabels;
 	loading?: boolean;
-	orchestratorAgent?: string;
 	path?: string;
 	projectName: string;
 	repositories?: string[];
 	variant?: "full" | "compact";
-	workerAgent?: string;
 };
 
 /** Compact, read-only context shown before a task starts and in the inspector. */
@@ -38,12 +36,10 @@ export function ExecutionContextView({
 	error,
 	labels,
 	loading = false,
-	orchestratorAgent,
 	path,
 	projectName,
 	repositories = [],
 	variant = "full",
-	workerAgent,
 }: ExecutionContextViewProps) {
 	const facts: Array<{ label: string; value: string; emphasis?: boolean }> = [];
 	if (repositories.length > 0) facts.push({ label: labels.repository, value: repositories.join(", ") });
@@ -55,12 +51,6 @@ export function ExecutionContextView({
 			value: activeAgent,
 			emphasis: true,
 		});
-	}
-	if (workerAgent && workerAgent !== activeAgent) {
-		facts.push({ label: `${labels.worker} (${labels.configured})`, value: workerAgent });
-	}
-	if (orchestratorAgent && orchestratorAgent !== activeAgent) {
-		facts.push({ label: `${labels.orchestrator} (${labels.configured})`, value: orchestratorAgent });
 	}
 	const displayBranch = branch ?? baseBranch;
 

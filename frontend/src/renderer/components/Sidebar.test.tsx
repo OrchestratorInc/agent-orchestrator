@@ -202,7 +202,6 @@ const workspace: WorkspaceSummary = {
 	id: "proj-1",
 	name: "Project One",
 	path: "/repo/project-one",
-	orchestratorAgent: "claude-code",
 	sessions: [],
 };
 
@@ -251,8 +250,6 @@ function sidebarPR(overrides: Partial<WorkspaceSession["prs"][number]> = {}): Wo
 
 type CreateProjectInput = {
 	path: string;
-	workerAgent: string;
-	orchestratorAgent: string;
 	trackerIntake?: unknown;
 	asWorkspace?: boolean;
 };
@@ -260,8 +257,6 @@ type CreateProjectHandler = (input: CreateProjectInput) => Promise<void>;
 type CloneProjectHandler = (input: {
 	remoteUrl: string;
 	destinationParent: string;
-	workerAgent: string;
-	orchestratorAgent: string;
 	trackerIntake?: unknown;
 	signal?: AbortSignal;
 }) => Promise<void>;
@@ -302,7 +297,6 @@ function renderSidebar({
 	onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler,
 	onInitializeProject = vi.fn().mockResolvedValue(undefined) as InitializeProjectHandler,
 	onRemoveProject = vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler,
-	seedAgents = true,
 	workspaces = [workspace],
 	remoteHosts = [],
 	remoteWorkspaces = [],
@@ -318,7 +312,6 @@ function renderSidebar({
 	onCreateProject?: CreateProjectHandler;
 	onInitializeProject?: InitializeProjectHandler;
 	onRemoveProject?: RemoveProjectHandler;
-	seedAgents?: boolean;
 	workspaces?: WorkspaceSummary[];
 	remoteHosts?: RemoteHost[];
 	remoteWorkspaces?: WorkspaceSummary[];
@@ -339,11 +332,6 @@ function renderSidebar({
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 	});
-	if (seedAgents) {
-		queryClient.setQueryData(agentReadinessQueryKey, {
-			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
-		});
-	}
 	seed?.(queryClient);
 	render(
 		<QueryClientProvider client={queryClient}>
@@ -426,25 +414,7 @@ it.each(["invalid JSON", '{"unexpected":true}', '[4,null]'])("ignores invalid sa
 	expect(document.querySelector(`[data-project-id="${workspace.id}"]`)).toBeInTheDocument();
 });
 
-function mockAgentReadinessResponse(response: {
-	data: { agents: ReturnType<typeof agentReadiness>[] };
-	error: undefined;
-} | Promise<{
-	data: { agents: ReturnType<typeof agentReadiness>[] };
-	error: undefined;
-}>) {
-	const fallback = getMock.getMockImplementation();
-	getMock.mockImplementation((path: string) =>
-		path === "/api/v1/agents/readiness" ? Promise.resolve(response) : fallback?.(path),
-	);
-}
-
 /** Projects restore their persisted disclosure state. */
-
-async function chooseOption(trigger: HTMLElement, optionName: string) {
-	await userEvent.click(trigger);
-	await userEvent.click(await screen.findByRole("option", { name: optionName }));
-}
 
 function codedError(message: string, code: "NOT_A_GIT_REPO" | "PROJECT_UNBORN") {
 	const error = new Error(message) as Error & { code: string };
@@ -480,8 +450,6 @@ async function openCreateProjectDialog(
 	await openLocalProjectSources(user);
 	await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 	await screen.findByRole("dialog", { name: "Set up project" });
-	await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
-	await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 	return user;
 }
 
@@ -804,17 +772,6 @@ describe("Sidebar", () => {
 		expect(content).toHaveClass("overflow-y-auto", "scrollbar-none");
 		expect(content).not.toHaveClass("project-sidebar-scrollbar");
 		expect(content).not.toContainElement(screen.getByText("Projects"));
-	});
-
-	it("spawns the orchestrator even when the project has no configured orchestrator agent", async () => {
-		const user = userEvent.setup();
-		spawnMock.mockResolvedValue("proj-1-orch");
-		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
-
-		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
-
-		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar"));
-		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	// The sidebar owns its own openOrchestrator, separate from
@@ -1350,7 +1307,6 @@ describe("Sidebar", () => {
 			id: "proj-2",
 			name: "Project Two",
 			path: "/repo/project-two",
-			orchestratorAgent: "claude-code",
 			sessions: [{ ...session, id: "proj-2-1", workspaceId: "proj-2", workspaceName: "Project Two", title: "other task" }],
 		};
 		renderSidebar({
@@ -1574,7 +1530,7 @@ describe("Sidebar", () => {
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "true");
 	});
 
-	it("defaults worker and orchestrator agents when creating a project", async () => {
+	it("creates a project with no agent fields from the setup sheet", async () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
@@ -1592,13 +1548,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Create and start" }));
 
 		await waitFor(() =>
-			expect(onCreateProject).toHaveBeenCalledWith(
-				expect.objectContaining({
-					path: "/repo/new-project",
-					workerAgent: "claude-code",
-					orchestratorAgent: "claude-code",
-				}),
-			),
+			expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/new-project", asWorkspace: false }),
 		);
 	});
 
@@ -1649,8 +1599,6 @@ describe("Sidebar", () => {
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({
 			path: "/repo/web-app",
 			clonePreparationId: "prep-web-app",
-			workerAgent: "claude-code",
-			orchestratorAgent: "claude-code",
 		})));
 		expect(onCloneProject).not.toHaveBeenCalled();
 	});
@@ -1700,58 +1648,10 @@ describe("Sidebar", () => {
 			expect(onCreateProject).toHaveBeenCalledWith(
 				expect.objectContaining({
 					path: "/repo/local-project",
-					workerAgent: "claude-code",
-					orchestratorAgent: "claude-code",
 				}),
 			),
 		);
 		expect(onCloneProject).not.toHaveBeenCalled();
-	});
-
-	it("prioritizes authorized project agents by preferred agent order", async () => {
-		const user = userEvent.setup();
-		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
-		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		mockAgentReadinessResponse({
-			data: {
-				agents: [
-					agentReadiness("goose", "Goose"),
-					agentReadiness("devin", "Devin"),
-					agentReadiness("aider", "Aider"),
-					agentReadiness("opencode", "OpenCode"),
-					agentReadiness("cursor", "Cursor"),
-				],
-			},
-			error: undefined,
-		});
-		renderSidebar({ onCreateProject, seedAgents: false });
-
-		await openLocalProjectSources(user);
-		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
-		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
-		expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveTextContent(/cursor/i);
-		expect(screen.getByRole("combobox", { name: "Orchestrator agent" })).toHaveTextContent(/cursor/i);
-
-		await user.click(screen.getByRole("combobox", { name: "Worker agent" }));
-		expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
-			"Cursor",
-			"OpenCode",
-			"Aider",
-			"Devin",
-			"Goose",
-			"Manage agents…",
-		]);
-		await user.keyboard("{Escape}");
-
-		await user.click(screen.getByRole("button", { name: "Create and start" }));
-		await waitFor(() =>
-			expect(onCreateProject).toHaveBeenCalledWith(
-				expect.objectContaining({
-					workerAgent: "cursor",
-					orchestratorAgent: "cursor",
-				}),
-			),
-		);
 	});
 
 	it("opens the agent sheet after project validation", async () => {
@@ -1850,15 +1750,11 @@ describe("Sidebar", () => {
 		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a workspace folder");
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() =>
 			expect(onCreateProject).toHaveBeenCalledWith({
 				path: "/repo/workspace",
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
 				asWorkspace: true,
 			}),
 		);
@@ -1880,7 +1776,6 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(1));
@@ -1940,7 +1835,6 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toBe("workspace not registered"));
@@ -2101,7 +1995,6 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
@@ -2144,7 +2037,6 @@ describe("Sidebar", () => {
 				"If this folder needs Git setup, AO will initialize it and create the first commit before starting.",
 			),
 		).toBeInTheDocument();
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(1));
@@ -2162,83 +2054,6 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /project actions/i }));
 
 		expect(await screen.findByRole("menuitem", { name: /settings/i })).toBeInTheDocument();
-	});
-
-	it("hides unavailable agents while keeping ready agents selectable", async () => {
-		const user = userEvent.setup();
-		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
-		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		mockAgentReadinessResponse({
-			data: {
-				agents: [
-					agentReadiness("claude-code", "Claude Code"),
-					agentReadiness("cursor", "Cursor", { authentication: "unauthorized" }),
-					agentReadiness("aider", "Aider", { installation: "not_installed", authentication: "unknown" }),
-				],
-			},
-			error: undefined,
-		});
-		renderSidebar({ onCreateProject, seedAgents: false });
-
-		await openLocalProjectSources(user);
-		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
-		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
-
-		await user.click(screen.getByRole("combobox", { name: "Orchestrator agent" }));
-		const options = await screen.findAllByRole("option");
-		expect(options.map((option) => option.textContent)).toEqual([
-			"Claude Code",
-			"Manage agents…",
-		]);
-		expect(options[1]).not.toHaveAttribute("aria-disabled", "true");
-		await user.keyboard("{Escape}");
-
-		await user.click(screen.getByRole("button", { name: "Create and start" }));
-
-		await waitFor(() =>
-			expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({ orchestratorAgent: "claude-code" })),
-		);
-	});
-
-	it("updates project agent options when the catalog loads after the dialog opens", async () => {
-		const user = userEvent.setup();
-		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
-		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
-		let resolveAgents!: (value: {
-			data: { agents: ReturnType<typeof agentReadiness>[] };
-			error: undefined;
-		}) => void;
-		mockAgentReadinessResponse(
-			new Promise((resolve) => {
-				resolveAgents = resolve;
-			}),
-		);
-		renderSidebar({ onCreateProject, seedAgents: false });
-
-		await openLocalProjectSources(user);
-		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
-		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
-
-		resolveAgents({
-			data: {
-				agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
-			},
-			error: undefined,
-		});
-
-		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
-		await user.click(screen.getByRole("button", { name: "Create and start" }));
-
-		await waitFor(() =>
-			expect(onCreateProject).toHaveBeenCalledWith({
-				path: "/repo/new-project",
-				workerAgent: "claude-code",
-				orchestratorAgent: "claude-code",
-				trackerIntake: undefined,
-				asWorkspace: false,
-			}),
-		);
 	});
 
 	it("opens settings when the footer Settings button is clicked", async () => {

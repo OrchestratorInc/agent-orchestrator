@@ -34,26 +34,10 @@ func mapPermission(legacy string) (mode domain.PermissionMode, ok, lossy bool) {
 	}
 }
 
-// mapHarness maps a legacy agent plugin id to a rewrite harness, or ok=false
-// when the rewrite has no such harness.
-func mapHarness(agent string) (domain.AgentHarness, bool) {
-	if agent == "" {
-		return "", false
-	}
-	h := domain.AgentHarness(agent)
-	if h.IsKnown() {
-		return h, true
-	}
-	return "", false
-}
-
 func buildAgentConfig(src *legacyAgentConfig, notes *[]string, label string) domain.AgentConfig {
 	var out domain.AgentConfig
 	if src == nil {
 		return out
-	}
-	if m := strings.TrimSpace(src.Model); m != "" {
-		out.Model = m
 	}
 	if mode, ok, lossy := mapPermission(src.Permissions); ok {
 		out.Permissions = mode
@@ -69,13 +53,8 @@ func buildRoleOverride(src *legacyRole, notes *[]string, label string) domain.Ro
 	if src == nil {
 		return out
 	}
-	if src.Agent != "" {
-		if h, ok := mapHarness(src.Agent); ok {
-			out.Harness = h
-		} else {
-			*notes = append(*notes, fmt.Sprintf("%s agent %q has no rewrite harness — dropped", label, src.Agent))
-		}
-	}
+	// A session owns its agent and model, so the legacy agent and model are
+	// not carried over; only permissions are.
 	out.AgentConfig = buildAgentConfig(src.AgentConfig, notes, label+" agent")
 	return out
 }

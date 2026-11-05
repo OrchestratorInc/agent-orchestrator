@@ -16,9 +16,9 @@ ao spawn [flags]
 | `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
 | `--claim-pr string` | Claim an existing PR for authorized implementation continuation. Omit for review-only work | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
-| `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
+| `--harness string` | Agent harness to use (see list below) | The spawning session's agent, else the first ready agent |
 | `--issue string` | Issue id to associate with the session | - |
-| `--model string` | Agent model override for this session only; overrides project/role config | - |
+| `--model string` | Agent model override for this session only; the agent's own default applies when omitted | - |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |

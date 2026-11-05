@@ -33,16 +33,3 @@ func TestChooseDefaultHarness(t *testing.T) {
 		})
 	}
 }
-
-func TestDefaultWorkerReviewerOnlyForTheTunedHarness(t *testing.T) {
-	cfg := ProjectConfig{Worker: RoleOverride{Harness: HarnessCodex, AgentConfig: AgentConfig{Model: "gpt-5.5", Effort: "high"}}}
-	if h, c := cfg.DefaultWorkerReviewer(HarnessCodex); h != ReviewerCodex || c.Model != "gpt-5.5" || c.Effort != "high" {
-		t.Fatalf("tuned harness = %q %+v, want codex with its model and effort", h, c)
-	}
-	if h, c := cfg.DefaultWorkerReviewer(HarnessClaudeCode); h != "" || c != (AgentConfig{}) {
-		t.Fatalf("switched harness = %q %+v, want no inherited reviewer settings", h, c)
-	}
-	if h, _ := (ProjectConfig{}).DefaultWorkerReviewer(HarnessCodex); h != "" {
-		t.Fatalf("unpinned project = %q, want none", h)
-	}
-}

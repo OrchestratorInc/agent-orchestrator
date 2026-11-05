@@ -2365,8 +2365,6 @@ function projectConfig(project: components["schemas"]["ProjectOrDegraded"] | und
 
 function mockProjectConfig(): ProjectConfig {
 	return {
-		worker: { agent: "codex" },
-		orchestrator: { agent: "codex" },
 		reviewers: [{ harness: "codex" }],
 	};
 }

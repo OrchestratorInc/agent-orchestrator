@@ -32,7 +32,7 @@ function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
-			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
+			{origin === "create-project" && <CreateProjectAgentSheet intakeVisible open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
 			<SettingsDialog />
 		</>
 	);
@@ -151,8 +151,8 @@ describe("Settings recovery modal integration", () => {
 		useUiStore.getState().openProjectSettings("proj-1");
 		const client = renderDialogs();
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
-		const trigger = await screen.findByLabelText("Worker agent");
-		await openAgentManagement("Worker agent");
+		const trigger = await screen.findByLabelText("Reviewer agent");
+		await openAgentManagement("Reviewer agent");
 		await screen.findByRole("tab", { name: "Account" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
@@ -170,23 +170,16 @@ describe("Settings recovery modal integration", () => {
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
-	it("allows pointer interaction above create-project and restores its selections and intake draft on close", async () => {
-		const client = renderDialogs("create-project");
-		await userEvent.click(screen.getByRole("combobox", { name: "Worker agent" }));
-		await userEvent.click(await screen.findByRole("option", { name: /Codex/i }));
+	it("keeps the create-project intake draft while settings opens above it and after it closes", async () => {
+		renderDialogs("create-project");
 		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
 		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
-		requireCodexLogin(client);
-		await openAgentManagement("Worker agent");
 
-		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
-		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
-		await userEvent.type(search, "Claude");
-		expect(search).toHaveValue("Claude");
-		await userEvent.click(screen.getByRole("button", { name: "Back" }));
+		act(() => useUiStore.getState().openGlobalSettings("harness"));
+		await screen.findByTestId("settings-page");
+		act(() => useUiStore.getState().closeSettings());
 
-		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
-		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
+		expect(await screen.findByLabelText("Assignee")).toHaveValue("octocat");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
@@ -203,14 +196,14 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.type(name, "Unsaved project name");
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
-		await openAgentManagement("Worker agent");
+		await openAgentManagement("Reviewer agent");
 		await screen.findByRole("tab", { name: "Account" });
 
 		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
 		else await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Codex");
+		expect(await screen.findByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Claude Code");
 		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		expect(document.getElementById("project-settings-form")).toBe(form);
 		await userEvent.click(screen.getByRole("button", { name: "General" }));

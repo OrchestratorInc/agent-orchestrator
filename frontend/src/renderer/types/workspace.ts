@@ -454,7 +454,6 @@ export type WorkspaceSummary = {
 	folderMissing?: boolean;
 	workspaceRepos?: WorkspaceRepoSummary[];
 	type?: "main" | "worktree";
-	orchestratorAgent?: AgentProvider;
 	accentColor?: string;
 	diff?: {
 		additions: number;

@@ -14,12 +14,10 @@ import { useSettings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 type Harness = components["schemas"]["SpawnSessionRequest"]["harness"];
-type ProjectAgents = { agent?: string; config?: { worker?: { agent?: string } } };
 
 /**
  * Starts a worker session whose output kind is artifact, in a project or the
- * Scratchpad (no projectId), and opens it. The agent is the project's worker
- * agent, then the daemon-wide default, then the first ready agent. A cloud
+ * Scratchpad (no projectId), and opens it. The agent is the first ready agent. A cloud
  * project (cloudOrgId set) starts the session on the control plane with the
  * project's worker agent, else Claude Code.
  */
@@ -65,14 +63,13 @@ export function useCreateArtifactSession() {
 					navigateToSession(projectId, session.id);
 					return;
 				}
-				const harness = projectId ? (await projectWorkerAgent(queryClient, projectId)) || readyAgent : readyAgent;
 				const { data, error } = await apiClient.POST("/api/v1/sessions", {
 					body: {
 						kind: "worker",
 						requestedOutput: "artifact",
 						displayName: t("artifacts.newSessionName"),
 						...(projectId ? { projectId } : {}),
-						...(harness ? { harness: harness as Harness } : {}),
+						...(readyAgent ? { harness: readyAgent as Harness } : {}),
 					},
 				});
 				if (error) throw new Error(apiErrorMessage(error, t("artifacts.createError")));
@@ -98,20 +95,4 @@ export function useCreateArtifactSession() {
 		/** False once readiness has loaded and no agent can launch. */
 		agentReady: agentsQuery.data === undefined || readyAgent !== "",
 	};
-}
-
-// Shares the ["project", id] cache entry with useProjectDefaultWorker.
-async function projectWorkerAgent(queryClient: ReturnType<typeof useQueryClient>, projectId: string): Promise<string> {
-	const project = await queryClient.fetchQuery({
-		queryKey: ["project", projectId],
-		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			if (data?.status !== "ok") throw new Error("Project config unavailable");
-			return data.project as ProjectAgents;
-		},
-	});
-	return project.config?.worker?.agent || project.agent || "";
 }

@@ -6,7 +6,7 @@ description: Isolated branches and files for sessions in Git projects.
 Each Git-backed session gets its own worktree and branch, based on the repository's default branch rather than the branch currently checked out in your source repository. Multi-repository workspaces resolve the root and each child repository independently.
 
 ```bash
-ao project add --path /path/to/repo --worker-agent codex
+ao project add --path /path/to/repo
 ao spawn --project my-repo --name fix-auth
 ```
 

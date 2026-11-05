@@ -5,7 +5,7 @@ description: Configure project workers, orchestrators, setup, reviews, and issue
 
 A project groups work in one repository, a multi-repository workspace, or an Orchestrator-managed Scratch directory. Orchestrator stores project settings in its database. There is no current `agent-orchestrator.yaml` project registry.
 
-To start, choose **Add project** in the desktop sidebar, select a repository, choose a worker agent in Project Settings, and create a small task. A worker implements the task in its own workspace. An orchestrator supervises workers. A reviewer is a separate agent run that checks a worker's pull request.
+To start, choose **Add project** in the desktop sidebar, select a repository, and create a small task. Adding a project asks for no agent. You pick the agent for each new chat in the new-chat composer. A worker implements the task in its own workspace. An orchestrator supervises workers. A reviewer is a separate agent run that checks a worker's pull request.
 
 Use Project Settings for interactive edits. The CLI's `set-config` command has the limits described in [Update from the CLI](#update-from-the-cli).
 
@@ -49,8 +49,8 @@ ao project rm <project-id>
 | `postCreate` | Shell commands Orchestrator runs after creating a workspace. A step whose first line is `# ao-timeout: <N>m` runs for at most N minutes (1 to 120). |
 | `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. A step may set its own time limit the same way. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
-| `worker` | Worker harness and agent-config overrides. |
-| `orchestrator` | Orchestrator harness and agent-config overrides. |
+| `worker` | Worker approval (permissions) setting. |
+| `orchestrator` | Orchestrator approval (permissions) setting. |
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |
 | `orchestratorRules` | Standing instructions for orchestrators. |
@@ -75,22 +75,20 @@ For a single repository or workspace root, set `defaultBranch` explicitly. For a
 
 <span id="split-orchestrator-and-worker-roles" />
 
-Choose each role's harness and provider settings independently:
+Projects do not choose an agent or model for either role. A session owns its agent. See [Choosing and switching agents](/guides/choosing-agents). Each role keeps its own approval setting:
 
 ```json
 {
   "worker": {
-    "agent": "codex",
-    "agentConfig": { "model": "gpt-5.4", "permissions": "bypass-permissions" }
+    "agentConfig": { "permissions": "bypass-permissions" }
   },
   "orchestrator": {
-    "agent": "claude-code",
-    "agentConfig": { "model": "claude-opus-4" }
+    "agentConfig": { "permissions": "default" }
   }
 }
 ```
 
-Use the model names provided by the installed agent. Orchestrator uses the provider CLI and its existing sign-in; project settings do not store provider tokens. The example's `bypass-permissions` mode lets provider tools act without their normal approval prompts. Choose it only when that behavior is intended. Available permission modes depend on the provider.
+The `--worker-agent` and `--orchestrator-agent` flags on `ao project add` and `ao project set-config` are deprecated. They still parse and do nothing. Orchestrator uses the provider CLI and its existing sign-in; project settings do not store provider tokens. The example's `bypass-permissions` mode lets provider tools act without their normal approval prompts. Choose it only when that behavior is intended. Available permission modes depend on the provider.
 
 ## Choose Chat or Terminal UI
 
@@ -135,7 +133,7 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 
 <span id="choose-a-reviewer" />
 
-Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, Orchestrator uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
+Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the worker session's current agent when it is Claude Code, Codex, OpenCode, Muse, or Kimchi, and with Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
 
 These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:
 
@@ -165,10 +163,10 @@ The `--config-json` flag takes a JSON string, not a filename. The CLI silently i
 
 For full-config CLI updates, include every field you want to keep and inspect the result afterward.
 
-For example, this command replaces the entire configuration with one worker choice; it does not keep setup, rules, reviewers, or effort:
+For example, this command replaces the entire configuration with one setting; it does not keep setup, rules, reviewers, or effort:
 
 ```bash
-ao project set-config <project-id> --config-json '{"worker":{"agent":"codex"}}'
+ao project set-config <project-id> --config-json '{"defaultBranch":"main"}'
 ```
 
 For interactive edits, use Project Settings. For a complete CLI reference, use `ao project set-config --help`. The current fields are listed in [Configuration fields](#configuration-fields).
@@ -226,6 +224,6 @@ Keep the harness installed and signed in. Recovery may restore the session, work
 ## Next steps
 
 <Cards>
-	<Card title="Per-role agents" href="/guides/per-role-agents" description="Choose worker and orchestrator harnesses." />
+	<Card title="Choosing and switching agents" href="/guides/choosing-agents" description="Pick an agent per session and switch it later." />
 	<Card title="Parallel work" href="/guides/parallel-issues" description="Start isolated sessions across projects." />
 </Cards>

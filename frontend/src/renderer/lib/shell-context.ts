@@ -10,16 +10,12 @@ export type ShellContextValue = {
 	workspaceStartupState: "loading" | "ready" | "error";
 	createProject: (input: {
 		path: string;
-		workerAgent: string;
-		orchestratorAgent: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 		asWorkspace?: boolean;
 	}) => Promise<void>;
 	cloneProject: (input: {
 		remoteUrl: string;
 		destinationParent: string;
-		workerAgent: string;
-		orchestratorAgent: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;

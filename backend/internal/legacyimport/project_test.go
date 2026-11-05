@@ -43,18 +43,6 @@ func TestMapPermission(t *testing.T) {
 	}
 }
 
-func TestMapHarness(t *testing.T) {
-	if h, ok := mapHarness("claude-code"); !ok || h != domain.HarnessClaudeCode {
-		t.Fatalf("claude-code = (%q,%v)", h, ok)
-	}
-	if _, ok := mapHarness("nope"); ok {
-		t.Fatal("unknown harness must map to ok=false")
-	}
-	if _, ok := mapHarness(""); ok {
-		t.Fatal("empty harness must map to ok=false")
-	}
-}
-
 func TestBuildProjectConfig_RemapAndPreserveMain(t *testing.T) {
 	var notes []string
 	pc := legacyProjectConfig{
@@ -63,7 +51,7 @@ func TestBuildProjectConfig_RemapAndPreserveMain(t *testing.T) {
 		Env:           map[string]string{"K": "V"},
 		AgentConfig:   &legacyAgentConfig{Model: "m", Permissions: "suggest"},
 		Worker:        &legacyRole{Agent: "codex"},
-		Orchestrator:  &legacyRole{Agent: "bogus"}, // no rewrite harness → dropped note
+		Orchestrator:  &legacyRole{Agent: "bogus"},
 		Tracker:       nonNilNode(),
 	}
 	cfg := buildProjectConfig(pc, &notes)
@@ -79,11 +67,8 @@ func TestBuildProjectConfig_RemapAndPreserveMain(t *testing.T) {
 	if cfg.AgentConfig.Permissions != domain.PermissionModeDefault {
 		t.Fatalf("permissions = %q, want default (lossy from suggest)", cfg.AgentConfig.Permissions)
 	}
-	if cfg.Worker.Harness != domain.HarnessCodex {
-		t.Fatalf("worker harness = %q, want codex", cfg.Worker.Harness)
-	}
-	if cfg.Orchestrator.Harness != "" {
-		t.Fatalf("orchestrator harness = %q, want dropped (unknown)", cfg.Orchestrator.Harness)
+	if cfg.AgentConfig.Model != "" || cfg.Worker.Harness != "" || cfg.Orchestrator.Harness != "" {
+		t.Fatalf("legacy agent/model carried over: %+v", cfg)
 	}
 	if len(notes) == 0 {
 		t.Fatal("expected lossy/dropped notes")

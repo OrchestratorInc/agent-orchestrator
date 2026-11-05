@@ -2332,39 +2332,14 @@ func (m *Manager) preserveFailedSpawnWorkspace(ctx context.Context, id domain.Se
 	}
 }
 
-// effectiveAgentConfig merges the role override's agent config over the
-// project's base agent config; set override fields win.
-//
-// Model, effort and mode are inherited only when the launch harness is the one
-// the role's settings were tuned for (role.Harness). Any other launch, such as
-// a session switched to another agent or a default pick, starts from that
-// agent's own defaults, so a provider-specific alias never reaches the wrong
-// harness. Permissions is harness-neutral and is always inherited.
-func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, cfg domain.ProjectConfig) ports.AgentConfig {
-	merged := cfg.AgentConfig
-	role := roleOverride(kind, cfg)
-	override := role.AgentConfig
-	if role.Harness != harness {
-		merged.Model, merged.Effort, merged.Mode = "", "", ""
-	} else {
-		if override.Model != "" {
-			merged.Model = override.Model
-		}
-		if override.Effort != "" {
-			merged.Effort = override.Effort
-		}
-		if override.Mode != "" {
-			merged.Mode = override.Mode
-		}
-	}
-	if override.Permissions != "" {
-		merged.Permissions = override.Permissions
-	}
-	// A project may carry a model from its previous worker harness. Memcode
-	// accepts only its native catalog; leave an incompatible inherited choice
-	// to the TUI instead of making every launch and restore fail.
-	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
-		merged.Model = ""
+// effectiveAgentConfig is the project's contribution to a launch: permissions
+// only, with the role override's value winning over the base. A session owns
+// its agent, model and effort (spawn request, or the agent's own defaults), so
+// project config never carries them. harness is kept so callers stay uniform.
+func effectiveAgentConfig(_ domain.AgentHarness, kind domain.SessionKind, cfg domain.ProjectConfig) ports.AgentConfig {
+	merged := ports.AgentConfig{Permissions: cfg.AgentConfig.Permissions}
+	if p := roleOverride(kind, cfg).AgentConfig.Permissions; p != "" {
+		merged.Permissions = p
 	}
 	return merged
 }

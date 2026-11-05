@@ -21,7 +21,6 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
-import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	buildRankedAgentOptions,
@@ -271,8 +270,6 @@ function AutomationFormDialog({
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
-	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const templateId = automation?.templateId ?? initialTemplateId;
@@ -347,28 +344,18 @@ function AutomationFormDialog({
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}
-	// Prefer an explicit choice, then the project's resolved worker, then the
-	// first ready harness so Model isn't stuck on "Select agent" before a
-	// project is picked.
+	// Prefer an explicit choice, then the first ready harness so Model isn't
+	// stuck on "Select agent" before a project is picked.
 	const fallbackHarness =
 		buildRankedAgentOptions({
 			agents: harnesses,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
-	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
-	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
-	// Match the daemon's base config plus overrides for a matching worker harness.
-	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
-	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
-	const inheritedMode = inheritedWorker?.mode || projectDefaults.agentConfig?.mode || "";
-	const inheritedEffort = inheritedWorker?.effort || projectDefaults.agentConfig?.effort || "";
-	const displayedModel = model || (!mode ? inheritedModel : "");
-	const displayedMode = mode || (!model ? inheritedMode : "");
-	const displayedEffort = effort || (!model && !mode ? inheritedEffort : "");
+	const selectedHarness = harness || fallbackHarness;
 	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
 	useEffect(() => {
-		if (!open || awaitingInheritedHarness) { previousHarness.current = null; return; }
+		if (!open) { previousHarness.current = null; return; }
 		if (!previousHarness.current || previousHarness.current.automation !== automation) {
 			// Opening an edit hydrates its saved harness in the preceding effect.
 			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
@@ -378,7 +365,7 @@ function AutomationFormDialog({
 			setModel(""); setMode(""); setEffort(""); setModelValid(true);
 			previousHarness.current.harness = selectedHarness;
 		}
-	}, [open, automation, selectedHarness, awaitingInheritedHarness]);
+	}, [open, automation, selectedHarness]);
 
 	function clearValidationError(field: AutomationField) {
 		setValidationErrors((current) => {
@@ -391,7 +378,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!modelValid || awaitingInheritedHarness) return;
+		if (!modelValid) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -525,16 +512,16 @@ function AutomationFormDialog({
 								}}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
 										variant="task"
 										agentId={selectedHarness}
 										projectId={projectId}
-										model={displayedModel}
-										mode={displayedMode}
-										effort={displayedEffort}
+										model={model}
+										mode={mode}
+										effort={effort}
 										onModelChange={setModel}
 										onModeChange={setMode}
 										onEffortChange={setEffort}
@@ -698,7 +685,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
+						<Button type="submit" variant="primary" disabled={busy || !modelValid}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

@@ -323,7 +323,7 @@ func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 		override bool
 		want     string
 	}{
-		{name: "project default", want: "high"},
+		{name: "legacy project effort ignored"},
 		{name: "explicit provider default", override: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
