@@ -155,14 +155,18 @@ jobs:
 
   # Keep the existing required check as the gate for every backend race test.
   build-test:
-    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
+    # `always()` lets this gate report a genuine failed prerequisite, but it
+    # must not turn a concurrency-cancelled workflow into a failed check that
+    # outlives its replacement run on the same commit.
+    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
     needs: [backend-core, chat-race, session-store-race, sqlite-race]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check backend results
         run: |
-          # This gate is skipped with draft/stacked jobs, never for a failed dependency.
+          # This gate is skipped with draft/stacked or cancelled workflows,
+          # never for a failed dependency.
           test '${{ needs.backend-core.result }}' = success
           test '${{ needs.chat-race.result }}' = success
           test '${{ needs.session-store-race.result }}' = success
