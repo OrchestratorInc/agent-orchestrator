@@ -1288,6 +1288,15 @@ function readNullTerminatedUTF8(record: Buffer, offset: number): string {
 	return new TextDecoder("utf-8", { fatal: true }).decode(record.subarray(offset, end));
 }
 
+// Bot managers bind these to the browser that earned them. Replayed from
+// another browser they read as stolen, and sites keep challenging. They are
+// issued again on the next visit, so nothing is lost by leaving them behind.
+const ANTI_BOT_COOKIE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl_.*|datadome|_abck|ak_bmsc|bm_sz|bm_sv|bm_mi|reese84|incap_ses_.*|visid_incap_.*|nlbi_.*|_px\d?|_pxvid|_pxhd)$/;
+
+export function isAntiBotCookie(name: string): boolean {
+	return ANTI_BOT_COOKIE.test(name);
+}
+
 function normalizeCookieRows(
 	rows: Array<Record<string, unknown>>,
 	now: Date,
@@ -1295,6 +1304,7 @@ function normalizeCookieRows(
 	const cookies: ImportedCookie[] = [];
 	let expired = 0;
 	let invalid = 0;
+	let antiBot = 0;
 	for (const row of rows) {
 		const domain = stringValue(row.domain).trim().toLowerCase();
 		const hostname = domain.replace(/^\.+/, "");
@@ -1306,6 +1316,10 @@ function normalizeCookieRows(
 		const value = stringValue(row.value);
 		if (!name) {
 			invalid += 1;
+			continue;
+		}
+		if (isAntiBotCookie(name)) {
+			antiBot += 1;
 			continue;
 		}
 		const expirationDate = typeof row.expires === "number" && Number.isFinite(row.expires) && row.expires > 0 ? row.expires : undefined;
@@ -1339,7 +1353,7 @@ function normalizeCookieRows(
 	const warnings: BrowserImportWarning[] = [];
 	if (expired > 0) warnings.push({ code: "expired-cookies-skipped", count: expired });
 	if (invalid > 0) warnings.push({ code: "invalid-cookies-skipped", count: invalid });
-	return { cookies, skipped: expired + invalid, warnings };
+	return { cookies, skipped: expired + invalid + antiBot, warnings };
 }
 
 function readFirefoxHistory(file: string): { history: BrowserHistoryEntry[]; warnings: BrowserImportWarning[] } {
