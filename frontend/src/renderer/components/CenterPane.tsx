@@ -139,7 +139,7 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
 		const item = itemRef.current;
-		if (item) beginPaneTabDrag(event, value, item, () => dragControls.stop());
+		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
 	};
 	// While dragging, the tab's x is derived from the pointer and the group's
 	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
@@ -158,6 +158,18 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		if (Math.abs(x.get() - next) > 0.01) x.set(next);
 	}, [x]);
 	useEffect(() => x.on("change", followPointer), [x, followPointer]);
+	// Lifting the tab out into a split hands its motion to the drag ghost. The
+	// tab goes straight back to its slot: letting the reorder drag animate home
+	// while followPointer still tracked the pointer could strand it a few
+	// pixels off, leaving a gap in the strip.
+	const settleInSlot = useCallback(() => {
+		dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
+		dragRef.current = null;
+		dragControls.cancel();
+		x.stop();
+		x.set(0);
+		setDragging(false);
+	}, [dragControls, followPointer, x]);
 	// A tab removed mid-drag gets no onDragEnd; drop its scroll listener anyway.
 	useEffect(() => () => dragRef.current?.scroller?.removeEventListener("scroll", followPointer), [followPointer]);
 	useLayoutEffect(followPointer);
