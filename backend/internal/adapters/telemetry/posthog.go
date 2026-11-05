@@ -700,9 +700,9 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
 			props["days_since_install"] = age
 		}
-		if snap := s.ident.Snapshot(); snap.CloudUserKnown {
-			props["is_signed_in"] = snap.CloudUserID != ""
-		}
+		// The durable binding (telemetry_bound_user) restores a sign-in across
+		// restarts, so no binding means not signed in on this install.
+		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
 	}
 	return props
 }
