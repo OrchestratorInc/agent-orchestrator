@@ -62,11 +62,24 @@ function connect() {
 	if (listeners === 0 || socket || typeof WebSocket === "undefined" || !hasTrustedApiBaseUrl()) return;
 	const ws = new WebSocket(muxUrlFromApiBase(getApiBaseUrl()));
 	socket = ws;
-	ws.onopen = () => ws.send(JSON.stringify({ ch: "shell-agents", type: "subscribe" }));
+	ws.onopen = () => {
+		if (socket === ws) ws.send(JSON.stringify({ ch: "shell-agents", type: "subscribe" }));
+	};
 	ws.onmessage = (event: MessageEvent) => {
+		if (socket !== ws) return;
 		try {
-			const frame = JSON.parse(String(event.data)) as { ch?: string; agents?: Snapshot };
-			if (frame.ch === "shell-agents") useShellAgentStore.getState().replace(frame.agents ?? []);
+			const frame: unknown = JSON.parse(String(event.data));
+			if (!frame || typeof frame !== "object" || !("ch" in frame) || frame.ch !== "shell-agents"
+				|| !("type" in frame) || frame.type !== "snapshot" || !("agents" in frame) || !Array.isArray(frame.agents)) return;
+			const entries: unknown[] = frame.agents;
+			const agents: Snapshot = [];
+			for (const entry of entries) {
+				if (!entry || typeof entry !== "object" || !("handleId" in entry) || typeof entry.handleId !== "string"
+					|| !("harness" in entry) || typeof entry.harness !== "string" || !("state" in entry)
+					|| (entry.state !== "working" && entry.state !== "idle" && entry.state !== "waiting")) return;
+				agents.push({ handleId: entry.handleId, harness: entry.harness, state: entry.state });
+			}
+			useShellAgentStore.getState().replace(agents);
 		} catch {
 			// A malformed frame changes nothing; the next snapshot replaces everything.
 		}
@@ -88,6 +101,7 @@ function disconnect() {
 	retryTimer = undefined;
 	const ws = socket;
 	socket = undefined;
+	useShellAgentStore.getState().clearAgents();
 	ws?.close();
 }
 

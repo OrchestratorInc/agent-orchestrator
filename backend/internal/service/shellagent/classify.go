@@ -72,16 +72,34 @@ var interpreters = map[string]bool{"node": true, "nodejs": true, "bun": true, "d
 // ClassifyArgv names the harness a foreground command line runs, or "". Only
 // the program counts (`vim codex.md` is vim), or an interpreter's script.
 func ClassifyArgv(argv []string) domain.AgentHarness {
-	for i, arg := range argv[:min(len(argv), 5)] {
-		if i > 0 && strings.HasPrefix(arg, "-") {
+	if len(argv) == 0 {
+		return ""
+	}
+	if harness := classifyProgram(argv[0]); harness != "" {
+		return harness
+	}
+	if !interpreters[strings.TrimRight(baseName(argv[0]), "0123456789.")] {
+		return ""
+	}
+	for i := 1; i < min(len(argv), 5); i++ {
+		arg := argv[i]
+		flag, _, hasValue := strings.Cut(arg, "=")
+		switch flag {
+		case "-e", "--eval", "-p", "--print", "-c", "--check":
+			return ""
+		case "-r", "--require", "--import", "--loader", "--experimental-loader", "--title", "-W", "-X":
+			if !hasValue {
+				i++
+			}
 			continue
 		}
-		if harness := classifyProgram(arg); harness != "" {
-			return harness
+		if strings.HasPrefix(arg, "-") {
+			if strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-p") || strings.HasPrefix(arg, "-c") {
+				return ""
+			}
+			continue
 		}
-		if i == 0 && !interpreters[strings.TrimRight(baseName(arg), "0123456789.")] {
-			return ""
-		}
+		return classifyProgram(arg)
 	}
 	return ""
 }

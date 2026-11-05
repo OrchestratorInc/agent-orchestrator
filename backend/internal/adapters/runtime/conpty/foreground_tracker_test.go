@@ -45,6 +45,35 @@ func TestForegroundTrackerIgnoresEchoAndResizeRedraws(t *testing.T) {
 	}
 }
 
+func TestForegroundTrackerRechecksQuietScreenAfterEchoOrResize(t *testing.T) {
+	for _, event := range []string{"input", "resize"} {
+		t.Run(event, func(t *testing.T) {
+			tracker := newForegroundTracker(&fakeForegroundReader{pgid: 42})
+			now := time.Now()
+			tracker.evaluate(now)
+			now = now.Add(foregroundStartGrace + time.Second)
+			if event == "input" {
+				tracker.noteInput(now)
+			} else {
+				tracker.noteResize(now)
+			}
+			// A fast permission prompt is indistinguishable from echo here.
+			tracker.noteOutput(now.Add(20 * time.Millisecond))
+			next, _, state := tracker.evaluate(now.Add(100 * time.Millisecond))
+			if state.Busy || next <= 0 {
+				t.Fatalf("suppressed output = %+v, next %v; want idle with a screen recheck", state, next)
+			}
+			settled := now.Add(100*time.Millisecond + next)
+			if _, changed, state := tracker.evaluate(settled); !changed || state.Busy {
+				t.Fatalf("quiet screen = %+v, changed %v; want an idle update to inspect the prompt", state, changed)
+			}
+			if next, changed, _ := tracker.evaluate(settled.Add(time.Second)); changed || next != 0 {
+				t.Fatal("quiet screen kept polling after its update")
+			}
+		})
+	}
+}
+
 type fakeForegroundPTY struct {
 	ptyConn
 	fakeForegroundReader

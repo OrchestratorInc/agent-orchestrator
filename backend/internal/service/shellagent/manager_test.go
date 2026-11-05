@@ -64,7 +64,7 @@ func TestManagerFollowsAnAgentThroughATurn(t *testing.T) {
 	waitForState(t, m, StateIdle)
 
 	rt.screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
-	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude, Busy: true}
+	// A fast prompt can arrive as a settled screen without an intervening busy state.
 	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude}
 	waitForState(t, m, StateWaiting)
 

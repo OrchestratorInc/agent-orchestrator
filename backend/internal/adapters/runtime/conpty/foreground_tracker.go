@@ -25,9 +25,6 @@ var (
 	foregroundResizeWindow = 600 * time.Millisecond
 	// foregroundStartGrace: a program drawing its first screen is not working.
 	foregroundStartGrace = 2500 * time.Millisecond
-	// foregroundArgvRefresh re-reads argv for an unchanged group, which
-	// catches `exec agent` replacing the shell in place.
-	foregroundArgvRefresh = 2 * time.Second
 )
 
 // maxForegroundArgs and maxForegroundArgLen bound the argv sent to watchers.
@@ -44,14 +41,15 @@ type foregroundTracker struct {
 	reader foregroundReader
 	poke   chan struct{}
 
-	mu         sync.Mutex
-	lastInput  time.Time
-	lastResize time.Time
-	lastOutput time.Time // output that was not an echo or a resize redraw
-	since      time.Time // when the current foreground group appeared
-	state      ForegroundPayload
-	hasState   bool
-	argvReadAt time.Time
+	mu            sync.Mutex
+	lastInput     time.Time
+	lastResize    time.Time
+	lastOutput    time.Time // output that was not an echo or a resize redraw
+	lastDraw      time.Time
+	screenPending bool
+	since         time.Time // when the current foreground group appeared
+	state         ForegroundPayload
+	hasState      bool
 }
 
 func newForegroundTracker(reader foregroundReader) *foregroundTracker {
@@ -73,6 +71,7 @@ func (t *foregroundTracker) noteOutput(now time.Time) {
 		return
 	}
 	t.mu.Lock()
+	t.lastDraw, t.screenPending = now, true
 	if now.Sub(t.lastInput) > foregroundEchoWindow && now.Sub(t.lastResize) > foregroundResizeWindow {
 		t.lastOutput = now
 	}
@@ -106,7 +105,7 @@ func (t *foregroundTracker) current() (ForegroundPayload, bool) {
 }
 
 // run evaluates on every wake, at most once per foregroundMinInterval, and
-// publishes each change until done closes.
+// publishes state changes and settled screen updates until done closes.
 func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPayload)) {
 	if t == nil {
 		return
@@ -137,19 +136,18 @@ func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPay
 	}
 }
 
-// evaluate reads the foreground and returns the new state, whether it
-// changed, and when to look again to report the busy-to-quiet edge (0: only
-// on the next event).
+// evaluate reports whether a state or settled-screen update is due and when
+// to evaluate again (0: only on the next event).
 func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed bool, state ForegroundPayload) {
 	pgid, _ := t.reader.ForegroundPGID()
+	// exec can replace the program without changing its process group. Wakes
+	// are output-driven and coalesced, so read argv on each evaluation.
+	argv := capForegroundArgv(processArgv(pgid))
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state.PGID, state.Argv = pgid, t.state.Argv
+	state.PGID, state.Argv = pgid, argv
 	if pgid != t.state.PGID {
 		t.since = now
-	}
-	if pgid != t.state.PGID || now.Sub(t.argvReadAt) >= foregroundArgvRefresh {
-		state.Argv, t.argvReadAt = capForegroundArgv(processArgv(pgid)), now
 	}
 	quiet := now.Sub(t.lastOutput)
 	state.Busy = t.lastOutput.After(t.since.Add(foregroundStartGrace)) && quiet < foregroundBusyWindow
@@ -157,6 +155,15 @@ func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed
 		next = foregroundBusyWindow - quiet + 10*time.Millisecond
 	}
 	changed = !t.hasState || state.PGID != t.state.PGID || state.Busy != t.state.Busy || !slices.Equal(state.Argv, t.state.Argv)
+	if !state.Busy && t.screenPending {
+		// Echo and resize output must not show as working, but may contain a
+		// permission prompt. Inspect it once it settles, even if state is equal.
+		if wait := foregroundEchoWindow - now.Sub(t.lastDraw); wait > 0 {
+			next = wait
+		} else {
+			changed, t.screenPending = true, false
+		}
+	}
 	t.state, t.hasState = state, true
 	return next, changed, state
 }
