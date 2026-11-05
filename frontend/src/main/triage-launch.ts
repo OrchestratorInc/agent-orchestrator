@@ -26,6 +26,11 @@ function resolveTriageBinary(stateEnv: NodeJS.ProcessEnv): string {
 	return launch.command;
 }
 
+// Linux terminals close when their command exits, which would take the issue
+// URL or failure ao triage prints last with them. Windows has -NoExit and macOS
+// Terminal keeps the window.
+const KEEP_WINDOW_OPEN = `"$@"; status=$?; printf '\\nPress Enter to close this window.'; read -r reply; exit "$status"`;
+
 export async function launchTriageInTerminal(
 	stateEnv: NodeJS.ProcessEnv,
 ): Promise<TriageResult> {
@@ -52,6 +57,7 @@ export async function launchTriageInTerminal(
 			argv = [...(overrides.length ? ["/usr/bin/env", ...overrides.map(([key, value]) => `${key}=${value}`)] : []), command, ...args];
 			const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 			manualCommand = [...overrides.map(([key, value]) => `${key}=${quote(value)}`), ...[command, ...args].map(quote)].join(" ");
+			if (process.platform !== "darwin") argv = ["/bin/sh", "-c", KEEP_WINDOW_OPEN, "sh", ...argv];
 		}
 		const terminal = terminalCommand(argv, process.platform, stateEnv, (candidate) => {
 			try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }

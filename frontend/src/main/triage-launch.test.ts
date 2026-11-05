@@ -46,6 +46,16 @@ describe("launchTriageInTerminal", () => {
 		expect(terminalCommand).toHaveBeenCalledWith(["/usr/bin/env", "AO_DATA_DIR=/data", "AO_RUN_FILE=/run.json", "/bundled resources/daemon/ao", "triage"], "darwin", env, expect.any(Function));
 	});
 
+	it("keeps the Linux window open after triage exits, with its exit status", async () => {
+		vi.stubGlobal("process", { ...process, platform: "linux" });
+		const env = { AO_DATA_DIR: "/data" };
+		expect(await launchTriageInTerminal(env)).toEqual({ ok: true });
+		const argv = vi.mocked(terminalCommand).mock.calls[0][0];
+		expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"]);
+		expect(argv[2]).toMatch(/^"\$@"; status=\$\?; .*read -r reply; exit "\$status"$/);
+		expect(argv.slice(3)).toEqual(["sh", "/usr/bin/env", "AO_DATA_DIR=/data", "/bundled resources/daemon/ao", "triage"]);
+	});
+
 	it.each([{}, { AO_DATA_DIR: "", AO_RUN_FILE: "" }])("omits unset state overrides: %j", async (env) => {
 		vi.mocked(terminalCommand).mockReturnValue(undefined);
 		expect(await launchTriageInTerminal(env)).toEqual({ ok: false, error: "report.terminalFailed", command: "'/bundled resources/daemon/ao' 'triage'" });
