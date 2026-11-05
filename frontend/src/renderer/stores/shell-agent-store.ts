@@ -28,6 +28,12 @@ type ShellAgentStore = {
 	 */
 	unseenDone: Record<string, true>;
 	replace: (agents: ShellTerminalAgentsResponse["agents"]) => void;
+	/**
+	 * Drops every agent while the stream is down, but keeps the unseen "done"
+	 * marks: the first frame after reconnecting keeps the mark of each agent
+	 * that is still idle.
+	 */
+	clearAgents: () => void;
 	markSeen: (handleId: string) => void;
 };
 
@@ -49,6 +55,7 @@ export const useShellAgentStore = create<ShellAgentStore>((set) => ({
 			}
 			return { agents, unseenDone };
 		}),
+	clearAgents: () => set({ agents: {} }),
 	markSeen: (handleId) =>
 		set((current) => {
 			if (!current.unseenDone[handleId]) return current;
@@ -99,7 +106,7 @@ function connect() {
 			// States are live facts: while the stream is down, show plain
 			// terminals rather than a status that may already be stale. The
 			// first frame after reconnecting restores them.
-			useShellAgentStore.getState().replace([]);
+			useShellAgentStore.getState().clearAgents();
 			if (connected.readyState === EVENTSOURCE_CLOSED && !retryTimer) {
 				retryTimer = setTimeout(() => {
 					retryTimer = undefined;
