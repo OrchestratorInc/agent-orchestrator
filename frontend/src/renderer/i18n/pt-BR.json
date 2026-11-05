@@ -3315,6 +3315,7 @@
 	"chat.draft.retryMessage": "Tentar novamente com segurança",
 	"chat.draft.clearMessageFailed": "O conteúdo foi aceito, mas não foi possível apagar seu rascunho local. Tente apagá-lo novamente antes de sair; o AO não o enviará outra vez.",
 	"chat.draft.recordMessageFailed": "Não foi possível registrar a aceitação localmente. Tente novamente com o mesmo ID de entrega para confirmá-la.",
+	"chat.draft.recordMessageSuperseded": "A mensagem foi enviada, mas seu registro local já havia sido substituído ou apagado, então não foi possível atualizá-lo. Não é preciso reenviá-la.",
 	"chat.draft.abandonFailed": "Não foi possível abandonar a recuperação porque seu registro local não pôde ser apagado. Nada será reenviado automaticamente.",
 	"chat.draft.abandonedSteer": "A recuperação foi abandonada. O conteúdo anterior pode já ter sido entregue; enviá-lo novamente pode duplicá-lo.",
 	"chat.draft.readAttachmentFailed": "Não foi possível ler o anexo salvo. Seu rascunho foi mantido.",

@@ -16,6 +16,7 @@ import type { ChatSkill } from "../../types/conversation";
 import {
 	type ChatDraftExcerptReference,
 	activateChatDraftScope,
+	clearAcceptedChatComposer,
 	markChatComposerDeliveryAccepted,
 	prepareChatComposerDelivery,
 	readChatSessionDraft,
@@ -1044,6 +1045,159 @@ describe("send keys", () => {
 			view.unmount();
 			localStorage.mockRestore();
 		}
+	});
+
+	describe("when an accepted delivery was superseded before it could be recorded", () => {
+		function scopes(sessionId: string) {
+			const scope = { sessionId, incarnation: "2026-09-07T10:00:00Z" };
+			return { scope, replacement: { ...scope, incarnation: "2026-09-08T10:00:00Z" } };
+		}
+
+		function expectReleasedComposer(field: HTMLElement) {
+			expect(screen.getByRole("status")).toHaveTextContent("No resend is needed");
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
+			expect(field).toHaveAttribute("contenteditable", "true");
+			expect(field.textContent).toBe("");
+		}
+
+		it("says a sent message needs no resend after the session was reset elsewhere", async () => {
+			const { scope, replacement } = scopes("composer-superseded-send");
+			expect(activateChatDraftScope(scope).ok).toBe(true);
+			const onSend = vi.fn(async () => {
+				activateChatDraftScope(replacement);
+			});
+			render(<ChatComposer draftSessionId={scope.sessionId} draftSessionIncarnation={scope.incarnation} onSend={onSend} />);
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "delivered before the reset");
+			fireEvent.keyDown(field, { key: "Enter" });
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+			expectReleasedComposer(field);
+			await waitFor(() => expect(getChatDraftBoundaries(scope.sessionId)).toEqual([]));
+			expect(onSend).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not report a draft save failure for a sent message's attachments", async () => {
+			const { scope, replacement } = scopes("composer-superseded-attachments");
+			expect(activateChatDraftScope(scope).ok).toBe(true);
+			writeChatAttachments(scope, [{ id: "sent-file", name: "sent.txt", mimeType: "text/plain", bytes: 4, path: ".ao/attachments/sent.txt" }]);
+			const onSend = vi.fn(async () => {
+				activateChatDraftScope(replacement);
+			});
+			render(<ChatComposer draftSessionId={scope.sessionId} draftSessionIncarnation={scope.incarnation} onSend={onSend} />);
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "delivered with a file");
+			fireEvent.keyDown(field, { key: "Enter" });
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+			expectReleasedComposer(field);
+			expect(screen.queryByText("sent.txt")).not.toBeInTheDocument();
+			await waitFor(() => expect(getChatDraftBoundaries(scope.sessionId)).toEqual([]));
+		});
+
+		it("removes accepted steer text so it cannot be sent a second time", async () => {
+			const { scope, replacement } = scopes("composer-superseded-steer");
+			expect(activateChatDraftScope(scope).ok).toBe(true);
+			const onSteer = vi.fn(async () => {
+				activateChatDraftScope(replacement);
+			});
+			render(<ChatComposer draftSessionId={scope.sessionId} draftSessionIncarnation={scope.incarnation} onSend={vi.fn()} onSteer={onSteer} canSteer willQueue />);
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "guidance delivered before the reset");
+			await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+			expectReleasedComposer(field);
+			expect(onSteer).toHaveBeenCalledTimes(1);
+		});
+
+		it("releases a restored delivery the daemon reports after the session was reset", async () => {
+			const { scope, replacement } = scopes("composer-superseded-observed");
+			expect(activateChatDraftScope(scope).ok).toBe(true);
+			const prepared = prepareChatComposerDelivery(scope, {
+				kind: "send",
+				composerText: "delivered though its answer was lost",
+				attachments: [],
+				requestText: "delivered though its answer was lost",
+				clientMessageId: "observed-after-reset",
+			});
+			if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+			const onSend = vi.fn();
+			const surface = (acceptedClientMessageIds: ReadonlySet<string>) => (
+				<ChatComposer
+					draftSessionId={scope.sessionId}
+					draftSessionIncarnation={scope.incarnation}
+					onSend={onSend}
+					acceptedClientMessageIds={acceptedClientMessageIds}
+				/>
+			);
+			const view = render(surface(new Set()));
+			await screen.findByRole("button", { name: "Retry message safely" });
+
+			expect(activateChatDraftScope(replacement)).toMatchObject({ ok: true, replaced: true });
+			view.rerender(surface(new Set(["observed-after-reset"])));
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "true"));
+			expectReleasedComposer(screen.getByLabelText("Message the agent"));
+			expect(onSend).not.toHaveBeenCalled();
+		});
+
+		it("shows a newer draft when another surface already cleared the delivery", async () => {
+			const sessionId = "composer-acceptance-cleared-elsewhere";
+			const onSend = vi.fn(async () => {
+				const delivery = readChatSessionDraft(sessionId).composer.delivery;
+				if (!delivery) throw new Error("Expected a dispatching delivery");
+				markChatComposerDeliveryAccepted(sessionId, delivery.clientMessageId, delivery.revision);
+				clearAcceptedChatComposer(sessionId, delivery.revision);
+				writeChatComposerText(sessionId, "newer draft from another surface");
+			});
+			render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "accepted and cleared elsewhere");
+			fireEvent.keyDown(field, { key: "Enter" });
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(field.textContent).toBe("newer draft from another surface"));
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("newer draft from another surface");
+			expect(onSend).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves the replacement session's draft alone when this surface already moved to it", async () => {
+			const { scope, replacement } = scopes("composer-superseded-moved-surface");
+			expect(activateChatDraftScope(scope).ok).toBe(true);
+			const accepted = deferred<void>();
+			const onSend = vi.fn(() => accepted.promise);
+			const surface = (incarnation: string) => (
+				<ChatComposer draftSessionId={scope.sessionId} draftSessionIncarnation={incarnation} onSend={onSend} />
+			);
+			const view = render(surface(scope.incarnation));
+			const field = screen.getByLabelText("Message the agent");
+			await typeInComposer(field, "delivered before the reset");
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+
+			expect(activateChatDraftScope(replacement)).toMatchObject({ ok: true, replaced: true });
+			writeChatComposerText(replacement, "replacement draft");
+			view.rerender(surface(replacement.incarnation));
+			await waitFor(() => expect(field.textContent).toBe("replacement draft"));
+			await act(async () => {
+				accepted.resolve();
+				await accepted.promise;
+			});
+
+			await screen.findByText(/No resend is needed/);
+			await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+			expect(field.textContent).toBe("replacement draft");
+			expect(readChatSessionDraft(replacement).composer.text).toBe("replacement draft");
+			expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
+		});
 	});
 
 	it("keeps a restored delivery recoverable without blocking navigation", async () => {

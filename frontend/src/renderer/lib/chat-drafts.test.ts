@@ -809,6 +809,141 @@ describe("Chat draft storage", () => {
 		expect(readChatSessionDraft("session-next-attachments", storage).composer.delivery).toBeUndefined();
 	});
 
+	describe("markChatComposerDeliveryAccepted failure reasons", () => {
+		function prepareDelivery(scope: string | ChatDraftScope, storage: DraftStorage) {
+			const prepared = prepareChatComposerDelivery(
+				scope,
+				{
+					kind: "send",
+					composerText: "accepted by the daemon",
+					attachments: [],
+					requestText: "accepted by the daemon",
+					clientMessageId: "acceptance-1",
+				},
+				storage,
+			);
+			if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+			return prepared.mutation;
+		}
+
+		it("reports superseded after the session incarnation was replaced", () => {
+			const storage = new MemoryStorage();
+			const scope = { sessionId: "session-reset", incarnation: "2026-09-07T10:00:00Z" };
+			expect(activateChatDraftScope(scope, storage).ok).toBe(true);
+			const delivery = prepareDelivery(scope, storage);
+			expect(activateChatDraftScope({ ...scope, incarnation: "2026-09-08T10:00:00Z" }, storage)).toMatchObject({
+				ok: true,
+				replaced: true,
+			});
+
+			expect(markChatComposerDeliveryAccepted(scope, "acceptance-1", delivery.revision, storage)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+		});
+
+		it("reports superseded when another surface already cleared the delivery", () => {
+			const storage = new MemoryStorage();
+			const delivery = prepareDelivery("session-cleared", storage);
+			expect(markChatComposerDeliveryAccepted("session-cleared", "acceptance-1", delivery.revision, storage).ok).toBe(true);
+			expect(clearAcceptedChatComposer("session-cleared", delivery.revision, storage).ok).toBe(true);
+
+			expect(markChatComposerDeliveryAccepted("session-cleared", "acceptance-1", delivery.revision, storage)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+		});
+
+		it("reports superseded when the expected delivery identity no longer matches", () => {
+			const storage = new MemoryStorage();
+			const delivery = prepareDelivery("session-other-delivery", storage);
+
+			expect(markChatComposerDeliveryAccepted("session-other-delivery", "another-id", delivery.revision, storage)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+			expect(markChatComposerDeliveryAccepted("session-other-delivery", "acceptance-1", delivery.revision + 1, storage)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+		});
+
+		it("reports superseded when the local record was corrupted", () => {
+			const backing = new MemoryStorage();
+			const delivery = prepareDelivery("session-corrupt", backing);
+			const corrupted: DraftStorage = {
+				getItem: (key) => (key.startsWith("ao.chat.draft.active:") ? backing.getItem(key) : "{not json"),
+				setItem: (key, value) => backing.setItem(key, value),
+				removeItem: (key) => backing.removeItem(key),
+			};
+
+			expect(markChatComposerDeliveryAccepted("session-corrupt", "acceptance-1", delivery.revision, corrupted)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+		});
+
+		it("reports storage when the accepted state cannot be written", () => {
+			const backing = new MemoryStorage();
+			const delivery = prepareDelivery("session-write-fails", backing);
+			const writeFailure: DraftStorage = {
+				getItem: (key) => backing.getItem(key),
+				setItem: () => {
+					throw new DOMException("full", "QuotaExceededError");
+				},
+				removeItem: (key) => backing.removeItem(key),
+			};
+
+			expect(markChatComposerDeliveryAccepted("session-write-fails", "acceptance-1", delivery.revision, writeFailure)).toMatchObject({
+				ok: false,
+				reason: "storage",
+			});
+			expect(readChatSessionDraft("session-write-fails", backing).composer.delivery?.state).toBe("dispatching");
+		});
+
+		it("reports storage when the store cannot be read", () => {
+			const backing = new MemoryStorage();
+			const delivery = prepareDelivery("session-read-fails", backing);
+			const unreadable: DraftStorage = {
+				getItem: () => {
+					throw new DOMException("blocked", "SecurityError");
+				},
+				setItem: (key, value) => backing.setItem(key, value),
+				removeItem: (key) => backing.removeItem(key),
+			};
+
+			expect(markChatComposerDeliveryAccepted("session-read-fails", "acceptance-1", delivery.revision, unreadable)).toMatchObject({
+				ok: false,
+				reason: "storage",
+			});
+		});
+
+		it("reports storage while this incarnation's own activation is unfinished", () => {
+			const backing = new MemoryStorage();
+			const scope = { sessionId: "session-activating", incarnation: "2026-09-07T10:00:00Z" };
+			const replacement = { ...scope, incarnation: "2026-09-08T10:00:00Z" };
+			expect(activateChatDraftScope(scope, backing).ok).toBe(true);
+			const delivery = prepareDelivery(scope, backing);
+			const removalFailure: DraftStorage = {
+				getItem: (key) => backing.getItem(key),
+				setItem: (key, value) => backing.setItem(key, value),
+				removeItem: () => {
+					throw new DOMException("blocked", "SecurityError");
+				},
+			};
+			expect(activateChatDraftScope(replacement, removalFailure).ok).toBe(false);
+
+			expect(markChatComposerDeliveryAccepted(replacement, "acceptance-1", delivery.revision, backing)).toMatchObject({
+				ok: false,
+				reason: "storage",
+			});
+			expect(markChatComposerDeliveryAccepted(scope, "acceptance-1", delivery.revision, backing)).toMatchObject({
+				ok: false,
+				reason: "superseded",
+			});
+		});
+	});
+
 	it("clears only the accepted delivery journal when a later composer revision exists", () => {
 		const storage = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery(
