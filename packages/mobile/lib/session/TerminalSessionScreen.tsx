@@ -980,8 +980,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
 				setMsg("");
-				// The toggle shows the route the prompt is now answered on.
-				setSendTarget("terminal");
+				// Reroute this one send only. Leaving the toggle alone keeps later
+				// messages on the agent's delivery path once the prompt is answered.
 				showNotice(REROUTED_NOTICE, "info");
 			} else {
 				haptics.error();
