@@ -2424,6 +2424,7 @@
 	"shortcut.movedBody": "{{binding}} moved from {{from}} to {{to}}",
 	"shortcut.new-session": "New session",
 	"shortcut.new-shell-terminal": "New terminal",
+	"shortcut.split-shell-terminal": "New terminal on the right",
 	"shortcut.next-attention-session": "Next session needing attention",
 	"shortcut.next-session": "Next session",
 	"shortcut.next-tab": "Next tab",

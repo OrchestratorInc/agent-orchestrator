@@ -2053,6 +2053,7 @@
 	"shortcut.movedBody": "{{binding}} movido de {{from}} para {{to}}",
 	"shortcut.new-session": "Nova sessão",
 	"shortcut.new-shell-terminal": "Novo terminal",
+	"shortcut.split-shell-terminal": "Novo terminal à direita",
 	"shortcut.next-attention-session": "Próxima sessão que precisa de atenção",
 	"shortcut.next-session": "Próxima sessão",
 	"shortcut.next-tab": "Próxima aba",

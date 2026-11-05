@@ -22,7 +22,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane, SessionPaneTab } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
-import { SplitHiddenTabKeysContext } from "./split-pane-context";
+import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
@@ -986,10 +986,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 	// Until the shell list loads, an absent shell is unknown rather than closed.
 	const shellListKnown = shellTerminalsQuery.data !== undefined;
-	const groups = useMemo(
-		() => (shellListKnown ? reconcileGroups(storedGroups, splittableKeys) : storedGroups),
-		[shellListKnown, splittableKeys, storedGroups],
-	);
+	const groups = useMemo(() => {
+		if (!shellListKnown) return storedGroups;
+		// A shell opened into a split is a placeholder until the daemon answers:
+		// keep its pane, then follow it to the shell it becomes.
+		let available: ReadonlySet<string> = splittableKeys;
+		for (const group of storedGroups) {
+			for (const key of leafKeys(group.root)) {
+				if (!key.startsWith(PENDING_SHELL_KEY_PREFIX) || adoptedShellHandle(key) || available.has(key)) continue;
+				available = new Set([...available, key]);
+			}
+		}
+		return reconcileGroups(storedGroups, available, adoptedShellHandle);
+	}, [shellListKnown, splittableKeys, storedGroups]);
 	const updateGroups = useCallback(
 		(update: (current: TabGroup[]) => TabGroup[]) => {
 			setGroupsBySession((current) => {
@@ -1664,7 +1673,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
 	const centerColumnRef = useRef<HTMLDivElement | null>(null);
 	const splitDropStateRef = useRef<SplitDropState | null>(null);
-	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups };
+	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups, splitPartner: undefined };
 	useEffect(
 		() =>
 			registerPaneDropTarget({
@@ -1743,17 +1752,104 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
 		return { key, onSelect, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
 	};
+	// A group remembers the member last focused, so its tab names that member
+	// and selecting it returns there.
+	useEffect(() => {
+		if (!shownGroup || shownGroup.focus === selectedTabKey) return;
+		const id = shownGroup.id;
+		updateGroups((current) => current.map((group) => (group.id === id ? { ...group, focus: selectedTabKey } : group)));
+	}, [selectedTabKey, shownGroup, updateGroups]);
+	const groupFocus = (group: TabGroup) => {
+		const members = leafKeys(group.root);
+		return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
+	};
 	const groupWorkspaceTabs = groups.map((group) => ({
 		key: groupTabKey(group),
 		content: (
 			<SplitGroupTab
 				active={group === shownGroup}
-				focusedKey={selectedTabKey}
+				focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 				members={leafKeys(group.root).map(groupMember)}
 			/>
 		),
-		onSelect: () => selectTab(leafKeys(group.root)[0]!),
+		onSelect: () => selectTab(groupFocus(group)),
 	}));
+
+	// ⌘W closes the focused pane and keeps the rest of the split on screen.
+	// The session's own pane and reviewers are not closable, so they return to
+	// the strip as tabs of their own.
+	const closeFocusedPaneRef = useRef<() => void>(() => undefined);
+	closeFocusedPaneRef.current = () => {
+		if (!shownGroup) return;
+		const key = selectedTabKey;
+		const members = leafKeys(shownGroup.root);
+		const index = members.indexOf(key);
+		const sibling = members[index - 1] ?? members[index + 1];
+		if (key.startsWith("file:")) {
+			const path = key.slice("file:".length);
+			const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
+			closed.push(path);
+			if (closed.length > 20) closed.shift();
+			setFileTabsBySession((current) => ({
+				...current,
+				[uiSessionId]: closeSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
+			}));
+			removeAuxiliaryTab(key);
+		} else if (shellTerminals.some((shell) => shell.handleId === key)) {
+			if (activeShellTerminalHandleId === key) setActiveShellTerminal(null);
+			closeShellTerminal.mutate(key, {
+				onSuccess: () => removeAuxiliaryTab(key),
+				onError: (error) => {
+					if (apiErrorCode(error) === "SHELL_TERMINAL_NOT_FOUND") removeAuxiliaryTab(key);
+				},
+			});
+		} else {
+			updateGroups((current) => withoutTab(current, key));
+		}
+		if (sibling) selectTab(sibling);
+	};
+	const closeFocusedPane = useCallback(() => closeFocusedPaneRef.current(), []);
+
+	// ⌘D opens a new terminal to the right of the focused pane, splitting the
+	// tab on screen if it is not split yet.
+	const splitNewTerminalRef = useRef<() => void>(() => undefined);
+	splitNewTerminalRef.current = () => {
+		if (!session || isOrchestrator) return;
+		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
+		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
+		if (!shell) return;
+		const key = shell.handleId;
+		updateGroups((current) => {
+			const group = groupContaining(current, anchor);
+			if (group) {
+				return current.map((candidate) =>
+					candidate.id === group.id ? { ...candidate, root: insertBeside(candidate.root, anchor, key, "right"), focus: key } : candidate,
+				);
+			}
+			return [...current, { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, "right"), focus: key }];
+		});
+		setReviewerChatId(null);
+		setFileTabsBySession((current) => ({
+			...current,
+			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
+		}));
+		setActiveShellTerminal(key);
+		setTerminalTarget({ generation: shell.createdAt, kind: "shell", handleId: key, sessionId, title: shell.title });
+	};
+	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current(), Boolean(session) && !isOrchestrator);
+
+	// Dragging the tab that is on screen splits it with the tab seen before it
+	// (else the session's own tab), so there is always something to drop beside.
+	const tabHistoryRef = useRef({ sessionKey: uiSessionId, current: selectedTabKey, previous: undefined as string | undefined });
+	if (tabHistoryRef.current.sessionKey !== uiSessionId) {
+		tabHistoryRef.current = { sessionKey: uiSessionId, current: selectedTabKey, previous: undefined };
+	} else if (tabHistoryRef.current.current !== selectedTabKey) {
+		tabHistoryRef.current = { sessionKey: uiSessionId, current: selectedTabKey, previous: tabHistoryRef.current.current };
+	}
+	const splitPartner = [tabHistoryRef.current.previous, SESSION_TAB_KEY, ...singleAuxiliaryTabOrder].find(
+		(key): key is string => Boolean(key) && key !== selectedTabKey && splittableKeys.has(key!) && !groupedKeySet.has(key!),
+	);
+	splitDropStateRef.current = { ...splitDropStateRef.current!, splitPartner };
 	const mainWorkspaceTabs = groups.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs;
 	useEffect(() => {
 		if (!chatViewActive) return;
@@ -2308,6 +2404,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							) : null}
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
+							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || sessionPaneHidden) && "invisible pointer-events-none")}
@@ -2453,6 +2550,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							)}
 							</div>
 							</SplitHiddenTabKeysContext.Provider>
+							</SplitCloseFocusedContext.Provider>
 							{shownGroup
 								? leafKeys(shownGroup.root)
 									.filter((key) => key !== SESSION_TAB_KEY && !key.startsWith("file:"))
@@ -2735,6 +2833,7 @@ function terminalTabKey(target: TerminalTarget): string {
 }
 
 const EMPTY_TAB_GROUPS: TabGroup[] = [];
+const PENDING_SHELL_KEY_PREFIX = "pending-shell:";
 const FULL_PANE_STYLE: CSSProperties = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
 
 type SplitDropState = {
@@ -2744,6 +2843,8 @@ type SplitDropState = {
 	splittableKeys: ReadonlySet<string>;
 	selectTab: (key: string) => void;
 	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
+	/** What a drag of the tab on screen splits with. */
+	splitPartner: string | undefined;
 };
 
 let groupSequence = 0;
@@ -2797,8 +2898,8 @@ function resolveSplitDrop(
 	if (!containsPoint(rect, x, y)) return null;
 	const shown = state.shownGroup;
 	if (!shown) {
-		const target = state.selectedTabKey;
-		if (target === key || !state.splittableKeys.has(target)) return null;
+		const target = state.selectedTabKey === key ? state.splitPartner : state.selectedTabKey;
+		if (!target || target === key || !state.splittableKeys.has(target)) return null;
 		const edge = edgeAt(rect, x, y);
 		if (!edge) return null;
 		return {

@@ -18,6 +18,7 @@ import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /**
  * A terminal shown in a split pane. Shell terminals come from the shared
@@ -172,7 +173,8 @@ export type SplitGroupMember = {
 };
 
 /**
- * One strip tab for tabs shown together. Each member's name is its own
+ * One strip tab for tabs shown together. The focused member shows its name;
+ * the others show only their icon, named by a tooltip. Each member is its own
  * target: clicking it shows the group with that pane focused, and dragging it
  * moves it within the split or out of the group.
  */
@@ -198,36 +200,45 @@ export function SplitGroupTab({
 			role="group"
 		>
 			{members.map((member, index) => {
-				const focused = active && member.key === focusedKey;
+				const focused = member.key === focusedKey;
+				const segment = (
+					<Pressable
+						aria-label={member.label}
+						aria-selected={active && focused}
+						className={cn(
+							"inline-flex h-full min-w-0 cursor-pointer items-center gap-2 leading-none",
+							focused ? "max-w-shell-tab-max px-2 text-control" : "px-1.5",
+							active && focused ? "text-foreground" : active ? "text-muted-foreground hover:text-foreground" : "hover:text-foreground",
+						)}
+						data-split-member={member.key}
+						onClick={(event) => {
+							if (event.detail > 1) return;
+							member.onSelect();
+						}}
+						onPointerDown={(event) => {
+							// A member drags on its own; the group tab itself stays in place.
+							event.stopPropagation();
+							beginPaneTabDrag(event, member.key, event.currentTarget);
+						}}
+						role="tab"
+						tabIndex={active && focused ? 0 : -1}
+						type="button"
+					>
+						<span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{member.icon}</span>
+						{focused ? <span className="truncate">{member.label}</span> : null}
+					</Pressable>
+				);
 				return (
 					<Fragment key={member.key}>
 						{index > 0 ? (
 							<span aria-hidden="true" className="my-2.5 w-px shrink-0 self-stretch bg-border" />
 						) : null}
-						<Pressable
-							aria-selected={focused}
-							className={cn(
-								"inline-flex h-full min-w-0 max-w-shell-tab-max cursor-pointer items-center gap-2 px-2 text-control leading-none",
-								focused ? "text-foreground" : active ? "text-muted-foreground hover:text-foreground" : "hover:text-foreground",
-							)}
-							data-split-member={member.key}
-							onClick={(event) => {
-								if (event.detail > 1) return;
-								member.onSelect();
-							}}
-							onPointerDown={(event) => {
-								// A member drags on its own; the group tab itself stays in place.
-								event.stopPropagation();
-								beginPaneTabDrag(event, member.key, event.currentTarget);
-							}}
-							role="tab"
-							tabIndex={focused ? 0 : -1}
-							title={member.label}
-							type="button"
-						>
-							<span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{member.icon}</span>
-							<span className="truncate">{member.label}</span>
-						</Pressable>
+						{focused ? segment : (
+							<Tooltip>
+								<TooltipTrigger asChild>{segment}</TooltipTrigger>
+								<TooltipContent side="bottom">{member.label}</TooltipContent>
+							</Tooltip>
+						)}
 					</Fragment>
 				);
 			})}

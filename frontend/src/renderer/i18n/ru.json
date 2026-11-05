@@ -2507,6 +2507,7 @@
 	"shortcut.movedBody": "{{binding}} перенесено с {{from}} на {{to}}",
 	"shortcut.new-session": "Новая сессия",
 	"shortcut.new-shell-terminal": "Новый терминал",
+	"shortcut.split-shell-terminal": "Новый терминал справа",
 	"shortcut.next-attention-session": "Следующая сессия, требующая внимания",
 	"shortcut.next-session": "Следующая сессия",
 	"shortcut.next-tab": "Следующая вкладка",

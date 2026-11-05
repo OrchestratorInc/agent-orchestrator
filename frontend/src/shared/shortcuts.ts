@@ -55,6 +55,7 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "split-shell-terminal"
 	| "dictate"
 	| "open-orchestrator"
 	| "toggle-browser-devtools";
@@ -100,6 +101,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "previous-tab", label: "Previous tab", category: "Navigation" },
 	{ id: "next-tab", label: "Next tab", category: "Navigation" },
 	{ id: "new-shell-terminal", label: "New terminal", category: "Session" },
+	{ id: "split-shell-terminal", label: "New terminal on the right", category: "Session" },
 	{ id: "close-shell-terminal", label: "Close tab", category: "Session" },
 	{ id: "reopen-closed-tab", label: "Reopen closed tab", category: "Session" },
 	{ id: "archive-session", label: "Archive session", category: "Session" },
@@ -201,9 +203,15 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
-		// Plain Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
+		// ⌘D splits a new terminal to the right, as in macOS terminals. Plain
+		// Ctrl+D is end-of-input in a terminal, so other platforms use Windows
+		// Terminal's Alt+Shift+D.
+		case "split-shell-terminal":
+			return [isMac ? binding("d", { meta: true }) : binding("d", { alt: true, shift: true })];
+		// ⌃⌘D on macOS (⌥⌘D toggles the Dock). Plain Ctrl+D is end-of-input in
+		// a terminal, so other platforms add Alt.
 		case "dictate":
-			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true })];
+			return [isMac ? binding("d", { ctrl: true, meta: true }) : binding("d", { ctrl: true, alt: true })];
 		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
 		// readline), so that platform takes G for "go to orchestrator".
 		case "open-orchestrator":

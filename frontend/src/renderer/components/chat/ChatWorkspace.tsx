@@ -111,7 +111,7 @@ import {
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
-import { useSplitHiddenTabKeys } from "../split-pane-context";
+import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -984,6 +984,7 @@ function ChatWorkspaceContent({
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
 	const splitHiddenTabKeys = useSplitHiddenTabKeys();
+	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -1448,10 +1449,11 @@ function ChatWorkspaceContent({
 	useEffect(
 		() =>
 			aoBridge.app.onCloseShellTerminalShortcut(() => {
-				if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
+				if (closeFocusedSplitPane) closeFocusedSplitPane();
+				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
 			}),
-		[activeWorkspaceTab, onCloseShellTerminal, shellTarget],
+		[activeWorkspaceTab, closeFocusedSplitPane, onCloseShellTerminal, shellTarget],
 	);
 
 	useEffect(() => {
@@ -1465,10 +1467,10 @@ function ChatWorkspaceContent({
 
 	useEffect(() => {
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
-			Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
+			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, onCloseShellTerminal, shellTarget]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, onCloseShellTerminal, shellTarget]);
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.

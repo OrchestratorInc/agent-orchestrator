@@ -2020,6 +2020,7 @@
 	"shortcut.movedBody": "{{binding}} von {{from}} nach {{to}} verschoben",
 	"shortcut.new-session": "Neue Sitzung",
 	"shortcut.new-shell-terminal": "Neues Terminal",
+	"shortcut.split-shell-terminal": "Neues Terminal rechts",
 	"shortcut.next-attention-session": "Nächste Sitzung mit Handlungsbedarf",
 	"shortcut.next-session": "Nächste Sitzung",
 	"shortcut.next-tab": "Nächster Tab",

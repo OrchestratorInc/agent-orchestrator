@@ -2020,6 +2020,7 @@
 	"shortcut.movedBody": "{{binding}} を {{from}} から {{to}} に移動しました",
 	"shortcut.new-session": "新しいセッション",
 	"shortcut.new-shell-terminal": "新しいターミナル",
+	"shortcut.split-shell-terminal": "右に新しいターミナル",
 	"shortcut.next-attention-session": "対応が必要な次のセッション",
 	"shortcut.next-session": "次のセッション",
 	"shortcut.next-tab": "次のタブ",

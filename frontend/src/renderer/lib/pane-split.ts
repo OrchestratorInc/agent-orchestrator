@@ -11,7 +11,8 @@ export type SplitNode =
 	/** `row` puts `a` left of `b`; `column` puts `a` above `b`. */
 	| { type: "split"; dir: "row" | "column"; ratio: number; a: SplitNode; b: SplitNode };
 
-export type TabGroup = { id: string; root: SplitNode };
+/** `focus` is the member last focused, named in the group's tab. */
+export type TabGroup = { id: string; root: SplitNode; focus?: string };
 
 /** Drag key for the session's own tab (chat or agent terminal). */
 export const SESSION_TAB_KEY = "session";
@@ -69,14 +70,33 @@ export function setRatioAt(node: SplitNode, path: string, ratio: number, at = "r
 	return a === node.a && b === node.b ? node : { ...node, a, b };
 }
 
+function renameLeaf(node: SplitNode, rename: (key: string) => string | undefined): SplitNode {
+	if (node.type === "leaf") {
+		const next = rename(node.key);
+		return next && next !== node.key ? { type: "leaf", key: next } : node;
+	}
+	const a = renameLeaf(node.a, rename);
+	const b = renameLeaf(node.b, rename);
+	return a === node.a && b === node.b ? node : { ...node, a, b };
+}
+
 /**
  * Drops members that no longer exist (a closed shell or file). A group left
- * with one tab dissolves back into a plain tab.
+ * with one tab dissolves back into a plain tab. `rename` follows a tab whose
+ * key changed (a new shell's placeholder becoming the real shell).
  */
-export function reconcileGroups(groups: TabGroup[], available: ReadonlySet<string>): TabGroup[] {
+export function reconcileGroups(
+	groups: TabGroup[],
+	available: ReadonlySet<string>,
+	rename: (key: string) => string | undefined = () => undefined,
+): TabGroup[] {
 	let changed = false;
 	const next: TabGroup[] = [];
-	for (const group of groups) {
+	for (const original of groups) {
+		const renamed = renameLeaf(original.root, rename);
+		const focus = original.focus ? (rename(original.focus) ?? original.focus) : undefined;
+		const group = renamed === original.root && focus === original.focus ? original : { ...original, root: renamed, focus };
+		if (group !== original) changed = true;
 		let root: SplitNode | null = group.root;
 		for (const key of leafKeys(group.root)) {
 			if (!available.has(key) && root) root = removeLeaf(root, key);
