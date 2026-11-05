@@ -1686,11 +1686,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, []);
 	const centerColumnRef = useRef<HTMLDivElement | null>(null);
 	const splitDropStateRef = useRef<SplitDropState | null>(null);
-	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups, splitPartner: undefined };
+	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups };
 	useEffect(
 		() =>
 			registerPaneDropTarget({
-				canDrag: (key) => Boolean(splitScreenRef.current && splitDropStateRef.current?.splittableKeys.has(key)),
+				// Other tabs come to the tab on screen; it never leaves itself. A
+				// member of the group on screen can still move within or out of it.
+				canDrag: (key) => {
+					const state = splitDropStateRef.current;
+					if (!splitScreenRef.current || !state?.splittableKeys.has(key)) return false;
+					return key !== state.selectedTabKey || Boolean(state.shownGroup);
+				},
 				resolve: (key, x, y) => {
 					const state = splitDropStateRef.current;
 					return state ? resolveSplitDrop(state, splitScreenRef.current, centerColumnRef.current, key, x, y) : null;
@@ -1859,18 +1865,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), Boolean(session) && !isOrchestrator);
 	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), Boolean(session) && !isOrchestrator);
 
-	// Dragging the tab that is on screen splits it with the tab seen before it
-	// (else the session's own tab), so there is always something to drop beside.
-	const tabHistoryRef = useRef({ sessionKey: uiSessionId, current: selectedTabKey, previous: undefined as string | undefined });
-	if (tabHistoryRef.current.sessionKey !== uiSessionId) {
-		tabHistoryRef.current = { sessionKey: uiSessionId, current: selectedTabKey, previous: undefined };
-	} else if (tabHistoryRef.current.current !== selectedTabKey) {
-		tabHistoryRef.current = { sessionKey: uiSessionId, current: selectedTabKey, previous: tabHistoryRef.current.current };
-	}
-	const splitPartner = [tabHistoryRef.current.previous, SESSION_TAB_KEY, ...singleAuxiliaryTabOrder].find(
-		(key): key is string => Boolean(key) && key !== selectedTabKey && splittableKeys.has(key!) && !groupedKeySet.has(key!),
-	);
-	splitDropStateRef.current = { ...splitDropStateRef.current!, splitPartner };
 	const mainWorkspaceTabs = groups.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs;
 	useEffect(() => {
 		if (!chatViewActive) return;
@@ -2875,8 +2869,6 @@ type SplitDropState = {
 	splittableKeys: ReadonlySet<string>;
 	selectTab: (key: string) => void;
 	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
-	/** What a drag of the tab on screen splits with. */
-	splitPartner: string | undefined;
 };
 
 let groupSequence = 0;
@@ -2933,8 +2925,8 @@ function resolveSplitDrop(
 	if (!containsPoint(rect, x, y)) return null;
 	const shown = state.shownGroup;
 	if (!shown) {
-		const target = state.selectedTabKey === key ? state.splitPartner : state.selectedTabKey;
-		if (!target || target === key || !state.splittableKeys.has(target)) return null;
+		const target = state.selectedTabKey;
+		if (target === key || !state.splittableKeys.has(target)) return null;
 		const edge = edgeAt(rect, x, y);
 		if (!edge) return null;
 		return {
