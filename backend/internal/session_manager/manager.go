@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -4696,11 +4697,16 @@ func (m *Manager) workspaceSetupPending(id domain.SessionID) (bool, error) {
 	if marker == "" {
 		return false, nil
 	}
-	missing, err := workspacePathMissing(marker)
-	if err != nil {
+	_, err := os.Stat(marker)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		// A missing or non-directory path component cannot contain a marker.
+		return false, nil
+	default:
 		return false, fmt.Errorf("read workspace Setup state: %w", err)
 	}
-	return !missing, nil
 }
 
 // Record the obligation before the adapter can put a checkout on disk. Keep
