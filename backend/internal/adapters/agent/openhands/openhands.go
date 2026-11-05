@@ -227,3 +227,11 @@ func (p *Plugin) verifyVersion(ctx context.Context, bin string) error {
 	p.verifiedBinary = bin
 	return nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}

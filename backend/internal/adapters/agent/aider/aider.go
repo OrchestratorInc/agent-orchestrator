@@ -148,6 +148,9 @@ func ResolveAiderBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if managed, ok := binaryutil.ManagedBinary("aider"); ok {
+		return managed, nil
+	}
 
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"aider.exe", "aider.cmd", "aider"} {
@@ -208,4 +211,12 @@ func (p *Plugin) aiderBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

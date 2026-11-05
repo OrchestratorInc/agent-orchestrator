@@ -9,10 +9,12 @@ import { haptics } from "./haptics";
 import type { Host } from "./hosts";
 import { Feather } from "./icons";
 import { MachineAvatar, MachineIdentity } from "./MachineIdentity";
-import { machineAppearance, machineAppearancePalette, machineSymbolLabels, type MachineAppearance, type MachineSymbol } from "./machineAppearance";
+import { machineAppearance, type MachineAppearance } from "./machineAppearance";
+import { MachineSymbolPicker } from "./MachineSymbolPicker";
 import { LAYOUT_MS, ROW_ENTER_MS } from "./motion";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { easingCurve, iconSize, radius, space, touchTarget, type } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 
@@ -378,18 +380,11 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 						{appearanceOpen ? (
 							<View style={styles.appearancePicker}>
 								<Text style={styles.appearancePickerLabel}>Symbol</Text>
-								<View style={styles.appearanceChoices}>
-									{machineAppearancePalette.symbols.map((symbol) => (
-										<AppearanceChoice
-											key={symbol}
-											testID={`environment-symbol-${host.id}-${symbol}`}
-											label={machineSymbolLabels[symbol]}
-											appearance={{ ...appearance, symbol }}
-											selected={appearance.symbol === symbol}
-											onPress={() => setAppearance((current) => ({ ...current, symbol: symbol as MachineSymbol }))}
-										/>
-									))}
-								</View>
+								<MachineSymbolPicker
+									testIDPrefix={`environment-symbol-${host.id}`}
+									selected={appearance.symbol}
+									onSelect={(symbol) => setAppearance((current) => ({ ...current, symbol }))}
+								/>
 							</View>
 						) : null}
 					</View>
@@ -413,7 +408,7 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 						<View>
 							<Text style={styles.fieldLabel}>Password</Text>
 							<View style={styles.passwordRow}>
-								<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} selectionColor={t.accent} style={[styles.input, styles.passwordInput]} />
+								<TextInput accessibilityLabel="Password" value={config.password} onChangeText={set("password")} autoCapitalize="none" autoCorrect={false} secureTextEntry={!showPassword} textContentType="password" editable={!saving} placeholder="Connection password" placeholderTextColor={t.textFaint} {...textSelectionColors(t)} style={[styles.input, styles.passwordInput]} />
 								<Pressable accessibilityRole="button" accessibilityLabel={showPassword ? "Hide password" : "Show password"} disabled={saving} onPress={() => { haptics.tap(); setShowPassword((visible) => !visible); }} style={({ pressed }) => [styles.passwordToggle, pressed && styles.pressed]}>
 									<Feather name={showPassword ? "eye-off" : "eye"} size={iconSize.lg} color={t.textSecondary} />
 								</Pressable>
@@ -445,29 +440,13 @@ export function EnvironmentEditorActions({ editor }: { editor: EnvironmentEditor
 	</View>;
 }
 
-function AppearanceChoice({ testID, label, appearance, selected, onPress }: { testID: string; label: string; appearance: MachineAppearance; selected: boolean; onPress(): void }) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<Pressable
-			testID={testID}
-			accessibilityRole="radio"
-			accessibilityLabel={label}
-			accessibilityState={{ selected }}
-			onPress={() => { haptics.select(); onPress(); }}
-			style={({ pressed }) => [styles.appearanceChoice, selected && styles.appearanceChoiceSelected, pressed && styles.pressed]}
-		>
-			<MachineAvatar appearance={appearance} size={32} />
-		</Pressable>
-	);
-}
-
 function EditField({ label, ...input }: { label: string } & React.ComponentProps<typeof TextInput>) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} accessibilityLabel={input.accessibilityLabel ?? label} placeholderTextColor={t.textFaint} selectionColor={t.accent} style={styles.input} />
+			<TextInput {...input} accessibilityLabel={input.accessibilityLabel ?? label} placeholderTextColor={t.textFaint} {...textSelectionColors(t)} style={styles.input} />
 		</View>
 	);
 }
@@ -520,9 +499,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	appearancePreview: { maxWidth: "52%" },
 	appearancePicker: { gap: space.sm, padding: space.md, backgroundColor: t.bgSubtle, borderRadius: radius.md, borderCurve: "continuous" },
 	appearancePickerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
-	appearanceChoices: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-	appearanceChoice: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: rowDividerWidth, borderColor: "transparent", borderRadius: radius.md, borderCurve: "continuous" },
-	appearanceChoiceSelected: { borderColor: t.accentBorder, backgroundColor: t.accentTint },
 	field: { flex: 1, gap: space.xxs },
 	fieldLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
 	input: { minHeight: touchTarget, fontFamily: "Geist_400Regular", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault, borderRadius: radius.sm, borderCurve: "continuous", paddingHorizontal: space.md, paddingVertical: space.sm, color: t.textPrimary, fontSize: type.subheadline.fontSize },

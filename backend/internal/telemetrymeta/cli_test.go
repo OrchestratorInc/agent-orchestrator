@@ -15,8 +15,6 @@ func TestIsRoutineInternalCLICommandNormalizesLegacyShapes(t *testing.T) {
 		"AO HOOKS",
 		"ao hooks claude-code post-tool-use",
 		"ao session get sess-123",
-		"ao session agent-switch ls sess-123",
-		"ao session handoff submit --switch switch-1",
 		"ao project ls",
 		"ao pty-host session-1",
 		"ao unreal-provider /tmp/config.json",
@@ -31,9 +29,6 @@ func TestCLIActorTypeKeepsKnownLegacyUserCommands(t *testing.T) {
 	for _, commandPath := range []string{
 		"ao agent ls",
 		"ao session claim-pr",
-		"ao session switch-agent",
-		"ao session agent-switch",
-		"ao session agent-switch ls",
 		"ao dev import-projects",
 		"ao project orchestration get",
 		"ao project orchestration set",

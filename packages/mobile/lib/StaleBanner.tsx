@@ -2,6 +2,7 @@ import { Feather } from "./icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { haptics } from "./haptics";
+import { describeLinkHealth } from "./linkHealth";
 import { staleAgeLabel } from "./screenState";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
@@ -22,28 +23,47 @@ import { useStaleness } from "./useStaleness";
  * that called it would re-render its whole list on a timer. Here the cost is one
  * small component. It also self-gates to null when the data is current, so
  * screens can render it unconditionally.
+ *
+ * It also says when the phone's own connection is the problem: no network, a
+ * link still recovering from a blip, or one that answers slowly. Those are
+ * amber and never name the machine as down. `networkOnly` limits it to the
+ * phone being offline, for screens that show several machines at once, where
+ * one machine's poll is not the whole story.
  */
-export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRetry?: () => void }) {
+export function StaleBanner({ error = false, onRetry, networkOnly = false }: { error?: boolean; onRetry?: () => void; networkOnly?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { getLastSyncAt, config } = useApp();
+	const { getLastSyncAt, config, linkHealth, selectedHostName } = useApp();
 	const { stale, ageMs } = useStaleness(getLastSyncAt);
+
+	const host = config?.host?.trim();
+	const link = describeLinkHealth(linkHealth, selectedHostName ?? host);
+	if (networkOnly && linkHealth !== "phone-offline") return null;
+	// A machine that answered with an error (a rejected password, a 5xx) keeps
+	// its own red copy; "slow" is no explanation for that.
+	const showLink = link !== null && !(error && linkHealth === "slow");
 
 	// Fresh and healthy: say nothing. Silence is the correct state here, and it
 	// keeps the caller free of a conditional.
-	if (!stale && !error) return null;
+	if (!stale && !error && !showLink) return null;
 
 	// A reachability failure is worth more alarm than mere age: one means the
-	// desktop is gone, the other can just be a laptop that slept.
-	const tone = error ? t.red : t.amber;
-	const fill = error ? t.tintRed : t.tintAmber;
-	const host = config?.host?.trim();
+	// desktop is gone, the other can just be a laptop that slept. The phone's own
+	// connection is amber: nothing is wrong with the machine.
+	const red = error && !showLink;
+	const tone = red ? t.red : t.amber;
+	const fill = red ? t.tintRed : t.tintAmber;
 	const age = staleAgeLabel(ageMs);
-	const text = error
-		? host
-			? `Can't reach ${host} — showing data from ${age}`
-			: `Can't reach your machine — showing data from ${age}`
-		: `Showing data from ${age}`;
+	const text = showLink
+		? link.text
+		: error
+			? host
+				? `Can't reach ${host} — showing data from ${age}`
+				: `Can't reach your machine — showing data from ${age}`
+			: `Showing data from ${age}`;
+	const icon = showLink ? link.icon : error ? "wifi-off" : "clock";
+	// Retrying can't help while the phone itself has no network.
+	const retry = linkHealth === "phone-offline" ? undefined : onRetry;
 
 	return (
 		<View
@@ -51,7 +71,7 @@ export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRet
 			accessibilityLabel={text}
 			style={[styles.banner, { backgroundColor: fill }]}
 		>
-			<Feather name={error ? "wifi-off" : "clock"} size={12} color={tone} />
+			<Feather name={icon} size={12} color={tone} />
 			<Text
 				numberOfLines={1}
 				maxFontSizeMultiplier={fontScaleCap.chrome}
@@ -59,14 +79,14 @@ export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRet
 			>
 				{text}
 			</Text>
-			{onRetry ? (
+			{retry ? (
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel="Retry now"
 					hitSlop={7}
 					onPress={() => {
 						haptics.tap();
-						onRetry();
+						retry();
 					}}
 				>
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.bannerAction, { color: tone }]}>

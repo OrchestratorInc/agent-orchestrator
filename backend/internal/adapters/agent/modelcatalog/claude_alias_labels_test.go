@@ -7,7 +7,11 @@ import (
 )
 
 func TestLabelClaudeAliasVersionsUsesNewestProviderModelPerFamily(t *testing.T) {
-	aliases := normalize(claudeCodeModels())
+	aliases := []ports.AgentModelInfo{
+		{ID: "sonnet", Label: "Sonnet"}, {ID: "opus", Label: "Opus"},
+		{ID: "haiku", Label: "Haiku"}, {ID: "fable", Label: "Fable 5.1"},
+		{ID: "opus[1m]", Label: "Opus (1M context)"},
+	}
 	reference := []ports.AgentModelInfo{
 		{ID: "claude-opus-5-1-20260301", Label: "Claude Opus 5.1"},
 		{ID: "claude-opus-5-5-20260901", Label: "Claude Opus 5.5"},
@@ -30,8 +34,24 @@ func TestLabelClaudeAliasVersionsUsesNewestProviderModelPerFamily(t *testing.T) 
 	}
 }
 
+func TestLabelClaudeAliasVersionsKeepsConfiguredContextVariant(t *testing.T) {
+	reference := []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}
+	// A configured default the catalog lacks is appended labeled with its ID.
+	models := applyClaudeConfiguredDefault(append([]ports.AgentModelInfo(nil), reference...), "opus[1m]")
+	got := map[string]string{}
+	for _, item := range LabelClaudeAliasVersions(models, reference) {
+		got[item.ID] = item.Label
+	}
+	if got["opus[1m]"] != "Opus 5.5 (1M context)" {
+		t.Fatalf("opus[1m] label = %q, want Opus 5.5 (1M context) (all: %v)", got["opus[1m]"], got)
+	}
+	if got["claude-opus-5-5"] != "Claude Opus 5.5" {
+		t.Fatalf("concrete label = %q, want it unchanged", got["claude-opus-5-5"])
+	}
+}
+
 func TestLabelClaudeAliasVersionsKeepsAliasWithoutEvidence(t *testing.T) {
-	aliases := normalize(claudeCodeModels())
+	aliases := []ports.AgentModelInfo{{ID: "opus", Label: "Opus"}}
 	for _, reference := range [][]ports.AgentModelInfo{
 		nil,
 		{{ID: "glm-5", Label: "GLM 5"}},
@@ -45,14 +65,11 @@ func TestLabelClaudeAliasVersionsKeepsAliasWithoutEvidence(t *testing.T) {
 	}
 }
 
-func TestDiscovererLabelsAliasesOnlyForClaudeCode(t *testing.T) {
+func TestLabelClaudeAliasVersionsDoesNotMutateInput(t *testing.T) {
 	models := []ports.AgentModelInfo{{ID: "opus", Label: "Opus"}}
 	reference := []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}
-	if got := (Discoverer{}).LabelAliases("opencode", models, reference); got[0].Label != "Opus" {
-		t.Fatalf("opencode label = %q, want it untouched", got[0].Label)
-	}
-	if got := (Discoverer{}).LabelAliases("claude-code", models, reference); got[0].Label != "Opus 5.5" {
-		t.Fatalf("claude-code label = %q, want Opus 5.5", got[0].Label)
+	if got := LabelClaudeAliasVersions(models, reference); got[0].Label != "Opus 5.5" {
+		t.Fatalf("label = %q, want Opus 5.5", got[0].Label)
 	}
 	if models[0].Label != "Opus" {
 		t.Fatal("labeling must not mutate the caller's slice")

@@ -88,6 +88,19 @@ describe("useSessionLinkNavigation", () => {
 		]);
 	});
 
+	it("navigates to the session and requests the artifact open, even after termination", () => {
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => expect(result.current("ao://sessions/project/terminated/artifacts/plans/my%20plan.md")).toBe(true));
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toEqual(expect.objectContaining({
+			sessionId: "terminated",
+			path: "plans/my plan.md",
+			source: "artifact",
+		}));
+		expect(useUiStore.getState().globalToasts).toEqual([]);
+	});
+
 	it.each([
 		["ao://sessions/project/missing", "missing or is not accessible"],
 		["ao://sessions/project/session/kill", "malformed or unsupported"],

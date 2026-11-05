@@ -88,7 +88,7 @@ type SessionEventKind = "ancillary" | "provisioned";
 
 async function publishReadySession(kind: SessionEventKind = "ancillary", conversationChanged = false) {
 	serverController = "ready";
-	const source = EventSourceStub.instances.find((entry) => entry.url.endsWith("/api/v1/events"));
+	const source = EventSourceStub.instances.find((entry) => entry.url.endsWith("/api/v1/events?after=latest"));
 	if (!source) throw new Error("Missing CDC event source");
 	await act(async () => {
 		source.dispatchEvent(new MessageEvent("session_updated", { data: JSON.stringify({

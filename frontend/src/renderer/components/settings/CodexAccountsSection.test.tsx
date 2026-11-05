@@ -21,6 +21,9 @@ const { deleteMock, getMock, postMock, scrollIntoViewMock, terminalFocusRequeste
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { DELETE: deleteMock, GET: getMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+	getApiBaseUrl: () => "http://127.0.0.1:1",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../TerminalPane", () => ({
@@ -148,8 +151,9 @@ it("shows a simple empty state when Codex is signed out on the device", async ()
 	expect(useButton).toBeEnabled();
 	expect(useButton).toHaveTextContent(/^Use$/);
 	expect(firstRow.querySelector('button[aria-expanded="false"]')).toBeInTheDocument();
-	expect(firstRow.firstElementChild).toHaveClass("items-start");
-	expect(firstRow.querySelector(".lucide-chevron-down")).toHaveClass("mt-1.5");
+	// The header is the shared settings row: identity, chevron and Use all sit on its centre line.
+	expect(firstRow.firstElementChild).toHaveClass("settings-row-bar");
+	expect(firstRow.querySelector(".lucide-chevron-down")).not.toHaveClass("mt-1.5");
 });
 
 it("does not offer an empty provider expand interaction when no accounts exist", async () => {

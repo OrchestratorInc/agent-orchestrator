@@ -66,6 +66,28 @@ export function splitInlineImagePaths(text: string, keep: (path: string) => bool
 }
 
 /**
+ * Text with one inline image taken out, as removing its chip would: the path goes
+ * with one following space, so the words around it don't double-space.
+ */
+export function removeInlineImagePath(text: string, path: string): string {
+	return text
+		.split("\n")
+		.map((line) => {
+			let kept = "";
+			let afterImage = false;
+			for (const segment of splitInlineImagePaths(line, (candidate) => candidate === path)) {
+				if (segment.path !== undefined) afterImage = true;
+				else {
+					kept += afterImage && segment.text.startsWith(" ") ? segment.text.slice(1) : segment.text;
+					afterImage = false;
+				}
+			}
+			return kept;
+		})
+		.join("\n");
+}
+
+/**
  * A message that is nothing but its attached images keeps no prose, since the
  * reference block already names them. Anything else is sent exactly as written:
  * a path the user typed is their text, and only the composer can tell a stale

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
@@ -43,7 +44,16 @@ func EnsureWorkspaceTrusted(ctx context.Context, workspacePath string) error {
 	return ensureCopilotFolderTrusted(filepath.Join(copilotHomeDir(home), "config.json"), workspacePath)
 }
 
+// copilotTrustMu keeps concurrent spawns from each dropping the others' entry.
+var copilotTrustMu sync.Mutex
+
 func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
+	copilotTrustMu.Lock()
+	defer copilotTrustMu.Unlock()
+	// A config linked from a dotfiles repo is updated there, not replaced.
+	if target, err := filepath.EvalSymlinks(configPath); err == nil {
+		configPath = target
+	}
 	folder, err := filepath.Abs(workspacePath)
 	if err != nil {
 		return fmt.Errorf("copilot: resolve workspace: %w", err)

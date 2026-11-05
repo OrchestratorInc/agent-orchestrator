@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 )
@@ -59,7 +61,11 @@ func TestPRsRoutes_NilService_ResolveCommentsReturns501(t *testing.T) {
 // ---- Merge: 200 ----
 
 func TestPRsRoutes_Merge_200(t *testing.T) {
-	svc := &fakePRService{mergeResult: prsvc.MergeResult{PRNumber: 42, Method: "squash"}}
+	stateChangedAt := time.Date(2026, 10, 19, 11, 6, 22, 0, time.UTC)
+	svc := &fakePRService{mergeResult: prsvc.MergeResult{
+		PRNumber: 42, Method: "squash", State: domain.PRStateMerged,
+		MergeCommitSHA: "merge-sha", StateChangedAt: stateChangedAt,
+	}}
 	srv := newPRTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/prs/42/merge", validMergeBody)
@@ -67,13 +73,15 @@ func TestPRsRoutes_Merge_200(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", status, body)
 	}
 	var resp struct {
-		OK       bool   `json:"ok"`
-		PRNumber int    `json:"prNumber"`
-		Method   string `json:"method"`
+		OK             bool           `json:"ok"`
+		PRNumber       int            `json:"prNumber"`
+		Method         string         `json:"method"`
+		State          domain.PRState `json:"state"`
+		StateChangedAt time.Time      `json:"stateChangedAt"`
 	}
 	mustJSON(t, body, &resp)
-	if !resp.OK || resp.PRNumber != 42 || resp.Method != "squash" {
-		t.Errorf("resp = %+v, want {ok:true prNumber:42 method:squash}", resp)
+	if !resp.OK || resp.PRNumber != 42 || resp.Method != "squash" || resp.State != domain.PRStateMerged || !resp.StateChangedAt.Equal(stateChangedAt) {
+		t.Errorf("unexpected merge response: %+v", resp)
 	}
 	if svc.mergeRequest.PRID != "42" || svc.mergeRequest.PRURL != "https://github.com/acme/widgets/pull/42" || svc.mergeRequest.ExpectedHeadSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("merge request = %#v", svc.mergeRequest)

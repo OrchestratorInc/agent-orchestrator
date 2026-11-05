@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -163,5 +166,36 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 				t.Fatalf("Execute error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\nscript=$1\nshift\nexec /bin/sh \"$script\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\necho \"login $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	var out bytes.Buffer
+	if err := runInteractiveCommand(context.Background(), launcher, []string{"--device-auth"}, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatalf("runInteractiveCommand: %v\n%s", err, out.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "login --device-auth" {
+		t.Fatalf("output = %q, want npm launcher to run under node", got)
 	}
 }

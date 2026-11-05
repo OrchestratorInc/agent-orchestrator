@@ -1,10 +1,10 @@
 import { QrCode } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { QrCanvas } from "./QrCanvas";
 
 // Public App Store listing for the Agent Orchestrator iOS app. No storefront
 // segment ("/us/") on purpose: Apple redirects a bare /app/ link to the
@@ -49,18 +49,18 @@ export function ConnectMobileGetApp() {
 					>
 						{t("mobile.getApp")}
 					</Button>
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="none"
 						aria-label={showQR ? t("mobile.hideQR") : t("mobile.showQR")}
 						aria-expanded={showQR}
+						data-active={showQR}
 						onClick={() => setShowQR((v) => !v)}
-						className={cn(
-							"inline-flex size-(--size-settings-action-height) items-center justify-center rounded-md border border-transparent transition-colors hover:border-(--color-border-settings-input) hover:bg-[var(--color-bg-settings-input)]",
-							showQR ? "bg-[var(--color-bg-settings-input)] text-settings-title" : "text-settings-muted",
-						)}
+						className="size-(--size-settings-action-height)"
 					>
 						<QrCode className="size-4" aria-hidden="true" />
-					</button>
+					</Button>
 				</div>
 			</div>
 
@@ -80,7 +80,7 @@ export function ConnectMobileGetApp() {
 						)}
 					>
 						<div className="rounded-md border border-(--color-border-settings-input) bg-white p-2">
-							<QRCodeSVG value={IOS_APP_STORE_URL} size={STORE_QR_SIZE} className="block" />
+							<QrCanvas value={IOS_APP_STORE_URL} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
 						</div>
 						<p className="mt-2 text-caption text-settings-muted">{t("mobile.qrHint")}</p>
 					</div>

@@ -78,6 +78,10 @@ func TestProviderHelper(t *testing.T) {
 	if os.Getenv("AO_CHAT_HOST_DELAY_EXIT") == "1" {
 		time.Sleep(300 * time.Millisecond)
 	}
+	if os.Getenv("AO_CHAT_HOST_IGNORE_STDIN") == "1" {
+		// Like Cursor and Grok: only a signal ends it.
+		time.Sleep(10 * time.Second)
+	}
 	os.Exit(0)
 }
 

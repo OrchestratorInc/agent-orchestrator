@@ -46,6 +46,40 @@ describe("rehypeStreamFade", () => {
 		expect(spans(html("x".repeat(4001)))).toBe(0);
 	});
 
+	it("leaves source text before the settled offset plain", () => {
+		const settled = (text: string, settledOffset: number) =>
+			renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
+		expect(spans(settled("hello world", 5))).toBe(" world".length);
+		expect(settled("hello world", 5)).toContain("<p>hello<span");
+		expect(spans(settled("hello", 5))).toBe(0);
+		expect(spans(settled("first\n\nsecond", 10))).toBe(3);
+	});
+
+	it("never splits a grapheme at the settled offset", () => {
+		const settled = (text: string, settledOffset: number) =>
+			renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
+		// The offset lands inside "é" (e + combining accent): the whole cluster fades.
+		const out = settled("caf\u0065\u0301 ok", 4);
+		expect(out).toContain("<p>caf<span");
+		expect(out).not.toMatch(/<p>cafe<span/);
+	});
+
+	it("keeps positionless text plain inside an element that was already settled", () => {
+		const plugin = rehypeStreamFade({ settledOffset: 20 });
+		const tree = {
+			type: "root",
+			children: [{
+				type: "element",
+				tagName: "p",
+				properties: {},
+				position: { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 11, offset: 10 } },
+				children: [{ type: "text", value: "split text" }],
+			}],
+		};
+		plugin(tree as never);
+		expect(JSON.stringify(tree)).not.toContain("stream-char");
+	});
+
 	it("never throws on a tree it does not expect", () => {
 		const transform = rehypeStreamFade();
 		expect(() => transform({ type: "root", children: [] })).not.toThrow();

@@ -41,7 +41,7 @@ it("rejects repeated quoted image submissions to an older host before staging du
  await act(async () => { renderer = create(<Harness />); });
  request.mockClear();
  for (let attempt = 0; attempt < 2; attempt++) {
-  await act(async () => { await expect(conversation.send("Explain this", images, undefined, excerpts)).rejects.toThrow("Update AO on this machine"); });
+  await act(async () => { await expect(conversation.send("Explain this", images, undefined, excerpts)).rejects.toThrow("Update Orchestrator on this machine"); });
  }
  expect(request.mock.calls.filter(call => call[2]?.method === "POST")).toEqual([]);
  expect(storage.setItem).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ it("probes a downgraded host before staging even when the loaded conversation ad
  await act(async () => { renderer = create(<Harness />); });
  expect(conversation.snapshot?.supportsExcerpts).toBe(true);
  supportsExcerpts = undefined; request.mockClear();
- await act(async () => { await expect(conversation.send("Explain this", images, undefined, excerpts)).rejects.toThrow("Update AO on this machine"); });
+ await act(async () => { await expect(conversation.send("Explain this", images, undefined, excerpts)).rejects.toThrow("Update Orchestrator on this machine"); });
  expect(request.mock.calls.filter(call => call[2]?.method === "POST")).toEqual([]);
 });
 

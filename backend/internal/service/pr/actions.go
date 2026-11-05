@@ -1,6 +1,11 @@
 package pr
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
 
 // ActionManager is the controller-facing contract for guarded PR mutations.
 type ActionManager interface {
@@ -20,7 +25,9 @@ type MergeRequest struct {
 type MergeResult struct {
 	PRNumber       int
 	Method         string
+	State          domain.PRState
 	MergeCommitSHA string
+	StateChangedAt time.Time
 }
 
 // ResolveResult is the successful outcome of a resolve-comments operation.

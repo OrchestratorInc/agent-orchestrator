@@ -7,13 +7,20 @@
 // and delivers prompted worker tasks after startup so dashboard terminal
 // attachments stay readable and Cline's startup command parser is bypassed.
 //
-// AO-managed sessions derive native session identity from Cline hooks
-// (the workspace-local `.clinerules/hooks/` executable scripts AO installs)
-// rather than transcript/cache scans.
+// AO-managed sessions prefer native session identity from Cline hooks (the
+// workspace-local `.clinerules/hooks/` executable scripts AO installs). Interactive
+// hooks carry root session IDs, but shared hubs can reuse the starting session's
+// AO environment for other sessions, misattributing identity and activity (#7478).
+// Restore therefore retains history recovery scoped to the session's unique
+// worktree; hooks alone do not reliably bind interactive TUI sessions.
 package cline
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Plugin is the Cline agent adapter. It is safe for concurrent use; the binary
@@ -39,6 +47,7 @@ func New() *Plugin {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentNativeRestoreCommand = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
@@ -120,21 +129,48 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 
 // GetRestoreCommand rebuilds the argv that continues an existing Cline session:
 // `cline [approval flags] --id <agentSessionId>`. Resumes are interactive
-// because no prompt is supplied here. ok is false when the hook-derived native
-// session id has not landed yet, so callers can fall back to fresh launch
-// behavior.
+// because no prompt is supplied here. History validates the stored native id
+// and recovers missing or stale ids by this session's unique worktree.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if agentSessionID == "" {
-		return nil, false, nil
-	}
+	cmd, _, ok, err = p.GetRestoreCommandWithSessionID(ctx, cfg)
+	return cmd, ok, err
+}
 
+// GetRestoreCommandWithSessionID returns the native identity selected by the
+// command so the manager validates recovered history rather than stale metadata.
+func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, agentSessionID string, ok bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", false, err
+	}
 	binary, err := p.clineBinary(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
+	}
+
+	agentSessionID = strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
+	if strings.TrimSpace(cfg.Session.WorkspacePath) != "" {
+		var savedHistory bool
+		if agentSessionID != "" {
+			// Valid stored conversations need no global scan and may be older
+			// than the bounded recovery window.
+			savedHistory, _ = p.NativeConversationExists(ctx, cfg.Session, agentSessionID, nil)
+		}
+		if !savedHistory {
+			recoveredID, historyErr := clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath, agentSessionID)
+			if historyErr == nil {
+				agentSessionID = recoveredID
+			} else if ctx.Err() != nil {
+				return nil, "", false, ctx.Err()
+			} else {
+				// Recovery is best effort: retain a stored ID when available,
+				// otherwise let the manager choose its normal fresh-launch fallback.
+				slog.Default().WarnContext(ctx, "cline: history lookup failed; skipping recovery",
+					"sessionID", cfg.Session.ID, "error", historyErr)
+			}
+		}
+	}
+	if agentSessionID == "" {
+		return nil, "", false, nil
 	}
 
 	cmd = make([]string, 0, 8)
@@ -145,7 +181,45 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "-s", cfg.SystemPrompt)
 	}
 	cmd = append(cmd, "--id", agentSessionID)
-	return cmd, true, nil
+	return cmd, agentSessionID, true, nil
+}
+
+// clineHistorySessionID prefers a stored native id present in the workspace's
+// recent history, falling back to its newest entry when the id is missing or
+// stale. Cline history is global; the bounded recovery window avoids scanning
+// every project. AO gives each session its own worktree, so history from another
+// cwd must never be used to recover its conversation.
+func clineHistorySessionID(ctx context.Context, binary, workspacePath, storedID string) (string, error) {
+	// Stored native history is checked directly before this recovery lookup.
+	// Missing hook IDs can only be recovered from the 100 most recent entries.
+	cmd := aoprocess.CommandContext(ctx, binary, "history", "--json", "--limit", "100") //nolint:gosec // binary is adapter-resolved; args are static
+	cmd.Dir = workspacePath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("cline: read session history: %w", err)
+	}
+
+	var history []struct {
+		SessionID string `json:"sessionId"`
+		CWD       string `json:"cwd"`
+	}
+	if err := json.Unmarshal(out, &history); err != nil {
+		return "", fmt.Errorf("cline: parse session history: %w", err)
+	}
+	want := filepath.Clean(workspacePath)
+	var newestID string
+	for _, entry := range history {
+		id := strings.TrimSpace(entry.SessionID)
+		if filepath.Clean(strings.TrimSpace(entry.CWD)) == want && id != "" && len(id) <= maxHookSessionIDLen {
+			if id == storedID {
+				return id, nil
+			}
+			if newestID == "" {
+				newestID = id
+			}
+		}
+	}
+	return newestID, nil
 }
 
 // SessionInfo surfaces Cline hook-derived metadata. Metadata is intentionally
@@ -216,4 +290,12 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 		// yolo mode: auto-approve tools with the restricted (safer) toolset.
 		*cmd = append(*cmd, "--yolo")
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

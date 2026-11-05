@@ -1,21 +1,128 @@
 package controllers_test
 
 import (
+	"compress/gzip"
+	"compress/zlib"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
+
+func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T) {
+	body := `{"values":[` + strings.Repeat(`"scratch",`, 100) + `"last"]}`
+	local, _ := artifactFileServer(t, map[string]string{"data.json": body})
+	remote := httpd.NewMobileLAN(local.Config.Handler, "h_scratch", 0, nil, nil)
+	remote.SetPasswordHash(mobilebridge.HashPassword("test-password"))
+	port, err := remote.StartLoopback(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Stop(context.Background()) })
+	transport := &http.Transport{DisableCompression: true}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions/ao-1/artifact-files/data.json", port)
+	identity, _ := getArtifactFile(t, local, "data.json", "")
+	strongETag := identity.Header.Get("ETag")
+	if !strings.HasPrefix(strongETag, `"`) {
+		t.Fatalf("fixture ETag=%q, want a strong validator", strongETag)
+	}
+	for _, tc := range []struct {
+		name, accept, byteRange, ifRange, ifNoneMatch string
+		status                                        int
+		encoding, etag, contentRange, wantBody        string
+	}{
+		{"identity", "identity", "", "", "", 200, "", strongETag, "", body},
+		{"gzip", "gzip", "", "", "", 200, "gzip", "W/" + strongETag, "", body},
+		{"deflate", "deflate", "", "", "", 200, "deflate", "W/" + strongETag, "", body},
+		{"gzip_range", "gzip", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"deflate_range", "deflate", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"matching_if_range", "gzip", "bytes=0-99", strongETag, "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"mismatched_if_range", "gzip", "bytes=0-99", `"stale"`, "", 200, "", strongETag, "", body},
+		{"weak_if_range", "deflate", "bytes=0-99", "W/" + strongETag, "", 200, "", strongETag, "", body},
+		{"weak_revalidation", "gzip", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"deflate_revalidation", "deflate", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"strong_revalidation", "gzip", "", "", strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"list_revalidation", "gzip", "", "", `"stale", W/` + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"wildcard_revalidation", "gzip", "", "", "*", 304, "", "W/" + strongETag, "", ""},
+		{"identity_revalidation", "identity", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"rejected_compression_revalidation", "gzip;q=0, deflate;q=0", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"range_revalidation", "gzip", "bytes=0-99", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer test-password")
+			req.Header.Set("Accept-Encoding", tc.accept)
+			req.Header.Set("Range", tc.byteRange)
+			req.Header.Set("If-Range", tc.ifRange)
+			req.Header.Set("If-None-Match", tc.ifNoneMatch)
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("status=%d, want %d", response.StatusCode, tc.status)
+			}
+			for name, want := range map[string]string{"Content-Encoding": tc.encoding, "ETag": tc.etag, "Content-Range": tc.contentRange} {
+				if got := response.Header.Get(name); got != want {
+					t.Errorf("%s=%q, want %q", name, got, want)
+				}
+			}
+			if !strings.Contains(strings.ToLower(strings.Join(response.Header.Values("Vary"), ",")), "accept-encoding") {
+				t.Errorf("Vary=%q, missing Accept-Encoding", response.Header.Values("Vary"))
+			}
+			if tc.status == http.StatusPartialContent && response.ContentLength != 100 {
+				t.Errorf("partial Content-Length=%d, want100", response.ContentLength)
+			}
+			var decoded io.Reader = response.Body
+			switch tc.encoding {
+			case "gzip":
+				reader, err := gzip.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			case "deflate":
+				reader, err := zlib.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			}
+			got, err := io.ReadAll(decoded)
+			if err != nil || string(got) != tc.wantBody {
+				t.Fatalf("file body changed: bytes=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
 
 // artifactFileServer serves session ao-1 with the given artifact files.
 func artifactFileServer(t *testing.T, files map[string]string) (*httptest.Server, string) {
@@ -205,5 +312,227 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden || resp.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatalf("API from the inline origin: status=%d ACAO=%q, want 403 and no ACAO", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+}
+
+// deleteArtifactFileServer serves session ao-1 with the given artifact files
+// on disk, of which listed are the ones its session read reports.
+func deleteArtifactFileServer(t *testing.T, files map[string]string, listed ...string) (*httptest.Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		file := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.ArtifactDir = dir
+	for _, name := range listed {
+		s.ArtifactFiles = append(s.ArtifactFiles, domain.SessionArtifactFile{Path: name, Name: path.Base(name)})
+	}
+	svc.sessions["ao-1"] = s
+	return newSessionTestServer(t, svc), dir
+}
+
+func deleteArtifactFile(t *testing.T, srv *httptest.Server, relPath string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/ao-1/artifact-files?path="+url.QueryEscape(relPath), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestDeleteArtifactFileRemovesAListedFile(t *testing.T) {
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"plans/notes.md": "# notes", "keep.md": "keep"}, "plans/notes.md", "keep.md")
+
+	if status := deleteArtifactFile(t, srv, "plans/notes.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plans", "notes.md")); !os.IsNotExist(err) {
+		t.Fatalf("notes.md still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.md")); err != nil {
+		t.Fatalf("keep.md was removed: %v", err)
+	}
+}
+
+func TestDeleteArtifactFileDeletesItsVersions(t *testing.T) {
+	srv, fake, dir := artifactVersionServer(t)
+
+	if status := deleteArtifactFile(t, srv, "plan.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("plan.md still exists: %v", err)
+	}
+	if len(fake.versions) != 0 {
+		t.Fatalf("versions after delete = %+v, want none", fake.versions)
+	}
+}
+
+func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"unlisted.md": "x", "plans/a.md": "a"}, "gone.md", "plans", "link.md", "../outside.md")
+	if err := os.Symlink(outside, filepath.Join(dir, "link.md")); err != nil {
+		t.Logf("symlink unavailable: %v", err)
+	}
+
+	for _, relPath := range []string{"unlisted.md", "gone.md", "plans", "link.md", "../outside.md", ""} {
+		if status := deleteArtifactFile(t, srv, relPath); status != http.StatusNotFound {
+			t.Errorf("DELETE %q status = %d, want 404", relPath, status)
+		}
+	}
+	for _, file := range []string{filepath.Join(dir, "unlisted.md"), filepath.Join(dir, "plans", "a.md"), outside} {
+		if _, err := os.Stat(file); err != nil {
+			t.Errorf("%s was removed: %v", file, err)
+		}
+	}
+}
+
+func artifactSHA(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+func putArtifactFile(t *testing.T, srv *httptest.Server, body map[string]string) (int, map[string]any) {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/sessions/ao-1/artifact-files", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+func TestUpdateArtifactFileReplacesAListedFile(t *testing.T) {
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"plans/notes.md": "# notes"}, "plans/notes.md")
+
+	status, out := putArtifactFile(t, srv, map[string]string{"path": "plans/notes.md", "content": "# edited", "expectedFileFingerprint": artifactSHA("# notes")})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%v)", status, out)
+	}
+	if out["fileFingerprint"] != artifactSHA("# edited") || out["path"] != "plans/notes.md" || out["size"] != float64(len("# edited")) {
+		t.Fatalf("response = %v", out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "plans", "notes.md"))
+	if err != nil || string(got) != "# edited" {
+		t.Fatalf("file = %q, %v", got, err)
+	}
+}
+
+func TestUpdateArtifactFileRefusesAStaleEdit(t *testing.T) {
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"notes.md": "agent rewrote this"}, "notes.md")
+
+	status, _ := putArtifactFile(t, srv, map[string]string{"path": "notes.md", "content": "mine", "expectedFileFingerprint": artifactSHA("what I loaded")})
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", status)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "notes.md")); string(got) != "agent rewrote this" {
+		t.Fatalf("file = %q, want it untouched", got)
+	}
+}
+
+func TestUpdateArtifactFileRefusesAnythingButAListedRegularFileWithText(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"unlisted.md": "x", "plans/a.md": "a", "ok.md": "ok"}, "gone.md", "plans", "link.md", "../outside.md", "ok.md")
+	if err := os.Symlink(outside, filepath.Join(dir, "link.md")); err != nil {
+		t.Logf("symlink unavailable: %v", err)
+	}
+
+	for _, relPath := range []string{"unlisted.md", "gone.md", "plans", "link.md", "../outside.md", ""} {
+		if status, _ := putArtifactFile(t, srv, map[string]string{"path": relPath, "content": "y", "expectedFileFingerprint": artifactSHA("outside")}); status != http.StatusNotFound {
+			t.Errorf("PUT %q status = %d, want 404", relPath, status)
+		}
+	}
+	for _, body := range []map[string]string{
+		{"path": "ok.md", "content": "y"},
+		{"path": "ok.md", "content": "nul\x00byte", "expectedFileFingerprint": artifactSHA("ok")},
+	} {
+		if status, _ := putArtifactFile(t, srv, body); status != http.StatusBadRequest {
+			t.Errorf("PUT %v status = %d, want 400", body, status)
+		}
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "outside" {
+		t.Errorf("outside file = %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "ok.md")); string(got) != "ok" {
+		t.Errorf("ok.md = %q", got)
+	}
+}
+
+func TestUpdateArtifactFileKeepsPermissionsAndLeavesNoTemporaryFile(t *testing.T) {
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"plans/notes.md": "# notes"}, "plans/notes.md")
+	file := filepath.Join(dir, "plans", "notes.md")
+	if err := os.Chmod(file, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if status, out := putArtifactFile(t, srv, map[string]string{"path": "plans/notes.md", "content": "# edited", "expectedFileFingerprint": artifactSHA("# notes")}); status != http.StatusOK {
+		t.Fatalf("status = %d (%v)", status, out)
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v, want 0640", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "plans"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "notes.md" {
+		t.Errorf("plans/ holds %v, want only notes.md", entries)
+	}
+}
+
+func TestUpdateArtifactFileLeavesTheOriginalIntactWhenTheWriteFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory does not block file creation on Windows")
+	}
+	srv, dir := deleteArtifactFileServer(t, map[string]string{"plans/notes.md": "# notes"}, "plans/notes.md")
+	plans := filepath.Join(dir, "plans")
+	if err := os.Chmod(plans, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(plans, 0o755) })
+	if probe, err := os.Create(filepath.Join(plans, "probe")); err == nil {
+		_ = probe.Close()
+		t.Skip("running with privileges that ignore directory permissions")
+	}
+
+	if status, _ := putArtifactFile(t, srv, map[string]string{"path": "plans/notes.md", "content": "# edited", "expectedFileFingerprint": artifactSHA("# notes")}); status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", status)
+	}
+	if got, _ := os.ReadFile(filepath.Join(plans, "notes.md")); string(got) != "# notes" {
+		t.Fatalf("notes.md = %q, want the original", got)
 	}
 }

@@ -24,6 +24,18 @@ export const haptics = {
 	select() {
 		run(() => Haptics.selectionAsync());
 	},
+	// A detent passing under the finger — a slider's knob stepping along its track.
+	detent() {
+		run(() => Haptics.selectionAsync());
+	},
+	// A control reached the point where letting go acts — swipe-to-merge armed.
+	armed() {
+		run(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid));
+	},
+	// A deliberate press lands — a slider released into its action.
+	press() {
+		run(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium));
+	},
 	// An action succeeded — spawn started, session killed, connection made.
 	success() {
 		run(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));

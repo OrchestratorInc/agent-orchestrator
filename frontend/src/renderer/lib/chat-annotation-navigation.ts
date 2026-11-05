@@ -66,3 +66,16 @@ export function highlightChatAnnotation(source: HTMLElement, text: string, revis
 		body.classList.remove("chat-annotation-target");
 	};
 }
+
+/**
+ * A search snippet is one raw Markdown line; the transcript shows it rendered.
+ * Drop the inline markup so the line can be found in the rendered message.
+ */
+export function renderedSnippetText(line: string): string {
+	return line
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/^\s*(?:#{1,6}\s+|(?:>\s*)+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, "")
+		.replace(/\*\*|__|~~|`|\*/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}

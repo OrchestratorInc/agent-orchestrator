@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestBoundaryAcceptanceAndRecoveryDoNotReplayFirstRequest(t *testing.T) {
@@ -78,15 +79,11 @@ func TestSideBoundaryIncludesAuthorizationAndDelegationRules(t *testing.T) {
 	}
 }
 
-func TestSideProviderEligibilityLimitsSupportedHarnesses(t *testing.T) {
-	for _, harness := range domain.AllHarnesses {
-		err := validateSideProvider(harness)
-		supported := harness == domain.HarnessCodex || harness == domain.HarnessClaudeCode || harness == domain.HarnessOpenCode
-		if supported && err != nil {
-			t.Fatalf("%s: %v", harness, err)
-		}
-		if !supported && !errors.Is(err, ErrSideProviderUnsupported) {
-			t.Fatalf("%s: %v", harness, err)
-		}
+func TestSideProviderEligibilityRequiresResume(t *testing.T) {
+	if err := validateSideProvider(ports.ChatCapabilities{ports.ChatCapabilityResume: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSideProvider(ports.ChatCapabilities{ports.ChatCapabilityForkCurrent: true}); !errors.Is(err, ErrSideProviderUnsupported) {
+		t.Fatalf("non-resumable fork admission: %v", err)
 	}
 }

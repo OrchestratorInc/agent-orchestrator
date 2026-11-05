@@ -277,6 +277,73 @@ func TestCommitSessionControllerEpochRetiresCheckpointWithoutErasingLastHumanTim
 	}
 }
 
+// A Chat whose controller never started has no conversation row, which the
+// freshness proof accepts. The fresh terminal epoch commits with nothing to
+// release instead of failing "empty root proof changed".
+func TestCommitSessionControllerEpochFreshTerminalWithoutConversation(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "never-started")
+	rec := sampleRecord("never-started")
+	rec.Mode = domain.SessionModeChat
+	created, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create Chat session: %v", err)
+	}
+
+	changed, err := st.CommitSessionControllerEpoch(
+		ctx, created.ID, domain.SessionModeChat, domain.SessionModeTUI, "", time.Now(),
+	)
+	if err != nil || !changed {
+		t.Fatalf("commit fresh Terminal epoch: changed=%v err=%v", changed, err)
+	}
+	after, _, err := st.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if domain.NormalizeSessionMode(after.Mode) != domain.SessionModeTUI {
+		t.Fatalf("mode after commit = %s, want tui", after.Mode)
+	}
+}
+
+// A conversation with provider history is not untouched: the fresh terminal
+// epoch must still fail closed and leave the Chat in place.
+func TestCommitSessionControllerEpochFreshTerminalRefusesTouchedConversation(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "touched")
+	rec := sampleRecord("touched")
+	rec.Mode = domain.SessionModeChat
+	rec.Metadata.ControllerGeneration = "chat-generation"
+	created, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create Chat session: %v", err)
+	}
+	conversation, err := st.CreateConversation(ctx, "touched-conversation",
+		domain.ConversationScopeSession, created.ProjectID, created.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation",
+		"turn-1", "provider-turn-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := st.CommitSessionControllerEpoch(
+		ctx, created.ID, domain.SessionModeChat, domain.SessionModeTUI, "", time.Now(),
+	)
+	if err == nil || changed {
+		t.Fatalf("commit over a touched conversation: changed=%v err=%v", changed, err)
+	}
+	after, _, err := st.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if domain.NormalizeSessionMode(after.Mode) != domain.SessionModeChat {
+		t.Fatalf("mode after refused commit = %s, want chat", after.Mode)
+	}
+}
+
 func TestLatestSessionInterfaceTransitionBreaksCreatedAtTiesByInsertion(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()

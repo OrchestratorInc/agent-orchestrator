@@ -51,6 +51,27 @@ describe("PRSummaryParts", () => {
 		);
 	});
 
+	it("names the person behind a PR AO's GitHub App opened instead of the bot", () => {
+		const { rerender } = render(
+			<PRSummaryMeta
+				pr={summary({
+					author: "ao-by-untrivial",
+					authorAvatarUrl: undefined,
+					openedBy: { name: "Ada Lovelace", githubLogin: "ada", avatarUrl: "https://avatars.githubusercontent.com/u/9?v=4" },
+				})}
+			/>,
+		);
+		expect(screen.getByRole("link", { name: "ada" })).toHaveAttribute("href", "https://github.com/ada");
+		expect(screen.getByText("via AO")).toBeInTheDocument();
+		expect(screen.queryByText("ao-by-untrivial")).not.toBeInTheDocument();
+
+		// Without a connected GitHub account, the AO name shows, unlinked.
+		rerender(<PRSummaryMeta pr={summary({ author: "ao-by-untrivial[bot]", openedBy: { name: "Ada Lovelace" } })} />);
+		expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: /Ada/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(/ao-by-untrivial/)).not.toBeInTheDocument();
+	});
+
 	it("keeps running checks visible and pulsing beneath a higher-priority review blocker", () => {
 		const { container } = render(
 			<PRCardStatusSummary

@@ -1,8 +1,8 @@
-import { useCallback, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useReducedMotion } from "motion/react";
+import { useAncestorFlag } from "../hooks/useElementFlag";
 import { useResizable } from "../hooks/useResizable";
 import { INSPECTOR_SEPARATOR_RESERVE_PX, inspectorMaxWidthPx } from "../lib/inspector-width";
-import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { isMacPlatform } from "../lib/platform";
 import type { InspectorView } from "../stores/ui-store";
 import { ResizeHandle } from "./ResizeHandle";
@@ -59,10 +59,8 @@ export function sizingGeometryEqual(a: InspectorSizing, b: InspectorSizing): boo
 // changes where the inspector's data comes from, not how its rail behaves.
 export function SessionInspectorRail({
 	sessionKey,
-	showCollapsedHandle = true,
 	children,
 	isOpen,
-	onExpand,
 	onCloseAnimationComplete,
 	restoreMinWidth,
 	sizing,
@@ -70,10 +68,8 @@ export function SessionInspectorRail({
 	splitRef,
 }: {
 	sessionKey: string;
-	showCollapsedHandle?: boolean;
 	children: ReactNode;
 	isOpen: boolean;
-	onExpand: () => void;
 	onCloseAnimationComplete?: () => void;
 	restoreMinWidth?: number;
 	sizing: InspectorSizing;
@@ -83,6 +79,7 @@ export function SessionInspectorRail({
 	const prefersReducedMotion = useReducedMotion();
 	const gapRef = useRef<HTMLDivElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
+	useAncestorFlag(gapRef, ".session-split", "data-inspector-expanded", isOpen);
 	const minWidth = useCallback(() => {
 		const split = splitRef.current;
 		if (!split || split.clientWidth <= 0) return sizing.minWidth;
@@ -97,7 +94,7 @@ export function SessionInspectorRail({
 		return inspectorMaxWidthPx(available, sizing.maxPercent, sizing.chatMinWidth) ?? sizing.defaultWidth;
 	}, [sizing.chatMinWidth, sizing.defaultWidth, sizing.maxPercent, splitRef]);
 	const getResizeTargets = useCallback(() => [gapRef.current, panelRef.current], []);
-	const { onPointerDown, onCollapsedPointerDown, onDoubleClick } = useResizable({
+	const { onPointerDown, onDoubleClick } = useResizable({
 		cssVar: inspectorWidthVar,
 		getCssTargets: getResizeTargets,
 		storageKey: sizing.storageKey,
@@ -105,28 +102,55 @@ export function SessionInspectorRail({
 		min: minWidth,
 		max: maxWidth,
 		edge: "left",
-		onExpand,
 		restoreMin: restoreMinWidth,
 		// Restore the preferred width after a narrow window or zoom level widens again.
 		reclampOnWindowResize: true,
 	});
-	// Restore a destination session's layout immediately. Only subsequent open/
-	// close changes within that session should animate; keep the content mounted.
+	// Restore a destination session's layout in the same frame as the route
+	// change. Only later open/close changes within that session animate. The
+	// geometry is plain inline style (not a JS animation) so the first painted
+	// frame of the destination already has its final inspector width: a JS
+	// animation library applies even instant targets after paint.
 	const [motionState, setMotionState] = useState({ sessionKey, isOpen, animate: false });
 	if (motionState.sessionKey !== sessionKey || motionState.isOpen !== isOpen) {
 		setMotionState({ sessionKey, isOpen, animate: motionState.sessionKey === sessionKey });
 	}
-	const transition = prefersReducedMotion || !motionState.animate ? { duration: 0 } : SHELL_PANEL_SPRING;
+	// The toggle owns the transition only until it lands, so later width-var
+	// changes (window reclamp, view profile) never inherit it. Expiring also
+	// settles a close whose transitionend was skipped (e.g. a hidden window).
+	useEffect(() => {
+		if (!motionState.animate) return;
+		const timer = window.setTimeout(
+			() => setMotionState((state) => (state === motionState ? { ...state, animate: false } : state)),
+			INSPECTOR_SPRING_MS + 100,
+		);
+		return () => window.clearTimeout(timer);
+	}, [motionState]);
+	const animate = !prefersReducedMotion && motionState.animate;
+	const motionMode = animate ? "animated" : "instant";
 	const hidden = !isOpen && settledClosed;
-	const handleAnimationComplete = useCallback(() => {
-		if (!isOpen) onCloseAnimationComplete?.();
-	}, [isOpen, onCloseAnimationComplete]);
+	// Settle a close before paint when it is instant, otherwise when the slide ends.
+	useLayoutEffect(() => {
+		if (isOpen || settledClosed || !onCloseAnimationComplete) return;
+		if (!animate) {
+			onCloseAnimationComplete();
+			return;
+		}
+		const panel = panelRef.current;
+		const onTransitionEnd = (event: TransitionEvent) => {
+			if (event.target === panel && event.propertyName === "transform") onCloseAnimationComplete();
+		};
+		panel?.addEventListener("transitionend", onTransitionEnd);
+		return () => panel?.removeEventListener("transitionend", onTransitionEnd);
+	}, [animate, isOpen, onCloseAnimationComplete, settledClosed]);
+	const width = `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)`;
 
 	return <>
-		<motion.div aria-hidden="true" className="relative max-w-(--session-inspector-max-width) shrink-0" data-slot="inspector-gap" initial={false} ref={gapRef} animate={{ width: isOpen ? `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)` : 0 }} transition={transition} />
-		<motion.div
+		<div aria-hidden="true" className="relative max-w-(--session-inspector-max-width) shrink-0" data-motion={motionMode} data-slot="inspector-gap" ref={gapRef} style={{ width: isOpen ? width : 0 }} />
+		<div
 			aria-hidden={hidden}
 			className="absolute inset-y-0 right-0 z-chrome flex h-full max-w-(--session-inspector-max-width) flex-col overflow-hidden border-l border-border-strong bg-background"
+			data-motion={motionMode}
 			data-panel=""
 			data-settled={settledClosed ? "true" : "false"}
 			data-slot="inspector-container"
@@ -136,16 +160,11 @@ export function SessionInspectorRail({
 			hidden={hidden}
 			id="inspector"
 			inert={hidden}
-			initial={false}
-			animate={{ x: isOpen ? "0%" : "100%" }}
-			onAnimationComplete={handleAnimationComplete}
 			ref={panelRef}
-			style={{ width: `var(${inspectorWidthVar}, ${sizing.defaultWidth}px)` }}
-			transition={transition}
+			style={{ width }}
 		>
 			<ResizeHandle className={!isOpen ? "hidden" : undefined} data-testid="inspector-resize-handle" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown} side="left" style={noDragStyle} />
 			<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{children}</div>
-		</motion.div>
-		{isOpen || !showCollapsedHandle ? null : <div className="absolute inset-y-0 right-0 z-chrome w-2 cursor-e-resize touch-none" data-slot="inspector-collapsed-rail" data-testid="inspector-collapsed-rail" onPointerDown={onCollapsedPointerDown} style={noDragStyle} />}
+		</div>
 	</>;
 }

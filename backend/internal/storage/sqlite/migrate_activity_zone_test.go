@@ -10,8 +10,8 @@ import (
 // stores a time.Time by its String() form. activity_last_at is compared
 // directly in SQL, so such a row stops behaving like a timestamp: a "+0800"
 // wall clock sorts above the UTC rendering of a later instant, and the
-// agent-switch source-stop predicate then matches zero rows and strands the
-// saga. Migration 0120 rewrites those rows to the canonical UTC form.
+// lifecycle timestamp predicate then matches zero rows and leaves a session
+// unrecoverable. Migration 0120 rewrites those rows to canonical UTC form.
 func TestMigration0120NormalizesLocalZoneActivityTimestamps(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 94)
 
@@ -27,7 +27,7 @@ func TestMigration0120NormalizesLocalZoneActivityTimestamps(t *testing.T) {
 		want    string
 	}{
 		// Monotonic reading and an east-of-UTC zone: the shape a bare time.Now()
-		// leaves behind, and the one that reproduced the stranded switch.
+		// leaves behind and the one that reproduced the stranded lifecycle state.
 		{"ao-1", "2026-06-28 18:45:08.349363 +0800 CST m=+25660.013723251", "2026-06-28 10:45:08.349363 +0000 UTC"},
 		// Same, with the fractional second one digit shorter — Go trims trailing
 		// zeros, which moves the offset's position in the string.
@@ -64,7 +64,7 @@ func TestMigration0120NormalizesLocalZoneActivityTimestamps(t *testing.T) {
 	}
 
 	// The normalized column has to compare as a timestamp again: this is the
-	// predicate the agent-switch source stop runs, and the value it compares
+	// predicate the lifecycle recovery path runs, and the value it compares
 	// against is a later instant in UTC.
 	var comparableRows int
 	if err := db.QueryRow(

@@ -8,7 +8,12 @@ import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-co
 import { type, space } from "./tokens";
 import { MicKey } from "./voice/MicKey";
 
-type OpenMenu = "host" | "project" | "harness" | "model" | null;
+type OpenMenu = "host" | "project" | "harness" | "model" | "attach" | null;
+
+const ATTACH_OPTIONS: readonly SpawnComposerOption[] = [
+	{ id: "photo", label: "Choose photo", icon: "image" },
+	{ id: "file", label: "Choose file", icon: "file-text" },
+];
 
 export function SpawnComposerControls({
 	hosts,
@@ -24,7 +29,8 @@ export function SpawnComposerControls({
 	modelSelection,
 	modelLabel,
 	onSelectModel,
-	onAttach,
+	onChoosePhoto,
+	onChooseFile,
 	voice,
 	onSpawn,
 	busy,
@@ -39,15 +45,17 @@ export function SpawnComposerControls({
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
-	const options = openMenu === "host" ? hosts : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
-	const selectedValue = openMenu === "host" ? (hostId ?? "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
-	const menuTitle = openMenu === "host" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
+	const options = openMenu === "host" ? hosts : openMenu === "project" ? projects : openMenu === "harness" ? agents : openMenu === "attach" ? ATTACH_OPTIONS : modelOptions;
+	const selectedValue = openMenu === "host" ? (hostId ?? "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : openMenu === "attach" ? "" : modelSelection;
+	const menuTitle = openMenu === "host" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : openMenu === "attach" ? "Attach" : "Model";
 
 	const selectOption = (value: string) => {
 		if (openMenu === "host") onSelectHost(value);
 		if (openMenu === "project") onSelectProject(value);
 		if (openMenu === "harness") onSelectHarness(value);
 		if (openMenu === "model") onSelectModel(value);
+		if (openMenu === "attach" && value === "photo") onChoosePhoto();
+		if (openMenu === "attach" && value === "file") onChooseFile();
 		setOpenMenu(null);
 	};
 
@@ -77,9 +85,9 @@ export function SpawnComposerControls({
 			<View style={styles.rail}>
 				<Pressable
 					accessibilityRole="button"
-					accessibilityLabel="Attach a file"
+					accessibilityLabel="Attach"
 					android_ripple={{ color: t.accentTint, borderless: true, radius: 20 }}
-					onPress={onAttach}
+					onPress={() => setOpenMenu("attach")}
 					style={styles.attach}
 				>
 					<Feather name="paperclip" size={20} color={t.textSecondary} />

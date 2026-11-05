@@ -163,22 +163,20 @@ export function renderThemesEqual(left: RenderTheme, right: RenderTheme): boolea
 /** Where the page shows: inline in the thread, or expanded in the dialog. */
 export type RenderDisplayMode = "inline" | "fullscreen";
 
-/** URL fragment that hands a render its theme and display mode before first paint. */
 /**
- * The fragment a render reads its theme from before first paint. scrollable is
- * AO's own field: the page scrolls inside a capped frame, so it shows its
- * scrollbar.
+ * The fragment a render reads its theme and wrapping choice from before first
+ * paint. scrollable lets a page scroll inside a capped frame with a scrollbar.
  */
-export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false): string {
-	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}) }))}`;
+export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false): string {
+	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent }))}`;
 }
 
-/** The message a mounted render restyles from when the theme changes; displayMode is the MCP Apps host-context field. */
-export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false) {
+/** Live theme and wrapping updates; displayMode is the MCP Apps host-context field. */
+export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false) {
 	return {
 		jsonrpc: "2.0",
 		method: "ui/notifications/host-context-changed",
-		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, ...(scrollable ? { scrollable } : {}) },
+		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent },
 	} as const;
 }
 

@@ -28,6 +28,12 @@ func (v *Validator) ValidateLocal(ctx context.Context, reportedProvider string, 
 	return v.ValidateResolvedLocal(ctx, provider, cred, found, opts)
 }
 
+// ValidatesProvider reports whether AO can validate credentials and list
+// models for provider: the first-party API and a compatible gateway.
+func ValidatesProvider(provider Provider) bool {
+	return provider == ProviderFirstParty || provider == ProviderGateway
+}
+
 // ValidateResolvedLocal validates a provider and credential that the caller
 // already resolved from the same local environment.
 func (v *Validator) ValidateResolvedLocal(
@@ -37,7 +43,7 @@ func (v *Validator) ValidateResolvedLocal(
 	found bool,
 	opts ResolveOptions,
 ) Result {
-	if provider != ProviderFirstParty && provider != ProviderGateway {
+	if !ValidatesProvider(provider) {
 		return Result{
 			State: StateUnknown, Provider: provider, CheckedAt: time.Now(),
 			Detail: "credential and model validation is not supported for this Claude provider",
@@ -58,7 +64,7 @@ func (v *Validator) ValidateResolvedLocal(
 	if result.State == StateInvalid && IsResolverBug(result.Detail) {
 		return Result{
 			State: StateUnknown, Provider: provider, Source: cred.Source,
-			Fingerprint: cred.Fingerprint(), CheckedAt: result.CheckedAt,
+			Fingerprint: cred.Fingerprint(), CheckedAt: result.CheckedAt, HTTPStatus: result.HTTPStatus,
 			Detail: "the credential probe was malformed, so nothing can be concluded",
 			Err:    result.Err,
 		}

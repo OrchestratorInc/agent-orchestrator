@@ -2,6 +2,8 @@ import { getApiBaseUrl } from "./api-client";
 
 export interface GitHubStatusResponse {
 	connected: boolean;
+	/** GitHub username AO is signed in as; absent when it could not be resolved. */
+	login?: string;
 }
 
 export interface GitHubRepo {

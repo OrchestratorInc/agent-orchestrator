@@ -8,6 +8,7 @@ import { haptics } from "../haptics";
 import { PAGE_SLIDE_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, space, type } from "../tokens";
 import { useReducedMotion } from "../useReducedMotion";
 import type { RequestDockModel, RequestDockPage } from "./requestDockModel";
@@ -212,6 +213,7 @@ export function RequestCard({
 							onChangeText={setDraft}
 							placeholder={current.freeText.placeholder}
 							placeholderTextColor={t.textTertiary}
+							{...textSelectionColors(t)}
 							keyboardType={current.freeText.numeric ? "number-pad" : "default"}
 							maxLength={current.freeText.maxLength}
 							returnKeyType="send"

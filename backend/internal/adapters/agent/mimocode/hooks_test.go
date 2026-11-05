@@ -87,3 +87,19 @@ func TestUninstallHooksRemovesOnlyOwnedArtifacts(t *testing.T) {
 		t.Fatalf("AO agent remains: %v", err)
 	}
 }
+
+func TestMimoAgentAllowsEveryPermissionForBypass(t *testing.T) {
+	// Bypass goes through the agent file: the CLI flag stops at a consent screen
+	// on every terminal launch.
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		if got := mimoAgentPermission(mode); got != "permission:\n  \"*\": allow\n" {
+			t.Fatalf("%s permission = %q, want every permission allowed", mode, got)
+		}
+		if !usesAOAgent(mode, "", "") {
+			t.Fatalf("%s does not select AO's agent file", mode)
+		}
+	}
+	if got := mimoAgentPermission(ports.PermissionModeDefault); got != "" || usesAOAgent(ports.PermissionModeDefault, "", "") {
+		t.Fatalf("default mode permission = %q, want none", got)
+	}
+}

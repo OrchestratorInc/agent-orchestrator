@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // errCapture is a request-scoped slot WriteError records the raw service error
@@ -24,8 +25,10 @@ type errCapture struct{ captured CapturedError }
 // decides which layer owns the Sentry report.
 type CapturedError struct {
 	Err            error
+	Code           string
 	ReportingOwner ownership.Owner
 	Fields         map[string]any
+	FailureSite    telemetrymeta.FailureSite
 }
 
 type errCaptureKey struct{}
@@ -48,6 +51,7 @@ func WithErrorCapture(r *http.Request) (*http.Request, func() CapturedError) {
 func captureError(r *http.Request, err error) {
 	if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
 		c.captured.Err = err
+		c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
 		c.captured.ReportingOwner = ownership.OwnerOf(err)
 	}
 }
@@ -82,7 +86,7 @@ type APIError struct {
 	Message        string          `json:"message"`
 	RequestID      string          `json:"requestId,omitempty"`
 	Details        map[string]any  `json:"details,omitempty"`
-	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http,agent_switch_saga"`
+	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http"`
 }
 
 // WriteJSON serialises v as JSON with the given status.
@@ -94,6 +98,14 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WriteAPIError emits the locked envelope for any non-2xx response.
 func WriteAPIError(w http.ResponseWriter, r *http.Request, status int, kind, code, message string, details map[string]any) {
+	if status >= http.StatusInternalServerError {
+		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
+			c.captured.Code = code
+			if c.captured.FailureSite.String() == "" {
+				c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
+			}
+		}
+	}
 	writeAPIError(w, r, status, kind, code, message, details, "")
 }
 
@@ -143,6 +155,17 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil, reportingOwner)
+}
+
+// WriteErrorWithCode gives an unclassified failure a stable operation code.
+// Classified failures retain their existing status and client envelope.
+func WriteErrorWithCode(w http.ResponseWriter, r *http.Request, err error, code, message string) {
+	var typed *apierr.Error
+	if errors.As(err, &typed) || isTransient(err) || errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		WriteError(w, r, err)
+		return
+	}
+	WriteError(w, r, apierr.InternalCause(code, message, err))
 }
 
 // SQLite primary result codes for a busy/locked database. Extended codes (e.g.

@@ -51,7 +51,13 @@ func (c *PRsController) merge(w http.ResponseWriter, r *http.Request) {
 		writePRError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, MergePRResponse{OK: true, PRNumber: res.PRNumber, Method: res.Method})
+	envelope.WriteJSON(w, http.StatusOK, MergePRResponse{
+		OK:             true,
+		PRNumber:       res.PRNumber,
+		Method:         res.Method,
+		State:          res.State,
+		StateChangedAt: res.StateChangedAt,
+	})
 }
 
 func (c *PRsController) resolveComments(w http.ResponseWriter, r *http.Request) {

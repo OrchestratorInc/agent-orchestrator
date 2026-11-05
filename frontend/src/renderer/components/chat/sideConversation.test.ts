@@ -67,6 +67,24 @@ describe("sideConversationSnapshot", () => {
 		expect(conversation.items[2]).toMatchObject({ text: "Updated answer 2" });
 	});
 
+	it("shows a side command's streamed output without the stored detail's truncation mark", () => {
+		const conversation = sideConversationSnapshot({
+			side,
+			hasMore: false,
+			turns: [turn("t1", "completed", 1)],
+			messages: [],
+			activities: [{
+				id: "a1", sideId: side.id, turnId: "t1", kind: "command", status: "completed", summary: "yes",
+				text: "every line the command printed\n",
+				detail: { command: "yes", output: "only the tail", outputTruncated: true },
+				createdAt: at(1),
+			}],
+		});
+		const activity = conversation.items.find((item) => item.id === "a1");
+		expect(activity).toMatchObject({ detail: { command: "yes", output: "every line the command printed\n" } });
+		expect(activity?.kind === "activity" && activity.detail?.outputTruncated).toBeFalsy();
+	});
+
 	it("keeps an item's sequence when older pages load, so turns do not remount", () => {
 		const latest: SideSnapshot = {
 			side,

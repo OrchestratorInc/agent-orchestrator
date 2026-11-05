@@ -159,7 +159,7 @@ export async function requireConversationExcerptSupport(cfg: ServerConfig, sessi
 	// Older daemons accept messages but silently ignore the excerpts field.
 	const snapshot = await getConversationPage(cfg, sessionId);
 	if (!snapshot.supportsExcerpts) {
-		throw new Error("Update AO on this machine to send quoted responses. Your draft is saved.");
+		throw new Error("Update Orchestrator on this machine to send quoted responses. Your draft is saved.");
 	}
 }
 
@@ -283,6 +283,20 @@ export async function rollbackConversation(cfg: ServerConfig, sessionId: string,
 	});
 	const body = (await res.json()) as { turnsDiscarded?: number };
 	return body.turnsDiscarded ?? 0;
+}
+
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
 }
 
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {

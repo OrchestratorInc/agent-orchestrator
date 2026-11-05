@@ -10,6 +10,8 @@ export type WindowComposition = {
 	shellView: WebContentsView;
 	shellWebContents: WebContents;
 	setOverlayOpen: (open: boolean) => void;
+	/** Re-raise the shell after another native view was added above it. */
+	restackShell: () => void;
 	resize: () => void;
 	dispose: () => void;
 };
@@ -27,9 +29,17 @@ export function createWindowComposition(options: {
 	WebContentsView: WebContentsViewConstructor;
 	preload: string;
 	platform: NodeJS.Platform;
+	allowShellDebugging?: boolean;
+	/**
+	 * Whether a native page is showing under the shell. The repaint nudge only
+	 * guards that page, and it resizes the whole UI by a pixel, so an overlay
+	 * opened with nothing beneath skips it. Defaults to true.
+	 */
+	hasLivePageBelow?: () => boolean;
 }): WindowComposition {
 	const shellView = new options.WebContentsView({
 		webPreferences: {
+			devTools: options.allowShellDebugging === true,
 			preload: options.preload,
 			contextIsolation: true,
 			nodeIntegration: false,
@@ -64,9 +74,7 @@ export function createWindowComposition(options: {
 		}, 0);
 	};
 
-	const setOverlayOpen = (open: boolean): void => {
-		if (overlayOpen === open) return;
-		overlayOpen = open;
+	const placeShell = (open: boolean, refresh = true): void => {
 		if (open) {
 			// Re-adding an existing child raises it above all page/DevTools views.
 			options.mainWindow.contentView.addChildView(shellView);
@@ -82,7 +90,25 @@ export function createWindowComposition(options: {
 		// even once.) Re-applying identical bounds is a no-op, so nudge the height
 		// by a pixel and restore it. Keep that repaint macOS-only: the stale
 		// compositor surface has only been observed there.
-		if (open && options.platform === "darwin") forceSurfaceRefresh();
+		if (open && refresh && options.platform === "darwin") forceSurfaceRefresh();
+	};
+
+	const setOverlayOpen = (open: boolean): void => {
+		if (overlayOpen === open) return;
+		overlayOpen = open;
+		// Every menu and dialog lands here. Without a live page below there is no
+		// stale surface to fix, and the nudge would visibly jolt the bottom-pinned
+		// composer by a pixel on each open.
+		placeShell(open, options.hasLivePageBelow?.() ?? true);
+	};
+
+	// `addChildView` without an index appends on top, so a browser tab created
+	// while an overlay is open (a long-lived update notice, a dialog during an
+	// agent-driven `ao browser` action) would cover the raised shell until the
+	// overlay toggled again. Put the shell back on top whenever that happens.
+	const restackShell = (): void => {
+		if (!overlayOpen || options.mainWindow.isDestroyed?.()) return;
+		placeShell(true);
 	};
 
 	resize();
@@ -91,6 +117,7 @@ export function createWindowComposition(options: {
 		shellView,
 		shellWebContents: shellView.webContents,
 		setOverlayOpen,
+		restackShell,
 		resize,
 		dispose: () => {
 			try {

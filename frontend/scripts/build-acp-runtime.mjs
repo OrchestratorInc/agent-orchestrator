@@ -16,13 +16,17 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
+	patchClaudeStaleIdleDebt,
+	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
 
 const NODE_VERSION = "22.23.2";
+const DOWNLOAD_ATTEMPTS = 3;
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const frontendRoot = resolve(scriptsDir, "..");
 const sourceDir = join(frontendRoot, "acp-runtime");
@@ -86,6 +90,9 @@ run(npm.command, npm.args, { cwd: outDir });
 patchClaudeRetryDetails(claudeAdapter);
 patchClaudeContextUsage(claudeAdapter);
 patchClaudeHibernationCheck(claudeAdapter);
+patchClaudeFoldedPromptSettlement(claudeAdapter);
+patchClaudeStaleIdleDebt(claudeAdapter);
+patchClaudeSteerSettlement(claudeAdapter);
 
 // The Claude Agent SDK declares platform-native Claude executables as optional
 // dependencies. --omit=optional excludes them; this removal is defense-in-depth.
@@ -148,8 +155,19 @@ function run(command, args, options = {}) {
 	if (result.status !== 0) throw new Error(`${command} exited ${result.status}`);
 }
 
+// Release runners sometimes lose the nodejs.org connection mid-body; one
+// dropped socket used to fail the whole stable release.
 async function download(url) {
-	const response = await fetch(url);
-	if (!response.ok) throw new Error(`download ${url}: HTTP ${response.status}`);
-	return Buffer.from(await response.arrayBuffer());
+	let lastError;
+	for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
+		try {
+			const response = await fetch(url);
+			if (response.ok) return Buffer.from(await response.arrayBuffer());
+			lastError = new Error(`HTTP ${response.status}`);
+		} catch (error) {
+			lastError = error;
+		}
+		if (attempt < DOWNLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+	}
+	throw new Error(`download ${url}: ${lastError?.message ?? String(lastError)}`);
 }

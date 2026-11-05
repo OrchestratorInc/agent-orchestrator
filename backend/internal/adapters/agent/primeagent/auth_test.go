@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -63,12 +64,17 @@ func TestPrimeLocalAuthStatusAuthorizedFromModelsFileCredentials(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "models.json"), []byte(`{"providers":{"custom":{"apiKey":"looks-like-a-key"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, ok, err := primeLocalAuthStatus(context.Background())
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := primeLocalAuthStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+	// The providers sit under "providers"; that key is not a provider.
+	if got := evidence.Identity(); got.Provider != "custom" || got.Method != domain.AgentAccountMethodAPIKey {
+		t.Fatalf("evidence = %+v, want the custom provider's API key", got)
 	}
 }
 
@@ -77,7 +83,7 @@ func TestPrimeCredentialJSONIgnoresMCPOnlyCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"mcp:notion":{"accessToken":"mcp-token"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, ok, err := primeCredentialJSONStatus(path, true)
+	status, ok, _, err := primeCredentialJSONStatus(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +97,7 @@ func TestPrimeModelsJSONIgnoresMCPOnlyCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"mcp:notion":{"accessToken":"mcp-token"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, ok, err := primeCredentialJSONStatus(path, false)
+	status, ok, _, err := primeCredentialJSONStatus(path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +111,7 @@ func TestPrimeCredentialJSONAuthorizedFromOAuth(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"openai-codex":{"type":"oauth","access":"oauth-token"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, ok, err := primeCredentialJSONStatus(path, true)
+	status, ok, _, err := primeCredentialJSONStatus(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}

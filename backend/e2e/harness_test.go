@@ -124,6 +124,9 @@ func startDaemon(t *testing.T, dataDir string) *daemon {
 		"AO_DATA_DIR="+dataDir,
 		"AO_RUN_FILE="+filepath.Join(dataDir, "running.json"),
 		"AO_PORT="+strconv.Itoa(port),
+		// Never inherit a desktop-stamped export setting from the shell that
+		// runs the tests; a test daemon must not report to PostHog.
+		"AO_TELEMETRY_REMOTE=off",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

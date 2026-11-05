@@ -29,7 +29,7 @@ it("retains server-verified excerpt summaries from desktop messages for mobile r
 it("refuses quoted sends to an older host before any message is submitted", async () => {
     request.mockResolvedValueOnce({ json: async () => ({ controller: "ready", capabilities: ["images"] }) });
     const input = { text: "Explain this", clientMessageId: "saved-retry", excerpts: [{ conversationId: "conversation", messageId: "source", revision: 2, text: "Important context" }] };
-    await expect(sendConversationMessage(config, "session", input)).rejects.toThrow("Update AO on this machine");
+    await expect(sendConversationMessage(config, "session", input)).rejects.toThrow("Update Orchestrator on this machine");
     expect(request.mock.calls.filter((call) => call[2]?.method === "POST")).toEqual([]);
     expect(input.excerpts[0].text).toBe("Important context");
 });

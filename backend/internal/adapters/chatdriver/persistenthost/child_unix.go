@@ -5,8 +5,12 @@ package persistenthost
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
+	"time"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func configureProviderProcess(cmd *exec.Cmd) {
@@ -20,13 +24,32 @@ func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 	return func() {}, nil
 }
 
+// killProviderProcess asks the provider's process group to exit before it
+// kills it, so the agent can stop the commands it runs in groups of their own.
 func killProviderProcess(_ context.Context, cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	return aoprocess.TerminateGroup(cmd.Process.Pid, 2*time.Second)
+}
+
+// terminateProviderProcess asks the hosted process group to exit.
+func terminateProviderProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err
 }
+
+// openHostFile opens a chat host file for reading. Unlinking an open file is
+// always allowed here, so a reader never blocks the host's cleanup.
+func openHostFile(path string) (*os.File, error) {
+	return os.Open(path) //nolint:gosec // AO-owned path derived from validated session id.
+}
+
+// hostFileBusy is a Windows sharing conflict, which Unix does not have.
+func hostFileBusy(error) bool { return false }

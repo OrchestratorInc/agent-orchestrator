@@ -20,6 +20,12 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
+export const SHARE_FEATURE = "share";
+/** Offering feature the control plane sends while its session attachment routes are on. */
+export const ATTACHMENTS_FEATURE = "attachments";
+/** The largest Cloud attachment when the control plane takes files but names no limit. */
+export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export interface ResolvedCloudOffering {
 	providers: string[];
@@ -29,6 +35,27 @@ export interface ResolvedCloudOffering {
 	/** Undefined while a fallback still waits on the billing summary. */
 	billingMode: CloudCpBillingMode | undefined;
 	features: string[];
+	/**
+	 * The largest file a Cloud session takes as an attachment; undefined when
+	 * the control plane takes none (no attachments feature), so no surface
+	 * offers to attach.
+	 */
+	maxAttachmentBytes: number | undefined;
+	/**
+	 * The org may connect its own Coder deployment (it holds the coder
+	 * capability), which shows the Coder settings page. An older control plane
+	 * that does not send it offered Coder only to such orgs, so the provider
+	 * list stands in.
+	 */
+	customCoder: boolean;
+	/** Cloud sessions keep artifact files; false for a control plane that does not say. */
+	artifacts: boolean;
+	/**
+	 * An ao-worker Coder session checks out in the project's working folder.
+	 * Off when the control plane does not say so (an older one never does):
+	 * a working folder then applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -99,6 +126,12 @@ export function resolveCloudOffering(
 			kind: offering.kind ?? offeringKindFor(providers),
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
+			maxAttachmentBytes: offering.features?.includes(ATTACHMENTS_FEATURE)
+				? (offering.maxAttachmentBytes && offering.maxAttachmentBytes > 0 ? offering.maxAttachmentBytes : CLOUD_MAX_ATTACHMENT_BYTES)
+				: undefined,
+			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
+			artifacts: offering.artifacts ?? false,
+			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
 			source: "server",
 		};
 	}
@@ -112,6 +145,10 @@ export function resolveCloudOffering(
 		kind: offeringKindFor(providers),
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
+		maxAttachmentBytes: undefined,
+		customCoder: providers.includes(CODER_PROVIDER),
+		artifacts: false,
+		coderWorkerWorkingFolder: false,
 		source: "fallback",
 	};
 }
@@ -133,15 +170,19 @@ export function canManageBilling(org: Pick<CloudCpOrganization, "role"> | undefi
 
 /**
  * The provider a project's sessions run on: the provider stored on the project
- * (config.sandboxProvider), else the org's default. The control plane applies
- * the same rule when a session is created without a provider.
+ * (config.sandboxProvider), else Coder for a project carrying Coder dev-kit
+ * config (set up before projects recorded their provider), else the org's
+ * default. The control plane applies the same rule when a session is created
+ * without a provider.
  */
 export function projectSandboxProvider(
 	config: object | null | undefined,
 	offering: Pick<ResolvedCloudOffering, "defaultProvider"> | undefined,
 ): string {
-	const stored = (config as { sandboxProvider?: unknown } | null | undefined)?.sandboxProvider;
+	const fields = config as { sandboxProvider?: unknown; coder?: unknown } | null | undefined;
+	const stored = fields?.sandboxProvider;
 	if (typeof stored === "string" && stored.trim() !== "") return stored.trim().toLowerCase();
+	if (fields?.coder !== null && typeof fields?.coder === "object") return CODER_PROVIDER;
 	return offering?.defaultProvider ?? "";
 }
 

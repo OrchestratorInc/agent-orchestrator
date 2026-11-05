@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionsBoard } from "./SessionsBoard";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -35,6 +35,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useRemoteProjectQuery: (hostId: string) => ({
 		data: mocks.workspaces[hostId], isError: false, isSuccess: Boolean(mocks.workspaces[hostId]),
 	}),
+	useCloudProjectsQuery: () => ({ data: undefined }),
 }));
 vi.mock("../hooks/useBoardPresentation", () => ({
 	useBoardPresentation: () => ({ showStartup: true, showWelcome: false, showProjectEmpty: false, workspaceStartupState: "error" }),
@@ -74,7 +75,10 @@ vi.mock("../stores/ui-store", () => {
 		setProjectRestarting: vi.fn(),
 		setOrchestratorStartupError: vi.fn(),
 	};
-	return { useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }) };
+	return {
+		sidebarOccupiesLayout: () => true,
+		useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }),
+	};
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
@@ -87,7 +91,11 @@ function worker(hostId: string, title = "Fix login", status = "working") {
 	};
 }
 
+/** Every client a test renders with, so afterEach can empty it. */
+const clients: QueryClient[] = [];
+
 function renderBoard(hostId: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+	clients.push(client);
 	const view = (host: string) => <QueryClientProvider client={client}>
 		<TooltipProvider><SessionsBoard key={host} hostId={host} projectId="shared" /></TooltipProvider>
 	</QueryClientProvider>;
@@ -103,18 +111,27 @@ beforeEach(() => {
 		"box-a": { hostId: "box-a", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-a")] },
 		"box-b": { hostId: "box-b", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-b", "Fix billing")] },
 	};
-	mocks.remoteGet.mockImplementation(async (_hostId: string, path: string) => path === "/api/v1/usage/sessions"
-		? { data: { sessions: [] } } : { data: { prs: [] } });
+	mocks.remoteGet.mockResolvedValue({ data: { prs: [] } });
 	mocks.remotePost.mockResolvedValue({ data: {}, error: undefined });
 });
 
-it("renders the shared board with host-scoped data, usage, PRs, actions, and navigation", async () => {
+// React Query hands updates to React on a 0ms timer. One queued as a test's
+// last fetch settles could fire after this file's DOM was torn down, and React
+// then threw "window is not defined" as an unhandled error that failed the
+// whole run. Unmount, empty the clients, then wait one tick so anything
+// already queued lands while the DOM still exists.
+afterEach(async () => {
+	cleanup();
+	for (const client of clients.splice(0)) client.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+it("renders the shared board with host-scoped data, PRs, actions, and navigation", async () => {
 	const { showHost } = renderBoard("box-a");
 	expect(screen.getByTestId("board")).toHaveAttribute("data-host-id", "box-a");
 	expect(screen.getByText("Fix login")).toBeVisible();
 	expect(screen.queryByText("Local worker")).toBeNull();
 	expect(screen.queryByTestId("daemon-startup-loader")).toBeNull();
-	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-a", "/api/v1/usage/sessions", expect.anything()));
 	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-a", "/api/v1/sessions/{sessionId}/pr", expect.anything()));
 	fireEvent.click(screen.getByRole("button", { name: "Fix login" }));
 	expect(mocks.navigate).toHaveBeenCalledWith({
@@ -124,7 +141,6 @@ it("renders the shared board with host-scoped data, usage, PRs, actions, and nav
 	showHost("box-b");
 	expect(screen.getByText("Fix billing")).toBeVisible();
 	expect(screen.queryByText("Fix login")).toBeNull();
-	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-b", "/api/v1/usage/sessions", expect.anything()));
 	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-b", "/api/v1/sessions/{sessionId}/pr", expect.anything()));
 	expect(mocks.localGet).not.toHaveBeenCalled();
 });

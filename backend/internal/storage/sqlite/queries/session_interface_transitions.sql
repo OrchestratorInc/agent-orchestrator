@@ -1,24 +1,28 @@
 -- name: InsertSessionInterfaceTransition :one
 INSERT INTO session_interface_transitions (
     id, session_id, source_mode, target_mode, policy, history_policy, phase,
-    native_conversation_id, error_code, error_detail,
-    created_at, updated_at, completed_at, notice_acknowledged_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL)
+    native_conversation_id, degraded_kind, error_code, error_detail,
+    created_at, updated_at, completed_at, notice_acknowledged_at,
+    source_account_id, target_account_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, NULL, NULL, ?, ?)
 RETURNING id, session_id, source_mode, target_mode, policy, phase,
-          native_conversation_id, error_code, error_detail,
-          created_at, updated_at, completed_at, notice_acknowledged_at, history_policy;
+          native_conversation_id, degraded_kind, error_code, error_detail,
+          created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id;
 
 -- name: GetSessionInterfaceTransition :one
 SELECT id, session_id, source_mode, target_mode, policy, phase,
-       native_conversation_id, error_code, error_detail,
-       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy
+       native_conversation_id, degraded_kind, error_code, error_detail,
+       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id
 FROM session_interface_transitions
 WHERE id = ?;
 
 -- name: GetActiveSessionInterfaceTransition :one
 SELECT id, session_id, source_mode, target_mode, policy, phase,
-       native_conversation_id, error_code, error_detail,
-       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy
+       native_conversation_id, degraded_kind, error_code, error_detail,
+       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id
 FROM session_interface_transitions
 WHERE session_id = ?
   AND phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
@@ -27,8 +31,9 @@ LIMIT 1;
 
 -- name: GetLatestSessionInterfaceTransition :one
 SELECT id, session_id, source_mode, target_mode, policy, phase,
-       native_conversation_id, error_code, error_detail,
-       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy
+       native_conversation_id, degraded_kind, error_code, error_detail,
+       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id
 FROM session_interface_transitions
 WHERE session_id = ?
 -- Tests and injected clocks can assign multiple sagas the same timestamp.
@@ -39,16 +44,18 @@ LIMIT 1;
 
 -- name: ListActiveSessionInterfaceTransitions :many
 SELECT id, session_id, source_mode, target_mode, policy, phase,
-       native_conversation_id, error_code, error_detail,
-       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy
+       native_conversation_id, degraded_kind, error_code, error_detail,
+       created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id
 FROM session_interface_transitions
 WHERE phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
 ORDER BY created_at;
 
 -- name: ListDeliverableSessionInterfaceTransitions :many
 SELECT t.id, t.session_id, t.source_mode, t.target_mode, t.policy, t.phase,
-       t.native_conversation_id, t.error_code, t.error_detail,
-       t.created_at, t.updated_at, t.completed_at, t.notice_acknowledged_at, t.history_policy
+       t.native_conversation_id, t.degraded_kind, t.error_code, t.error_detail,
+       t.created_at, t.updated_at, t.completed_at, t.notice_acknowledged_at, t.history_policy,
+       t.source_account_id, t.target_account_id
 FROM session_interface_transitions AS t
 WHERE t.phase IN ('completed', 'failed', 'cancelled', 'recovery_required')
   AND EXISTS (
@@ -74,8 +81,9 @@ WHERE id = sqlc.arg(id)
   AND session_id = sqlc.arg(session_id)
   AND phase IN ('failed', 'recovery_required')
 RETURNING id, session_id, source_mode, target_mode, policy, phase,
-          native_conversation_id, error_code, error_detail,
-          created_at, updated_at, completed_at, notice_acknowledged_at, history_policy;
+          native_conversation_id, degraded_kind, error_code, error_detail,
+          created_at, updated_at, completed_at, notice_acknowledged_at, history_policy,
+       source_account_id, target_account_id;
 
 -- name: EnqueueSessionInterfaceTransitionMessage :exec
 INSERT INTO session_interface_transition_messages (

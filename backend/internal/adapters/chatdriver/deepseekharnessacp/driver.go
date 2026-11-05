@@ -4,6 +4,7 @@ package deepseekharnessacp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,9 +29,29 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		Harness:              domain.HarnessDeepSeek,
 		Configure:            configure,
 		SessionOptions:       sessionOptions,
+		PromptFailureCode:    promptFailureCode,
+		SessionPreamble:      SessionPreamble,
 		PermissionPolicy:     permissionPolicy,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
+}
+
+// The harness reports a missing key as a generic ACP internal error. Only its
+// explicit route-specific diagnostic is safe to turn into setup guidance.
+func promptFailureCode(err error) domain.ConversationFailureCode {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return ""
+	}
+	detail, _ := requestErr.Data.(string)
+	if detail == "" && strings.HasPrefix(requestErr.Message, "Internal error: ") {
+		detail = strings.TrimPrefix(requestErr.Message, "Internal error: ")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(detail),
+		`turn failed: llm-deepseek: no API key for provider route "deepseek-official";`) {
+		return ""
+	}
+	return domain.ConversationFailureProviderKeyMissing
 }
 
 func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
@@ -70,6 +91,23 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 		return nil
 	}
 	return options
+}
+
+// SessionPreamble delivers AO's standing instructions as a text block ahead of
+// the first prompt. DeepSeek Harness accepts no system-prompt launch flag and
+// its session/new handler reads only the working directory, so plain text on
+// the first turn is the channel it follows — the same shape as agyacp. An
+// embedded resource is avoided: Antigravity-class agents treated the resource
+// URI as something to look up rather than as instructions in testing.
+func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
+	standing := strings.TrimSpace(cfg.SystemPrompt)
+	if standing == "" {
+		return nil
+	}
+	return []acpsdk.ContentBlock{acpsdk.TextBlock(
+		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
+			"<ao_standing_instructions>\n" + standing + "\n</ao_standing_instructions>",
+	)}
 }
 
 // deepseekEffort resolves one AO effort value to a Harness level, passing an

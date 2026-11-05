@@ -2,8 +2,11 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
+import { groupScriptRuns } from "../lib/cloud-script-runs";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { TooltipProvider } from "./ui/tooltip";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const workspaceUrl = "https://coder.acme.example.com/@dev/dev-3f2a9c1e7b4d";
 
@@ -13,6 +16,20 @@ function mount(props: Parameters<typeof CloudSessionStartupLoader>[0]) {
 
 describe("CloudSessionStartupLoader", () => {
 	afterEach(() => vi.restoreAllMocks());
+
+	it("shows the running Setup log under the steps until the loader completes", () => {
+		const setupRun = groupScriptRuns([{
+			sessionId: "s", sequence: 1, type: "workspace.script.step", createdAt: "2026-10-18T10:00:00Z",
+			payload: { phase: "setup", runId: "r", step: 1, total: 2, command: "npm ci", repository: "", status: "running", output: "fetching" },
+		}])[0];
+		const { rerender } = mount({ activeIndex: 2, setupRun });
+		const panel = screen.getByTestId("script-run-panel");
+		expect(panel).toHaveTextContent("Running step 1 of 2");
+		expect(panel).toHaveTextContent("fetching");
+		expect(screen.getByRole("status", { name: "Session setup activity" })).toBeInTheDocument();
+		rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={3} completed setupRun={setupRun} /></TooltipProvider>);
+		expect(screen.queryByTestId("script-run-panel")).not.toBeInTheDocument();
+	});
 
 	it("links the bring-your-own Coder workspace beside the workspace step", async () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
@@ -37,5 +54,24 @@ describe("CloudSessionStartupLoader", () => {
 		view.unmount();
 		mount({ activeIndex: 1, coderWorkspaceUrl: "javascript:alert(1)" });
 		expect(screen.queryByTestId("coder-workspace-link")).toBeNull();
+	});
+
+	it("shows the person's queued first message above the steps, labelled as waiting for the workspace", () => {
+		const view = mount({ activeIndex: 0, queuedMessage: "Fix the flaky login test\nand add a regression test" });
+		const message = screen.getByRole("figure", { name: "Your message, sent when the workspace is ready" });
+		expect(message).toHaveTextContent("Fix the flaky login test and add a regression test");
+		// It reads as the chat's queued message: the agent has not seen it yet.
+		expect(within(message).getByText(/Fix the flaky login test/)).toHaveAttribute("data-queued");
+		// The steps still show, after it.
+		const steps = screen.getByRole("status", { name: "Session setup activity" });
+		expect(message.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		view.rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={3} completed queuedMessage="Fix it" /></TooltipProvider>);
+		expect(screen.getByRole("figure", { name: "Your message, sent when the workspace is ready" })).toBeInTheDocument();
+	});
+
+	it("shows no message without one", () => {
+		mount({ activeIndex: 1 });
+		expect(screen.queryByRole("figure")).toBeNull();
+		expect(screen.queryByText("Your message, sent when the workspace is ready")).toBeNull();
 	});
 });

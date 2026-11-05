@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWindowComposition } from "./window-composition";
 
-function setup(platform: NodeJS.Platform = "win32") {
+function setup(platform: NodeJS.Platform = "win32", allowShellDebugging = false, hasLivePageBelow?: () => boolean) {
 	let bounds = { x: 0, y: 0, width: 900, height: 640 };
 	let boundsChanged: (() => void) | undefined;
 	const addChildView = vi.fn();
@@ -26,17 +26,20 @@ function setup(platform: NodeJS.Platform = "win32") {
 		},
 		isDestroyed: () => false,
 	};
-	function FakeWebContentsView() {
+	const FakeWebContentsView = vi.fn(function () {
 		return view;
-	}
+	});
 	const composition = createWindowComposition({
 		mainWindow: mainWindow as never,
 		WebContentsView: FakeWebContentsView as never,
 		preload: "/preload.js",
 		platform,
+		allowShellDebugging,
+		hasLivePageBelow,
 	});
 	return {
 		addChildView,
+		FakeWebContentsView,
 		bounds: () => bounds,
 		close,
 		composition,
@@ -52,6 +55,13 @@ function setup(platform: NodeJS.Platform = "win32") {
 }
 
 describe("createWindowComposition", () => {
+	it.each([false, true])("enables shell DevTools only when explicitly allowed: %s", (allowShellDebugging) => {
+		const { FakeWebContentsView } = setup("darwin", allowShellDebugging);
+		expect(FakeWebContentsView).toHaveBeenCalledWith({
+			webPreferences: expect.objectContaining({ devTools: allowShellDebugging }),
+		});
+	});
+
 	it("creates a transparent shell at window bounds and reorders it for overlays", () => {
 		const { addChildView, composition, view } = setup();
 
@@ -63,6 +73,23 @@ describe("createWindowComposition", () => {
 		expect(addChildView).toHaveBeenLastCalledWith(view);
 		composition.setOverlayOpen(false);
 		expect(addChildView).toHaveBeenLastCalledWith(view, 0);
+	});
+
+	it("keeps the raised shell above browser views added while an overlay is open", () => {
+		const { addChildView, composition, view } = setup();
+
+		composition.restackShell();
+		expect(addChildView).toHaveBeenCalledTimes(1);
+
+		composition.setOverlayOpen(true);
+		addChildView.mockClear();
+		composition.restackShell();
+		expect(addChildView).toHaveBeenCalledExactlyOnceWith(view);
+
+		composition.setOverlayOpen(false);
+		addChildView.mockClear();
+		composition.restackShell();
+		expect(addChildView).not.toHaveBeenCalled();
 	});
 
 	it("does not resize the transparent shell when raising overlays on Windows", () => {
@@ -85,6 +112,33 @@ describe("createWindowComposition", () => {
 
 			expect(view.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 900, height: 639 });
 			expect(view.setVisible).not.toHaveBeenCalled();
+			vi.runAllTimers();
+			expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 900, height: 640 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("raises the shell without the nudge when no live page is below it on macOS", () => {
+		const { addChildView, composition, view } = setup("darwin", false, () => false);
+		(view.setBounds as ReturnType<typeof vi.fn>).mockClear();
+
+		composition.setOverlayOpen(true);
+
+		expect(addChildView).toHaveBeenLastCalledWith(view);
+		expect(view.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("still nudges a raised shell when a browser view is added under an open overlay", () => {
+		vi.useFakeTimers();
+		try {
+			const { composition, view } = setup("darwin", false, () => false);
+			composition.setOverlayOpen(true);
+			(view.setBounds as ReturnType<typeof vi.fn>).mockClear();
+
+			composition.restackShell();
+
+			expect(view.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 900, height: 639 });
 			vi.runAllTimers();
 			expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 900, height: 640 });
 		} finally {

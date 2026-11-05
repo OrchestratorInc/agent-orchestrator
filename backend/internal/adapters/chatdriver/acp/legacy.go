@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,15 +18,21 @@ import (
 // ACP 0.13.5 removed the legacy model selector from its generated API while
 // deployed agents such as Kimi still advertise `models` and implement
 // session/set_model. This narrow wire shim preserves that compatibility without
-// downgrading or forking the SDK: ordinary SDK traffic is forwarded unchanged,
-// and only AO-owned string request ids are intercepted.
+// downgrading or forking the SDK. Requests and responses still use the SDK;
+// update notifications use synchronous delivery so replay backpressure reaches
+// the provider socket instead of overflowing the SDK's notification queue.
 type legacyACPTransport struct {
 	writer *lockedWriteCloser
+	reader *io.PipeReader
+	output *io.PipeWriter
 	nextID atomic.Uint64
 
-	mu      sync.Mutex
-	pending map[string]chan legacyACPResponse
-	models  *legacySessionModelState
+	mu                    sync.Mutex
+	pending               map[string]chan legacyACPResponse
+	models                *legacySessionModelState
+	toolCallToRPCID       map[string]string
+	latestPermissionRPCID string
+	pendingAnswers        map[string]map[string]string
 }
 
 type lockedWriteCloser struct {
@@ -60,46 +67,76 @@ type legacyACPResponse struct {
 	err error
 }
 
-func newLegacyACPTransport(stdin io.WriteCloser, stdout io.Reader) (*legacyACPTransport, io.WriteCloser, io.Reader) {
+func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteCloser, io.Reader) {
 	writer := &lockedWriteCloser{inner: stdin}
-	transport := &legacyACPTransport{
-		writer:  writer,
-		pending: make(map[string]chan legacyACPResponse),
-	}
 	sdkReader, sdkWriter := io.Pipe()
-	go transport.forward(stdout, sdkWriter)
-	return transport, writer, sdkReader
+	transport := &legacyACPTransport{
+		writer:          writer,
+		reader:          sdkReader,
+		output:          sdkWriter,
+		pending:         make(map[string]chan legacyACPResponse),
+		toolCallToRPCID: make(map[string]string),
+		pendingAnswers:  make(map[string]map[string]string),
+	}
+	rewriter := &permissionResponseRewriter{
+		inner:     writer,
+		transport: transport,
+	}
+	return transport, rewriter, sdkReader
 }
 
-func (t *legacyACPTransport) forward(source io.Reader, destination *io.PipeWriter) {
-	reader := bufio.NewReader(source)
+func (t *legacyACPTransport) forward(source io.Reader, notification func(string, json.RawMessage) bool) {
+	reader := &extensionMethodReader{reader: bufio.NewReader(source), maxFrame: maxACPFrameSize}
+	defer func() { _ = t.output.Close() }()
 	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 && !t.intercept(line) {
-			if _, writeErr := destination.Write(line); writeErr != nil {
-				_ = destination.CloseWithError(writeErr)
+		line, err := reader.readFrame()
+		if len(line) > 0 && !t.intercept(line, notification) {
+			if _, writeErr := t.output.Write(line); writeErr != nil {
+				_ = t.output.CloseWithError(writeErr)
 				return
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				_ = destination.Close()
+				_ = t.output.Close()
 			} else {
-				_ = destination.CloseWithError(err)
+				_ = t.output.CloseWithError(err)
 			}
 			return
 		}
 	}
 }
 
-func (t *legacyACPTransport) intercept(line []byte) bool {
+func (t *legacyACPTransport) intercept(line []byte, notification func(string, json.RawMessage) bool) bool {
 	var envelope struct {
 		ID     json.RawMessage      `json:"id"`
+		Method string               `json:"method"`
+		Params json.RawMessage      `json:"params"`
 		Result json.RawMessage      `json:"result"`
 		Error  *acpsdk.RequestError `json:"error"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return false
+	}
+	if (len(envelope.ID) == 0 || bytes.Equal(envelope.ID, []byte("null"))) &&
+		envelope.Method != "" && notification(envelope.Method, envelope.Params) {
+		return true
+	}
+
+	if envelope.Method == "session/request_permission" && len(envelope.ID) > 0 {
+		var req struct {
+			ToolCall struct {
+				ToolCallID string `json:"toolCallId"`
+			} `json:"toolCall"`
+		}
+		_ = json.Unmarshal(envelope.Params, &req)
+		rawID := string(bytes.TrimSpace(envelope.ID))
+		t.mu.Lock()
+		if req.ToolCall.ToolCallID != "" {
+			t.toolCallToRPCID[req.ToolCall.ToolCallID] = rawID
+		}
+		t.latestPermissionRPCID = rawID
+		t.mu.Unlock()
 	}
 
 	var requestID string
@@ -184,4 +221,78 @@ func (t *legacyACPTransport) removePending(requestID string) {
 	t.mu.Lock()
 	delete(t.pending, requestID)
 	t.mu.Unlock()
+}
+
+func (t *legacyACPTransport) registerAnswersForToolCall(toolCallID string, answers map[string]string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rpcID := t.toolCallToRPCID[toolCallID]
+	if rpcID == "" {
+		rpcID = t.latestPermissionRPCID
+	}
+	if rpcID != "" {
+		t.pendingAnswers[rpcID] = answers
+	}
+}
+
+func (t *legacyACPTransport) hasPendingAnswers() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.pendingAnswers) > 0
+}
+
+func (t *legacyACPTransport) rewriteResponse(data []byte) []byte {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Result map[string]any  `json:"result"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || len(envelope.ID) == 0 || envelope.Result == nil {
+		return data
+	}
+
+	rpcID := string(bytes.TrimSpace(envelope.ID))
+	t.mu.Lock()
+	answers, ok := t.pendingAnswers[rpcID]
+	if ok {
+		delete(t.pendingAnswers, rpcID)
+	}
+	t.mu.Unlock()
+
+	if !ok || len(answers) == 0 {
+		return data
+	}
+
+	var rawMsg map[string]any
+	if err := json.Unmarshal(data, &rawMsg); err != nil {
+		return data
+	}
+	envelope.Result["answers"] = answers
+	rawMsg["result"] = envelope.Result
+	modifiedLine, err := json.Marshal(rawMsg)
+	if err != nil {
+		return data
+	}
+	return append(modifiedLine, '\n')
+}
+
+type permissionResponseRewriter struct {
+	inner     *lockedWriteCloser
+	transport *legacyACPTransport
+}
+
+func (r *permissionResponseRewriter) Write(data []byte) (int, error) {
+	if r.transport != nil && r.transport.hasPendingAnswers() {
+		data = r.transport.rewriteResponse(data)
+	}
+	return r.inner.Write(data)
+}
+
+func (r *permissionResponseRewriter) Close() error {
+	return r.inner.Close()
 }

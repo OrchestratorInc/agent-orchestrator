@@ -440,6 +440,13 @@ func (c *conversation) DeleteFork(ctx context.Context, providerConversationID st
 	if id == "" || id == c.threadID {
 		return errors.New("refusing to delete the active provider conversation")
 	}
-	return c.conn.request(ctx, codexproto.MethodThreadDelete,
+	err := c.conn.request(ctx, codexproto.MethodThreadDelete,
 		codexproto.ThreadDeleteParams{ThreadID: id}, nil)
+	// Cleanup runs after the child host stops and must tolerate an already
+	// deleted rollout, including a deletion whose acknowledgement was lost.
+	var refusal *rpcError
+	if errors.As(err, &refusal) && refusal.Code == -32600 && refusal.Message == "no rollout found for thread id "+id {
+		return nil
+	}
+	return err
 }

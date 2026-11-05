@@ -1,13 +1,14 @@
 import { Feather } from "./icons";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
 	absorbNewHosts,
 	groupSessions,
 	hasNewHost,
 	holdOrder,
+	isArchived,
 	shouldResnapshot,
 	snapshotOrder,
 	updatedSince,
@@ -15,6 +16,8 @@ import {
 	type OrderSnapshot,
 } from "./agentsView";
 import type { DashboardSession } from "./api";
+import { ArchivedWorkerRow } from "./archived-worker-row";
+import { useArchivedSessions, type ArchiveSource } from "./archive/useArchivedSessions";
 import { haptics } from "./haptics";
 import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
 import { useApp } from "./store";
@@ -22,7 +25,7 @@ import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
-import { archiveSessionMessage } from "./worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
@@ -58,7 +61,28 @@ const boardRowKey = (item: BoardRow) => item.key;
 export type BoardRow =
 	| { kind: "header"; key: string; label: string; open: boolean; collapsible: boolean }
 	| { kind: "archive"; key: string }
-	| { kind: "session"; key: string; session: DashboardSession };
+	| { kind: "session"; key: string; session: DashboardSession }
+	// Read-only with Restore, as on desktop. See ArchivedWorkerRow.
+	| { kind: "archived"; key: string; session: DashboardSession }
+	// Loading, failed, or more to come, below an archive that pages.
+	| { kind: "archive-status"; key: string };
+
+const NO_ARCHIVE_SOURCES: readonly ArchiveSource[] = [];
+
+const sessionRow = (session: DashboardSession): BoardRow =>
+	isArchived(session)
+		? { kind: "archived", key: hostedSessionKey(session), session }
+		: { kind: "session", key: hostedSessionKey(session), session };
+
+/**
+ * A screenful of rows either side of the viewport, rather than FlatList's ten.
+ *
+ * The default (21 viewports in total) kept roughly 200 rows mounted, which on a
+ * board with a long archive meant building and laying out every one of them the
+ * moment Archive opened. Seven still leaves three screens of runway each way for
+ * a fling, and the rows are cheap enough to fill it as the list moves.
+ */
+export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 8, windowSize: 7 } as const;
 
 /**
  * The Workers board's grouped list: Pinned, Needs you, Recent, and a
@@ -81,6 +105,7 @@ export function WorkerBoardList({
 	initialArchiveOpen = false,
 	showProject = true,
 	identityKey,
+	archiveSources = NO_ARCHIVE_SOURCES,
 }: {
 	sessions: DashboardSession[];
 	/** Non-empty switches the board to a single flat "Search results" section. */
@@ -105,10 +130,16 @@ export function WorkerBoardList({
 	 * a row moving.
 	 */
 	identityKey?: string;
+	/**
+	 * Machines whose daemon pages its archive. Their archived workers are not in
+	 * `sessions`; they are fetched when Archive opens, or a search runs.
+	 */
+	archiveSources?: readonly ArchiveSource[];
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { projects, allProjects, currentHostId, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	const router = useRouter();
+	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
@@ -144,12 +175,37 @@ export function WorkerBoardList({
 	);
 	const fresh = useMemo(() => groupSessions(t, sessions), [t, sessions]);
 	const filteredGroups = useMemo(() => query.trim() ? groupSessions(t, filteredSessions) : fresh, [t, filteredSessions, query, fresh]);
-	const archived = fresh.archived;
 
 	// The order is held still while the user looks (see OrderSnapshot): rows
 	// update in place and news waits behind the "N updated" pill. Accepting news
 	// installs the new snapshot atomically, without an intermediate empty one.
 	const freshLive = useMemo(() => [...fresh.pinned, ...fresh.sections.flatMap((section) => section.data)], [fresh]);
+
+	// The archive: inline from a machine that still sends it with the poll, paged
+	// from one that does not, and merged into one list in archive order. It is
+	// only fetched while someone is looking at it (Archive open, or a search).
+	const searching = query.trim().length > 0;
+	const [archiveRefresh, setArchiveRefresh] = useState(0);
+	const pagedArchive = useArchivedSessions(archiveSources, {
+		active: archiveOpen || searching,
+		exhaustive: searching,
+		inline: fresh.archived,
+		refreshToken: archiveRefresh,
+	});
+	// A restored session is live by the next poll, before the archive refreshes.
+	const liveKeys = useMemo(() => new Set(freshLive.map(hostedSessionKey)), [freshLive]);
+	const archived = useMemo(
+		() => pagedArchive.rows.filter((session) => !liveKeys.has(hostedSessionKey(session))),
+		[pagedArchive.rows, liveKeys],
+	);
+	const archiveCount = pagedArchive.total;
+	const searchedArchive = useMemo(
+		() => searching
+			? filterWorkerSessions(archived, query, (_projectId, session) => projectNameFor(session), (status) => statusVisual(t, status).label)
+			: [],
+		[searching, archived, query, projectNameFor, t],
+	);
+	const archiveStatusShown = pagedArchive.loading || pagedArchive.error !== null || pagedArchive.hasMore;
 	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, hostedSessionKey));
 	const freshLiveRef = useRef(freshLive);
 	freshLiveRef.current = freshLive;
@@ -182,8 +238,13 @@ export function WorkerBoardList({
 		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
 	}, [snapshot, listRef]);
 	// Opening the board, coming back to the app, or a different set of workers
-	// is looking again, so each re-sorts.
-	useFocusEffect(resort);
+	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
+	// visited screens mounted, so unmounting alone does not say the user moved on.
+	const focusEpoch = useRef(0);
+	useFocusEffect(useCallback(() => {
+		resort();
+		return () => { focusEpoch.current += 1; };
+	}, [resort]));
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (state) => {
 			if (state === "active") resort();
@@ -193,6 +254,7 @@ export function WorkerBoardList({
 	useEffect(resort, [resort, identityKey]);
 	// Pulling to refresh is asking for the latest order too.
 	const refreshAndResort = useCallback(async () => {
+		setArchiveRefresh((value) => value + 1);
 		try {
 			await onRefresh();
 		} finally {
@@ -208,42 +270,47 @@ export function WorkerBoardList({
 	// The archive is the last section, rendered only when expanded so a collapsed
 	// strip costs nothing to scroll past.
 	const listSections = useMemo<ListSection[]>(() => {
-		if (query.trim()) {
-			const data = [...filteredGroups.pinned, ...filteredGroups.sections.flatMap((section) => section.data), ...filteredGroups.archived];
-			return data.length === 0 ? [] : [{ zone: "search", label: "Search results", color: t.accent, data }];
+		if (searching) {
+			const data = [...filteredGroups.pinned, ...filteredGroups.sections.flatMap((section) => section.data), ...searchedArchive];
+			// Kept while the archive is still being read, or could not be, so its
+			// status row (progress, or the error and Retry) shows instead of "no
+			// results" for a match that has not arrived yet.
+			return data.length === 0 && !pagedArchive.loading && !pagedArchive.error
+				? []
+				: [{ zone: "search", label: "Search results", color: t.accent, data }];
 		}
 		const liveSections: ListSection[] = [
 			...(pinned.length ? [{ zone: "pinned" as const, label: "Pinned", color: t.amber, data: pinned }] : []),
 			...sections,
 		];
-		if (archived.length === 0) return liveSections;
+		if (archiveCount === 0 && archived.length === 0) return liveSections;
 		return [
 			...liveSections,
 			{ zone: "archive" as const, label: "Archive", color: t.textFaint, data: archiveOpen ? archived : [] },
 		];
-	}, [query, filteredGroups, pinned, sections, archived, archiveOpen, t]);
+	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pagedArchive.error, pinned, sections, archiveCount, archived, archiveOpen, t]);
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.
 	const listData = useMemo<BoardRow[]>(
 		() =>
 			listSections.flatMap((section): BoardRow[] => {
+				const status: BoardRow[] = archiveStatusShown && (section.zone === "search" || (section.zone === "archive" && archiveOpen))
+					? [{ kind: "archive-status", key: "archive:status" }]
+					: [];
 				if (section.zone === "archive") {
-					return [
-						{ kind: "archive", key: "header:archive" } as const,
-						...section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const),
-					];
+					return [{ kind: "archive", key: "header:archive" } as const, ...section.data.map(sessionRow), ...status];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
 				const open = !collapsible || !collapsedSections[section.zone];
 				return [
 					{ kind: "header", key: `header:${section.zone}`, label: section.label, open, collapsible } as const,
-					...(open
-						? section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const)
-						: []),
+					// Search mixes live and archived workers; each keeps its own row.
+					...(open ? section.data.map(sessionRow) : []),
+					...status,
 				];
 			}),
-		[collapsedSections, listSections],
+		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
 	);
 
 	const toggleSection = useCallback((zone: string) => {
@@ -295,14 +362,73 @@ export function WorkerBoardList({
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
 		haptics.warning();
 		Alert.alert(
-			"Archive session?",
-			archiveSessionMessage(session.displayName?.trim() || "this worker"),
+			ARCHIVE_SESSION_CONFIRM.title,
+			ARCHIVE_SESSION_CONFIRM.message,
 			[
-				{ text: "Cancel", style: "cancel" },
-				{ text: "Archive session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+				{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);
+
+	// Desktop's archive: one restore at a time, the error under the card it
+	// belongs to, and a successful restore opens the session. A restore that
+	// finishes after the user has moved to another board must not navigate, nor
+	// one that finishes after they left this one for another tab or session:
+	// the board stays mounted then, so only the focus epoch says they went.
+	const [restoringKey, setRestoringKey] = useState<string>();
+	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
+	const restoringRef = useRef<string | undefined>(undefined);
+	const restoreGeneration = useRef(0);
+	useEffect(() => {
+		restoreGeneration.current += 1;
+		restoringRef.current = undefined;
+		setRestoringKey(undefined);
+		setRestoreErrors({});
+	}, [identityKey]);
+	useEffect(() => () => { restoreGeneration.current += 1; }, []);
+	// Restore is a request to the session's own machine, so like desktop it is
+	// unavailable while that machine is unreachable. Keyed by the offline ids
+	// rather than hostStates, which is a new array on every poll.
+	const offlineKey = hostStates.filter((host) => host.connection !== "open").map((host) => host.hostId).join("\n");
+	const offlineHosts = useMemo(() => new Set(offlineKey ? offlineKey.split("\n") : []), [offlineKey]);
+	const machineOffline = useCallback((session: DashboardSession) => {
+		const hostId = sessionHostId(session);
+		// A row without a host id belongs to this board's own connection (HostScope
+		// already scopes that to the right machine).
+		return hostId ? offlineHosts.has(hostId) : connection !== "open";
+	}, [offlineHosts, connection]);
+	const restoreArchived = useCallback(async (session: DashboardSession) => {
+		if (restoringRef.current || machineOffline(session)) return;
+		const key = hostedSessionKey(session);
+		const generation = restoreGeneration.current;
+		const current = () => generation === restoreGeneration.current;
+		const focus = focusEpoch.current;
+		restoringRef.current = key;
+		setRestoringKey(key);
+		setRestoreErrors(({ [key]: _cleared, ...rest }) => rest);
+		haptics.tap();
+		try {
+			await restore(session.id, sessionHostId(session));
+			if (!current()) return;
+			haptics.success();
+			// The busy state below still clears; only the navigation is dropped.
+			if (focus !== focusEpoch.current) return;
+			router.push({
+				pathname: "/session/[id]",
+				params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
+			});
+		} catch (cause) {
+			if (!current()) return;
+			haptics.error();
+			setRestoreErrors((errors) => ({ ...errors, [key]: userFacingError(cause, "Couldn't restore this session.") }));
+		} finally {
+			if (current()) {
+				restoringRef.current = undefined;
+				setRestoringKey(undefined);
+			}
+		}
+	}, [restore, router, currentHostId, machineOffline]);
 
 	// Recycled list cells must never carry animated offsets across reordering.
 	const toggleArchive = useCallback(() => setArchiveOpen((value) => !value), []);
@@ -314,15 +440,21 @@ export function WorkerBoardList({
 		recover: runWorkerRecovery,
 	}), [renameWorker, updateWorkerPin, confirmDeleteSession, runWorkerRecovery]);
 	const renderItem = useCallback(({ item }: { item: BoardRow }) => {
-		if (item.kind === "archive") return <ArchiveHeader count={archived.length} open={archiveOpen} onToggle={toggleArchive} />;
+		if (item.kind === "archive") return <ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />;
+		if (item.kind === "archive-status") return <ArchiveStatusRow loading={pagedArchive.loading} error={pagedArchive.error}
+			hasMore={pagedArchive.hasMore} onRetry={pagedArchive.retry} onLoadMore={pagedArchive.loadMore} />;
 		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
 			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
+		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
+			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
+			restoring={restoringKey === item.key} restoreDisabled={restoringKey !== undefined}
+			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} />;
 		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
 			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} />;
-	}, [archived.length, archiveOpen, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
-		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions]);
+	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
 
 	return (
 		<View style={styles.listWrap}>
@@ -335,6 +467,7 @@ export function WorkerBoardList({
 					ref={listRef}
 					data={listData}
 					keyExtractor={boardRowKey}
+					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
 					contentContainerStyle={{ paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
@@ -343,6 +476,9 @@ export function WorkerBoardList({
 					ListHeaderComponent={ListHeaderComponent}
 					ListEmptyComponent={ListEmptyComponent}
 					renderItem={renderItem}
+					// The next archive page loads as its end comes into view.
+					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
+					onEndReachedThreshold={1.5}
 				/>
 			</LayoutAnimationConfig>
 		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} onPress={showLatest} /> : null}
@@ -393,6 +529,44 @@ function UpdatesPill({ count, onPress }: { count: number; onPress: () => void })
 		>
 			<Feather name="arrow-up" size={14} color={t.onAccent} />
 			<Text style={styles.updatesLabel}>{label}</Text>
+		</Pressable>
+	);
+}
+
+// Below a paged archive: the next page loading, a failure to retry, or a way to
+// ask for more when the end of the list was reached before a page arrived.
+function ArchiveStatusRow({ loading, error, hasMore, onRetry, onLoadMore }: {
+	loading: boolean;
+	error: string | null;
+	hasMore: boolean;
+	onRetry(): void;
+	onLoadMore(): void;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	if (error) {
+		return (
+			<View style={styles.archiveStatus}>
+				<Text accessibilityRole="alert" style={[styles.archiveStatusText, { color: t.red }]} numberOfLines={2}>{error}</Text>
+				<Pressable accessibilityRole="button" accessibilityLabel="Retry loading archived sessions" hitSlop={8} onPress={onRetry}
+					style={({ pressed }) => pressed && { opacity: 0.6 }}>
+					<Text style={styles.archiveStatusAction}>Retry</Text>
+				</Pressable>
+			</View>
+		);
+	}
+	if (loading) {
+		return (
+			<View style={styles.archiveStatus} accessible accessibilityLabel="Loading archived sessions">
+				<ActivityIndicator size="small" color={t.textTertiary} />
+				<Text style={styles.archiveStatusText}>Loading archived sessions…</Text>
+			</View>
+		);
+	}
+	if (!hasMore) return null;
+	return (
+		<Pressable accessibilityRole="button" onPress={onLoadMore} style={({ pressed }) => [styles.archiveStatus, pressed && { opacity: 0.6 }]}>
+			<Text style={styles.archiveStatusAction}>Show more</Text>
 		</Pressable>
 	);
 }
@@ -449,4 +623,7 @@ const makeStyles = (t: Theme) =>
 		},
 		archiveLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", flex: 1 },
 		archiveCount: { color: t.textFaint, fontSize: type.caption1.fontSize, fontWeight: "600", fontFamily: t.fontMono },
+		archiveStatus: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, minHeight: 56, paddingHorizontal: space.lg },
+		archiveStatusText: { flexShrink: 1, fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		archiveStatusAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	});

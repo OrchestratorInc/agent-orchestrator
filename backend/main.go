@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	if err := daemon.Run(); err != nil {
+	if err := daemon.Run(""); err != nil {
 		fmt.Fprintln(os.Stderr, "ao backend daemon: "+err.Error())
 		os.Exit(1)
 	}

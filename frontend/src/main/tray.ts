@@ -1,8 +1,21 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
-import { catalogFor, type MessageKey, type PluralMessageKey } from "../renderer/i18n/messages";
+// A tray-only catalog: importing the renderer's catalogs put every locale file
+// (1.3 MB) into main.js. Regenerate with `node scripts/sync-tray-catalog.mjs`.
+import { trayCatalogs, type TrayMessageKey } from "./tray-catalog.generated";
 import type { AppLocale } from "../shared/ui-locale";
+
+type MessageKey = TrayMessageKey;
+type PluralMessageKey = TrayMessageKey extends infer Key extends string
+	? Key extends `${infer Base}_${"one" | "other"}`
+		? Base
+		: never
+	: never;
+
+function catalogFor(locale: AppLocale): Record<TrayMessageKey, string> & Partial<Record<string, string>> {
+	return trayCatalogs[locale] ?? trayCatalogs.en;
+}
 import type { TrayAttentionState, TrayAttentionZone, TrayOpenSessionTarget, TraySessionEntry } from "../shared/tray";
 
 const MAX_MENU_SESSIONS = 8;
@@ -15,16 +28,17 @@ function format(template: string, vars: Record<string, string | number>): string
 	return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => String(vars[key] ?? match));
 }
 
-function trayIconPath(): string | undefined {
+function trayIconPath(name = "trayIconTemplate.png"): string | undefined {
 	const candidate = app.isPackaged
-		? path.join(process.resourcesPath, "trayIconTemplate.png")
-		: path.join(__dirname, "../../assets/trayIconTemplate.png");
+		? path.join(process.resourcesPath, name)
+		: path.join(__dirname, "../../assets", name);
 	return existsSync(candidate) ? candidate : undefined;
 }
 
 export type TrayController = {
 	setState(state: TrayAttentionState): void;
 	setLocale(locale: AppLocale): void;
+	setAwakeState(active: boolean | null): void;
 	clear(): void;
 	dispose(): void;
 };
@@ -42,10 +56,17 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	const icon = nativeImage.createFromPath(iconPath);
 	if (icon.isEmpty()) return null;
 	icon.setTemplateImage(true);
+	const awakeIconPath = trayIconPath("trayAwakeIconTemplate.png");
+	const loadedAwakeIcon = awakeIconPath ? nativeImage.createFromPath(awakeIconPath) : icon;
+	const awakeIcon = loadedAwakeIcon.isEmpty() ? icon : loadedAwakeIcon;
+	awakeIcon.setTemplateImage(true);
 
 	const tray = new Tray(icon);
 	let sessions: TraySessionEntry[] = [];
-	let catalog = catalogFor(options.locale);
+	let awake: boolean | null = false;
+	let lastAwake = false;
+	let locale = options.locale;
+	let catalog = catalogFor(locale);
 
 	const t = (key: MessageKey, vars?: Record<string, string | number>): string => {
 		const raw = catalog[key] ?? key;
@@ -53,8 +74,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	};
 
 	const tPlural = (base: PluralMessageKey, count: number): string => {
-		const key = (count === 1 ? `${base}_one` : `${base}_other`) as MessageKey;
-		return t(key, { count });
+		const form = new Intl.PluralRules(locale).select(count);
+		return format(catalog[`${base}_${form}`] ?? catalog[`${base}_other`], { count });
 	};
 
 	const sessionItem = (entry: TraySessionEntry): MenuItemConstructorOptions => {
@@ -67,10 +88,16 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 
 	const render = () => {
 		const count = sessions.length;
-		tray.setTitle(count > 0 ? String(count) : "");
-		tray.setToolTip(count > 0 ? tPlural("tray.attentionTooltip", count) : "Agent Orchestrator");
+		// A compact drawn cup stays legible without relying on font glyph sizing.
+		tray.setImage(lastAwake ? awakeIcon : icon);
+		tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
+		const awakeLabel = awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";
+		tray.setToolTip([count > 0 ? tPlural("tray.attentionTooltip", count) : "Orchestrator", awakeLabel].filter(Boolean).join(" — "));
 
 		const items: MenuItemConstructorOptions[] = [];
+		if (awakeLabel) {
+			items.push({ label: awakeLabel, enabled: false }, { type: "separator" });
+		}
 		if (count === 0) {
 			items.push({ label: t("tray.empty"), enabled: false });
 		} else {
@@ -107,8 +134,15 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 			sessions = state.sessions ?? [];
 			render();
 		},
-		setLocale(locale) {
+		setLocale(next) {
+			locale = next;
 			catalog = catalogFor(locale);
+			render();
+		},
+		setAwakeState(active) {
+			if (awake === active) return;
+			awake = active;
+			if (active !== null) lastAwake = active;
 			render();
 		},
 		clear() {

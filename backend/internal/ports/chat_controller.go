@@ -13,7 +13,7 @@ type ChatHistoryMode uint8
 const (
 	ChatHistoryImport ChatHistoryMode = iota
 	ChatHistoryRequired
-	// ChatHistoryDeferred is used when agent switching owns later projection.
+	// ChatHistoryDeferred is used when later projection is intentionally deferred.
 	ChatHistoryDeferred
 )
 
@@ -21,7 +21,10 @@ const (
 type ChatControllerStart struct {
 	// ReconnectOnly restricts startup recovery to an existing provider process.
 	ReconnectOnly bool
-	SessionID     domain.SessionID
+	// AwakeReconnectTarget additionally requires current, unconsumed evidence
+	// of an interrupted persistent transport under the controller gate.
+	AwakeReconnectTarget *domain.AwakeAgentTarget
+	SessionID            domain.SessionID
 	// Owner distinguishes worker and review conversations that share a worker
 	// session. Empty preserves the existing worker-session owner.
 	Owner         domain.ConversationOwner
@@ -58,6 +61,9 @@ type ChatControllerStart struct {
 	// active branch, which is the ordinary initial-start and resume path.
 	ProviderScopeID string
 	ProviderHandoff *domain.ChatProviderHandoff
+	// ProviderSwitch proves an idle Chat-to-Chat handoff. It reuses the AO
+	// conversation but always starts a fresh target-provider thread.
+	ProviderSwitch *domain.ChatProviderSwitch
 	// ControllerGeneration is supplied by a durable replacement saga that must
 	// fence the target before starting it. Ordinary starts leave it empty.
 	ControllerGeneration string

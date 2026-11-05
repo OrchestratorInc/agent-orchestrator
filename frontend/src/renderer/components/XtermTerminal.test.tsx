@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TerminalMux } from "../lib/terminal-mux";
@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
 	lastTerminal: null as null | {
 		write(data: Uint8Array, done?: () => void): void;
 		cols: number;
+		screenElement: HTMLElement;
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		selection: string;
@@ -112,6 +113,9 @@ vi.mock("@xterm/xterm", () => ({
 	Terminal: class FakeTerminal {
 		options: Record<string, unknown>;
 		cols = 80;
+		screenElement = Object.assign(document.createElement("div"), {
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 240 }) as DOMRect,
+		});
 		rows = 24;
 		dimensions?: { css: { cell: { width: number; height: number } } };
 		resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
@@ -825,6 +829,47 @@ describe("XtermTerminal", () => {
 			style.remove();
 			delete document.documentElement.dataset.styleTheme;
 			act(() => useUiStore.setState({ themeStyle: "orchestrate" }));
+		}
+	});
+
+	it.each(["dark", "light"] as const)("toggles transparency on a retained %s terminal", (theme) => {
+		setNavigatorPlatform("MacIntel");
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme={theme} />);
+		const terminal = state.lastTerminal!;
+		const background = theme === "dark" ? "#0d1117" : "#ffffff";
+		try {
+			expect(terminal.options.allowTransparency).toBe(true);
+			expect(terminal.options.theme).toMatchObject({
+				background: "#00000000",
+				black: background,
+				cursorAccent: background,
+			});
+
+			act(() => useUiStore.getState().setWindowTranslucency(false));
+			expect(terminal.options.theme).toMatchObject({ background });
+			act(() => useUiStore.getState().setWindowTranslucency(true));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			act(() => useUiStore.getState().setThemeStyle("orchestrate"));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			expect(state.lastTerminal).toBe(terminal);
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(terminal.clear).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
+	it("keeps terminals opaque outside macOS even with a saved transparency preference", () => {
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme="dark" />);
+		try {
+			expect(state.lastTerminal!.options.allowTransparency).toBe(false);
+			expect(state.lastTerminal!.options.theme).toMatchObject({ background: "#0d1117" });
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
 		}
 	});
 
@@ -1965,7 +2010,8 @@ describe("XtermTerminal", () => {
 	it.each([
 		["Cmd+Left", { key: "ArrowLeft", metaKey: true }, "\x01"],
 		["Cmd+Right", { key: "ArrowRight", metaKey: true }, "\x05"],
-	])("normalizes macOS %s into beginning/end-of-line input", (_name, init, expected) => {
+		["Cmd+Backspace", { key: "Backspace", metaKey: true }, "\x15"],
+	])("normalizes macOS %s into readline input", (_name, init, expected) => {
 		setNavigatorPlatform("MacIntel");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
@@ -1987,14 +2033,14 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
 	});
 
-	it("does not re-fire macOS Cmd+Left on the following keyup", () => {
+	it.each(["ArrowLeft", "Backspace"])("does not re-fire macOS Cmd+%s on the following keyup", (key) => {
 		setNavigatorPlatform("MacIntel");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		const keyDown = {
 			type: "keydown",
-			key: "ArrowLeft",
+			key,
 			metaKey: true,
 			ctrlKey: false,
 			shiftKey: false,
@@ -2032,6 +2078,28 @@ describe("XtermTerminal", () => {
 		}
 	});
 
+	it.each([
+		["Option/Alt+Backspace", { key: "Backspace", altKey: true }, "\x1b\x7f"],
+		["Ctrl+Backspace", { key: "Backspace", ctrlKey: true }, "\x1b\x7f"],
+	])("keeps macOS %s as word-backwards deletion", (_name, init, expected) => {
+		setNavigatorPlatform("MacIntel");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const event = {
+			type: "keydown",
+			metaKey: false,
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+			...init,
+		} as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(event)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
+	});
+
 	it("keeps Windows Ctrl+Left and Ctrl+Right as word movement", () => {
 		setNavigatorPlatform("Win32");
 		const onInput = vi.fn();
@@ -2055,25 +2123,47 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith("\x1b[1;5C", "shortcut");
 	});
 
-	it("does not treat the Windows key plus arrows as macOS line-boundary shortcuts", () => {
+	it("keeps Windows Ctrl+Backspace as word-backwards deletion", () => {
 		setNavigatorPlatform("Win32");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		const event = {
 			type: "keydown",
-			key: "ArrowLeft",
-			metaKey: true,
-			ctrlKey: false,
+			key: "Backspace",
+			ctrlKey: true,
+			metaKey: false,
 			shiftKey: false,
 			altKey: false,
 			preventDefault: vi.fn(),
 			stopPropagation: vi.fn(),
 		} as unknown as KeyboardEvent;
-		expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
-		expect(event.preventDefault).not.toHaveBeenCalled();
-		expect(onInput).not.toHaveBeenCalled();
+		expect(state.lastTerminal!.keyHandler!(event)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith("\x1b\x7f", "shortcut");
 	});
+
+	it.each(["ArrowLeft", "Backspace"])(
+		"does not treat the Windows key plus %s as a macOS readline shortcut",
+		(key) => {
+			setNavigatorPlatform("Win32");
+			const onInput = vi.fn();
+			render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+			const event = {
+				type: "keydown",
+				key,
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+			} as unknown as KeyboardEvent;
+			expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
+			expect(event.preventDefault).not.toHaveBeenCalled();
+			expect(onInput).not.toHaveBeenCalled();
+		},
+	);
 
 	it("does not re-fire a shortcut on the keyup that follows its keydown", () => {
 		// xterm.js invokes attachCustomKeyEventHandler on keydown, keyup, AND
@@ -2375,6 +2465,17 @@ describe("XtermTerminal", () => {
 		expect(sendInputs[index]).not.toHaveBeenCalled();
 	});
 
+	it("does not forward colour replies xterm makes while parsing a replayed scrollback", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
+		// The replay is still being parsed: its write has not called back yet.
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("does not forward an unsolicited cursor-position-shaped input", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
@@ -2545,10 +2646,36 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 		// rowHeight = fontSize(12) * lineHeight(1.35) = 16.2px; -50px => 3 lines up.
-		const suppressed = state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent);
+		const suppressed = state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent);
 
 		expect(suppressed).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<64;1;1M", "wheel");
+	});
+
+	it.each([
+		["transcript body", 180, 70, 5, 2],
+		["pinned header", 180, 50, 5, 1],
+		["outside top-left", 90, 40, 1, 1],
+		["outside bottom-right", 2000, 2000, 80, 24],
+	])("reports actual one-based wheel coordinates over %s", (_name, clientX, clientY, column, row) => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		// Offset grid with 20px cells: models a moved and CSS-scaled terminal.
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({
+			left: 100, top: 50, width: 1600, height: 480,
+		} as DOMRect);
+		for (const [deltaY, button] of [[-1, 64], [1, 65]]) {
+			state.lastTerminal!.wheelHandler!({ clientX, clientY, deltaY, deltaMode: 1 } as WheelEvent);
+			expect(onInput).toHaveBeenLastCalledWith(`\x1b[<${button};${column};${row}M`, "wheel");
+		}
+	});
+
+	it("does not invent mouse coordinates for an unmeasured terminal", () => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({ width: 0, height: 0 } as DOMRect);
+		state.lastTerminal!.wheelHandler!({ clientX: 100, clientY: 100, deltaY: -1, deltaMode: 1 } as WheelEvent);
+		expect(onInput).not.toHaveBeenCalled();
 	});
 
 	it("handles line- and page-mode wheels (Linux/Windows mice), not just pixel deltas", () => {
@@ -2556,12 +2683,12 @@ describe("XtermTerminal", () => {
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		// DOM_DELTA_LINE: deltaY is already in lines, so one notch up => one report.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M", "wheel");
 
 		// DOM_DELTA_PAGE: one page down => rows (24) line reports down.
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<65;1;1M".repeat(24), "wheel");
 	});
 
@@ -2569,11 +2696,11 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<65;1;1M", "wheel");
 
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
 		expect(onInput).not.toHaveBeenCalled();
 	});
 
@@ -2585,11 +2712,11 @@ describe("XtermTerminal", () => {
 
 		// rowHeight = 16.2px; -50px => 3 lines up. The pane never sees these bytes;
 		// we scroll the terminal's retained scrollback locally instead.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(-3);
 		expect(onInput).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(1);
 		expect(onInput).not.toHaveBeenCalled();
 	});
@@ -2602,11 +2729,11 @@ describe("XtermTerminal", () => {
 		// page key per notch is the best fallback.
 		state.lastTerminal!.buffer.active.type = "alternate";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 		expect(state.lastTerminal!.scrollLines).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[6~", "wheel");
 	});
 
@@ -2619,7 +2746,7 @@ describe("XtermTerminal", () => {
 		// via the paneScrollsByKeyboard hint, tested separately.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M".repeat(3), "wheel");
 	});
 
@@ -2630,7 +2757,7 @@ describe("XtermTerminal", () => {
 		// hint this would send SGR reports; the hint forces page keys.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 	});
 
@@ -2683,17 +2810,15 @@ describe("XtermTerminal", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("requires Ctrl for a session link while an application captures mouse input", () => {
+	it("opens a session link on a plain click while an application captures mouse input", () => {
 		const onSessionLinkOpen = vi.fn();
 		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 		const handler = (state.lastTerminal!.options.linkHandler as {
 			activate: (event: MouseEvent, uri: string) => void;
 		}).activate;
-		handler({ ctrlKey: false } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
-		handler({ ctrlKey: true } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).toHaveBeenCalledTimes(1);
+		handler({ ctrlKey: false, metaKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
 	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {
@@ -2846,6 +2971,102 @@ describe("XtermTerminal", () => {
 		// dragenter bumped, or the next folder drag inherits a stale depth and
 		// never shows the overlay.
 		expect(bubbled).toHaveBeenCalledTimes(1);
+	});
+
+	it("types a sandbox path quoted for its shell, so a file name is never run", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/it's a $(id) `id`; x & y | z.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const file = new File(["hello"], "it's a $(id) `id`; x & y | z.txt", { type: "text/plain" });
+
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/it'\\''s a $(id) `id`; x & y | z.txt' ", "paste"));
+	});
+
+	it("takes no dropped files when the session cannot take them", async () => {
+		const saveDroppedFile = vi.fn();
+		window.ao!.terminal.saveDroppedFile = saveDroppedFile;
+		const onInput = vi.fn();
+		const { container } = render(<XtermTerminal theme="dark" saveDroppedFile={null} onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+		const event = createEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		fireEvent(container.firstElementChild!, event);
+		// Left to the window, which ignores a dropped file.
+		expect(event.defaultPrevented).toBe(false);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(saveDroppedFile).not.toHaveBeenCalled();
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
+	it("refuses a dropped file over the session's limit before reading it", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/small.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={4} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const big = new File(["hello"], "big.txt", { type: "text/plain" });
+		const small = new File(["hi"], "small.txt", { type: "text/plain" });
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [big, small]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/small.txt' ", "paste"));
+		expect(saveDroppedFile).toHaveBeenCalledTimes(1);
+		expect(saveDroppedFile).toHaveBeenCalledWith({ name: "small.txt", bytes: expect.any(Uint8Array) });
+	});
+
+	it("shows that a dropped file is being placed, then says why one could not be, without blocking the terminal", async () => {
+		let finishPlacing!: (path: string) => void;
+		const saveDroppedFile = vi.fn(({ name }: { name: string }) => name === "notes.txt"
+			? new Promise<string>((resolve) => (finishPlacing = resolve))
+			: Promise.reject(new Error("This session does not allow workspace writes.")));
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={1024 * 1024} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const files = [
+			new File(["hello"], "notes.txt", { type: "text/plain" }),
+			new File(["hello"], "locked.txt", { type: "text/plain" }),
+			new File([new Uint8Array(1024 * 1024 + 1)], "huge.bin", { type: "application/octet-stream" }),
+		];
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, files) });
+		const placing = await screen.findByRole("status");
+		expect(placing).toHaveTextContent("Attaching 3 files…");
+		expect(placing).toHaveClass("pointer-events-none");
+		finishPlacing("/workspace/.ao/attachments/notes.txt");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Couldn’t attach locked.txt: This session does not allow workspace writes.");
+		expect(alert).toHaveTextContent("Couldn’t attach huge.bin: The file is larger than 1 MB, the most this session takes.");
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		// The file that was placed is still typed.
+		expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/notes.txt' ", "paste");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows a local save's progress only when it is slow", async () => {
+		vi.useFakeTimers();
+		try {
+			let finish!: (path: string) => void;
+			window.ao!.terminal.saveDroppedFile = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
+			const { container } = render(<XtermTerminal theme="dark" />);
+			fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [new File(["x"], "quick.txt")]) });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(100);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(400);
+			});
+			expect(screen.getByRole("status")).toHaveTextContent("Attaching quick.txt…");
+			await act(async () => {
+				finish("/tmp/ao-dropped/quick.txt");
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	// Regression: a dropped folder is the app-wide "open as project" gesture

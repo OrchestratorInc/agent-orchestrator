@@ -4,12 +4,14 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrchestratorChildren, type OrchestratorChildView } from "../hooks/useOrchestratorChildren";
 import { cn } from "../lib/utils";
+import { prRepositoryFromUrl, prsSpanRepositories } from "../lib/pr-display";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { captureRendererEvent } from "../lib/telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { Pressable } from "./ui/pressable";
 
 /**
  * The Workers section of a cloud orchestrator's Summary tab: every session the
@@ -78,10 +80,9 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 			)}
 			data-testid="orchestrator-child-row"
 		>
-			<button
-				className="flex w-full min-w-0 cursor-pointer items-center gap-2 text-left"
+			<Pressable
+				className="flex w-full min-w-0 cursor-pointer items-center gap-2"
 				onClick={onOpen}
-				type="button"
 			>
 				<span
 					aria-hidden="true"
@@ -91,11 +92,11 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 				<AgentAvatar className="size-4 shrink-0" decorative provider={child.provider} />
 				<span className="min-w-0 flex-1 truncate text-sm">{child.title}</span>
 				<span className="shrink-0 text-xs text-settings-muted">{statusLabel}</span>
-			</button>
+			</Pressable>
 			{child.prs.length > 0 ? (
 				<div className="mt-1 flex flex-wrap items-center gap-1.5 pl-4">
 					{child.prs.map((pr) => (
-						<PullRequestChip key={pr.url || pr.number} pr={pr} />
+						<PullRequestChip key={pr.url || pr.number} pr={pr} showRepository={prsSpanRepositories(child.prs)} />
 					))}
 				</div>
 			) : null}
@@ -103,18 +104,21 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 	);
 }
 
-function PullRequestChip({ pr }: { pr: PullRequestFacts }) {
+function PullRequestChip({ pr, showRepository = false }: { pr: PullRequestFacts; showRepository?: boolean }) {
 	const { t } = useTranslation();
+	// A multi-repository worker can have a PR on each repository; name it then.
+	const repository = showRepository ? prRepositoryFromUrl(pr.url) : undefined;
+	const label = `${repository ? `${repository} ` : ""}${t("pr.short")} #${pr.number}`;
 	const stateLabel = t(`pr.state.${pr.state}`, { defaultValue: pr.state });
 	const ciSuffix = pr.ci && pr.ci !== "unknown" ? ` · CI ${pr.ci}` : "";
 	return (
 		<ProductExternalLink
-			ariaLabel={`${t("pr.short")} #${pr.number}`}
+			ariaLabel={label}
 			className="truncate text-xs text-settings-muted underline-offset-2 hover:underline"
 			href={pr.url}
 			stopPropagation
 		>
-			{t("pr.short")} #{pr.number} · {stateLabel}
+			{label} · {stateLabel}
 			{ciSuffix}
 		</ProductExternalLink>
 	);

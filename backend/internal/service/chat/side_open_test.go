@@ -29,9 +29,48 @@ type connectedSideForkDriver struct {
 	// mainConfig is the main session's start config, kept to prove sides copy
 	// rather than mutate it.
 	mainConfig ports.ChatStartConfig
+	onFork     func(context.Context) error
+	beforeFork func(context.Context) error
+	afterFork  func(context.Context) error
 }
 
-func (d *connectedSideForkDriver) ForkIntoHost(_ context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if d.beforeFork != nil {
+		if err := d.beforeFork(ctx); err != nil {
+			return nil, err
+		}
+	}
+	operationCtx := ctx
+	var release func()
+	if cfg.AcquireForkSource != nil {
+		var err error
+		ctx, release, err = cfg.AcquireForkSource(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if d.onFork != nil {
+		if err := d.onFork(ctx); err != nil {
+			if release != nil {
+				release()
+			}
+			return nil, err
+		}
+	}
+	if release != nil {
+		release()
+	}
+	ctx = operationCtx
+	if cfg.RecordFork != nil {
+		if err := cfg.RecordFork(ctx, "fork-"+string(cfg.SessionID)); err != nil {
+			return nil, err
+		}
+	}
+	if d.afterFork != nil {
+		if err := d.afterFork(ctx); err != nil {
+			return nil, err
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	conv := newFakeConversation()
@@ -48,6 +87,9 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 	main := newFakeConversation()
+	caps := productionCaps()
+	caps[ports.ChatCapabilityFork] = true
+	main.setCapabilities(caps)
 	driver := &connectedSideForkDriver{}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 		if cfg.SessionID != testSession {

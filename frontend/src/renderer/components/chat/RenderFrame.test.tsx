@@ -8,6 +8,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -62,6 +63,32 @@ describe("render activity", () => {
 		render(<ActivityRow activity={renderActivity()} />);
 		act(() => setApiBaseUrl("http://127.0.0.1:3555"));
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
+	});
+
+	it("toggles reflow without reloading and shares the choice with the expanded page", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={renderActivity()} />);
+		const inline = frame();
+		const src = inline.getAttribute("src");
+		const sent = vi.spyOn(inline.contentWindow!, "postMessage");
+		const wrap = screen.getByRole("button", { name: "Wrap content" });
+		expect(wrap).toHaveAttribute("aria-pressed", "false");
+		await user.click(wrap);
+		expect(wrap).toHaveAttribute("aria-pressed", "true");
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: true }) }), "*");
+		expect(inline.getAttribute("src")).toBe(src);
+
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		const dialog = await screen.findByRole("dialog");
+		const expanded = within(dialog).getByTitle("Turns by day") as HTMLIFrameElement;
+		expect(fragmentOf(expanded)).toMatchObject({ wrapContent: true });
+		const dialogWrap = within(dialog).getByRole("button", { name: "Wrap content" });
+		expect(dialogWrap).toHaveAttribute("aria-pressed", "true");
+		await user.click(dialogWrap);
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: false }) }), "*");
+		await user.click(within(dialog).getByRole("button", { name: "Close" }));
+		expect(wrap).toHaveAttribute("aria-pressed", "false");
+		expect(inline.getAttribute("src")).toBe(src);
 	});
 
 	it("shows a note instead of a frame in a remote host's chat", () => {
@@ -390,15 +417,24 @@ describe("render activity", () => {
 		const open = vi.spyOn(window, "open").mockReturnValue(null);
 		try {
 			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "Wrap content" }));
 			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
 			expect(open).toHaveBeenCalledTimes(1);
 			const [url, target, features] = open.mock.calls[0]!;
 			expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
-			expect(JSON.parse(decodeURIComponent(String(url).split("#ao-theme=")[1]!)).displayMode).toBe("fullscreen");
+			expect(JSON.parse(decodeURIComponent(String(url).split("#ao-theme=")[1]!))).toMatchObject({ displayMode: "fullscreen", wrapContent: true });
 			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
 		} finally {
 			open.mockRestore();
 		}
+	});
+
+	it("opens the page in the session's Browser panel straight from the inline frame", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
+		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
 	});
 });
 
@@ -472,6 +508,15 @@ describe("artifact activity", () => {
 		expect(artifactFrame().style.height).toBe("520px");
 	});
 
+	it("offers wrapping for HTML artifacts too", async () => {
+		const user = userEvent.setup();
+		renderArtifact();
+		const inline = artifactFrame();
+		const sent = vi.spyOn(inline.contentWindow!, "postMessage");
+		await user.click(screen.getByRole("button", { name: "Wrap content" }));
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: true, scrollable: true }) }), "*");
+	});
+
 	it("caps the inline artifact at 640 and lets the page scroll inside it, so a page sized to its viewport cannot ratchet the frame", () => {
 		renderArtifact();
 		const fragment = JSON.parse(decodeURIComponent(artifactFrame().getAttribute("src")!.split("#ao-theme=")[1]!));
@@ -509,21 +554,17 @@ describe("artifact activity", () => {
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
 		// The session lists no preview for this path.
-		expect(within(dialog).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 	});
 
-	it("opens the session's preview of the artifact in the Browser panel and closes the dialog", async () => {
+	it("opens the artifact in the Artifacts tab and closes the dialog", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
 			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(dialog).getByRole("button", { name: "Open in Browser panel" }));
+			await user.click(within(dialog).getByRole("button", { name: "Open in Artifacts tab" }));
 			expect(screen.queryByRole("dialog")).toBeNull();
-			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
-			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
-			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
-			expect(request.method).toBe("POST");
-			expect(await request.json()).toEqual({ url: previewUrl });
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
+			expect(fetch).not.toHaveBeenCalled();
 		} finally {
 			fetch.mockRestore();
 		}
@@ -535,20 +576,17 @@ describe("artifact activity", () => {
 		expect(header).toHaveTextContent("Artifact");
 		expect(header).toHaveTextContent("Q3 (final).html");
 		// The session lists no preview for this artifact, so there is nothing to open.
-		expect(within(header).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 	});
 
-	it("opens the artifact in the Browser panel straight from the card", async () => {
+	it("opens the artifact in the Artifacts tab straight from the card", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
 			const user = userEvent.setup();
 			renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Browser panel" }));
-			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
-			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
-			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
-			expect(await request.json()).toEqual({ url: previewUrl });
+			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" }));
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
+			expect(fetch).not.toHaveBeenCalled();
 		} finally {
 			fetch.mockRestore();
 		}

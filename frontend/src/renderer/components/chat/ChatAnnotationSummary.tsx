@@ -1,10 +1,17 @@
+import { FileAnnotationPreview } from "./FileAnnotationPreview";
+import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { MessageSquareQuote, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 
 export interface ChatAnnotationSummaryItem {
+	kind?: "chat" | "file";
+	fileReference?: ChatFileReference;
+	order?: number;
 	text: string;
 	conversationId?: string;
 	id?: string;
@@ -16,6 +23,7 @@ interface ChatAnnotationSummaryProps {
 	annotations: readonly ChatAnnotationSummaryItem[];
 	onSelect?: (annotation: ChatAnnotationSummaryItem) => void;
 	onRemove?: (annotation: ChatAnnotationSummaryItem) => void;
+	onRemoveAll?: () => void;
 	disabled?: boolean;
 	className?: string;
 }
@@ -25,61 +33,105 @@ export function ChatAnnotationSummary({
 	annotations,
 	onSelect,
 	onRemove,
+	onRemoveAll,
 	disabled = false,
 	className,
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
+	annotations = [...annotations].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 	const { t } = useTranslation();
 	const triggerRef = useRef<HTMLButtonElement>(null);
+	const interactedOutside = useRef(false);
+	const removeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const pendingRemoval = useRef<{ annotation: ChatAnnotationSummaryItem; index: number } | null>(null);
+	// Wait for the caller to remove the item before focusing the updated list.
+	useLayoutEffect(() => {
+		const pending = pendingRemoval.current;
+		if (!pending || annotations.some((item) => (pending.annotation.id ? item.id === pending.annotation.id : item === pending.annotation))) return;
+		pendingRemoval.current = null;
+		if (annotations.length === 0) setOpen(false);
+		else removeRefs.current[Math.min(pending.index, annotations.length - 1)]?.focus({ preventScroll: true });
+	}, [annotations]);
 	if (annotations.length === 0) return null;
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
+	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2";
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>
-				<button
-					ref={triggerRef}
-					type="button"
-					disabled={disabled}
-					aria-label={label}
-					className={cn(
-						"inline-flex w-fit max-w-full select-none self-start min-w-0 items-center gap-1.5 rounded-[10px] border border-logo-accent/25 bg-logo-accent/5 px-2.5 py-1.5 text-[11px] leading-tight text-muted-foreground transition-colors hover:bg-logo-accent/10 disabled:cursor-not-allowed disabled:opacity-50",
-						className,
-					)}
-				>
-					<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-					<span>{label}</span>
-				</button>
-			</PopoverTrigger>
-			<PopoverContent align="start" side="top" className="w-[min(22rem,90vw)] p-1.5 shadow-xl" onCloseAutoFocus={(event) => {
-				// Returning focus to the trigger must not scroll the composer/message
-				// back into view after a row has just navigated to its source.
-				event.preventDefault();
-				triggerRef.current?.focus({ preventScroll: true });
-			}}>
-				<div className="space-y-1" aria-label={t("chat.annotationReferences")}>
+			<div className={cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded bg-interactive-hover transition-colors", !disabled && "hover:bg-interactive-active", className)}>
+				<PopoverTrigger asChild>
+					<Pressable
+						ref={triggerRef}
+						disabled={disabled}
+						aria-label={label}
+						className={cn("inline-flex h-7 w-full min-w-0 select-none items-center gap-1.5 rounded px-1.5 text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemoveAll && "pr-7")}
+					>
+						<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
+						<span className="truncate">{label}</span>
+					</Pressable>
+				</PopoverTrigger>
+				{onRemoveAll ? (
+					<Button
+						type="button"
+						variant="destructive-ghost"
+						size="icon-xs"
+						disabled={disabled}
+						aria-label={t("chat.removeAllAnnotations")}
+						className={removeClass}
+						onClick={() => {
+							setOpen(false);
+							onRemoveAll();
+						}}
+					>
+						<X aria-hidden="true" className="size-3" />
+					</Button>
+				) : null}
+			</div>
+			<PopoverContent
+				onClick={(event) => event.stopPropagation()}
+				align="start"
+				side="top"
+				className="w-[min(22rem,90vw)] p-2"
+				onInteractOutside={() => { interactedOutside.current = true; }}
+				onCloseAutoFocus={(event) => {
+					// Outside interaction already chose a focus target. Stealing it back
+					// would dismiss another annotation popover that is just opening.
+					event.preventDefault();
+					if (!interactedOutside.current) triggerRef.current?.focus({ preventScroll: true });
+					interactedOutside.current = false;
+				}}
+			>
+				<div className="max-h-[min(24rem,60vh)] space-y-1.5 overflow-y-auto p-0.5" aria-label={t("chat.annotationReferences")}>
 					{annotations.map((annotation, index) => (
-						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-raised/40 p-0.5">
-							<button
-								type="button"
-								className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-logo-accent"
+						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="relative min-w-0 rounded bg-interactive-hover">
+       {annotation.fileReference ? <div className={cn("px-2.5 py-1.5 text-xs", onRemove && "pr-7")}>
+<FileAnnotationPreview reference={annotation.fileReference} onNavigate={() => setOpen(false)} />
+       </div> : <Pressable
+	disabled={disabled}
+	className={cn("block w-full min-w-0 select-none rounded bg-transparent px-2.5 py-1.5 text-xs leading-5 text-popover-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemove && "pr-7")}
 								onClick={() => {
 									onSelect?.(annotation);
-														setOpen(false);
+									setOpen(false);
 								}}
 							>
-								<span className="block max-w-[280px] truncate">{annotation.text}</span>
-							</button>
+								<span className="block truncate">{annotation.text}</span>
+							</Pressable>}
 							{onRemove ? (
-								<button
+								<Button
 									type="button"
+									variant="destructive-ghost"
+									size="icon-xs"
+									ref={(node) => { removeRefs.current[index] = node; }}
 									disabled={disabled}
 									aria-label={t("chat.removeAnnotation", { count: index + 1 })}
-									className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
-									onClick={() => onRemove(annotation)}
+									className={removeClass}
+									onClick={() => {
+										pendingRemoval.current = { annotation, index };
+										onRemove(annotation);
+									}}
 								>
-									<X aria-hidden="true" className="size-3.5" />
-								</button>
+									<X aria-hidden="true" className="size-3" />
+								</Button>
 							) : null}
 						</div>
 					))}

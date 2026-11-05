@@ -10,6 +10,7 @@ import { aoBridge } from "../../lib/bridge";
 import { connectHost, disconnectHost } from "../../lib/host-clients";
 import { useUiStore } from "../../stores/ui-store";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
+import { TooltipProvider } from "../ui/tooltip";
 
 const terminal = vi.hoisted(() => ({ createMux: undefined as undefined | (() => { dispose: () => void }), target: undefined as unknown }));
 class FakeWebSocket extends EventTarget {
@@ -51,6 +52,22 @@ afterEach(async () => {
 	FakeWebSocket.urls = [];
 });
 
+
+/** Opens a harness page from the list and returns it. */
+async function openHarness(agentId: string): Promise<HTMLElement> {
+	const row = await waitFor(() => {
+		const button = document.querySelector<HTMLElement>(`button[data-agent="${agentId}"]`);
+		if (!button) throw new Error(`harness row ${agentId} has not rendered`);
+		return button;
+	});
+	await userEvent.click(row);
+	return waitFor(() => {
+		const page = document.querySelector<HTMLElement>(`div[data-agent="${agentId}"]`);
+		if (!page) throw new Error(`harness page ${agentId} has not opened`);
+		return page;
+	});
+}
+
 it("routes installer, login, readiness, terminal, and cleanup to the selected host without falling back on disconnect", async () => {
 	await appI18n.changeLanguage("en");
 	const localReadiness = readiness(["claude-code", "codex"]);
@@ -87,12 +104,13 @@ it("routes installer, login, readiness, terminal, and cleanup to the selected ho
 	}));
 	await connectHost("http://box-a:3001");
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	const view = render(<QueryClientProvider client={client}><HarnessSettingsSection hostId="box-a" /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessSettingsSection hostId="box-a" /></TooltipProvider></QueryClientProvider>);
 	expect(screen.getByRole("button", { name: "Host" })).toHaveTextContent("Box A");
-	const codex = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+	const codex = await openHarness("codex");
 	await userEvent.click(await within(codex).findByRole("button", { name: "Install" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/codex/install"));
-	const claude = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
+	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
 	await within(claude).findByTestId("remote-auth-terminal");
 	expect(terminal.target).toMatchObject({ kind: "shell", handleId: "auth-a", generation: "2026-09-29T00:00:00Z" });
@@ -148,12 +166,14 @@ it("closes a remote login terminal returned after switching away from its host",
 	}));
 	await connectHost("http://box-a:3001");
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	const view = render(<QueryClientProvider client={client}><HarnessSettingsSection /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessSettingsSection /></TooltipProvider></QueryClientProvider>);
 	await userEvent.click(screen.getByRole("button", { name: "Host" }));
 	await userEvent.click(screen.getByRole("menuitem", { name: "Box A" }));
-	const claude = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/claude-code/auth"));
+	// Host selection lives on the harness list.
+	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
 	await userEvent.click(screen.getByRole("button", { name: "Host" }));
 	await userEvent.click(screen.getByRole("menuitem", { name: "This computer" }));
 	await act(async () => finishAuth(Response.json({

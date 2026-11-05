@@ -8,6 +8,7 @@
 // debug the wrong thing.
 
 // Type-only, so erased at runtime: this module stays free of native imports.
+import type { Endpoint } from "./endpoints";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
@@ -227,9 +228,61 @@ export function describeConnectionFailure(
 	}
 }
 
+/**
+ * Copy for a scanned code none of whose endpoints answered.
+ *
+ * The phone races every endpoint the code carries, so the copy speaks to the
+ * code as a whole rather than naming one address. And a code with no tunnel
+ * in it — shown by the desktop before remote access was ready — can only ever
+ * work on the machine's own network: telling someone on mobile data to check
+ * their Wi-Fi, without saying the code itself is the limit, sends them to
+ * debug the wrong thing. Seen in the field from a photographed code.
+ */
+export function describeUnreachableCode(
+	endpoints: readonly Endpoint[],
+	platform: "ios" | "android" | string,
+): ConnectionErrorCopy {
+	const local = endpoints.find((e) => e.kind === "lan") ?? endpoints[0];
+	const base = describeConnectionFailure("unreachable", {
+		host: local?.host ?? "",
+		port: local ? String(local.port) : "",
+		platform,
+	});
+	// Shown under the scanner, so each message is the fix in one line; the
+	// address that failed is left out because it does not change what to do.
+	const rescan = "scan a new code once remote access is on.";
+	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
+		// Every path failed, the internet one included, so this is not a Wi-Fi
+		// problem. The Local Network hint stays (base keeps it for an iOS code
+		// with a LAN address): a tunnel that is briefly down plus a denied
+		// permission fails both probes, and granting the permission recovers.
+		return {
+			...base,
+			hint: "Make sure Orchestrator is running on that machine.",
+			message: "Make sure Orchestrator is running there with Connect Mobile on.",
+		};
+	}
+	// Tailscale is a remote path too, just not a public one: it works from any
+	// network once both devices are on the tailnet. What the code lacks is the
+	// public tunnel, which is the only path that needs nothing on the phone.
+	if (endpoints.some((e) => e.kind === "tailscale")) {
+		return {
+			...base,
+			title: "Turn on Tailscale",
+			hint: "Connect Tailscale on both devices, or scan a new code.",
+			message: `Connect Tailscale on this phone and that machine, or ${rescan}`,
+		};
+	}
+	return {
+		...base,
+		title: "This code only works nearby",
+		hint: "Scan a new code once remote access has started.",
+		message: `Join the same Wi-Fi as that machine, or ${rescan}`,
+	};
+}
+
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */
-export const LOCAL_NETWORK_HINT =
-	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › Orchestrator.";
+export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in Settings.";
 
 // ---- Failed actions ----------------------------------------------------------
 

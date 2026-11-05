@@ -61,7 +61,7 @@ describe("Android spawn machine selector", () => {
 			onSelectHost,
 			projects: [{ id: "project-1", label: "Project" }], projectId: "project-1", onSelectProject: vi.fn(),
 			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], modelSelection: "__auto__", modelLabel: "Automatic", onSelectModel: vi.fn(),
-			onAttach: vi.fn(), voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
+			onChoosePhoto: vi.fn(), onChooseFile: vi.fn(), voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
 
@@ -73,5 +73,35 @@ describe("Android spawn machine selector", () => {
 		);
 		await act(async () => beta?.props.onPress());
 		expect(onSelectHost).toHaveBeenCalledWith("host-b");
+	});
+
+	it("offers both a photo and a file from the attach button", async () => {
+		const onChoosePhoto = vi.fn();
+		const onChooseFile = vi.fn();
+		const props = {
+			hosts: [{ id: "host-a", label: "Alpha" }], hostId: "host-a", onSelectHost: vi.fn(),
+			projects: [{ id: "project-1", label: "Project" }], projectId: "project-1", onSelectProject: vi.fn(),
+			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], modelSelection: "__auto__", modelLabel: "Automatic", onSelectModel: vi.fn(),
+			onChoosePhoto, onChooseFile, voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
+		} as unknown as Parameters<typeof SpawnComposerControls>[0];
+		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
+
+		const openAttach = async () => {
+			const attach = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Attach")[0];
+			await act(async () => attach.props.onPress());
+		};
+		const choose = async (label: string) => {
+			const row = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) =>
+				node.findAll((child) => String(child.type) === "Text" && child.props.children === label).length > 0,
+			);
+			await act(async () => row?.props.onPress());
+		};
+
+		await openAttach();
+		await choose("Choose photo");
+		expect(onChoosePhoto).toHaveBeenCalledOnce();
+		await openAttach();
+		await choose("Choose file");
+		expect(onChooseFile).toHaveBeenCalledOnce();
 	});
 });

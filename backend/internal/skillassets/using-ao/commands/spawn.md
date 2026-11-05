@@ -14,7 +14,7 @@ ao spawn [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
-| `--claim-pr string` | Immediately claim an existing PR for the spawned session | - |
+| `--claim-pr string` | Claim an existing PR for authorized implementation continuation. Omit for review-only work | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
@@ -45,8 +45,13 @@ ao spawn --project agent-orchestrator --issue 142 --name "fix-session-leak" --pr
 ```
 
 ```bash
-# Spawn a worker and immediately claim an open PR
-ao spawn --project agent-orchestrator --name "review-pr-88" --claim-pr 88 --harness claude-code
+# Spawn a worker to continue implementation on an existing PR
+ao spawn --project agent-orchestrator --name "continue-pr-88" --claim-pr 88 --prompt "Continue implementation on PR 88."
+```
+
+```bash
+# Spawn a normal worker to review someone else's PR without taking ownership
+ao spawn --project agent-orchestrator --name "review-pr-88" --prompt "Review PR 88 and submit only the requested provider review. Do not claim or attach the PR."
 ```
 
 ```bash

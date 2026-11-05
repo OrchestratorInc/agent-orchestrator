@@ -12,7 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Check, LoaderCircle, Plus, Send as SendIcon } from "lucide-react";
+import { Check, LoaderCircle, Plus, Send as SendIcon, type LucideIcon } from "lucide-react";
 import type { FileAnnotationTarget } from "../../shared/file-annotations";
 import {
 	type WorkspaceCompareMode,
@@ -21,6 +21,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useParsedDiff } from "../hooks/useParsedDiff";
 import { useDiffHighlight } from "../hooks/useDiffHighlight";
+import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import type { DiffRow, DiffRowKind } from "../lib/diff-parser";
@@ -65,7 +66,7 @@ export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (t
 }
 
 export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
-	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path].join("\u0000");
+	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path, target.quote ?? ""].join("\u0000");
 }
 
 // Split (old | new) view only means something when both sides have content to
@@ -669,7 +670,7 @@ export function LineFeedbackButtonControl({
 			aria-label={label}
 			aria-expanded={expanded || undefined}
 			className={cn(
-				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30 active:translate-y-0 active:scale-100",
+				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30",
 				gutter
 					? "relative size-5"
 					: "absolute inset-y-0 left-6 my-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/line:opacity-100",
@@ -753,9 +754,13 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	}, [fitHeight, target]);
 	const side = target.side === "file" ? "" : t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const targetLabel =
-		target.side === "file"
+		target.quote != null
+			? t("files.selectionFeedbackTarget", { file: target.path })
+			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
+	// The quoted page selection, unless the box has its own text selected.
+	const quoteToCopy = (box: HTMLTextAreaElement) => (box.selectionStart === box.selectionEnd ? target.quote : undefined);
 	const status = annotation.statusFor(target);
 	const sending = status === "sending";
 	const sent = status === "sent";
@@ -791,6 +796,15 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					)}
 					disabled={sending || sent}
 					onBlur={() => annotation.setDraft(target, text)}
+					// Focusing the box clears the page selection it was opened from, so
+					// Cmd/Ctrl+C (or Edit > Copy) with nothing selected in the box copies
+					// the quoted selection.
+					onCopy={(event) => {
+						const quote = quoteToCopy(event.currentTarget);
+						if (quote === undefined) return;
+						event.preventDefault();
+						event.clipboardData.setData("text/plain", quote);
+					}}
 					onChange={(event) => {
 						const next = event.target.value;
 						setText(next);
@@ -805,6 +819,11 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
 							event.preventDefault();
 							submitAll();
+						} else if (event.key.toLowerCase() === "c" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+							const quote = quoteToCopy(event.currentTarget);
+							if (quote === undefined) return;
+							event.preventDefault();
+							void aoBridge.clipboard.writeText(quote);
 						}
 					}}
 					placeholder={t("files.feedbackPlaceholder")}
@@ -822,23 +841,23 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
 					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
 					<Button
-						className="px-2 text-xs text-muted-foreground hover:text-foreground"
+						className="px-2"
 						disabled={sending}
 						onClick={() => annotation.cancel(target)}
 						size="sm"
 						type="button"
-						variant="ghost"
+						variant="quiet"
 					>
 						{t("files.cancelFeedback")}
 					</Button>
 					<Button
 						aria-label={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
-						className="text-muted-foreground hover:text-foreground disabled:opacity-100"
+						className="disabled:opacity-100"
 						disabled={!text.trim() || sending || sent}
 						size="icon-sm"
 						title={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
 						type="submit"
-						variant="ghost"
+						variant="quiet"
 					>
 						{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" className="text-success" /> : <SendIcon aria-hidden="true" className={cn(!text.trim() && "opacity-50")} />}
 					</Button>
@@ -863,10 +882,10 @@ export function FileAnnotationSendBar({ annotation, className, surface }: { anno
 			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
 				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : null}
 			</span>
-			<Button className="px-2 text-xs text-muted-foreground hover:bg-error/10 hover:text-error focus-visible:text-error active:bg-error/15 dark:hover:bg-error/10" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+			<Button className="px-2" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="destructive-ghost">
 				{t("files.discardFeedback")}
 			</Button>
-			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
+			<Button className="px-2" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
 				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
 				{t("files.sendAllFeedback", { count: written.length })}
 			</Button>
@@ -911,6 +930,23 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
 				<p>{children}</p>
 				{action ?? null}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * A pane with nothing to show: an icon over a short heading and an optional
+ * way out, a little above the middle of the space it fills (where the eye
+ * lands), so it reads as a state of the pane rather than a stray line at its top.
+ */
+export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; title: ReactNode; action?: ReactNode }) {
+	return (
+		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">
+			<span aria-hidden="true" className="flex size-10 items-center justify-center rounded-lg bg-interactive-hover text-muted-foreground">
+				<Icon className="size-5" />
+			</span>
+			<p className="max-w-xs text-heading-sm font-medium text-foreground">{title}</p>
+			{action ?? null}
 		</div>
 	);
 }

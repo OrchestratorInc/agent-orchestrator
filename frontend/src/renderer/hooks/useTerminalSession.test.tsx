@@ -332,9 +332,14 @@ describe("useTerminalSession", () => {
 		act(() => void vi.advanceTimersByTime(500));
 
 		expect(muxes[0].inputs).toEqual([]);
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
+		// The only frame parking sends gives the grid up; it carries no size.
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 120, 40],
+			["handle-1", 0, 0],
+		]);
 		expect(terminal.lines).toContain("output while hidden");
 		expect(muxes).toHaveLength(1);
+		expect(muxes[0].closes).toEqual([]);
 
 		// The same attachment becomes interactive again on return.
 		view.rerender({ daemonReady: true, isVisible: true });
@@ -343,8 +348,77 @@ describe("useTerminalSession", () => {
 		expect(muxes[0].inputs).toEqual([["handle-1", "visible\r"]]);
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
 			["handle-1", 120, 40],
+			["handle-1", 0, 0],
 			["handle-1", 150, 55],
 		]);
+	});
+
+	// The daemon reads a client without a grid as "not showing this terminal".
+	it("gives its grid up when hidden and claims the same grid again when shown", () => {
+		const { view, terminal, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+
+		view.rerender({ daemonReady: true, isVisible: false });
+		view.rerender({ daemonReady: true, isVisible: false, inputDisabled: true });
+		expect(muxes[0].resizes).toEqual([["handle-1", 0, 0]]);
+
+		view.rerender({ daemonReady: true, isVisible: true });
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		terminal.emitResize(80, 24);
+		expect(muxes[0].resizes).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+
+		// Rapid switching sends one frame per change and nothing else.
+		view.rerender({ daemonReady: true, isVisible: false });
+		view.rerender({ daemonReady: true, isVisible: true });
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		expect(muxes[0].resizes.slice(2)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+		expect(muxes).toHaveLength(1);
+	});
+
+	it("gives its grid up while the window is hidden and claims it again on return", () => {
+		const { view, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+		const visibility = vi.spyOn(document, "visibilityState", "get");
+		const setWindowShown = (shown: boolean) => {
+			visibility.mockReturnValue(shown ? "visible" : "hidden");
+			act(() => void document.dispatchEvent(new Event("visibilitychange")));
+		};
+
+		setWindowShown(false);
+		setWindowShown(false);
+		expect(muxes[0].resizes).toEqual([["handle-1", 0, 0]]);
+		setWindowShown(true);
+		setWindowShown(true);
+		expect(muxes[0].resizes).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+
+		// A pane parked behind another tab stays parked when the window returns.
+		view.rerender({ daemonReady: true, isVisible: false });
+		setWindowShown(false);
+		setWindowShown(true);
+		expect(muxes[0].resizes.slice(2)).toEqual([["handle-1", 0, 0]]);
+	});
+
+	it("sends no parking frame for a pane that never claimed a grid, or to a cloud terminal", () => {
+		const parked = setup({ isVisible: false });
+		parked.view.rerender({ daemonReady: true, isVisible: false, inputDisabled: true });
+		expect(parked.muxes[0].opens).toEqual([["handle-1", 0, 0]]);
+		expect(parked.muxes[0].resizes).toEqual([]);
+
+		const cloud = setup({ attachedSession: { ...session, cloud: { orgId: "org-1" } } });
+		cloud.view.rerender({ daemonReady: true, isVisible: false });
+		cloud.view.rerender({ daemonReady: true, isVisible: true });
+		act(() => cloud.view.result.current.syncVisibleSize(80, 24));
+		expect(cloud.muxes[0].resizes).toEqual([]);
 	});
 
 	it("publishes a locally refitted parked grid when the terminal becomes visible", () => {
@@ -360,7 +434,10 @@ describe("useTerminalSession", () => {
 		view.rerender({ daemonReady: true, isVisible: true });
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 132, 47],
+		]);
 	});
 
 	// A tab opened and immediately covered by the next one attaches before it

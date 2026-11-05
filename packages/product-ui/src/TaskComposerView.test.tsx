@@ -69,7 +69,6 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 				selectionMode: "catalog",
 			},
 			fetching: false,
-			loading: false,
 			onModelChange: vi.fn(),
 			onModeChange: vi.fn(),
 		},

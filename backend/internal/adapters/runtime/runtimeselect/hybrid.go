@@ -156,6 +156,15 @@ func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handl
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
 }
 
+func (r *hybridRuntime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
+	backend, raw := r.route(handle)
+	inspector, ok := backend.(ports.WorkloadCommandInspector)
+	if !ok {
+		return 0, errors.New("runtime cannot inspect the commands an agent is running")
+	}
+	return inspector.RunningWorkloadCommands(ctx, raw, normalizeProcessRef(handle, raw, ref))
+}
+
 func normalizeProcessRef(handle, raw ports.RuntimeHandle, ref ports.SupervisedProcessRef) ports.SupervisedProcessRef {
 	if string(ref.SessionID) == handle.ID && raw.ID != handle.ID {
 		ref.SessionID = domain.SessionID(raw.ID)

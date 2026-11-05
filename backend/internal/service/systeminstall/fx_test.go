@@ -78,7 +78,7 @@ func TestFXInstallAndReinstallBlockedByActiveSession(t *testing.T) {
 	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall} {
 		s := newTestService("linux", "bash")
 		s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "fx-1", Harness: domain.HarnessFX}}}
-		if _, err := s.StartAgentOperation(context.Background(), Target("fx"), "official-installer", operation); !errors.Is(err, ErrHarnessActive) {
+		if _, err := s.StartAgentOperation(context.Background(), Target("fx"), "official-installer", operation, ""); !errors.Is(err, ErrHarnessActive) {
 			t.Fatalf("%s while fx session active = %v, want ErrHarnessActive", operation, err)
 		}
 	}

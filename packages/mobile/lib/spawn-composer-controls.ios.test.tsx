@@ -52,6 +52,8 @@ afterEach(async () => {
 describe("iOS spawn machine selector", () => {
 	it("places a checked Run on menu beside the project selector", async () => {
 		const onSelectHost = vi.fn();
+		const onChoosePhoto = vi.fn();
+		const onChooseFile = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
 				hosts={[{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }]}
@@ -67,7 +69,8 @@ describe("iOS spawn machine selector", () => {
 				modelSelection="__auto__"
 				modelLabel="Automatic"
 				onSelectModel={vi.fn()}
-				onAttach={vi.fn()}
+				onChoosePhoto={onChoosePhoto}
+				onChooseFile={onChooseFile}
 				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
 				onSpawn={vi.fn()}
 				busy={false}
@@ -76,7 +79,8 @@ describe("iOS spawn machine selector", () => {
 		});
 
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
-		expect(menus).toHaveLength(4);
+		// Host, project, attach, harness, model.
+		expect(menus).toHaveLength(5);
 		const hostButtons = menus[0].findAll((node) => String(node.type) === "Button");
 		expect(hostButtons.map((node) => [node.props.label, node.props.systemImage])).toEqual([
 			["Alpha", "checkmark"],
@@ -84,5 +88,12 @@ describe("iOS spawn machine selector", () => {
 		]);
 		await act(async () => hostButtons[1].props.onPress());
 		expect(onSelectHost).toHaveBeenCalledWith("host-b");
+
+		const attachButtons = menus[2].findAll((node) => String(node.type) === "Button");
+		expect(attachButtons.map((node) => node.props.label)).toEqual(["Choose Photo", "Choose File"]);
+		await act(async () => attachButtons[0].props.onPress());
+		await act(async () => attachButtons[1].props.onPress());
+		expect(onChoosePhoto).toHaveBeenCalledOnce();
+		expect(onChooseFile).toHaveBeenCalledOnce();
 	});
 });

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
+import { CloseButton } from "./ui/close-button";
+import { Button } from "./ui/button";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
@@ -57,9 +58,10 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 		<section
 			aria-live={isError ? "assertive" : "polite"}
 			className={`${exiting ? "toast-exit" : "toast-enter"} pointer-events-auto flex items-start gap-3 rounded-welcome-panel px-3.5 py-3 text-xs shadow-[var(--shadow-import-modal)] ${
-				isError ? "border border-destructive/40 bg-destructive/10" : "border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]"
+				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
+			data-global-toast=""
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
@@ -69,15 +71,27 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>
 				{toast.body ? <p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p> : null}
 			</div>
-			{toast.dismissible ? (
-				<button
+			{toast.action ? (
+				<Button
 					type="button"
+					variant="ghost"
+					size="xs"
+					onClick={() => {
+						toast.action?.run();
+						dismissGlobalToast(toast.nonce);
+					}}
+					className="-my-1 font-medium"
+					data-toast-action=""
+				>
+					{toast.action.label}
+				</Button>
+			) : null}
+			{toast.dismissible ? (
+				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}
 					onClick={() => dismissGlobalToast(toast.nonce)}
-					className="shrink-0 rounded p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3" />
-				</button>
+					size="icon-xs"
+				/>
 			) : null}
 		</section>
 	);

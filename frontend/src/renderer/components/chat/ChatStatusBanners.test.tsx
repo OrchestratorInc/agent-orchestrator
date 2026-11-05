@@ -1,56 +1,61 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+
+const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
+vi.mock("../../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
+}));
+vi.mock("../../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/host-clients")>()),
+	labelForHost: (hostId: string) => (hostId === "host-air" ? "Macbook Air M1" : undefined),
+}));
 
 // Each of these answers a question the timeline structurally cannot, so the tests are
 // about what is said and when it is withheld — a banner for an ordinary state is noise
 // that teaches readers to ignore the row.
 
 describe("ReauthBanner", () => {
-	it.each(["Unauthorized (401)", "Authentication failed", "OAuth token has been revoked"])(
-		"offers sign-in based on account state for %s",
-		(reason) => {
-			render(<ReauthBanner account={{ reauthRequiredAt: "2026-09-14T00:00:00Z", reauthReason: reason }} harness="claude-code" />);
-			expect(screen.getByRole("alert")).toHaveTextContent(reason);
-			expect(screen.getByText("claude auth login")).toBeInTheDocument();
-		},
-	);
-	it("names the command, because re-authenticating is not something AO can do", () => {
-		render(
-			<ReauthBanner
-				account={{
-					reauthRequiredAt: "2026-08-03T00:00:00Z",
-					reauthReason: "The stored session expired.",
-				}}
-				harness="codex"
-			/>,
-		);
-		expect(screen.getByRole("alert")).toBeInTheDocument();
-		expect(screen.getByText("codex login")).toBeInTheDocument();
-		expect(screen.getByText(/The stored session expired/)).toBeInTheDocument();
+	const failed = { authenticationState: "required" as const, authFailureId: "f1", reauthReason: "OAuth token has been revoked" };
+	const openGlobalSettings = vi.fn();
+	const original = useUiStore.getState().openGlobalSettings;
+	beforeEach(() => useUiStore.setState({ openGlobalSettings }));
+	afterEach(() => {
+		useUiStore.setState({ openGlobalSettings: original });
+		openGlobalSettings.mockReset();
 	});
 
-	it("does not claim that failed work had no side effects", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="codex" />,
-		);
-		expect(screen.queryByText(/worktree is untouched|Nothing will run/i)).not.toBeInTheDocument();
+	it("says the login expired in plain words, without the provider's error", () => {
+		render(<ReauthBanner account={failed} harness="claude-code" />);
+		expect(screen.getByRole("status")).toHaveTextContent("Your Claude Code login has expired. Log in again to keep using this chat.");
+		expect(screen.queryByText(/revoked/)).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("names Claude Code's non-interactive authentication command", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="claude-code" />,
-		);
-		expect(screen.getByText("claude auth login")).toBeInTheDocument();
+	it("opens the Harness page, which starts the login", async () => {
+		render(<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="codex" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "codex", harnessView: "local", startLogin: true, preserveProject: true,
+		});
 	});
 
-	it("falls back to generic wording rather than guessing a command", () => {
-		render(
-			<ReauthBanner account={{ reauthRequiredAt: "2026-08-03T00:00:00Z" }} harness="opencode" />,
-		);
-		expect(screen.queryByText(/login$/)).not.toBeInTheDocument();
-		expect(screen.getByText(/agent’s own CLI/)).toBeInTheDocument();
+	// A remote session runs on its host, so that host's login is the one to fix.
+	it("names a remote host and logs in on it", async () => {
+		render(<ReauthBanner account={failed} harness="claude-code" hostId="host-air" />);
+		expect(screen.getByRole("status")).toHaveTextContent("Your Claude Code login on Macbook Air M1 has expired.");
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", hostId: "host-air", harnessView: "local", startLogin: true, preserveProject: true,
+		});
+	});
+
+	it("logs a cloud session in on the cloud connection", async () => {
+		render(<ReauthBanner account={failed} harness="codex" cloud />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ focusAgentId: "codex", harnessView: "cloud" }));
 	});
 
 	it("stays silent for an account with no credential demand", () => {
@@ -59,22 +64,22 @@ describe("ReauthBanner", () => {
 		);
 		expect(container).toBeEmptyDOMElement();
 	});
+
 	it("dismisses only this failure and displays a new failure", async () => {
 		const account = { authenticationState: "required" as const, authFailureId: "first", reauthRequiredAt: "2026-08-03T00:00:00Z" };
 		const { rerender } = render(<ReauthBanner account={account} harness="codex" />);
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss authentication notice" }));
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		rerender(<ReauthBanner account={{ ...account, planLabel: "Pro" }} harness="codex" />);
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		rerender(<ReauthBanner account={{ ...account, authFailureId: "second" }} harness="codex" />);
-		expect(screen.getByRole("alert")).toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
 	it("uses current authentication state even when historical failure evidence exists", () => {
 		render(<ReauthBanner account={{ authenticationState: "authenticated", reauthRequiredAt: "2026-08-03T00:00:00Z", lastAuthFailureReason: "expired" }} harness="codex" />);
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
-
 });
 
 describe("ThreadStateBanner", () => {
@@ -183,5 +188,40 @@ describe("McpServerBanner", () => {
 		expect(container).toBeEmptyDOMElement();
 		rerender(<McpServerBanner sessionId="mcp-healthy" servers={broken} />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+});
+
+describe("VersionSwitchBanner", () => {
+	afterEach(() => { versionRefreshSetting.enabled = true; });
+
+	it("says nothing for a session on the installed release", () => {
+		const { container } = render(<VersionSwitchBanner />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("tells the user the session moves to the new release when idle", () => {
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Switching to v2.1.300…");
+	});
+
+	it("asks for a resume instead of promising a switch when the agent stopped", () => {
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.308", since: "2026-10-20T00:00:00Z" }} agentStopped />);
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("v2.1.308 installed");
+		expect(status).toHaveTextContent("Resume the agent to start it on the new version.");
+		expect(status).not.toHaveTextContent("Switching");
+	});
+
+	it("stays quiet when moving sessions is turned off", () => {
+		versionRefreshSetting.enabled = false;
+		const { container } = render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("explains a failed switch and that queued messages were kept", () => {
+		versionRefreshSetting.enabled = false;
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" }} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't switch to v2.1.300");
+		expect(screen.getByRole("alert")).toHaveTextContent("queued messages are kept");
 	});
 });

@@ -23,6 +23,10 @@ export function createAppRouter(queryClient: QueryClient) {
 		// branding back over an already-running app.
 		defaultPendingComponent: AppPendingFallback,
 		defaultPendingMs: 0,
+		// The router's default keeps a shown pending component up for at least
+		// 500ms. With pendingMs 0 it always shows, so every launch and reload
+		// held the startup screen for half a second after the data had arrived.
+		defaultPendingMinMs: 0,
 		// Always re-run loaders when a route is preloaded or visited so React
 		// Query's cache is the single source of truth for staleness.
 		defaultPreloadStaleTime: 0,

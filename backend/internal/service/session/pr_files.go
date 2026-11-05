@@ -241,13 +241,23 @@ func prCommitLog(ctx context.Context, root string, pr domain.PullRequest) ([]Com
 }
 
 // prCommits reads up to maxCommits commits in revRange with their changed
-// files. Like the rest of the PR read model it reads revisions only, never the
-// session worktree, so file sizes are left unset: the list only picks and
-// filters files, and reading a file reports its real size.
+// files, reporting any Git failure as an unavailable PR source.
 func prCommits(ctx context.Context, root, revRange string, maxCommits int) ([]CommitSummary, bool, error) {
-	commits, changes, counts, truncated, err := gitCommitLogChanges(ctx, root, revRange, maxCommits, maxCommitLogBytes)
+	commits, truncated, err := revisionCommitList(ctx, root, []string{revRange}, maxCommits)
 	if err != nil {
 		return nil, false, unavailablePRSource()
+	}
+	return commits, truncated, nil
+}
+
+// revisionCommitList reads up to maxCommits commits selected by revArgs with
+// their changed files. It reads revisions only, never the session worktree,
+// so file sizes are left unset: the list only picks and filters files, and
+// reading a file reports its real size.
+func revisionCommitList(ctx context.Context, root string, revArgs []string, maxCommits int) ([]CommitSummary, bool, error) {
+	commits, changes, counts, truncated, err := gitCommitLogChangesArgs(ctx, root, revArgs, maxCommits, maxCommitLogBytes)
+	if err != nil {
+		return nil, false, err
 	}
 	for i := range commits {
 		change := changes[commits[i].SHA]

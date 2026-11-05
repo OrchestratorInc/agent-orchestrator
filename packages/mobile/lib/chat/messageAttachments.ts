@@ -8,13 +8,26 @@ const STAGED_ATTACHMENT_PATH = /^\.ao\/attachments\/(?:attachment|image)-[A-Za-z
 const IMAGE_ATTACHMENT_PATH = /\.(?:png|jpe?g|gif|webp|bmp)$/i;
 
 export function stagedAttachmentParts(text: string): { body: string; attachments: string[] } {
+	const { body, attachments } = editableMessageText(text);
+	return attachments.length ? { body: labelInlineImages(body, attachments), attachments } : { body, attachments };
+}
+
+/**
+ * The prompt as the person wrote it, split from AO's staged-path block. An edit
+ * changes only the body; `withEditedBody` puts the same files back.
+ */
+export function editableMessageText(text: string): { body: string; attachments: string[] } {
 	const match = ATTACHMENT_REFERENCE_BLOCK.exec(text);
 	if (!match?.[1]) return { body: text, attachments: [] };
 	const attachments = match[1].trimEnd().split("\n").map((line) => line.slice(2));
 	// Only reinterpret paths AO itself stages: prose quoting the same wording about
 	// docs/screenshot.png must stay readable text.
 	if (attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path))) return { body: text, attachments: [] };
-	return { body: labelInlineImages(text.slice(0, match.index), attachments), attachments };
+	return { body: text.slice(0, match.index), attachments };
+}
+
+export function withEditedBody(body: string, attachments: string[]): string {
+	return attachments.length ? withAttachmentReferences(body, attachments) : body.trimEnd();
 }
 
 // Desktop's composer writes an inline image chip as its staged path. Every

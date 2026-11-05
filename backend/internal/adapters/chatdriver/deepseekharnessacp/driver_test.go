@@ -26,6 +26,28 @@ func TestConfigureBootsTheACPProfile(t *testing.T) {
 	}
 }
 
+func TestPromptFailureCodeOnlyRecognizesDeepSeekMissingRouteKey(t *testing.T) {
+	const detail = `turn failed: llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service`
+	for _, tc := range []struct {
+		name string
+		err  error
+		want domain.ConversationFailureCode
+	}{
+		{"observed missing key", &acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: detail}, domain.ConversationFailureProviderKeyMissing},
+		{"message-only diagnostic", &acpsdk.RequestError{Code: -32603, Message: "Internal error: " + detail}, domain.ConversationFailureProviderKeyMissing},
+		{"other route", &acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: `turn failed: llm-deepseek: no API key for provider route "other";`}, ""},
+		{"unrelated internal error", &acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: "model service unavailable"}, ""},
+		{"auth code", &acpsdk.RequestError{Code: -32000, Message: "Authentication required", Data: detail}, ""},
+		{"unstructured error", &acpsdk.RequestError{Code: -32603, Message: detail}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := promptFailureCode(tc.err); got != tc.want {
+				t.Fatalf("promptFailureCode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionOptionsCarryModelAndMappedEffort(t *testing.T) {
 	got := sessionOptions(ports.ChatTurnSettings{
 		Model:  `["deepseek-official","deepseek-v4-flash"]`,
@@ -140,6 +162,19 @@ func TestPermissionPolicyAnswersOnceForAutoAndEdits(t *testing.T) {
 	// default stays out of the way entirely.
 	if _, ok := permissionPolicy(ports.PermissionModeDefault, params(&edit)); ok {
 		t.Fatal("default mode answered a permission request")
+	}
+}
+
+func TestSessionPreambleCarriesStandingInstructions(t *testing.T) {
+	blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "follow AO rules"})
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %#v, want one text block", blocks)
+	}
+}
+
+func TestSessionPreambleOmitWhenEmpty(t *testing.T) {
+	if got := SessionPreamble(acpdriver.LaunchConfig{}); got != nil {
+		t.Fatalf("blocks = %#v, want nil", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import {
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
+  InspectorSection,
   SessionInspectorShellView,
   SessionInspectorSummaryView,
   type InspectorReviewLabels,
@@ -79,6 +80,27 @@ describe("SessionInspectorShellView", () => {
     const body = screen.getByTestId("side-slot").parentElement;
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
+  });
+  it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
+    const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
+    const { rerender } = render(<SessionInspectorShellView activeView="summary" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="reviews" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
+    rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
+    expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
+  });
+  it("renders the artifacts view under its own tab", () => {
+    const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
+    render(<SessionInspectorShellView
+      activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
+      artifactsView={<div data-testid="artifacts-slot" />}
+      tabs={withArtifacts} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("artifacts-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
   });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
@@ -191,6 +213,24 @@ describe("portable inspector presentations", () => {
     const context = screen.getByTestId("execution-context");
     const pullRequest = screen.getByText("pull request");
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+        scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
+      />,
+    );
+
+    const setup = screen.getByRole("button", { name: "Setup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("setup log")).toBeNull();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    fireEvent.click(setup);
+    expect(setup).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
   it("omits the PR/artifacts section entirely when no title is given", () => {

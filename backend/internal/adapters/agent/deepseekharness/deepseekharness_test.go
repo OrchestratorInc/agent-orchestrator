@@ -57,21 +57,61 @@ func TestGetLaunchCommandRunsOneHeadlessTask(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandIgnoresSystemPromptFile documents that AO standing
-// instructions have no Harness surface: passing the file as a task argument
-// would run it as work.
-func TestGetLaunchCommandIgnoresSystemPromptFile(t *testing.T) {
+// TestGetLaunchCommandPrependsSystemPrompt documents that AO standing
+// instructions reach the headless profile by prepending them to the positional
+// task: there is no system-prompt flag or hook file, so the task is the only
+// channel that reaches the model.
+func TestGetLaunchCommandPrependsSystemPrompt(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SystemPrompt: "follow AO rules",
+		Prompt:       "task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd) != 4 || cmd[0] != "dsh" || cmd[1] != "--profile" || cmd[2] != "headless" {
+		t.Fatalf("unexpected command prefix: %#v", cmd)
+	}
+	if !strings.Contains(cmd[3], "<ao_standing_instructions>\nfollow AO rules\n</ao_standing_instructions>") ||
+		!strings.HasSuffix(cmd[3], "Task:\ntask") {
+		t.Fatalf("task missing standing instructions delimiter: %q", cmd[3])
+	}
+}
+
+// TestGetLaunchCommandPrefersInlineSystemPromptOverFile pins inline-wins when
+// both are present.
+func TestGetLaunchCommandPrefersInlineSystemPromptOverFile(t *testing.T) {
+	p := &Plugin{resolvedBinary: "dsh"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SystemPrompt:     "inline wins",
 		SystemPromptFile: "/tmp/ao-prompt.md",
 		Prompt:           "task",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"dsh", "--profile", "headless", "task"}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	if !strings.Contains(cmd[3], "inline wins") {
+		t.Fatalf("task = %q, want inline instructions", cmd[3])
+	}
+}
+
+// TestGetLaunchCommandReadsSystemPromptFile covers the file fallback.
+func TestGetLaunchCommandReadsSystemPromptFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "system.md")
+	if err := os.WriteFile(file, []byte("  file rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: "dsh"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		SystemPromptFile: file,
+		Prompt:           "task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmd[3], "file rules") {
+		t.Fatalf("task = %q, want file instructions", cmd[3])
 	}
 }
 

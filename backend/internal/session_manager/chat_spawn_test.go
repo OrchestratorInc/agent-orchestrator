@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,7 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 // chat launcher. Anything else means two writers on one conversation.
 
 type recordingLauncher struct {
+	permissionModes  []ports.PermissionMode
 	preflightErr     error
 	startErr         error
 	turnErr          error
@@ -146,6 +148,13 @@ func (s *historicalChatRestoreStore) ConversationBranch(
 
 func (l *recordingLauncher) SupportsChat(_ domain.AgentHarness) bool { return true }
 
+func (l *recordingLauncher) PermissionModes(context.Context, domain.AgentHarness) ([]ports.PermissionMode, error) {
+	if l.permissionModes != nil {
+		return l.permissionModes, nil
+	}
+	return ports.PermissionModesStrictestFirst, nil
+}
+
 func (l *recordingLauncher) PreflightChat(
 	_ context.Context,
 	harness domain.AgentHarness,
@@ -153,6 +162,9 @@ func (l *recordingLauncher) PreflightChat(
 ) error {
 	l.preflighted = append(l.preflighted, harness)
 	l.preflightPermissions = append(l.preflightPermissions, permissions)
+	if l.permissionModes != nil && !slices.Contains(l.permissionModes, permissions) {
+		return ports.ErrChatPermissionModeUnsupported
+	}
 	return l.preflightErr
 }
 
@@ -261,7 +273,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 		Metadata: domain.SessionMetadata{
 			WorkspacePath: "/ws/mer-1",
 			Model:         "selected-model",
-			Effort:        "low",
+			Effort:        "xhigh",
 			Permissions:   ports.PermissionModeAcceptEdits,
 		},
 	}
@@ -276,7 +288,7 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 	task := launcher.background[0]
 	if launcher.backgroundHarnesses[0] != rec.Harness || task.WorkspacePath == rec.Metadata.WorkspacePath ||
-		task.Model != rec.Metadata.Model || task.Effort != rec.Metadata.Effort || task.Permissions != ports.PermissionModeAcceptEdits {
+		task.Model != rec.Metadata.Model || task.Effort != "" || task.Permissions != ports.PermissionModeAcceptEdits {
 		t.Fatalf("background task = %#v", task)
 	}
 	if _, err := os.Stat(task.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
@@ -291,6 +303,9 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	if _, ok := task.Env[EnvSessionID]; ok {
 		t.Fatalf("background task inherited %s: %#v", EnvSessionID, task.Env)
 	}
+	if worker := st.sessions[rec.ID]; worker.Metadata.Model != rec.Metadata.Model || worker.Metadata.Effort != rec.Metadata.Effort {
+		t.Fatalf("background task changed worker model/effort: %#v", worker.Metadata)
+	}
 }
 
 func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
@@ -302,7 +317,7 @@ func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
 	}
 }
 
-func TestChatSpawnPersistsResolvedEffortForBackgroundTasks(t *testing.T) {
+func TestChatSpawnPersistsResolvedEffort(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		override bool
@@ -1477,7 +1492,7 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
 		}
 	}
-	if got := mgr.aoMCPServers(domain.HarnessUnreal, launcher.started[0].Env); got != nil {
+	if got := mgr.aoMCPServers(context.Background(), domain.HarnessUnreal, launcher.started[0].Env); got != nil {
 		t.Fatalf("unreal agent got tool servers %+v; its driver refuses them", got)
 	}
 }
@@ -1855,7 +1870,7 @@ func TestChatSpawnInstallsAgentHooksBeforeControllerStart(t *testing.T) {
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 			mgr := New(Deps{
 				Runtime:   &fakeRuntime{},
-				Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+				Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 				Workspace: &fakeWorkspace{path: wsDir},
 				Store:     st,
 				Messenger: &fakeMessenger{},
@@ -1912,7 +1927,7 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 		Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store:     st,
 		Messenger: &fakeMessenger{},
@@ -1939,9 +1954,11 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 
 // TestChatSpawnWritesCommandCodeSessionStartHook drives a fresh Chat spawn
 // through the real Command Code adapter and asserts the workspace actually
-// receives the SessionStart hook that injects the standing instructions. A
-// prompt file without this hook is the exact gap reported against fresh Chat
-// workers and orchestrators.
+// receives the managed hooks (SessionStart for the TUI lifecycle plus
+// PreToolUse/PostToolUse/Stop for activity). The SessionStart hook itself
+// never fires under `cmd acp` (issue #6784); Chat standing instructions ride
+// the first prompt preamble instead, so this asserts hook installation — not
+// Chat delivery.
 func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	dataDir := t.TempDir()
 	wsDir := t.TempDir()
@@ -1950,7 +1967,7 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: commandcode.New()},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: commandcode.New()},
 		Workspace: &fakeWorkspace{path: wsDir},
 		Store:     st,
 		Messenger: &fakeMessenger{},
@@ -1978,5 +1995,86 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("settings.json missing %q; standing instructions have no delivery hook:\n%s", want, raw)
 		}
+	}
+}
+
+type suggestionRecordingLauncher struct {
+	*recordingLauncher
+	source domain.SessionID
+	turn   string
+}
+
+func (l *suggestionRecordingLauncher) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turn string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+	l.source, l.turn = id, turn
+	return l.RunBackgroundTask(ctx, harness, cfg, prompt)
+}
+func TestRunPromptSuggestionTaskPassesForkSourceWithScratchPolicy(t *testing.T) {
+	launcher := &suggestionRecordingLauncher{recordingLauncher: &recordingLauncher{}}
+	m, st, _ := newChatManager(launcher)
+	m.dataDir = t.TempDir()
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Metadata: domain.SessionMetadata{WorkspacePath: "/foreground", Model: "selected-model", Permissions: ports.PermissionModeAuto}}
+	st.sessions[rec.ID] = rec
+	got, err := m.RunPromptSuggestionTask(t.Context(), rec.ID, "completed-turn", "suggestion only", "Suggest next message")
+	if err != nil || got != "Generated title" || launcher.source != rec.ID || launcher.turn != "completed-turn" || len(launcher.background) != 1 {
+		t.Fatalf("source=%q turn=%q result=%q err=%v", launcher.source, launcher.turn, got, err)
+	}
+	cfg := launcher.background[0]
+	if launcher.backgroundHarnesses[0] != rec.Harness || cfg.WorkspacePath == rec.Metadata.WorkspacePath || cfg.Model != rec.Metadata.Model || cfg.Permissions != ports.PermissionModeAcceptEdits || cfg.SystemPrompt != "suggestion only" {
+		t.Fatalf("suggestion config=%+v", cfg)
+	}
+	if _, ok := cfg.Env[EnvSessionID]; ok {
+		t.Fatal("suggestion inherited foreground hook identity")
+	}
+	if _, err := os.Stat(cfg.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("scratch workspace survived suggestion")
+	}
+}
+
+func TestChatSpawnDefaultRespectsProviderModes(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		requested, project ports.PermissionMode
+		modes              []ports.PermissionMode
+		want               ports.PermissionMode
+		standalone         bool
+	}{
+		{name: "standalone Kimi", standalone: true, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeDefault},
+		{name: "unset Kimi", modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeDefault},
+		{name: "explicit auto", requested: ports.PermissionModeAuto, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeAuto},
+		{name: "project auto", project: ports.PermissionModeAuto, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeAuto},
+		{name: "supported auto", modes: ports.PermissionModesStrictestFirst, want: ports.PermissionModeAuto},
+		{name: "no substitution for multiple modes", modes: []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeBypassPermissions}, want: ports.PermissionModeAuto},
+		{name: "no implicit bypass", modes: []ports.PermissionMode{ports.PermissionModeBypassPermissions}, want: ports.PermissionModeAuto},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{permissionModes: tc.modes}
+			mgr, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Permissions = tc.project
+			st.projects[string(chatTestProject)] = project
+			projectID := chatTestProject
+			if tc.standalone {
+				projectID = ""
+			}
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker, Harness: domain.HarnessKimi, RequestedMode: domain.SessionModeChat, AgentConfig: ports.AgentConfig{Permissions: tc.requested}})
+			if !slices.Contains(tc.modes, tc.want) {
+				if !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+					t.Fatalf("rejection = %v", err)
+				}
+				if len(launcher.started) != 0 || len(st.sessions) != 0 {
+					t.Fatal("unsupported permission created a session or controller")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(launcher.preflightPermissions) != 1 || launcher.preflightPermissions[0] != tc.want {
+				t.Fatalf("preflight = %v; want %s", launcher.preflightPermissions, tc.want)
+			}
+			if len(launcher.started) != 1 || launcher.started[0].Permissions != tc.want {
+				t.Fatalf("launch = %+v; want %s", launcher.started, tc.want)
+			}
+		})
 	}
 }

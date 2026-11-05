@@ -263,13 +263,24 @@ function isPermissionModeOption(option: ChatConfigOption): boolean {
 		![choice.value, choice.name].some((text) => /^(?:plan|agent|build)(?:[\s_-]mode)?$/i.test(text.trim())));
 }
 
+/**
+ * Whether the provider's own controls stand in for AO's. A catalog it reported
+ * counts as well as the capability: a hibernated chat's snapshot reports no
+ * capabilities, and the catalog remembered from an earlier visit would otherwise
+ * show beside AO's Approvals row until the wake lands.
+ */
+export function usesProviderControls(snapshot: ConversationSnapshot, options: readonly ChatConfigOption[]): boolean {
+	return can(snapshot, "config_options") || options.length > 0;
+}
+
 export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): TurnSettingRow[] {
 	const selectedModel = models.find((model) => model.id === snapshot.settings.model) ?? models.find((model) => model.default);
 	const providerModel = options.some((option) => option.category === "model" || option.id === "model" || option.id === "agent");
 	const providerMode = options.some(isPermissionModeOption);
+	const providerControls = usesProviderControls(snapshot, options);
 	const rows: TurnSettingRow[] = [];
 
-	if ((!can(snapshot, "config_options") || !providerModel) && models.length) {
+	if ((!providerControls || !providerModel) && models.length) {
 		rows.push({
 			id: "model",
 			label: "Model",
@@ -298,7 +309,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 		}
 	}
 
-	if (!can(snapshot, "config_options") || !providerMode) {
+	if (!providerControls || !providerMode) {
 		const approval = snapshot.settings.approvalMode ?? "default";
 		rows.push({
 			id: "approvals",

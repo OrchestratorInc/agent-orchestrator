@@ -209,11 +209,13 @@ function easProjectId(): string | undefined {
 //
 // `ask` decides whether this call may spend the user's one-shot OS permission
 // prompt. Automatic callers (post-connect, foreground refresh) pass false and
-// register only if permission was already granted; only a call the user
-// deliberately initiated — where the app has just explained what notifications
-// are for — passes true. Without this the prompt fires milliseconds after the
-// first successful connect, while the user is still reading the result, with
-// nothing having framed it.
+// register only if permission was already granted. Only a call the user
+// deliberately initiated passes true: the Settings switch, and a successful QR
+// scan in the pair screen. Scanning a code is the user choosing to link this
+// phone to a machine, and without asking there, a new device stays unregistered
+// until the user finds the Settings switch. Never pass true from the automatic
+// reconnect paths: there the prompt would fire on every fresh connect, unrelated
+// to anything the user just did.
 async function registerForPushNow(
 	cfg: ServerConfig,
 	{ ask }: { ask: boolean },

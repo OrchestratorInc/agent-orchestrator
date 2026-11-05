@@ -5,5 +5,5 @@
 	// preload-drift tripwire) would never actually run. Wired into the
 	// renderer-smoke CI job via `npm run typecheck:e2e`.
 	"extends": "./tsconfig.json",
-	"include": ["e2e/**/*.ts", "playwright.config.ts"]
+	"include": ["e2e/**/*.ts", "e2e/**/*.tsx", "playwright.config.ts"]
 }

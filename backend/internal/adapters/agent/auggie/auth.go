@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -26,18 +28,33 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// auggieLocalAuthStatus checks Auggie's own login session first;
+// AUGMENT_SESSION_AUTH in the environment is the fallback.
 func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	if strings.TrimSpace(os.Getenv("AUGMENT_SESSION_AUTH")) != "" {
+	status, ok, err := auggieStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodToken, "AUGMENT_SESSION_AUTH") != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
+
+func auggieStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	return auggieSessionAuthStatus(filepath.Join(home, ".augment", "session.json"))
+	path := filepath.Join(home, ".augment", "session.json")
+	status, ok, err := auggieSessionAuthStatus(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
+	}
+	return status, ok, err
 }
 
 // auggieSessionAuthStatus checks Auggie's documented login session file

@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { MicKey } from "../voice/MicKey";
 import type { VoiceMode, VoiceState } from "../voice/types";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
+import { textSelectionColors } from "../textSelection";
 import type { Theme } from "../theme";
 import { haptics } from "../haptics";
 import type { SendTarget } from "./sendRoute";
@@ -52,7 +53,7 @@ export function Composer({
 					placeholderTextColor={t.textFaint}
 					multiline
 					keyboardAppearance={scheme}
-					selectionColor={t.accent}
+					{...textSelectionColors(t)}
 					// No autoFocus: the bar is always mounted now, so focusing on mount
 					// would pop the keyboard over the terminal every time the screen opens.
 				/>

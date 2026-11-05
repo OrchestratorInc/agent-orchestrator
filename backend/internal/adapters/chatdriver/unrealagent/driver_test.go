@@ -37,10 +37,10 @@ func TestDriverRequiresExplicitBypassPermissions(t *testing.T) {
 	if missing := ports.MissingCapabilitiesForPermissions(caps, ports.PermissionModeBypassPermissions); len(missing) != 0 {
 		t.Fatalf("bypass production capabilities missing %v", missing)
 	}
-	if err := validateStart(t.TempDir(), ports.PermissionModeBypassPermissions, false, nil, nil); err != nil {
+	if err := validateStart(t.TempDir(), ports.PermissionModeBypassPermissions, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateStart(t.TempDir(), ports.PermissionModeDefault, false, nil, nil); err == nil {
+	if err := validateStart(t.TempDir(), ports.PermissionModeDefault, false, nil); err == nil {
 		t.Fatal("default permissions unexpectedly accepted without an approval channel")
 	}
 }
