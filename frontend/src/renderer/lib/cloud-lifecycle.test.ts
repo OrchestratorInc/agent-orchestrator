@@ -67,6 +67,8 @@ describe("cloudChatStartingInPlace", () => {
 		["running", "bootstrapping"],
 		["running", "stopped"],
 		["running", "restoring"],
+		["running", "running"],
+		["running", "failed"],
 	] as const)("holds a Freestyle Chat session on its conversation while %s/%s", (desired, observed) => {
 		expect(cloudChatStartingInPlace(freestyleChat(desired, observed))).toBe(true);
 	});
