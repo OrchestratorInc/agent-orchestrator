@@ -146,6 +146,7 @@ import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { OrchestratorIcon } from "./icons";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
@@ -156,7 +157,7 @@ import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
-import { applyOrder } from "../lib/sidebar-order";
+import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -950,6 +951,7 @@ export function Sidebar({
 	const projectOrder = useSidebarOrderStore((state) => state.projectOrder);
 	const pendingCreatedProjectIds = useSidebarOrderStore((state) => state.pendingCreatedProjectIds);
 	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
+	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
 	useLayoutEffect(() => {
 		// Preserve absent IDs in place: creation can publish its order before the
 		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
@@ -957,8 +959,8 @@ export function Sidebar({
 		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
 	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
-		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
-		[projectOrder, workspaces],
+		() => pinnedFirst(applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"), (workspace) => workspace.id, pinnedProjectIds),
+		[pinnedProjectIds, projectOrder, workspaces],
 	);
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
@@ -1030,7 +1032,9 @@ export function Sidebar({
 		const row = event.currentTarget;
 		const rect = row.getBoundingClientRect();
 		const placement: ProjectDropPlacement = event.clientY <= rect.top + rect.height / 2 ? "before" : "after";
-		if (reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
+		// Pinned and unpinned projects reorder only within their own group.
+		const pinned = useSidebarOrderStore.getState().pinnedProjectIds;
+		if (pinned.includes(activeId) !== pinned.includes(overId) || reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
 			clearProjectDropIndicator();
 			return;
 		}
@@ -1860,6 +1864,11 @@ const ProjectItem = memo(function ProjectItem({
 		setConfirmOpen(true);
 	};
 	const copyToClipboard = useCopyToClipboard();
+	// Pins are a local list preference; remote host rows and the Scratchpad
+	// have their own sections and are not pinnable.
+	const canPin = !isStandalone && !workspace.hostId;
+	const isPinned = useSidebarOrderStore((state) => canPin && state.pinnedProjectIds.includes(workspace.id));
+	const setProjectPinned = useSidebarOrderStore((state) => state.setProjectPinned);
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
@@ -1873,6 +1882,9 @@ const ProjectItem = memo(function ProjectItem({
 		selection.goHome();
 		try {
 			await onRemoveProject(workspace.id);
+			// Project ids come from the folder name, so a stale pin would come
+			// back if the same folder is added again.
+			if (canPin) setProjectPinned(workspace.id, false);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : t("shell.couldNotRemoveProject");
 			setRemoveError(message);
@@ -1932,7 +1944,7 @@ const ProjectItem = memo(function ProjectItem({
 										// Projects header so icons and labels share one left edge.
 										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
-										"pr-sidebar-project-actions",
+										isPinned ? "pr-sidebar-project-actions-pinned" : "pr-sidebar-project-actions",
 										"transition-none",
 										projectIsDragging && "!cursor-grabbing",
 										projectDragInProgress && "hover:text-muted-foreground active:text-muted-foreground",
@@ -1992,6 +2004,7 @@ const ProjectItem = memo(function ProjectItem({
 									>
 										{workspace.name}
 									</span>
+									{workspace.shared ? <SharedProjectMark share={workspace.shared} /> : null}
 									{/* The host badge shrinks and truncates in narrow sidebars so it never
 									    runs under the row actions; half the row stays for the name. */}
 									{hostLabel && (
@@ -2039,6 +2052,24 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
+								{isPinned ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												size="icon-xs"
+												variant="quiet"
+												aria-label={t("shell.unpinProject")}
+												className={HOVER_ACTION_CLASS}
+												data-project-pinned=""
+												onClick={() => setProjectPinned(workspace.id, false)}
+												type="button"
+											>
+												<Pin aria-hidden="true" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.unpinProject")}</TooltipContent>
+									</Tooltip>
+								) : null}
 								{/* A guest may open a shared orchestrator but never start one, and the
 								    project's own actions belong to its organization. */}
 								{!workspace.shared || orchestrator ? (
@@ -2101,7 +2132,13 @@ const ProjectItem = memo(function ProjectItem({
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
-								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+												{canPin ? (
+													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+														{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+														{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+													</DropdownMenuItem>
+												) : null}
+												<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 													<Settings aria-hidden="true" />
 													{t("shell.projectSettings")}
 												</DropdownMenuItem>
@@ -2248,6 +2285,12 @@ const ProjectItem = memo(function ProjectItem({
 					</>
 				) : null}
 				{!isStandalone ? <ContextMenuSeparator /> : null}
+				{canPin ? (
+					<ContextMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
+						{isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+						{isPinned ? t("shell.unpinProject") : t("shell.pinProject")}
+					</ContextMenuItem>
+				) : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -2919,7 +2962,8 @@ const SessionRow = memo(function SessionRow({
 			</HoverCardContent>
 			</HoverCard>
 			<ContextMenuContent className="min-w-44">
-				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -3016,7 +3060,8 @@ const SessionActions = memo(function SessionActions({
 						>
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						</Button>}
-				<Tooltip>
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				{session.cloud?.shared ? null : <Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
 							<SessionArchiveDialog
@@ -3041,7 +3086,7 @@ const SessionActions = memo(function SessionActions({
 						</span>
 					</TooltipTrigger>
 					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>
+				</Tooltip>}
 			</div>
 			{hideAge ? null : <SessionMessageAge session={session} />}
 		</div>

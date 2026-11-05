@@ -195,7 +195,8 @@ export function ArtifactVersionPreview({
 	cloud?: CloudArtifactVersions;
 	hostId?: string;
 	onBack: () => void;
-	onRestore: () => void;
+	/** Absent when this person only views the file. */
+	onRestore?: () => void;
 	path: string;
 	restoreError?: string;
 	restoring: boolean;
@@ -215,10 +216,12 @@ export function ArtifactVersionPreview({
 				<Button onClick={onBack} size="sm" type="button" variant="ghost">
 					{t("artifacts.history.backToCurrent")}
 				</Button>
-				<Button disabled={!query.data || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
-					{restoring ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-					{t(restoring ? "artifacts.history.restoring" : "artifacts.history.restore")}
-				</Button>
+				{onRestore ? (
+					<Button disabled={!query.data || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
+						{restoring ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+						{t(restoring ? "artifacts.history.restoring" : "artifacts.history.restore")}
+					</Button>
+				) : null}
 			</div>
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
 				{query.isPending ? (

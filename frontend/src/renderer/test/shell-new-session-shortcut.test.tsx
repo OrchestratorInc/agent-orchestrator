@@ -137,7 +137,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-router")>()),
 	createFileRoute: () => (options: unknown) => ({ options }),
-	Outlet: () => null,
+	Outlet: () => <input aria-label="Page draft" defaultValue="" />,
 	useMatch: () => undefined,
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
@@ -270,25 +270,33 @@ vi.mock("../components/TitlebarNav", async () => {
 	>("../stores/ui-store");
 	return {
 		useCanGoForward: () => false,
-		TitlebarNav: () => {
+		TitlebarNav: ({ onBack }: { onBack?: () => void }) => {
 			const isSidebarOpen = useStore(sidebarIsVisible);
 			const toggleSidebar = useStore((state) => state.toggleSidebar);
 			return (
-				<button
-					aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-					onClick={toggleSidebar}
-					type="button"
-				/>
+				<>
+					<button type="button" aria-label="Titlebar Back" onClick={onBack} />
+					<button
+						aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+						onClick={toggleSidebar}
+						type="button"
+					/>
+				</>
 			);
 		},
 	};
 });
-vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: () => null }));
-vi.mock("../components/SettingsDialog", () => ({
-	SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-	SettingsPane: () => null,
-	useSettingsPage: () => null,
-}));
+vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: ({ onBack }: { onBack?: () => void }) => <button type="button" aria-label="Windows Back" onClick={onBack} /> }));
+vi.mock("../components/SettingsDialog", async () => {
+	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
+	return {
+		SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+		SettingsPane: () => null,
+		useSettingsPage: () => useStore((state) => state.settingsModal?.scope === "global")
+			? { close: useStore.getState().closeSettings, navigation: { canGoBack: true, canGoForward: false, back: vi.fn(), forward: vi.fn() } }
+			: null,
+	};
+});
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
 	KeyboardShortcutsDialog: ({ open, onCustomize }: { open: boolean; onCustomize?: () => void }) => (open ? <div data-testid="keyboard-shortcuts"><button type="button" onClick={onCustomize}>Customize</button></div> : null),
 }));
@@ -1344,12 +1352,53 @@ describe("shell application shortcut subscriptions", () => {
 		expect(shellMocks.router.history.forward).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		["home", {}, "/"],
+		["project board", { projectId: "proj-1" }, "/projects/$projectId"],
+		["project session", { projectId: "proj-1", sessionId: "sess-1" }, "/projects/$projectId/sessions/$sessionId"],
+		["standalone session", { sessionId: "standalone-1" }, "/sessions/$sessionId"],
+	] as const)("returns from Settings to %s without changing its route or draft", async (_origin, params, route) => {
+		shellMocks.state.routeParams = params;
+		shellMocks.state.matchRouteTarget = route;
+		await renderShell();
+		const draft = screen.getByRole("textbox", { name: "Page draft" });
+		fireEvent.change(draft, { target: { value: "Keep my draft" } });
+		for (const canGoBack of [false, true]) {
+			shellMocks.router.history.canGoBack.mockReturnValue(canGoBack);
+			for (const action of ["Titlebar Back", "Windows Back", "shortcut"]) {
+				act(() => useUiStore.getState().openGlobalSettings("harness"));
+				if (action === "shortcut") emitAppShortcut({ id: "history-back" });
+				else fireEvent.click(screen.getByRole("button", { name: action }));
+				expect(useUiStore.getState().settingsModal).toBeNull();
+				expect(screen.getByRole("textbox", { name: "Page draft" })).toBe(draft);
+				expect(draft).toHaveValue("Keep my draft");
+			}
+		}
+		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		// The next shortcut resumes ordinary route navigation.
+		emitAppShortcut({ id: "history-back" });
+		expect(shellMocks.router.history.back).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not go back past the first route", async () => {
 		shellMocks.router.history.canGoBack.mockReturnValue(false);
 		await renderShell();
 
 		emitAppShortcut({ id: "history-back" });
 
+		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
+	});
+
+	it.each(["Titlebar Back", "Windows Back", "shortcut"])("returns to covered project settings using %s", async (action) => {
+		await renderShell();
+		act(() => {
+			useUiStore.getState().openProjectSettings("proj-1");
+			useUiStore.getState().openGlobalSettings("harness", { preserveProject: true });
+		});
+		if (action === "shortcut") emitAppShortcut({ id: "history-back" });
+		else fireEvent.click(screen.getByRole("button", { name: action }));
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
 	});
 

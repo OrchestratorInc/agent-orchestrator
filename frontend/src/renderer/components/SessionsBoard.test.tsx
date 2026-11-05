@@ -217,6 +217,21 @@ describe("SessionsBoard", () => {
 		}
 	});
 
+	it("offers a guest of a shared project no Task, orchestrator or missing-orchestrator notice", () => {
+		const worker = boardSession({ id: "s1", title: "Upgrade to React 20", status: "working", cloud: { orgId: "org-elsewhere", shared: true } });
+		workspaceQueryMock.mockReturnValue({ data: [{ ...workspaceWithSessions([worker]), kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Asha" } }], isSuccess: true });
+		renderBoard("p1");
+		expect(screen.queryByRole("button", { name: /^(Task|New task)$/ })).toBeNull();
+		expect(screen.queryByText("No orchestrator is running for this project.")).toBeNull();
+	});
+
+	it("keeps Task and the missing-orchestrator notice on the owner's own project", () => {
+		const worker = boardSession({ id: "s1", title: "Upgrade to React 20", status: "working", cloud: { orgId: "org-mine" } });
+		workspaceQueryMock.mockReturnValue({ data: [{ ...workspaceWithSessions([worker]), kind: "cloud", cloudOrgId: "org-mine" }], isSuccess: true });
+		renderBoard("p1");
+		expect(screen.getAllByRole("button", { name: /^(Task|New task)$/ }).length).toBeGreaterThan(0);
+	});
+
 	it("leaves an unflagged cloud project on its board", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);

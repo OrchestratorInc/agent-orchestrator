@@ -27,6 +27,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
 import type { DictationEvent } from "./shared/dictation";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
@@ -455,6 +456,10 @@ const api = {
 				ipcRenderer.off("daemon:status", wrapped);
 			};
 		},
+	},
+	agentLogin: {
+		// Null means no main process can reach the daemon; callers fall back to HTTP.
+		request: (input: AgentLoginRequest) => ipcRenderer.invoke("agentLogin:request", input) as Promise<AgentLoginResponse | null>,
 	},
 	sideChats: {
 		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,

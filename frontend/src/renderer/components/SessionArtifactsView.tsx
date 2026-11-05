@@ -8,6 +8,7 @@ import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
+import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
@@ -15,7 +16,7 @@ import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type Artifac
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import type { ArtifactRow } from "../lib/artifacts";
+import { artifactChangeError, canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -286,7 +287,7 @@ function ArtifactViewerBody({
 						cloud={cloudVersions}
 						hostId={hostId}
 						onBack={() => onPreviewVersion(null)}
-						onRestore={() => {
+						onRestore={readOnly ? undefined : () => {
 							if (previewVersion !== null) restore.mutate({ version: previewVersion }, { onSuccess: () => onPreviewVersion(null) });
 						}}
 						path={artifact.path}
@@ -414,6 +415,9 @@ export function SessionArtifactsView({
 	const cloudUserId = useCloudMeUserId(cloud);
 	const cloudOwner = Boolean(cloudUserId) && session.cloud?.createdByUserId === cloudUserId;
 	const cloudOrgId = session.cloud?.orgId;
+	// Another member's cloud session files open view only: no edit, restore,
+	// delete or copy of them (the control plane refuses the changes too).
+	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
 	// which hands a save to the session's worker.
@@ -423,7 +427,8 @@ export function SessionArtifactsView({
 	);
 	const saveCloudArtifact = useCallback<ArtifactSave>(async ({ content, expectedFileFingerprint, path }) => {
 		if (!cloudOrgId) throw new Error(t("files.saveError"));
-		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint });
+		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint })
+			.catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); });
 		// The file's link changes with it, so the list's refresh reads it again.
 		await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 		return { fileFingerprint: artifact.sha256, size: artifact.size };
@@ -462,6 +467,8 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
+	// A file the agent rewrites while it is open shows the new content.
+	useArtifactFileChanges(session, Boolean(selected) && !hostId);
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file, which for a
 	// cloud file also shows when its access link was refused.
@@ -602,8 +609,8 @@ export function SessionArtifactsView({
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={false}
-							save={cloud ? saveCloudArtifact : undefined}
+							readOnly={!owner}
+							save={cloud && owner ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
@@ -621,7 +628,7 @@ export function SessionArtifactsView({
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
-				{session.cloud && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
+				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>

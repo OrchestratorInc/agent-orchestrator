@@ -32,6 +32,7 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
+	| "teams"
 	| "billing"
 	| "remoteHosts"
 	| "coder"
@@ -127,10 +128,12 @@ export type GlobalToast = {
 	dismissible?: boolean;
 	durationMs?: number;
 	dedupeKey?: string;
+	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
+	action?: { label: string; run: () => void };
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;

@@ -650,7 +650,8 @@ describe("ACP session config options", () => {
 			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
 				.querySelector(".lucide-chevron-down"),
 		).toBeNull();
-		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).toBeNull();
+		// The permission button reads as a select: value first, caret second.
+		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).not.toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Default")).not.toBeInTheDocument();

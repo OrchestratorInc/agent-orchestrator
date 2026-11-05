@@ -246,6 +246,7 @@ var shippedMigrations = map[int64]string{
 	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 	20261101145613011: "20261101145613011_repository_renames.sql",
+	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
 	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
