@@ -46,6 +46,10 @@ type Config struct {
 	// because a single failed probe must not kill the loop. nil means
 	// slog.Default.
 	Logger *slog.Logger
+	// StartAfter holds the periodic loop until it closes; nil starts at once.
+	// The daemon closes it after the startup check, so a runtime that died
+	// while AO was down is judged by that check, not read as a crash first.
+	StartAfter <-chan struct{}
 }
 
 type sessionSource interface {
@@ -63,13 +67,14 @@ type runtimeProber interface {
 // Reaper is the polling timer. Construct it with New; start the background
 // goroutine with Start, or drive a single cycle synchronously with Tick.
 type Reaper struct {
-	sink     runtimeObservationSink
-	sessions sessionSource
-	runtime  runtimeProber
-	workload ports.SupervisedProcessInspector
-	tick     time.Duration
-	clock    func() time.Time
-	logger   *slog.Logger
+	sink       runtimeObservationSink
+	sessions   sessionSource
+	runtime    runtimeProber
+	workload   ports.SupervisedProcessInspector
+	tick       time.Duration
+	clock      func() time.Time
+	logger     *slog.Logger
+	startAfter <-chan struct{}
 
 	// The periodic loop and boot-time reconciliation may call Tick on the same
 	// Reaper concurrently, so the per-run warning set needs synchronization.
@@ -87,6 +92,7 @@ func New(sink runtimeObservationSink, sessions sessionSource, runtime runtimePro
 		tick:                cfg.Tick,
 		clock:               cfg.Clock,
 		logger:              cfg.Logger,
+		startAfter:          cfg.StartAfter,
 		warnedMissingHandle: make(map[domain.SessionID]struct{}),
 	}
 	if workload, ok := runtime.(ports.SupervisedProcessInspector); ok {
@@ -122,6 +128,13 @@ func (r *Reaper) Start(ctx context.Context) <-chan struct{} {
 
 func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
+	if r.startAfter != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.startAfter:
+		}
+	}
 	t := time.NewTicker(r.tick)
 	defer t.Stop()
 	for {

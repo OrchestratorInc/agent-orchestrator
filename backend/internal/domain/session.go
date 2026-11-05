@@ -175,8 +175,9 @@ type SessionMetadata struct {
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
 	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
-	// purpose while keeping the session (an agent exit). Its runtime's death is
-	// then not a crash. It names one launch, so a new launch is never covered.
+	// purpose while keeping the session (an agent exit), or found already gone
+	// at startup. Its runtime's death is then not a crash. It names one launch,
+	// so a new launch is never covered.
 	RuntimeReleasedLaunchID string `json:"-"`
 	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to

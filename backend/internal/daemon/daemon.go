@@ -1274,6 +1274,7 @@ func Run(buildVersion string) error {
 		go func() {
 			defer sentryobs.RecoverBackground()
 			defer close(done)
+			defer lcStack.StartReaperLoop()
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
