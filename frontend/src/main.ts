@@ -184,6 +184,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -3262,6 +3263,11 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+});
+registerAgentLoginIpc({
+	ipcMain,
+	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
+	trustedSender: (sender) => sender === getShellWebContents(),
 });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
