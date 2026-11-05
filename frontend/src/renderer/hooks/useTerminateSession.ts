@@ -164,7 +164,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		},
 		onSuccess: async (artifactsDeleted, session) => {
 			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
-			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
+			void captureRendererEvent("ao.sessions.killed", { project_id: session.workspaceId });
 			// The archive stands either way. A failed delete, or a host whose daemon
 			// predates the option, leaves the files on disk, so say so.
 			if (session.deleteArtifacts && !artifactsDeleted) {
@@ -182,7 +182,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			options.onSuccess?.(session);
 		},
 		onError: (_error, session, context) => {
-			void captureRendererEvent("ao.renderer.session_kill_failed", { project_id: session.workspaceId });
+			void captureRendererEvent("ao.sessions.kill_failed", { project_id: session.workspaceId });
 			// Restore the pre-mutation snapshots so a failed kill un-archives the card
 			// rather than leaving it wrongly terminated.
 			clearOptimisticSessionKill(session.id, session.hostId);

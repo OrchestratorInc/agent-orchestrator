@@ -310,7 +310,7 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		if (!automation) void captureRendererEvent("ao.renderer.automation_create_opened");
+		if (!automation) void captureRendererEvent("ao.automations.create_opened");
 		setProjectId(automation?.projectId ?? "");
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");

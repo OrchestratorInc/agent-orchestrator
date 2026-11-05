@@ -286,7 +286,7 @@ function reportApiError(
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
 	lastApiErrorAt.set(key, now);
-	void captureRendererEvent("ao.renderer.api_error", {
+	void captureRendererEvent("ao.requests.failed", {
 		operation,
 		error_category: category,
 		status,

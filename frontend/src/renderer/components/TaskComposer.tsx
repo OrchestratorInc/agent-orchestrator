@@ -269,10 +269,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
@@ -308,10 +308,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 					);
 				}
 				if (!data?.workerId) throw new Error(t("newTask.noSession"));
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return data.workerId;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				if (
 					err instanceof TaskCreateError &&
 					err.code &&
@@ -353,10 +353,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw new TaskCreateError(apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
-			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
+			void captureRendererEvent("ao.tasks.created", { scope: "standalone" });
 			return data.session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				void captureRendererEvent("ao.tasks.create_failed", { scope: "standalone" });
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
