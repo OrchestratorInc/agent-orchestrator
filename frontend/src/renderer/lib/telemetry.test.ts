@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
+import { autocapturePropertiesForElement } from "posthog-js/lib/src/autocapture";
 import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
@@ -302,6 +303,58 @@ describe("telemetry sanitizers", () => {
 			recordBody: false,
 			recordCrossOriginIframes: false,
 		});
+	});
+
+	it.each(["new_task", "start_task", "open_orchestrator", "open_worker_session", "open_pr", "open_artifact"])("keeps the fixed %s action readable while masking UI content", (action) => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		card.setAttribute("data-session-id", "private-session-id");
+		const button = document.createElement("button");
+		button.setAttribute("data-ph-capture-attribute-ao_action", action);
+		button.setAttribute("title", "private-project-name");
+		button.textContent = "private-session-title";
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		button.append(icon);
+		card.append(button);
+		const config = buildPostHogConfig("ins_test");
+		const { props } = autocapturePropertiesForElement(icon, {
+			e: new MouseEvent("click"),
+			maskAllElementAttributes: config.mask_all_element_attributes!,
+			maskAllText: config.mask_all_text!,
+			elementsChainAsString: true,
+		});
+		const send = config.before_send as (event: unknown) => { properties: Record<string, unknown> };
+		const captured = send({ event: "$autocapture", properties: props });
+		expect(captured.properties.ao_action).toBe(action);
+		expect(captured.properties.$event_type).toBe("click");
+		expect(JSON.stringify(captured)).not.toContain("private-");
+	});
+
+	it("uses the session card action only when no nested control has its own action", () => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		const title = document.createElement("span");
+		title.textContent = "private-session-title";
+		card.append(title);
+		const { props } = autocapturePropertiesForElement(title, {
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+		});
+		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
+		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBe("open_worker_session");
+	});
+
+	it("does not mistake an unlabelled secondary card button for opening the session", () => {
+		const card = document.createElement("div");
+		card.setAttribute("data-ph-capture-attribute-ao_card_action", "open_worker_session");
+		const button = document.createElement("button");
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		button.append(icon);
+		card.append(button);
+		const { props } = autocapturePropertiesForElement(icon, {
+			e: new MouseEvent("click"), maskAllElementAttributes: true, maskAllText: true, elementsChainAsString: true,
+		});
+		const send = buildPostHogConfig("ins_test").before_send as (event: unknown) => { properties: Record<string, unknown> };
+		expect(send({ event: "$autocapture", properties: props }).properties.ao_action).toBeUndefined();
 	});
 
 	it("drops SDK-generated events silenced by the kill switch", () => {

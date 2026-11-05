@@ -2062,6 +2062,7 @@ const ProjectItem = memo(function ProjectItem({
 														}
 															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
 															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+														data-ph-capture-attribute-ao_action="open_orchestrator"
 														onClick={() => void openOrchestrator()}
 														type="button"
 													>
@@ -2098,7 +2099,7 @@ const ProjectItem = memo(function ProjectItem({
 												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent side="right" align="start" className="min-w-44">
-												<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+												<DropdownMenuItem data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
@@ -2225,7 +2226,7 @@ const ProjectItem = memo(function ProjectItem({
 				</motion.li>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+				<ContextMenuItem data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
 				</ContextMenuItem>
@@ -2398,6 +2399,7 @@ function ScratchpadSection({
 													variant="quiet"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
+													data-ph-capture-attribute-ao_action="new_task"
 													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 													type="button"
 												>
@@ -2413,7 +2415,7 @@ function ScratchpadSection({
 					</div>
 				</ContextMenuTrigger>
 				<ContextMenuContent className="min-w-44">
-					<ContextMenuItem onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+					<ContextMenuItem data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
 						<Plus aria-hidden="true" />
 						{t("shell.openNewAgent")}
 					</ContextMenuItem>
@@ -2814,6 +2816,7 @@ const SessionRow = memo(function SessionRow({
 						<Pressable
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
+							data-ph-capture-attribute-ao_action={session.kind === "orchestrator" ? "open_orchestrator" : "open_worker_session"}
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(

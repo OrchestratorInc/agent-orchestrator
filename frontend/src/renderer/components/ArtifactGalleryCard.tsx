@@ -21,6 +21,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 			</span>
 			<Pressable
 				className="block w-full overflow-hidden rounded-md hover:bg-accent"
+				data-ph-capture-attribute-ao_action="open_artifact"
 				onClick={onPreview}
 				title={`${row.sessionTitle} · ${row.path}`}
 			>

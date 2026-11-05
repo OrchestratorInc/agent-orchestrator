@@ -1209,8 +1209,8 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 		// Autocapture clicks, form submits and changes so we can see how people
 		// actually move through the app. Element text and attributes are masked:
 		// AO's UI shows repo names, branches, prompts and file paths, so only the
-		// tag, classes and data-attr survive. Label buttons that matter with
-		// data-attr="..." to make them readable in PostHog.
+		// tag and classes survive. Fixed data-ph-capture-attribute-ao_action
+		// labels identify controls without capturing their text or project data.
 		autocapture: {
 			dom_event_allowlist: ["click", "submit", "change"],
 			capture_copied_text: false,
@@ -1257,6 +1257,14 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 			// The kill switch also covers SDK-generated events ($autocapture,
 			// $rageclick, $snapshot), not just the ones AO captures by hand.
 			if (typeof event.event === "string" && isDeniedEvent(event.event)) return null;
+			// A card contains independent PR/artifact controls. Its fallback label
+			// must never overwrite the specific action on a nested control.
+			if ((event.event === "$autocapture" || event.event === "$rageclick") && !event.properties.ao_action && event.properties.ao_card_action) {
+				// Unknown secondary controls must not look like opening the card.
+				const chain = event.properties.$elements_chain;
+				const nestedControl = typeof chain === "string" && /(^|;)(button|a|input|select|textarea)(?=[:.#\s;]|$)/.test(chain);
+				if (!nestedControl) event.properties.ao_action = event.properties.ao_card_action;
+			}
 			return sanitizePostHogCaptureResult(event);
 		},
 		session_recording: {
