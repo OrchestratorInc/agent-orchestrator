@@ -40,6 +40,7 @@ export const ReauthBanner = memo(function ReauthBanner({
 	harness,
 	hostId,
 	cloud = false,
+	onLogIn,
 }: {
 	account: ConversationAccount;
 	harness: string;
@@ -47,6 +48,8 @@ export const ReauthBanner = memo(function ReauthBanner({
 	hostId?: string;
 	/** The session runs in the cloud, so its login is the cloud connection's. */
 	cloud?: boolean;
+	/** Starts the login so that it brings the user back to this chat once it takes. */
+	onLogIn?: () => void;
 }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -64,13 +67,13 @@ export const ReauthBanner = memo(function ReauthBanner({
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
 			<Button type="button" size="sm" variant="outline" className="shrink-0"
-				onClick={() => openGlobalSettings("harness", {
+				onClick={onLogIn ?? (() => openGlobalSettings("harness", {
 					focusAgentId: harness,
 					...(hostId ? { hostId } : {}),
 					harnessView: cloud ? "cloud" : "local",
 					startLogin: true,
 					preserveProject: true,
-				})}>
+				}))}>
 				{t("chat.reauth.logInAgain")}
 			</Button>
 			<CloseButton size="icon-xs" className="shrink-0"

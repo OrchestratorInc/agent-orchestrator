@@ -5,7 +5,7 @@ import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
-import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, fetchSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
@@ -1889,7 +1889,7 @@ function ChatWorkspaceContent({
 					{/* The band on the chat box already offers the login; the banner would say it twice. */}
 					{snapshot.account && !chatLogin.band ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
-							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
+							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} onLogIn={chatLogin.logIn} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -5599,7 +5599,7 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	hostId?: string;
 	cloud: boolean;
 	newWorkDisabled: boolean;
-}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean } {
+}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean; logIn: () => void } {
 	const retryable = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
 	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
 	// Switching the chat to another agent leaves this agent's login behind.
@@ -5616,10 +5616,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	// cloud one (the cloud connection's login is not watched from here), is the
 	// user's to send again.
 	const queued = Boolean(refusedId && !cloud && retryControl && retryable.has(refusedId) && !turnDidWork(snapshot, refusedId));
-	// The account this session runs on: only that account's login fixes it. A
-	// remote host's accounts are not readable from here.
+	// Only a login for the account this session runs on fixes it.
 	const provider = agentAccountProviderFor(snapshot.harness);
-	const sessionAccounts = useSessionAgentAccounts(refusedId && provider && !hostId && !cloud ? snapshot.sessionId : undefined);
 	const stored = useUiStore((state) => state.loginReturn);
 	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
 	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
@@ -5642,13 +5640,16 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	});
 	const logIn = useStableCallback(() => {
 		const ui = useUiStore.getState();
-		const accountId = provider ? sessionAccounts.data?.[provider] : undefined;
-		ui.startLoginReturn({
-			sessionId: snapshot.sessionId,
-			agentId: snapshot.harness,
-			...(hostId ? { hostId } : {}),
-			...(accountId ? { accountId } : {}),
-		});
+		const sessionId = snapshot.sessionId;
+		ui.startLoginReturn({ sessionId, agentId: snapshot.harness, ...(hostId ? { hostId } : {}) });
+		// Read while the Harness page opens; a remote host's accounts are not readable
+		// from here, so there any login for the agent on that host counts.
+		if (provider && !hostId && !cloud) {
+			void fetchSessionAgentAccounts(sessionId).then((accounts) => {
+				const accountId = accounts[provider];
+				if (accountId) useUiStore.getState().setLoginReturnAccount(sessionId, accountId);
+			}).catch(() => undefined);
+		}
 		ui.openGlobalSettings("harness", {
 			focusAgentId: snapshot.harness,
 			...(hostId ? { hostId } : {}),
@@ -5660,9 +5661,11 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	useEffect(() => {
 		if (!loginReturn) return;
 		const ui = useUiStore.getState();
-		// Sent again, or moved past with a new message: nothing waits on this login.
+		// No refused message to send (it was sent again, the chat moved past it, or the
+		// login was started from the banner): the login still brings the user back,
+		// and then nothing more waits on it.
 		if (!refusedId) {
-			ui.clearLoginReturn(snapshot.sessionId);
+			if (loginReturn.loggedInAt !== undefined) ui.clearLoginReturn(snapshot.sessionId);
 			return;
 		}
 		if (loginReturn.loggedInAt === undefined || loginReturn.settled) return;
@@ -5695,6 +5698,7 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	}, [queued, refusedId, snapshot, state]);
 	return {
 		lines,
+		logIn,
 		// Until the login takes (or the chat moves to another agent), nothing new can
 		// be sent: the agent would refuse it the same way.
 		locked: Boolean(refused) && (state === "signedOut" || state === "waiting"),

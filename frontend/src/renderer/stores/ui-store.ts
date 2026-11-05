@@ -298,6 +298,8 @@ export type UiState = {
 	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled">) => void;
 	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
 	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
+	/** The account the waiting chat's session runs on, once read; only its login counts. */
+	setLoginReturnAccount: (sessionId: string, accountId: string) => void;
 	/** The waiting chat saw the login and sent nothing again. */
 	settleLoginReturn: (sessionId: string) => void;
 	/** Drop the waiting chat, or only when it is this session's. */
@@ -606,6 +608,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
 		};
 	}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt === undefined
+			? { loginReturn: { ...state.loginReturn, accountId } }
+			: {}),
 	settleLoginReturn: (sessionId) => set((state) =>
 		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
 			? { loginReturn: { ...state.loginReturn, settled: true } }

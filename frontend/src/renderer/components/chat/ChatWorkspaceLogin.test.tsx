@@ -166,8 +166,9 @@ describe("ChatWorkspace refused login", () => {
 		try {
 			const retry = vi.fn();
 			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
-			await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}", expect.anything()));
 			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+			// Read while the Harness page opens.
+			expect(get).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}", expect.anything());
 			await waitFor(() => expect(useUiStore.getState().loginReturn?.accountId).toBe("acct-a"));
 
 			// Another account signing in leaves this session signed out.
@@ -193,11 +194,29 @@ describe("ChatWorkspace refused login", () => {
 		act(() => useUiStore.setState({ loginReturn: { sessionId: snapshot.sessionId, agentId: "claude-code" } }));
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+		expect(screen.queryByTestId("login-band")).toBeNull();
 
-		expect(useUiStore.getState().loginReturn).toBeNull();
+		// The login still brings the user back, and then nothing waits on it.
 		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
 		expect(retry).not.toHaveBeenCalled();
-		expect(screen.queryByTestId("login-band")).toBeNull();
+		expect(useUiStore.getState().loginReturn).toBeNull();
+	});
+
+	it("brings the user back from the banner's login too, sending nothing", async () => {
+		// A lapsed login without a refused message: the banner offers the login.
+		const snapshot = signedOutSnapshot({ didWork: false });
+		snapshot.turns = [{ ...snapshot.turns[0]!, failureCode: undefined, errorMessage: "Failed to authenticate: OAuth session expired and could not be refreshed" }];
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(useUiStore.getState().settingsModal).toMatchObject({ section: "harness", focusAgentId: "claude-code", startLogin: true });
+		expect(useUiStore.getState().loginReturn).toMatchObject({ sessionId: snapshot.sessionId, agentId: "claude-code" });
+
+		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		expect(useUiStore.getState().loginReturn).toBeNull();
+		expect(retry).not.toHaveBeenCalled();
 	});
 
 	it("says the user is in and leaves a message that did work for them to send again", async () => {
