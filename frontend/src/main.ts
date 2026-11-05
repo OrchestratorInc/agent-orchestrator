@@ -3026,6 +3026,17 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return;
 	}
 });
+/** The daemon's durable lifetime session count, or null while it is unreachable. */
+async function daemonLifetimeSessions(): Promise<number | null> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return null;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+		const identity = response.ok ? await response.json() as { lifetimeSessions?: unknown } : {};
+		return typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
+	} catch {
+		return null;
+	}
+}
 ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!telemetryPolicyController) return null;
 	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
@@ -3040,17 +3051,8 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	});
 	const bootstrap = await buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
 	if (!bootstrap) return bootstrap;
-	if (daemonStatus.state === "ready" && daemonStatus.port) {
-		try {
-			const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
-			const identity = response.ok ? await response.json() as { lifetimeSessions?: unknown } : {};
-			if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
-				bootstrap.lifetimeSessions = identity.lifetimeSessions;
-			}
-		} catch {
-			// A missing daemon count stays absent.
-		}
-	}
+	const lifetimeSessions = await daemonLifetimeSessions();
+	if (lifetimeSessions !== null) bootstrap.lifetimeSessions = lifetimeSessions;
 	if (await claimFirstOpen(desktopDataDir, bootstrap)) bootstrap.firstOpen = true;
 	// Start the renderer identified when this desktop is signed in to the same
 	// AO Cloud account the daemon durably recorded, so launch events (active,
@@ -3084,6 +3086,7 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	return telemetryIdentity.setCloudUser(userId);
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
+ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");

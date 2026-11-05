@@ -357,12 +357,38 @@ describe("PostHog identity and opt-out", () => {
 		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
 	});
 
-	it("stamps sign-in only after the renderer learns the account state", async () => {
+	it("fills lifetime_sessions in once the daemon answers when the bootstrap had none", async () => {
 		localStorage.clear();
-		mockBridge(async () => bootstrap);
+		vi.useFakeTimers();
+		try {
+			mockPosthog();
+			const getLifetimeSessions = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(7);
+			vi.doMock("./bridge", () => ({
+				aoBridge: {
+					telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null), getLifetimeSessions },
+					updateSettings: { get: vi.fn(async () => ({})) },
+				},
+			}));
+			const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+			await initTelemetry();
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 7);
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(getLifetimeSessions).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stamps is_signed_in, days_since_install and lifetime_sessions on every event", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, installTimestampMs: Date.now() - 3 * 86_400_000, lifetimeSessions: 4 }));
 		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
 		await initTelemetry();
-		expect(withTelemetryContext({})).not.toHaveProperty("is_signed_in");
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, days_since_install: 3, lifetime_sessions: 4 });
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", true);
 		clearCloudUser();

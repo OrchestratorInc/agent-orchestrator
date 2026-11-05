@@ -77,8 +77,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["lifetime_sessions"] != float64(2) || props["days_since_install"] != float64(0) {
 			t.Fatalf("shared metadata missing or incorrect: %#v", props)
 		}
-		if _, ok := props["is_signed_in"]; ok {
-			t.Fatal("unknown Cloud sign-in state was exported")
+		if props["is_signed_in"] != false {
+			t.Fatalf("is_signed_in = %#v, want false without a Cloud binding", props["is_signed_in"])
 		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])

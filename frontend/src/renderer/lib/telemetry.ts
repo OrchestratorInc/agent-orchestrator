@@ -347,7 +347,7 @@ export function withTelemetryContext(properties: TelemetryProperties): Telemetry
 	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
 	// the flag is left to the SDK, which processes the identified person.
 	const currentAge = installTimestampMs === undefined ? undefined : Math.floor((Date.now() - installTimestampMs) / 86_400_000);
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), ...(signInKnown ? { is_signed_in: cloudUser !== null } : {}), ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), is_signed_in: cloudUser !== null, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
 // Who this install is. The GitHub login and AO Cloud user ID ride every event as
@@ -508,6 +508,23 @@ async function syncGithubLogin(): Promise<void> {
 		void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
 		registerBaseProperties();
 		if (identifiedId) posthog.setPersonProperties({ github_login: login });
+		return;
+	}
+}
+
+// The bootstrap usually runs before the daemon is ready, which leaves
+// lifetime_sessions off every renderer event for the launch. Fill it in once
+// the daemon answers, on the same bounded schedule.
+async function syncLifetimeSessions(): Promise<void> {
+	for (const delay of GITHUB_LOGIN_RETRY_MS.slice(0, 3)) {
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		if (analyticsOptedOut) return;
+		const count = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getLifetimeSessions())
+			.catch(() => null);
+		if (typeof count !== "number") continue;
+		telemetryContext = { ...telemetryContext, lifetime_sessions: count };
+		registerBaseProperties();
 		return;
 	}
 }
@@ -1343,6 +1360,7 @@ export async function initTelemetry(): Promise<boolean> {
 		posthogReady = true;
 		registerBaseProperties();
 		void syncGithubLogin();
+		if (bootstrap.lifetimeSessions === undefined) void syncLifetimeSessions();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog
 		// product analytics are intentionally independent of that preference.
 		void initSentry({

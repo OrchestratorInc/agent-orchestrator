@@ -53,8 +53,8 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if anon["install_id"] != stableInstallID {
 		t.Fatal("anonymous event missing installation ID")
 	}
-	if _, ok := anon["is_signed_in"]; ok {
-		t.Fatal("unresolved Cloud sign-in state was exported")
+	if anon["is_signed_in"] != false {
+		t.Fatalf("anonymous event has is_signed_in = %#v, want false", anon["is_signed_in"])
 	}
 
 	sink.Identity().SetGitHubLogin("octocat")
