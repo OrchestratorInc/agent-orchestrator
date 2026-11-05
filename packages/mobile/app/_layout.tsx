@@ -258,7 +258,8 @@ function Shell() {
 				{/* Draws its own header, like notifications, so the title can be the project. */}
 				<Stack.Screen name="project/[id]" options={{ headerShown: false }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
-				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: false }} />
+				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />
+				<Stack.Screen name="connect" options={{ title: "Connect manually" }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than
