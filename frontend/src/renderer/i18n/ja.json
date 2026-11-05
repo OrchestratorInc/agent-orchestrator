@@ -2521,7 +2521,7 @@
 	"settings.computerUse.agentAccessNeedsDriver": "オンにするには Cua Driver をインストールしてください。",
 	"settings.computerUse.loadFailed": "Cua Driver を確認できませんでした。",
 	"settings.downloads": "ダウンロード",
-	"settings.browserProfiles.description": "一時プロファイルはワーカーごとに分離され、破棄されます。名前付きプロファイルはログイン情報とサイト状態を保持し、同じプロファイルに明示的にバインドしたワーカーだけが共有します。",
+	"settings.browserProfiles.description": "一時プロファイルはワーカーごとに分離され、破棄されます。名前付きプロファイルはログイン情報とサイト状態を保持し、そのプロファイルを使うすべてのワーカーで共有されます。プロファイルを選択していないワーカーはデフォルトプロファイルを使用し、デフォルトが設定されていない場合は一時プロファイルを使用します。",
 	"settings.browserProfiles.profiles": "プロファイル",
 	"settings.browserProfiles.create": "プロファイルを作成",
 	"settings.browserProfiles.name": "プロファイル名",

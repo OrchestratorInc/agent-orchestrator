@@ -2565,7 +2565,7 @@
 	"settings.computerUse.agentAccessNeedsDriver": "Instale o Cua Driver para ativar.",
 	"settings.computerUse.loadFailed": "Não foi possível verificar o Cua Driver.",
 	"settings.downloads": "Downloads",
-	"settings.browserProfiles.description": "O perfil temporário é isolado por trabalhador e descartado. Perfis nomeados mantêm logins e o estado dos sites, compartilhados apenas por trabalhadores explicitamente vinculados ao mesmo perfil.",
+	"settings.browserProfiles.description": "O perfil temporário é isolado por trabalhador e descartado. Perfis nomeados mantêm logins e o estado dos sites e são compartilhados por todos os trabalhadores que os usam. Trabalhadores que não escolheram um perfil usam o perfil padrão, ou o temporário se nenhum padrão estiver definido.",
 	"settings.browserProfiles.profiles": "Perfis",
 	"settings.browserProfiles.create": "Criar perfil",
 	"settings.browserProfiles.name": "Nome do perfil",

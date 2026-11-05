@@ -1545,7 +1545,7 @@
 	"settings.computerUse.agentAccessNeedsDriver": "Install Cua Driver to turn this on.",
 	"settings.computerUse.loadFailed": "Could not check Cua Driver.",
 	"settings.downloads": "Downloads",
-	"settings.browserProfiles.description": "Temporary is isolated per worker and discarded. Named profiles retain sign-ins and site state and are shared only by workers you explicitly bind to the same profile.",
+	"settings.browserProfiles.description": "Temporary is isolated per worker and discarded. Named profiles retain sign-ins and site state and are shared by every worker that uses them. Workers that haven't chosen a profile use the default profile, or Temporary if no default is set.",
 	"settings.browserProfiles.profiles": "Profiles",
 	"settings.browserProfiles.create": "Create profile",
 	"settings.browserProfiles.name": "Profile name",

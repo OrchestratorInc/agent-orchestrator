@@ -2565,7 +2565,7 @@
 	"settings.computerUse.agentAccessNeedsDriver": "Instala Cua Driver para activarlo.",
 	"settings.computerUse.loadFailed": "No se pudo comprobar Cua Driver.",
 	"settings.downloads": "Descargas",
-	"settings.browserProfiles.description": "El perfil temporal está aislado por trabajador y se descarta. Los perfiles con nombre conservan los inicios de sesión y el estado de los sitios, y solo se comparten entre trabajadores vinculados explícitamente al mismo perfil.",
+	"settings.browserProfiles.description": "El perfil temporal está aislado por trabajador y se descarta. Los perfiles con nombre conservan los inicios de sesión y el estado de los sitios, y los comparten todos los trabajadores que los usan. Los trabajadores que no han elegido un perfil usan el perfil predeterminado, o el temporal si no hay ninguno predeterminado.",
 	"settings.browserProfiles.profiles": "Perfiles",
 	"settings.browserProfiles.create": "Crear perfil",
 	"settings.browserProfiles.name": "Nombre del perfil",
