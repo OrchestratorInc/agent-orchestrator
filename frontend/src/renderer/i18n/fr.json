@@ -3084,7 +3084,6 @@
 	"chat.image.untitled": "Image",
 	"chat.image.copy": "Copier l’image",
 	"chat.image.save": "Enregistrer l’image",
-	"chat.image.copied": "Image copiée",
 	"chat.image.copyFailed": "Impossible de copier l’image",
 	"chat.image.saveFailed": "Impossible d’enregistrer l’image",
 	"chat.render.expand": "Agrandir la page",
