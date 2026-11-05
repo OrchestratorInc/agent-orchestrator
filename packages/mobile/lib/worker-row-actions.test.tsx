@@ -33,16 +33,18 @@ const control = (renderer: ReactTestRenderer, label: string) =>
 function mount(pinned = false) {
 	let renderer!: ReactTestRenderer;
 	act(() => {
-		renderer = create(<WorkerRowActions title="Polish workers" pinned={pinned} onSetPinned={vi.fn()} onDelete={vi.fn()} />);
+		renderer = create(<WorkerRowActions title="Polish workers" pinned={pinned} onSetPinned={vi.fn()} />);
 	});
 	return renderer;
 }
 
 describe("WorkerRowActions", () => {
-	// Archive stops the agent and deletes a clean worktree: the one destructive
-	// control of the pair, so it carries the red on both platforms.
-	it("marks Archive as the destructive action", () => {
-		expect(glyph(mount(), "archive").props.tintColor).toBe("red");
+	// Archiving is the full swipe past the pin (and the long-press menu), not a
+	// second button in the rail.
+	it("holds only the pin, with no Archive button", () => {
+		const renderer = mount();
+		const controls = renderer.root.findAll((node) => (node.type as unknown) === "Pressable");
+		expect(controls.map((node) => node.props.accessibilityLabel)).toEqual(["Pin Polish workers"]);
 	});
 
 	it("names the pin state it will change to", () => {

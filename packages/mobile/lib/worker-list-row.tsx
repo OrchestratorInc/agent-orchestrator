@@ -154,10 +154,9 @@ export const WorkerListRow = memo(
 					closeActionRailRef.current();
 					void onSetPinned(pinned);
 				}}
-				onDelete={() => { closeActionRailRef.current(); onDelete(); }}
 			/>
 		),
-		[onDelete, onSetPinned, row.title, session.isPinned],
+		[onSetPinned, row.title, session.isPinned],
 	);
 	const openSession = useCallback(() => {
 		router.push({

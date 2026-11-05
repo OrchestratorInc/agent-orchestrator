@@ -12,12 +12,10 @@ export function WorkerRowActions({
 	title,
 	pinned,
 	onSetPinned,
-	onDelete,
 }: {
 	title: string;
 	pinned: boolean;
 	onSetPinned(pinned: boolean): void;
-	onDelete(): void;
 }) {
 	const styles = useThemedStyles(makeStyles);
 
@@ -29,21 +27,15 @@ export function WorkerRowActions({
 				tone="neutral"
 				onPress={() => onSetPinned(!pinned)}
 			/>
-			<Action
-				accessibilityLabel={`Archive ${title}`}
-				icon={workerActionSymbol("delete")}
-				tone="destructive"
-				onPress={onDelete}
-			/>
 		</View>
 	);
 }
 
-// Plain tonal icon buttons, the same on both platforms, set on the list's own
-// background rather than on a panel. Pin is a neutral one in
-// foreground ink — `amber` means "needs your attention" in this
-// palette, and pinning asks for nothing. Archive is the destructive one: it
-// stops the agent and deletes a clean worktree, so it carries the red.
+// A plain tonal icon button, the same on both platforms, set on the list's own
+// background rather than on a panel. Pin is a neutral one in foreground ink:
+// `amber` means "needs your attention" in this palette, and pinning asks for
+// nothing. Archive has no button here: the full swipe past the pin runs it,
+// and the long-press menu offers it too.
 function Action({
 	accessibilityLabel,
 	icon,
@@ -52,30 +44,29 @@ function Action({
 }: {
 	accessibilityLabel: string;
 	icon: PlatformSymbol;
-	tone: Extract<PressTone, "neutral" | "destructive">;
+	tone: Extract<PressTone, "neutral">;
 	onPress(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("button", { tone });
-	const destructive = tone === "destructive";
 	return (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={accessibilityLabel}
 			android_ripple={feedback.android_ripple}
 			onPress={onPress}
-			style={({ pressed }) => [styles.control, destructive ? styles.destructive : styles.neutral, pressed && feedback.pressed]}
+			style={({ pressed }) => [styles.control, styles.neutral, pressed && feedback.pressed]}
 		>
-			<AppSymbol name={icon} size={iconSize.lg} color={destructive ? t.red : t.textPrimary} />
+			<AppSymbol name={icon} size={iconSize.lg} color={t.textPrimary} />
 		</Pressable>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		// Ends on the row's own 16pt gutter, so the archive control lines up with
-		// the status above it once the row slides over.
+		// Ends on the row's own 16pt gutter, so the pin lines up with the status
+		// above it once the row slides over.
 		actions: {
 			width: WORKER_ACTION_REVEAL_WIDTH,
 			flexDirection: "row",
@@ -94,5 +85,4 @@ const makeStyles = (t: Theme) =>
 			overflow: "hidden",
 		},
 		neutral: { backgroundColor: t.bgElevated },
-		destructive: { backgroundColor: t.tintRed },
 	});

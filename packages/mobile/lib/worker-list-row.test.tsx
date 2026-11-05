@@ -244,7 +244,8 @@ describe("worker board haptics", () => {
 		act(() => row.props.onAction("rename"));
 		act(() => row.props.rightActions.props.onSetPinned(true));
 		expect(fired()).toEqual([]);
-		act(() => row.props.rightActions.props.onDelete());
+		// Archive is the full swipe and the long-press menu, both this action.
+		act(() => row.props.onAction("delete"));
 		expect(Alert.alert).toHaveBeenCalledTimes(1);
 		expect(fired()).toEqual([haptics.warning]);
 		expect(vi.mocked(haptics.warning)).toHaveBeenCalledTimes(1);

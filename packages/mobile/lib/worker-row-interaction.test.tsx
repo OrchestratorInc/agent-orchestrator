@@ -41,7 +41,9 @@ vi.mock("react-native-reanimated", () => ({
 	default: { View: "AnimatedView" },
 	useSharedValue: (initial: unknown) => useRef({ value: initial }).current,
 	useAnimatedStyle: (style: () => unknown) => style(),
+	useDerivedValue: (value: () => unknown) => ({ value: value() }),
 	withTiming: (value: unknown) => value,
+	Easing: { out: (easing: unknown) => easing, cubic: "cubic" },
 }));
 vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args) }));
 vi.mock("./haptics", () => ({ haptics }));
@@ -148,7 +150,7 @@ it("archives on a full swipe, with one haptic as it arms", () => {
 	const onAction = vi.fn();
 	const view = mount({ onAction });
 	expect(boundary(view).props.overshootRight).toBe(true);
-	drag(-150);
+	drag(-100);
 	expect(haptics.armed).not.toHaveBeenCalled();
 	drag(-260);
 	act(() => watch.handlers.onUpdate({ translationX: -300 }));
@@ -161,7 +163,7 @@ it("archives on a full swipe, with one haptic as it arms", () => {
 it("does not archive a drag that only opens the rail, is carried back, or is cancelled", () => {
 	const onAction = vi.fn();
 	mount({ onAction });
-	drag(-140);
+	drag(-100);
 	release();
 	drag(-300);
 	act(() => watch.handlers.onUpdate({ translationX: -100 }));
@@ -169,7 +171,7 @@ it("does not archive a drag that only opens the rail, is carried back, or is can
 	drag(-300);
 	release(false);
 	// Disarmed by the cancel, the next drag starts over.
-	drag(-150);
+	drag(-100);
 	release();
 	expect(onAction).not.toHaveBeenCalled();
 });
@@ -178,8 +180,9 @@ it("measures a full swipe from the open rail when the drag starts there", () => 
 	const onAction = vi.fn();
 	const view = mount({ onAction });
 	act(() => boundary(view).props.onSwipeableWillOpen("left"));
-	// 128 already uncovered, plus 110 more, passes 60% of 390.
-	drag(-110);
+	// The 72pt rail already uncovered, plus 70 more, passes the arm point,
+	// about 60pt past the rail on a 390pt row.
+	drag(-70);
 	release();
 	expect(onAction).toHaveBeenCalledWith("delete");
 });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { Easing, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { AppSymbol } from "./AppSymbol";
 import { haptics } from "./haptics";
@@ -24,8 +24,10 @@ const DRAG_DISTANCE = 16;
 const NEVER = 10_000;
 /** The action a full swipe runs, as Mail's runs its last one. */
 const FULL_SWIPE_ACTION: WorkerActionId = "delete";
-/** How long the rail takes to turn red, and back, as a full swipe arms. */
-const ARM_DURATION = 160;
+/** How long the red takes to sweep across the rail, and back, as a full swipe arms. */
+const ARM_DURATION = 120;
+/** Quick out of the gate, so the red is there on the first frames, then settling. */
+const ARM_EASING = Easing.out(Easing.cubic);
 /** How much of the rail a drag uncovers before its controls start to appear. */
 const REVEAL_START = WORKER_ACTION_REVEAL_WIDTH * 0.2;
 
@@ -182,8 +184,14 @@ export function WorkerRowInteraction({
  * over a fill that follows the row past the rail. At rest the fill is the
  * list's own background, so the controls sit in the space the row leaves
  * rather than on a panel, and they grow in as the drag uncovers them. Once
- * letting go would archive, the fill turns red, the controls give way, and
- * the archive glyph rides its leading edge, as Mail draws a full swipe.
+ * letting go would archive, red sweeps across the fill from the trailing edge,
+ * the controls give way, and the archive glyph rides its leading edge, as Mail
+ * draws a full swipe.
+ *
+ * The red is its own full-strength layer that sweeps in, not the fill's colour
+ * fading from the page's: a fade from near-black passes through dark, greyish
+ * reds for most of its frames, which read on Android as a muddy rail and a
+ * late red. Every frame of the sweep is either the page or the real red.
  */
 function SwipeRail({ translation, armed, children }: {
 	translation: SharedValue<number>;
@@ -191,25 +199,35 @@ function SwipeRail({ translation, armed, children }: {
 	children: ReactNode;
 }) {
 	const t = useTheme();
+	// One progress for the whole arming, so its parts stay in step: 0 at rest,
+	// 1 once the red covers the rail.
+	const arming = useDerivedValue(() => withTiming(armed.value ? 1 : 0, { duration: ARM_DURATION, easing: ARM_EASING }));
 	const fill = useAnimatedStyle(() => ({
 		width: Math.max(WORKER_ACTION_REVEAL_WIDTH, -translation.value),
-		backgroundColor: withTiming(armed.value ? t.red : t.bgBase, { duration: ARM_DURATION }),
 	}));
-	const armedGlyph = useAnimatedStyle(() => ({
-		opacity: withTiming(armed.value ? 1 : 0, { duration: ARM_DURATION }),
-		transform: [{ scale: withTiming(armed.value ? 1 : 0.6, { duration: ARM_DURATION }) }],
+	const red = useAnimatedStyle(() => ({
+		transform: [{ scaleX: arming.value }],
 	}));
+	// The archive glyph sits at the rail's leading edge, which the sweep reaches
+	// last: it comes in only as the red arrives under it, never on the dark.
+	const armedGlyph = useAnimatedStyle(() => {
+		const shown = Math.min(1, Math.max(0, (arming.value - 0.6) / 0.4));
+		return { opacity: shown, transform: [{ scale: 0.6 + 0.4 * shown }] };
+	});
+	// The pin gives way in the sweep's first third: fading over the whole of it,
+	// its dark disc sat on the red as a grey blot.
 	const controls = useAnimatedStyle(() => {
 		const uncovered = (-translation.value - REVEAL_START) / (WORKER_ACTION_REVEAL_WIDTH - REVEAL_START);
 		const revealed = Math.min(1, Math.max(0, uncovered));
 		return {
-			opacity: armed.value ? withTiming(0, { duration: ARM_DURATION }) : revealed,
+			opacity: revealed * (1 - Math.min(1, arming.value * 3)),
 			transform: [{ scale: 0.6 + 0.4 * revealed }],
 		};
 	});
 	return (
 		<>
-			<Animated.View pointerEvents="none" style={[styles.fill, fill]}>
+			<Animated.View pointerEvents="none" style={[styles.fill, { backgroundColor: t.bgBase }, fill]}>
+				<Animated.View style={[StyleSheet.absoluteFill, styles.red, { backgroundColor: t.red }, red]} />
 				<Animated.View style={[styles.armedGlyph, armedGlyph]}>
 					<AppSymbol name={workerActionSymbol(FULL_SWIPE_ACTION)} size={iconSize.xl} color={t.onDestructive} />
 				</Animated.View>
@@ -228,6 +246,8 @@ const styles = StyleSheet.create({
 		right: 0,
 		bottom: 0,
 	},
+	// Sweeps in from the trailing edge, where the drag uncovered it first.
+	red: { transformOrigin: "right center" },
 	armedGlyph: {
 		position: "absolute",
 		top: 0,
