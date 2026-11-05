@@ -13,7 +13,6 @@ import {
 	useRef,
 	useState,
 	type CSSProperties,
-	type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -1667,14 +1666,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
-	// Clicking into a pane focuses its member, as clicking its name does. React
-	// also delivers events from portals (the session surface's tab strip lives
-	// in the topbar), so only a press inside the pane's own box counts.
-	const focusPane = (key: string) => (event: ReactPointerEvent<HTMLElement>) => {
-		if (!event.currentTarget.contains(event.target as Node)) return;
-		if (key !== selectedTabKey) selectTab(key);
-	};
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
+	// Clicking into a pane focuses its member, as clicking its name does. This
+	// listens natively: terminals are portaled from the shared cache, so React
+	// would deliver their events elsewhere, while the topbar strip (portaled
+	// the other way) is outside this element and never counts.
+	const focusPaneRef = useRef<(key: string) => void>(() => undefined);
+	focusPaneRef.current = (key) => {
+		if (shownLayout?.leaves.has(key) && key !== selectedTabKey) selectTab(key);
+	};
+	useEffect(() => {
+		const onPointerDown = (event: PointerEvent) => {
+			const screen = splitScreenRef.current;
+			const pane = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-split-pane]") : null;
+			if (screen && pane?.dataset.splitPane && screen.contains(pane)) focusPaneRef.current(pane.dataset.splitPane);
+		};
+		document.addEventListener("pointerdown", onPointerDown, true);
+		return () => document.removeEventListener("pointerdown", onPointerDown, true);
+	}, []);
 	const centerColumnRef = useRef<HTMLDivElement | null>(null);
 	const splitDropStateRef = useRef<SplitDropState | null>(null);
 	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups, splitPartner: undefined };
@@ -2415,7 +2424,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
 								inert={mainActiveFilePath || sessionPaneHidden ? true : undefined}
-								onPointerDownCapture={shownGroup ? focusPane(SESSION_TAB_KEY) : undefined}
 								style={paneStyle(SESSION_TAB_KEY)}
 							>
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
@@ -2566,7 +2574,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												className="min-h-0 min-w-0 overflow-hidden bg-background"
 												data-split-pane={key}
 												key={key}
-												onPointerDownCapture={focusPane(key)}
 												style={paneStyle(key)}
 											>
 												{target ? (
@@ -2621,7 +2628,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 														className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
 														data-split-pane={inPane ? paneKey : undefined}
 														inert={!visible ? true : undefined}
-														onPointerDownCapture={inPane ? focusPane(paneKey) : undefined}
 														style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
 													>
 														<SessionFileWorkspace
