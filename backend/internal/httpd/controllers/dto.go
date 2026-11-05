@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/devimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -191,6 +192,16 @@ type ListProjectsResponse struct {
 // ProjectResponse is the { project } body shared by POST /projects (201).
 type ProjectResponse struct {
 	Project projectsvc.Project `json:"project"`
+}
+
+// ClonePrepareStreamEvent is the data of one server-sent event on
+// POST /projects/clone/prepare/stream. Exactly one field is set: progress
+// events arrive while git runs, and the last event carries the result or the
+// error envelope the JSON route would have returned.
+type ClonePrepareStreamEvent struct {
+	Progress *projectsvc.CloneProgress          `json:"progress,omitempty"`
+	Result   *projectsvc.ClonePreparationResult `json:"result,omitempty"`
+	Error    *envelope.APIError                 `json:"error,omitempty"`
 }
 
 // GetProjectResponse is the { status, project } body of GET /projects/{id},

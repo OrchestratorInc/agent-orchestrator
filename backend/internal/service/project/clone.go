@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -94,7 +95,7 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 // The checkout is staged in a unique sibling directory so a failed or cancelled
 // clone can never leave a half-populated destination behind.
 func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
-	prepared, err := m.prepareClone(ctx, in)
+	prepared, err := m.prepareClone(ctx, in, nil)
 	if err != nil {
 		return Project{}, err
 	}
@@ -119,7 +120,13 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 
 // PrepareClone checks out a repository without registering it as a project.
 func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
-	return m.prepareClone(ctx, in)
+	return m.prepareClone(ctx, in, nil)
+}
+
+// PrepareCloneWithProgress is PrepareClone that reports each git step through
+// onProgress as the clone reaches it.
+func (m *Service) PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error) {
+	return m.prepareClone(ctx, in, onProgress)
 }
 
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
@@ -170,7 +177,7 @@ func (m *Service) cleanupPreparedCloneAfterFailure(ctx context.Context, prepared
 	}
 }
 
-func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
+func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error) {
 	remoteURL := normalizeCloneURL(in.RemoteURL)
 	repositoryName, err := cloneRepositoryName(remoteURL)
 	if err != nil {
@@ -218,10 +225,18 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	}()
 
 	for attempt := 0; ; attempt++ {
-		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
+		args := []string{"clone", "--origin", "origin"}
+		stderr := cloneStderr{}
+		if onProgress != nil {
+			// Git only prints progress to a terminal unless asked.
+			args = append(args, "--progress")
+			stderr.report = func(phase CloneProgressPhase) {
+				onProgress(CloneProgress{Phase: phase, Attempt: attempt + 1})
+			}
+		}
+		cmd := aoprocess.CommandContext(ctx, "git", append(args, "--", remoteURL, temporaryPath)...)
 		aoprocess.ConfigureTreeCancellation(cmd)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "LC_ALL=C")
-		var stderr limitedCloneOutput
 		cmd.Stderr = &stderr
 		err := cmd.Run()
 		if err == nil {
@@ -244,6 +259,9 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
 				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not reset the temporary clone. Choose another destination.", nil)
+			}
+			if onProgress != nil {
+				onProgress(CloneProgress{Phase: ClonePhaseRetrying, Attempt: attempt + 2})
 			}
 			timer := time.NewTimer(time.Duration(attempt+1) * time.Second)
 			select {
@@ -287,6 +305,81 @@ func (b *limitedCloneOutput) Write(p []byte) (int, error) {
 }
 
 func (b *limitedCloneOutput) String() string { return string(b.data) }
+
+// cloneProgressPhases maps git's progress titles (LC_ALL=C) to their phases.
+var cloneProgressPhases = map[string]CloneProgressPhase{
+	"Enumerating objects": ClonePhaseEnumeratingObjects,
+	"Counting objects":    ClonePhaseCountingObjects,
+	"Compressing objects": ClonePhaseCompressingObjects,
+	"Receiving objects":   ClonePhaseReceivingObjects,
+	"Resolving deltas":    ClonePhaseResolvingDeltas,
+	"Updating files":      ClonePhaseUpdatingFiles,
+	"Checking out files":  ClonePhaseUpdatingFiles,
+	"Filtering content":   ClonePhaseFilteringContent,
+}
+
+const maxCloneStderrLine = 4 * 1024
+
+// cloneStderr splits git's stderr into lines; progress redraws end in \r. A
+// progress line only moves the reported phase. Every other line is kept,
+// bounded, for retry classification, so a long progress run cannot push the
+// final error out of the buffer.
+type cloneStderr struct {
+	output  limitedCloneOutput
+	pending []byte
+	phase   CloneProgressPhase
+	report  func(CloneProgressPhase)
+}
+
+func (s *cloneStderr) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexAny(p, "\r\n")
+		if end < 0 {
+			s.appendPending(p)
+			break
+		}
+		s.appendPending(p[:end])
+		s.line(s.pending)
+		s.pending = s.pending[:0]
+		p = p[end+1:]
+	}
+	return n, nil
+}
+
+func (s *cloneStderr) appendPending(p []byte) {
+	if room := maxCloneStderrLine - len(s.pending); room > 0 {
+		s.pending = append(s.pending, p[:min(len(p), room)]...)
+	}
+}
+
+func (s *cloneStderr) line(line []byte) {
+	if len(line) == 0 {
+		return
+	}
+	if phase, ok := cloneProgressPhase(line); ok {
+		if phase != s.phase {
+			s.phase = phase
+			if s.report != nil {
+				s.report(phase)
+			}
+		}
+		return
+	}
+	_, _ = s.output.Write(line)
+	_, _ = s.output.Write([]byte{'\n'})
+}
+
+func (s *cloneStderr) String() string { return s.output.String() + string(s.pending) }
+
+func cloneProgressPhase(line []byte) (CloneProgressPhase, bool) {
+	title, _, found := strings.Cut(strings.TrimPrefix(string(line), "remote: "), ":")
+	if !found {
+		return "", false
+	}
+	phase, ok := cloneProgressPhases[title]
+	return phase, ok
+}
 
 func transientCloneFailure(output string) bool {
 	output = strings.ToLower(output)

@@ -336,6 +336,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// httpd/controllers (wire envelopes)
 	"ControllersListProjectsResponse":                     "ListProjectsResponse",
 	"ControllersProjectResponse":                          "ProjectResponse",
+	"ControllersClonePrepareStreamEvent":                  "ClonePrepareStreamEvent",
 	"ControllersAgentIDParam":                             "AgentIDParam",
 	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
 	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
@@ -651,6 +652,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectCloneInput":                 "CloneProjectInput",
 	"ProjectClonePreparationResult":     "ClonePreparationResult",
 	"ProjectCloneDestination":           "CloneDestination",
+	"ProjectCloneProgress":              "CloneProgress",
 	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
 	"ProjectInitializeRepositoryResult": "InitializeRepositoryResult",
 	"ProjectRemoveResult":               "RemoveProjectResult",
@@ -2820,6 +2822,17 @@ func projectOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/projects/clone/prepare/stream", id: "prepareCloneProjectStream", tag: "projects",
+			summary: "Clone a project without registering it, streaming each git step as a server-sent event",
+			reqBody: projectsvc.CloneInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ClonePrepareStreamEvent{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/projects/clone/cleanup", id: "cleanupPreparedClone", tag: "projects",

@@ -1,6 +1,10 @@
 package project
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestCloneRepositoryNameDecodesURLPathOnce(t *testing.T) {
 	t.Parallel()
@@ -71,5 +75,33 @@ func TestTransientCloneFailure(t *testing.T) {
 		if got := transientCloneFailure(tt.output); got != tt.want {
 			t.Errorf("transientCloneFailure(%q) = %v, want %v", tt.output, got, tt.want)
 		}
+	}
+}
+
+func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
+	var phases []CloneProgressPhase
+	stderr := cloneStderr{report: func(phase CloneProgressPhase) { phases = append(phases, phase) }}
+	// A long redraw run would fill the 32 KiB buffer if progress were kept.
+	redraws := strings.Repeat("Receiving objects:  50% (1/2), 1.00 MiB | 1.00 MiB/s\r", 2000)
+	for _, chunk := range []string{
+		"Cloning into '/tmp/.ao-clone-1'...\nremote: Enumerating objects: 3, done.\nremote: Coun",
+		"ting objects: 100% (3/3), done.\n",
+		redraws,
+		"Receiving objects: 100% (2/2), done.\nResolving deltas: 100% (1/1), done.\n",
+		"fatal: unable to access 'https://user:secret@example.test/': Connection reset by peer\n",
+	} {
+		if _, err := stderr.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []CloneProgressPhase{ClonePhaseEnumeratingObjects, ClonePhaseCountingObjects, ClonePhaseReceivingObjects, ClonePhaseResolvingDeltas}
+	if !reflect.DeepEqual(phases, want) {
+		t.Fatalf("phases = %v, want %v", phases, want)
+	}
+	if strings.Contains(stderr.String(), "Receiving objects") {
+		t.Fatal("progress lines were kept for classification")
+	}
+	if !transientCloneFailure(stderr.String()) {
+		t.Fatalf("final error was not classifiable: %q", stderr.String())
 	}
 }

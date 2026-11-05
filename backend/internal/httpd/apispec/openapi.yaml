@@ -5057,6 +5057,38 @@ paths:
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
+  /api/v1/projects/clone/prepare/stream:
+    post:
+      operationId: prepareCloneProjectStream
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneProjectInput'
+        required: true
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ClonePrepareStreamEvent'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Clone a project without registering it, streaming each git step as
+        a server-sent event
+      tags:
+      - projects
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -15210,6 +15242,35 @@ components:
       - path
       - remoteUrl
       - preparationId
+      type: object
+    ClonePrepareStreamEvent:
+      properties:
+        error:
+          $ref: '#/components/schemas/APIError'
+        progress:
+          $ref: '#/components/schemas/CloneProgress'
+        result:
+          $ref: '#/components/schemas/ClonePreparationResult'
+      type: object
+    CloneProgress:
+      properties:
+        attempt:
+          minimum: 1
+          type: integer
+        phase:
+          enum:
+          - enumerating_objects
+          - counting_objects
+          - compressing_objects
+          - receiving_objects
+          - resolving_deltas
+          - updating_files
+          - filtering_content
+          - retrying
+          type: string
+      required:
+      - phase
+      - attempt
       type: object
     CloneProjectInput:
       properties:
