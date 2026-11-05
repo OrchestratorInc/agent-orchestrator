@@ -509,7 +509,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -1501,6 +1501,17 @@ describe("Sidebar", () => {
 		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
 		expect(screen.queryByRole("button", { name: "Spawn Project One orchestrator" })).toBeNull();
 		expect(screen.getByText("fix login")).toBeTruthy();
+	});
+
+	it("offers a guest no Archive on a session shared with them, and keeps it on the owner's own", async () => {
+		const sharedSession: WorkspaceSession = { ...session, cloud: { orgId: "org-elsewhere", shared: true } };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [sharedSession] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByText("fix login")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Archive session" })).toBeNull();
+		cleanup();
+		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] }], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
 	});
 
 	it("keeps the owner's project actions on a project of their own", () => {
@@ -3799,6 +3810,48 @@ describe("Sidebar", () => {
 
 		expect(Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent)).toEqual(["Bravo", "Alpha"]);
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["bravo", "alpha"]);
+	});
+
+	it("pins a project to the top from its context menu and unpins it from the row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, id: "alpha", name: "Alpha" },
+				{ ...workspace, id: "bravo", name: "Bravo" },
+			],
+		});
+		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
+
+		fireEvent.contextMenu(document.querySelector('[data-project-id="bravo"] [data-project-label]')!);
+		await user.click(await screen.findByRole("menuitem", { name: "Pin to top" }));
+
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.pinned-projects") ?? "null")).toEqual(["bravo"]);
+		const unpin = screen.getByRole("button", { name: "Unpin" });
+		expect(unpin.closest("[data-project-id]")).toHaveAttribute("data-project-id", "bravo");
+
+		await user.click(unpin);
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+		expect(useSidebarOrderStore.getState().pinnedProjectIds).toEqual([]);
+	});
+
+	it("does not drop an unpinned project into the pinned group", () => {
+		useSidebarOrderStore.setState({ pinnedProjectIds: ["alpha"] });
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, id: "alpha", name: "Alpha" },
+				{ ...workspace, id: "bravo", name: "Bravo" },
+			],
+		});
+
+		const bravoRow = document.querySelector('[data-project-drag-row][data-project-id="bravo"]')!;
+		const alphaTarget = document.querySelector('li[data-project-drop-target][data-project-id="alpha"]')!;
+		fireDrag("dragStart", bravoRow, {});
+		fireDrag("dragOver", alphaTarget, { clientY: 0 });
+		fireDrag("drop", alphaTarget, {});
+
+		expect(Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent)).toEqual(["Alpha", "Bravo"]);
 	});
 
 	it("keeps the ad hoc group out of the project list and its drag ordering", () => {

@@ -7,7 +7,9 @@ import { SessionPeopleControl, SessionPeopleStack } from "./SessionPeople";
 const mocks = vi.hoisted(() => ({
 	live: undefined as CloudCpSessionLive | undefined,
 	dialog: vi.fn(),
+	teams: true,
 }));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ userId: "me", ready: true, baseUrl: "https://cp.test" }) }));
 vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => mocks.live }));
 vi.mock("./ShareSessionDialog", () => ({
@@ -15,6 +17,9 @@ vi.mock("./ShareSessionDialog", () => ({
 		mocks.dialog(props.open);
 		return props.open ? <div data-testid="share-dialog" /> : null;
 	},
+}));
+vi.mock("./ShareLinkDialog", () => ({
+	ShareLinkDialog: (props: { open: boolean }) => (props.open ? <div data-testid="share-link-dialog" /> : null),
 }));
 
 const person = (userId: string, name: string, state: SessionPerson["state"], present = true): SessionPerson => ({ userId, name, present, state });
@@ -71,6 +76,25 @@ describe("SessionPeopleControl", () => {
 	beforeEach(() => {
 		mocks.live = undefined;
 		mocks.dialog.mockClear();
+		mocks.teams = true;
+	});
+
+	it("in a build without Teams, Share opens the link-only dialog from before Teams", () => {
+		mocks.teams = false;
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		fireEvent.click(screen.getByRole("button", { name: "Share" }));
+		expect(screen.getByTestId("share-link-dialog")).toBeTruthy();
+		expect(screen.queryByTestId("share-dialog")).toBeNull();
+		expect(mocks.dialog).not.toHaveBeenCalled();
+	});
+
+	it("in a build with Teams, Share opens the people and teams dialog", () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		fireEvent.click(screen.getByRole("button", { name: "Share" }));
+		expect(screen.getByTestId("share-dialog")).toBeTruthy();
+		expect(screen.queryByTestId("share-link-dialog")).toBeNull();
 	});
 
 	it("shows the owner a Share button while nobody else is here", () => {

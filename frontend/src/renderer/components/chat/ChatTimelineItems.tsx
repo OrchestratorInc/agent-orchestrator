@@ -78,6 +78,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -1093,38 +1094,40 @@ export function HumanMessage({
 					data-queued={queued ? "" : undefined}
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
-					{excerptReferences.length > 0 ? (
-						<ChatAnnotationSummary
-							annotations={excerptReferences.map((excerpt) => ({
-								fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
-								text: excerpt.text ?? "",
-								conversationId: excerpt.sourceConversationId,
- messageId: excerpt.sourceMessageId,
-								revision: excerpt.sourceRevision,
-							}))}
-							onSelect={onSelectAnnotation}
-							className="mb-2"
-						/>
-					) : null}
-					{body ? (
-						<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => <SessionLinkedText text={text} />}
+					<CollapsibleHumanBody stateKey={visibleMessageText}>
+						{excerptReferences.length > 0 ? (
+							<ChatAnnotationSummary
+								annotations={excerptReferences.map((excerpt) => ({
+									fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
+									text: excerpt.text ?? "",
+									conversationId: excerpt.sourceConversationId,
+	 messageId: excerpt.sourceMessageId,
+									revision: excerpt.sourceRevision,
+								}))}
+								onSelect={onSelectAnnotation}
+								className="mb-2"
 							/>
-						</p>
-					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Attached files"
-						className={cn(body && "mt-2")}
-					/>
-					<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
+						) : null}
+						{body ? (
+							<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
+								<ProseWithInlineImages
+									text={body}
+									attachments={attachments}
+									sessionId={sessionId}
+									apiBaseUrl={apiBaseUrl}
+									renderText={(text) => <SessionLinkedText text={text} />}
+								/>
+							</p>
+						) : null}
+						<StagedAttachmentItems
+							paths={attachments}
+							sessionId={sessionId}
+							apiBaseUrl={apiBaseUrl}
+							ariaLabel="Attached files"
+							className={cn(body && "mt-2")}
+						/>
+						<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
+					</CollapsibleHumanBody>
 				</div>
 			)}
 			{editing ? null : (

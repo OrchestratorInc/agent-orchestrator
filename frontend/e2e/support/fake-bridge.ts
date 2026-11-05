@@ -164,6 +164,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
@@ -1089,6 +1090,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
+				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
