@@ -2099,9 +2099,11 @@ const ProjectItem = memo(function ProjectItem({
 												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent side="right" align="start" className="min-w-44">
-												<DropdownMenuItem data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-													<Plus aria-hidden="true" />
-													{t("shell.newTask")}
+												<DropdownMenuItem asChild data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+													<button className="w-full" type="button">
+														<Plus aria-hidden="true" />
+														{t("shell.newTask")}
+													</button>
 												</DropdownMenuItem>
 												{canPin ? (
 													<DropdownMenuItem onSelect={() => setProjectPinned(workspace.id, !isPinned)}>
@@ -2226,17 +2228,23 @@ const ProjectItem = memo(function ProjectItem({
 				</motion.li>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-					<Plus aria-hidden="true" />
-					{t("shell.newTask")}
+				<ContextMenuItem asChild data-ph-capture-attribute-ao_action="new_task" disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+					<button className="w-full" type="button">
+						<Plus aria-hidden="true" />
+						{t("shell.newTask")}
+					</button>
 				</ContextMenuItem>
 				{!isStandalone && (!workspace.shared || orchestrator) ? (
 					<ContextMenuItem
+						asChild
+						data-ph-capture-attribute-ao_action="open_orchestrator"
 						disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
 						onSelect={() => void openOrchestrator()}
 					>
-						<OrchestratorIcon aria-hidden="true" />
-						{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
+						<button className="w-full" type="button">
+							<OrchestratorIcon aria-hidden="true" />
+							{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
+						</button>
 					</ContextMenuItem>
 				) : null}
 				{!isStandalone ? (
@@ -2415,9 +2423,11 @@ function ScratchpadSection({
 					</div>
 				</ContextMenuTrigger>
 				<ContextMenuContent className="min-w-44">
-					<ContextMenuItem data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
-						<Plus aria-hidden="true" />
-						{t("shell.openNewAgent")}
+					<ContextMenuItem asChild data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+						<button className="w-full" type="button">
+							<Plus aria-hidden="true" />
+							{t("shell.openNewAgent")}
+						</button>
 					</ContextMenuItem>
 					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
 						<Archive aria-hidden="true" />
