@@ -44,6 +44,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 			</span>
 			<Pressable
 				className={cn("block w-full overflow-hidden rounded-md hover:bg-accent", selection?.disabledReason && "cursor-not-allowed hover:bg-transparent")}
+				data-ph-capture-attribute-ao_action={selection ? undefined : "open_artifact"}
 				onClick={selection ? toggle : onPreview}
 				title={selection?.disabledReason ?? `${row.sessionTitle} · ${row.path}`}
 				{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}

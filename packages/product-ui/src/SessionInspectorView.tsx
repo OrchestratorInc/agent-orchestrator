@@ -363,6 +363,7 @@ export function InspectorPullRequestCardView({
 				<ExternalLink
 					className="inline text-sm font-semibold leading-snug tracking-tight text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					href={pr.href}
+					data-ph-capture-attribute-ao_action="open_pr"
 				>
 					{pr.title}
 				</ExternalLink>
@@ -372,6 +373,7 @@ export function InspectorPullRequestCardView({
 					ariaLabel={openLabel}
 					className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label decoration-muted-foreground underline-offset-2 hover:text-settings-label hover:underline focus-visible:rounded-sm focus-visible:text-settings-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					href={pr.href}
+					data-ph-capture-attribute-ao_action="open_pr"
 				>
 					{pullRequestIcon ?? <GitPullRequestIcon className="size-icon-sm shrink-0" />}
 					<span className="truncate">{pr.repositoryLabel ? `${pr.repositoryLabel} ` : ""}PR #{pr.number}</span>

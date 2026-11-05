@@ -595,6 +595,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							"flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60",
 							selection?.disabledReason && "cursor-not-allowed",
 						)}
+						data-ph-capture-attribute-ao_action={selection ? undefined : "open_artifact"}
 						onClick={selection ? toggle : open}
 						title={selection?.disabledReason ?? `${row.sessionTitle} · ${row.path}`}
 						{...(selection ? { tabIndex: -1, "aria-hidden": true } : {})}
