@@ -314,6 +314,50 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 // Projection helpers
 // ---------------------------------------------------------------------------
 
+func checkNameFromGraphQL(n map[string]any) string {
+	typ := str(n["__typename"])
+	switch typ {
+	case "CheckRun":
+		return str(n["name"])
+	case "StatusContext":
+		return str(n["context"])
+	default:
+		return ""
+	}
+}
+
+// dedupeContextNodes retains one context node per check name on the head SHA:
+// for CheckRun pairs with positive databaseId values the highest databaseId
+// wins; otherwise (StatusContext or absent databaseId) the last node wins.
+func dedupeContextNodes(rawNodes []map[string]any) []map[string]any {
+	if len(rawNodes) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(rawNodes))
+	byName := make(map[string]int, len(rawNodes))
+	for _, n := range rawNodes {
+		name := checkNameFromGraphQL(n)
+		if name == "" {
+			continue
+		}
+		if idx, ok := byName[name]; ok {
+			prev := out[idx]
+			if str(prev["__typename"]) == "CheckRun" && str(n["__typename"]) == "CheckRun" {
+				prevID := int64(num(prev["databaseId"]))
+				curID := int64(num(n["databaseId"]))
+				if prevID > 0 && curID > 0 && curID < prevID {
+					continue
+				}
+			}
+			out[idx] = n
+			continue
+		}
+		byName[name] = len(out)
+		out = append(out, n)
+	}
+	return out
+}
+
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
 // If ANY visible context concluded failure-class we return CIFailing.
 // Otherwise any pending context wins over passing. An empty rollup is
@@ -336,14 +380,14 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		return mapRollupState(str(roll["state"]))
 	}
 	pending, passing := false, false
-	for _, n := range rawNodes {
+	for _, n := range dedupeContextNodes(rawNodes) {
 		st := checkStatusFromGraphQL(n)
 		switch st {
 		case domain.PRCheckFailed, domain.PRCheckCancelled:
 			return domain.CIFailing
 		case domain.PRCheckQueued, domain.PRCheckInProgress:
 			pending = true
-		case domain.PRCheckPassed:
+		case domain.PRCheckPassed, domain.PRCheckSkipped:
 			passing = true
 		}
 	}
@@ -467,12 +511,12 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
-	if len(rawNodes) == 0 {
+	deduped := dedupeContextNodes(nodes(contexts["nodes"]))
+	if len(deduped) == 0 {
 		return nil
 	}
-	out := make([]ports.PRCheckObservation, 0, len(rawNodes))
-	for _, n := range rawNodes {
+	out := make([]ports.PRCheckObservation, 0, len(deduped))
+	for _, n := range deduped {
 		typ := str(n["__typename"])
 		var name, urlOut string
 		switch typ {
@@ -556,7 +600,7 @@ func isBotAuthor(author map[string]any) bool {
 func jobIDForCheck(pr map[string]any, name string) int64 {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	for _, n := range nodes(contexts["nodes"]) {
+	for _, n := range dedupeContextNodes(nodes(contexts["nodes"])) {
 		if str(n["__typename"]) != "CheckRun" {
 			continue
 		}

@@ -1964,3 +1964,112 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 		t.Fatalf("list requests = %d, want 1", n)
 	}
 }
+
+func TestSCMChecksFromGraphQL_RetainsOnlyLatestRunPerCheckName(t *testing.T) {
+	// Simulates superseded check runs on the same head SHA (e.g. concurrency cancellation),
+	// including out-of-order databaseId values so highest CheckRun databaseId wins.
+	pr := map[string]any{
+		"url":              "https://github.com/acme/repo/pull/42",
+		"number":           float64(42),
+		"state":            "OPEN",
+		"mergeable":        "MERGEABLE",
+		"mergeStateStatus": "CLEAN",
+		"reviewDecision":   "APPROVED",
+		"headRefOid":       "abc1234",
+		"commits": map[string]any{"nodes": []any{
+			map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{
+				"state": "FAILURE",
+				"contexts": map[string]any{"nodes": []any{
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/old-fail-1", "databaseId": float64(101)},
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://ci/latest-pass", "databaseId": float64(103)},
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/old-fail-2", "databaseId": float64(102)},
+					map[string]any{"__typename": "StatusContext", "context": "coverage", "state": "FAILURE", "targetUrl": "https://ci/coverage-old"},
+					map[string]any{"__typename": "StatusContext", "context": "coverage", "state": "SUCCESS", "targetUrl": "https://ci/coverage"},
+				}},
+			}}},
+		}},
+	}
+	checks := scmChecksFromGraphQL(pr)
+	if len(checks) != 2 {
+		t.Fatalf("expected 2 deduplicated checks, got %d: %+v", len(checks), checks)
+	}
+	if checks[0].Name != "Worker startup check" || checks[0].Status != string(domain.PRCheckPassed) || checks[0].Conclusion != "success" || checks[0].ProviderID != "103" {
+		t.Fatalf("Worker startup check did not retain highest databaseId run: %+v", checks[0])
+	}
+	if checks[1].Name != "coverage" || checks[1].Status != string(domain.PRCheckPassed) {
+		t.Fatalf("coverage check incorrect: %+v", checks[1])
+	}
+
+	failed := failedSCMChecks(checks)
+	if len(failed) != 0 {
+		t.Fatalf("expected 0 failed checks, got %d: %+v", len(failed), failed)
+	}
+
+	if gotJobID := jobIDForCheck(pr, "Worker startup check"); gotJobID != 103 {
+		t.Fatalf("jobIDForCheck = %d, want 103", gotJobID)
+	}
+
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{
+		Repo:   ports.SCMRepo{Provider: "github", Owner: "acme", Name: "repo"},
+		Number: 42,
+	}, pr)
+	if obs.CI.Summary != string(domain.CIPassing) {
+		t.Fatalf("obs.CI.Summary = %q, want %q", obs.CI.Summary, domain.CIPassing)
+	}
+	if obs.Mergeability.State != string(domain.MergeMergeable) {
+		t.Fatalf("obs.Mergeability = %+v, want %q", obs.Mergeability, domain.MergeMergeable)
+	}
+}
+
+func TestSCMObservationFromGraphQL_RecomputesPendingAndHonorsPaginatedRollup(t *testing.T) {
+	pendingPR := map[string]any{
+		"commits": map[string]any{"nodes": []any{
+			map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{
+				"state": "FAILURE",
+				"contexts": map[string]any{"nodes": []any{
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "FAILURE", "databaseId": float64(101)},
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "IN_PROGRESS", "conclusion": "", "databaseId": float64(102)},
+				}},
+			}}},
+		}},
+	}
+	obs := scmObservationFromGraphQL(ports.SCMPRRef{Number: 1}, pendingPR)
+	if obs.CI.Summary != string(domain.CIPending) {
+		t.Fatalf("pending rerun obs.CI.Summary = %q, want %q", obs.CI.Summary, domain.CIPending)
+	}
+
+	paginatedPR := map[string]any{
+		"commits": map[string]any{"nodes": []any{
+			map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{
+				"state": "FAILURE",
+				"contexts": map[string]any{
+					"pageInfo": map[string]any{"hasNextPage": true},
+					"nodes": []any{
+						map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "SUCCESS", "databaseId": float64(102)},
+					},
+				},
+			}}},
+		}},
+	}
+	pagObs := scmObservationFromGraphQL(ports.SCMPRRef{Number: 2}, paginatedPR)
+	if pagObs.CI.Summary != string(domain.CIFailing) {
+		t.Fatalf("paginated rollup obs.CI.Summary = %q, want conservative %q", pagObs.CI.Summary, domain.CIFailing)
+	}
+}
+
+func TestCISummaryFromGraphQL_ConsidersOnlyLatestRunPerCheckName(t *testing.T) {
+	pr := map[string]any{
+		"commits": map[string]any{"nodes": []any{
+			map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{
+				"contexts": map[string]any{"nodes": []any{
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci/old-fail", "databaseId": float64(10)},
+					map[string]any{"__typename": "CheckRun", "name": "Worker startup check", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://ci/latest-pass", "databaseId": float64(11)},
+				}},
+			}}},
+		}},
+	}
+	st := ciSummaryFromGraphQL(pr)
+	if st != domain.CIPassing {
+		t.Fatalf("ciSummaryFromGraphQL = %v, want %v", st, domain.CIPassing)
+	}
+}
