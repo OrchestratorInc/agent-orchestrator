@@ -2031,6 +2031,8 @@ export const ChatComposer = memo(function ChatComposer({
 		};
 	}, []);
 
+	// A send retrying by itself is already on show, so its failed attempts aren't news.
+	const retryingBySelf = [unsent, durableDelivery].some((delivery) => delivery && transportRetries[delivery.clientMessageId] !== undefined);
 	const attachmentError =
 		fileAttachments.error ??
 		draftPersistenceError ??
@@ -2038,7 +2040,7 @@ export const ChatComposer = memo(function ChatComposer({
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
-		commandError;
+		(retryingBySelf ? undefined : commandError);
 	// The strip shows the unsent message, the same message while its retry runs, or a short undo after a discard.
 	const retryingDelivery = retryingUnsent && durableDelivery?.clientMessageId === retryingUnsent ? durableDelivery : undefined;
 	// A send retrying by itself passes through the delivery slot on every attempt.

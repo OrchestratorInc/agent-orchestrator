@@ -18,7 +18,7 @@ function pendingSend() {
 	return { onSend, resolve, reject };
 }
 
-function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false) {
+function renderComposer(sessionId: string, onSend: Parameters<typeof ChatComposer>[0]["onSend"], attachments = false, commandError?: string) {
 	return render(
 		<TooltipProvider>
 			<ChatComposer
@@ -26,6 +26,7 @@ function renderComposer(sessionId: string, onSend: Parameters<typeof ChatCompose
 				onSend={onSend}
 				nativeImages={attachments}
 				onStageAttachments={attachments ? vi.fn().mockResolvedValue([".ao/attachments/original.png"]) : undefined}
+				commandError={commandError}
 			/>
 		</TooltipProvider>,
 	);
@@ -273,6 +274,19 @@ describe("optimistic message delivery", () => {
 		await new Promise((resolve) => setTimeout(resolve, 2_500));
 		expect(onSend).toHaveBeenCalledTimes(3);
 		expect(readChatSessionDraft(sessionId).unsent?.state).toBe("dispatching");
+	});
+
+	it.each([
+		["hides", "a send retrying by itself", new TypeError("Failed to fetch"), false],
+		["keeps", "a coded failure", { code: "CHAT_SEND_FAILED", message: "The agent refused" }, true],
+	])("%s the raw send error after %s", async (_verb, reason, error, shown) => {
+		const raw = "Host h_1 is not connected";
+		const onSend = vi.fn().mockRejectedValue(error);
+		renderComposer(`optimistic-raw-error-${reason}`, onSend, false, raw);
+		expect(screen.getByRole("alert")).toHaveTextContent(raw);
+		await startSend(onSend, "status here");
+		await screen.findByTestId("unsent-message-strip");
+		await waitFor(() => expect(Boolean(screen.queryByText(raw))).toBe(shown));
 	});
 
 	it("delivers both a retrying strip send and a second unanswered send held in the box", async () => {
