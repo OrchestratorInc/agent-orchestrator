@@ -36,7 +36,8 @@ type ShellTerminal struct {
 // ProjectID opens the shell in the daemon's data dir instead of a project root,
 // which is what the topbar action does when no project is selected. SessionID
 // scopes the shell to an agent session so it appears only in that session's tab
-// strip; an empty SessionID makes it a standalone shell on the /terminals screen.
+// strip; an empty SessionID makes it a standalone shell, which no client shows
+// (ReapShellTerminalsFromPreviousAppRuns destroys it on the next launch).
 type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
@@ -50,6 +51,12 @@ type OpenShellTerminalInput struct {
 	// title it shows, so the tab keeps its name when the shell arrives; empty
 	// numbers it after the existing shells.
 	Title string `json:"title,omitempty"`
+	// Cols and Rows give the grid the requesting client will show. When both
+	// are set the shell starts immediately at that grid, in parallel with the
+	// client mounting its terminal, instead of waiting for the attach that
+	// StartOnAttach waits for (saving that round trip before the first prompt).
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state relevant to the command's

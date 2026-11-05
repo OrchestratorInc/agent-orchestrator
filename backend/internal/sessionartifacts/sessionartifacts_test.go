@@ -91,6 +91,49 @@ func TestList_SkipsOSMetadataAndToolFiles(t *testing.T) {
 	}
 }
 
+func TestSkips_AgreesWithList(t *testing.T) {
+	dir := t.TempDir()
+	paths := map[string]bool{
+		"plan.md":                    false,
+		"charts/q4.html":             false,
+		"notes/.versions/kept.md":    false, // Only the top level holds versions.
+		".versions/plan.md/1.txt":    true,
+		"node_modules/rxjs/index.js": true,
+		"charts/node_modules/x/a.js": true,
+		"NODE_MODULES/x/a.js":        true,
+		"app/__pycache__/mod.pyc":    true,
+		"repo/.git/HEAD":             true,
+		"notes/.DS_Store":            true,
+		"notes/._plan.md":            true,
+	}
+	for rel := range paths {
+		file := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, err := List(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, file := range files {
+		listed[file.Path] = true
+	}
+	for rel, skipped := range paths {
+		if got := Skips(rel); got != skipped {
+			t.Errorf("Skips(%q) = %v, want %v", rel, got, skipped)
+		}
+		if listed[rel] == skipped {
+			t.Errorf("List has %q = %v, but Skips is meant to agree with it", rel, listed[rel])
+		}
+	}
+}
+
 func TestList_BoundsFileCount(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < MaxFiles+25; i++ {

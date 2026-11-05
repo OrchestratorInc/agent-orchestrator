@@ -21,6 +21,11 @@ const css = readFileSync(resolve(process.cwd(), "src/renderer/styles.css"), "utf
 
 const NATIVE_COMPOSITION = 'html[data-native-browser-composition="true"]';
 const LIVE_PAGE = '.browser-panel[data-browser-native-page="live"]';
+// Published on <html> by BrowserPanel / SessionBrowserPopOut (useElementFlag)
+// instead of container-level :has() checks, which restyled the whole app on
+// every DOM change.
+const DOCKED_LIVE = "[data-browser-native-live]";
+const POPOUT_OPEN = "[data-browser-popout-open]";
 
 type Rule = { selector: string; body: string };
 
@@ -67,7 +72,7 @@ describe("native-composition transparency cascade", () => {
 		// classes, which macOS never applies — so the shell blanked the live page
 		// on macOS alone. Match it by its platform-independent class instead.
 		expect(
-			clearsBackgroundFor((selector) => selector.includes(".app-shell-root") && selector.includes(LIVE_PAGE)),
+			clearsBackgroundFor((selector) => selector.includes(".app-shell-root") && selector.includes(DOCKED_LIVE)),
 		).toBe(true);
 	});
 
@@ -94,7 +99,7 @@ describe("native-composition transparency cascade", () => {
 		// device-preset dropdown) held the shell raised.
 		expect(
 			clearsBackgroundFor(
-				(selector) => selector.includes(".app-shell-root") && selector.includes(".browser-popout-overlay"),
+				(selector) => selector.includes(".app-shell-root") && selector.includes(POPOUT_OPEN),
 			),
 		).toBe(true);
 	});

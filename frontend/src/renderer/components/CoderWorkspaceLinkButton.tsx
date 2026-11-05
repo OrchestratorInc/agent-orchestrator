@@ -19,10 +19,9 @@ export function CoderWorkspaceLinkButton({ url }: { url?: string }) {
 			<TooltipTrigger asChild>
 				<Button
 					type="button"
-					variant="ghost"
+					variant="quiet"
 					size="icon-sm"
 					aria-label={label}
-					className="text-muted-foreground hover:text-foreground"
 					data-testid="coder-workspace-link"
 					onClick={() => void openLinkInSystemBrowser(url)}
 				>
@@ -68,7 +67,7 @@ export function CoderWorkspaceTopbarButton({ url, style }: { url?: string; style
 						className="topbar-control--labeled"
 						data-priority="secondary"
 						data-testid="coder-workspace-topbar-link"
-						variant="accent"
+						variant="action"
 						onClick={() => void openLinkInSystemBrowser(url)}
 					>
 						<SquareArrowOutUpRight className="size-icon-md" aria-hidden="true" />

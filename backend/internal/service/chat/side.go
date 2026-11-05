@@ -42,6 +42,7 @@ type SideStore interface {
 	ClaimSideLaunch(context.Context, string, time.Time) ([]domain.SideConversation, error)
 	RecoverInterruptedSideTurns(context.Context, string, time.Time) error
 	CreateSideConversation(context.Context, domain.SideConversation) (domain.SideConversation, bool, error)
+	SideConversationByCreateKey(context.Context, domain.SessionID, string, string) (domain.SideConversation, bool, error)
 	SideConversation(context.Context, string) (domain.SideConversation, error)
 	ListSideConversations(context.Context, domain.SessionID, string) ([]domain.SideConversation, error)
 	ListOpenSidesForRun(context.Context, string) ([]domain.SideConversation, error)
@@ -365,14 +366,8 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if record.IsTerminated {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
-	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
-	if err != nil {
-		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
 	}
 	_, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -388,14 +383,12 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	existing, err = s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
+	}
+	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
 	if err != nil {
 		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
 	}
 	cfg, driver, err := s.branchLaunchConfig(source)
 	if err != nil {

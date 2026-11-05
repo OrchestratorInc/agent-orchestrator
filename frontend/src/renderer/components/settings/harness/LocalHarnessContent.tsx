@@ -37,6 +37,7 @@ import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hook
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../../lib/agent-options";
 import { apiErrorMessage } from "../../../lib/api-client";
+import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
@@ -45,6 +46,7 @@ import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
@@ -443,6 +445,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
+		if (operation === "install") void captureRendererEvent("ao.agents.install_clicked", { agent: agentId });
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const fail = (message: string) => {
@@ -807,14 +810,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <button key={agentId}
-								type="button"
+							return <Pressable key={agentId}
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
 								aria-describedby={statusId}
 								aria-current={selected ? "true" : undefined}
 								className={cn(
-									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+									"flex w-full items-center gap-3",
 									split ? "min-h-11 shrink-0 px-3" : "min-h-12 shrink-0 px-3",
 									selected
 										? (split ? "bg-(--color-bg-tertiary) font-medium" : "bg-accent font-medium")
@@ -839,7 +841,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button>;
+							</Pressable>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
@@ -852,7 +854,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						ref={detailRef}
 					>
 						{split ? null : <div className="shrink-0">
-							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
+							<Button type="button" size="sm" variant="quiet" className="-ml-2 gap-1 px-2" onClick={closeDetail}>
 								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
 							</Button>
 						</div>}

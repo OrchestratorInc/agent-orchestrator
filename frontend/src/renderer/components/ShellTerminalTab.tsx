@@ -6,7 +6,7 @@ import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
 	shell: ShellTerminal;
@@ -19,10 +19,8 @@ type ShellTerminalTabProps = {
 	onRename?: (title: string) => void;
 };
 
-// One standalone-shell tab, shared by the session pane's tab strip (CenterPane)
-// and the standalone /terminals screen (ShellTerminalsView) so the two never
-// drift. Session-pane tabs use a connected treatment that visually continues
-// into xterm below; the standalone terminals screen keeps its compact pill.
+// One shell tab in the session pane's tab strip (CenterPane). Session-pane
+// tabs use a connected treatment that visually continues into xterm below.
 // The full title only becomes the hover tooltip when the strip truncates it.
 //
 // Renaming happens inline with the platform's native gesture: double-click on
@@ -130,14 +128,9 @@ export function ShellTerminalTab({
 	};
 	if (appearance === "connected") {
 		const closeAction = isEditing || shell.optimistic ? undefined : (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button {...closeControl} className={terminalTabActionClassName}>
-						<X aria-hidden="true" className="size-icon-sm" />
-					</button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
-			</Tooltip>
+			<Pressable {...closeControl} className={terminalTabActionClassName}>
+				<X aria-hidden="true" className="size-icon-sm" />
+			</Pressable>
 		);
 		const editingContent = isEditing ? (
 			<input
@@ -210,7 +203,7 @@ export function ShellTerminalTab({
 					value={draft}
 				/>
 			) : (
-				<button
+				<Pressable
 					ref={ref}
 					aria-current={isActive}
 					aria-selected={isActive}
@@ -234,19 +227,14 @@ export function ShellTerminalTab({
 					<span className="inline-flex min-w-0 -translate-y-px items-center">
 						<span className="truncate">{title}</span>
 					</span>
-				</button>
+				</Pressable>
 			)}
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button
-						{...closeControl}
-						className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
-					>
-						<X aria-hidden="true" className="size-icon-sm" />
-					</button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
-			</Tooltip>
+			<Pressable
+				{...closeControl}
+				className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
+			>
+				<X aria-hidden="true" className="size-icon-sm" />
+			</Pressable>
 		</span>
 	);
 }

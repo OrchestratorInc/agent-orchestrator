@@ -52,7 +52,10 @@ type TelemetryIdentity struct {
 	InstallID   string
 	AnonymousID string
 	CloudUserID string
-	GitHubLogin string
+	// CloudUserKnown is true after the desktop has resolved its Cloud session.
+	// An empty CloudUserID is only a known sign-out when this is true.
+	CloudUserKnown bool
+	GitHubLogin    string
 	// OptedOut is true when export must stop: the user opted out, or the identity
 	// could not be persisted. Consumers (the paired phone) reset and stop capture.
 	OptedOut bool
@@ -84,7 +87,7 @@ type TelemetryIdentityStore interface {
 	SetCloudUserID(ctx context.Context, id string) error
 	// MarkInstalledEvent reserves the one install event before queueing it.
 	MarkInstalledEvent(ctx context.Context) (bool, error)
-	// MarkFirstOpenEvent reserves ao.app.first_open once per install ID.
+	// MarkFirstOpenEvent reserves ao.install.created once per install ID.
 	MarkFirstOpenEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
 }

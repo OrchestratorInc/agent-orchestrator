@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -24,6 +25,9 @@ type Server struct {
 	log    *slog.Logger
 	http   *http.Server
 	listen net.Listener
+	// listen6 serves the same router on [::1] at the loopback port; nil when
+	// that address could not be bound (see bindIPv6Loopback).
+	listen6 net.Listener
 
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
@@ -62,11 +66,13 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 		cfg:               cfg,
 		log:               log,
 		listen:            ln,
+		listen6:           bindIPv6Loopback(cfg, ln, log),
 		shutdownRequested: make(chan struct{}),
 	}
 	srv.http = &http.Server{
 		Handler: NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
 			RequestShutdown: srv.requestShutdown,
+			IPv6Loopback:    srv.listen6 != nil,
 		}),
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
@@ -75,9 +81,42 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 	return srv, nil
 }
 
+// bindIPv6Loopback also binds [::1] at the primary listener's port. The
+// desktop opens its event streams on a *.localhost name so they get their own
+// browser connections, and Chromium resolves such a name to ::1 first: with
+// this listener up, ::1 at that port is this daemon and never another
+// process. It is loopback like the primary listener and serves the same
+// router. Without IPv6, or with the address taken, the daemon serves
+// 127.0.0.1 alone; the health probes report which (ipv6Loopback), and the
+// desktop uses the name only while this listener is up.
+func bindIPv6Loopback(cfg config.Config, primary net.Listener, log *slog.Logger) net.Listener {
+	if cfg.Host != config.LoopbackHost {
+		return nil
+	}
+	tcp, ok := primary.Addr().(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	ln, err := net.Listen("tcp6", net.JoinHostPort("::1", strconv.Itoa(tcp.Port)))
+	if err != nil {
+		log.Info("IPv6 loopback listener unavailable; serving 127.0.0.1 only", "port", tcp.Port, "err", err)
+		return nil
+	}
+	return ln
+}
+
 // Addr returns the actual bound address (useful when the configured port was 0
 // and the OS chose one — primarily in tests).
 func (s *Server) Addr() net.Addr { return s.listen.Addr() }
+
+// IPv6LoopbackAddr returns the [::1] listener's address, or nil when the
+// daemon serves 127.0.0.1 alone.
+func (s *Server) IPv6LoopbackAddr() net.Addr {
+	if s.listen6 == nil {
+		return nil
+	}
+	return s.listen6.Addr()
+}
 
 // Handler returns the loopback server's built router so the daemon can share
 // the exact same handler instance with the LAN listener (via NewMobileLAN),
@@ -112,6 +151,9 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 	}
 	if err := runfile.Write(s.cfg.RunFilePath, info); err != nil {
 		_ = s.listen.Close()
+		if s.listen6 != nil {
+			_ = s.listen6.Close()
+		}
 		return fmt.Errorf("write run-file: %w", err)
 	}
 	defer func() {
@@ -130,6 +172,15 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 		}
 		serveErr <- nil
 	}()
+	if s.listen6 != nil {
+		go func() {
+			// Shutdown closes this listener too. Losing it otherwise leaves the
+			// daemon serving 127.0.0.1, so it is logged, not fatal.
+			if err := s.http.Serve(s.listen6); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				s.log.Warn("IPv6 loopback listener stopped", "addr", s.listen6.Addr().String(), "err", err)
+			}
+		}()
+	}
 	if onReady != nil {
 		onReady()
 	}

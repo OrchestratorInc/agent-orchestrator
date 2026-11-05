@@ -103,6 +103,8 @@ export type SessionStaleBinary = { version: string; since: string; switchFailedA
 
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
+	/** The cleanup was started by a sweep, not an archive: its state raises no app feedback. */
+	workspaceCleanupReportOnly?: boolean;
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;
@@ -239,8 +241,12 @@ export type WorkspaceSession = {
 		orgId: string;
 		/** Reached through a share link: what this person may do comes from its grant. */
 		shared?: boolean;
+		/** The team a shared session reaches this person through, when it isn't shared with them directly. */
+		sharedVia?: string;
 		/** The guest the session was started for, when someone the project was shared with asked for it. */
 		requestedBy?: { userId: string; name: string };
+		/** The control-plane user who started the session; only they share its files as public links. */
+		createdByUserId?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
@@ -426,6 +432,25 @@ export function sessionNeedsAttention(session: WorkspaceSession): boolean {
 export { attentionZone, attentionZoneLabel, attentionZoneOrder } from "../lib/session-presentation";
 export type { AttentionZone } from "../lib/session-presentation";
 
+/**
+ * How one thing reached the person: who shared it and, for a team share,
+ * which team. `source` is how: a link they opened themselves, a direct
+ * share, or a team (absent from a control plane from before teams, which
+ * had only links).
+ */
+export type WorkspaceShareSource = { byName?: string; viaTeamName?: string; grantId?: string; source?: "link" | "direct" | "team" };
+
+/**
+ * A cloud project someone in another organization shared with this person:
+ * who shared the project itself (when they did), and each session shared on
+ * its own. Roles come from each session's live state.
+ */
+export type WorkspaceShare = WorkspaceShareSource & {
+	/** Set when the whole project is shared, not only some of its sessions. */
+	wholeProject?: WorkspaceShareSource;
+	sessions?: Record<string, WorkspaceShareSource>;
+};
+
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
@@ -434,7 +459,7 @@ export type WorkspaceSummary = {
 	 * person. It carries no role: each shared session has its own grant, which
 	 * the session's live state reports.
 	 */
-	shared?: { byName?: string };
+	shared?: WorkspaceShare;
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;

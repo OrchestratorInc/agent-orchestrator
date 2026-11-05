@@ -2,6 +2,7 @@ import { Pencil, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 
 function SettingsRowLabel({
 	icon: Icon,
@@ -149,8 +150,7 @@ export function SettingsInlineInput({
 
 	if (!editing) {
 		return (
-			<button
-				type="button"
+			<Pressable
 				className={cn("settings-inline-edit-trigger", className)}
 				aria-label={t("settings.field.edit", { label })}
 				onClick={() => setEditing(true)}
@@ -159,7 +159,7 @@ export function SettingsInlineInput({
 					{value || placeholder}
 				</span>
 				<Pencil className="settings-inline-edit-icon" aria-hidden="true" />
-			</button>
+			</Pressable>
 		);
 	}
 

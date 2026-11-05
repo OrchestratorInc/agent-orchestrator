@@ -23,10 +23,13 @@ export type ConversationActionsEntry = {
 	canPin: boolean;
 	pinned: boolean;
 	canDelete: boolean;
+	/** Files in the session's artifact directory; undefined when not known. */
+	artifactCount?: number;
 	onMap(): void;
 	onFiles(): void;
 	onOpenShell(): void;
 	onPreview(): void;
+	onArtifacts(): void;
 	onPullRequests(): void;
 	onSettings(): void;
 	onSwitchInterface(): void;
