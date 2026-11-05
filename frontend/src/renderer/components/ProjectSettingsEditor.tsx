@@ -76,7 +76,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, cloudOrgId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -86,6 +86,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	renderAgent: (props: ProjectAgentPickerProps) => ReactNode;
 	defaultReviewer?: (draft: ProjectSettingsDraft) => string;
 	modelScope: (agent: string) => string;
+	/** A Cloud project's organization: its models are Cloud's for the account. */
+	cloudOrgId?: string;
 	/** Self-hosted daemon whose model catalog the role pickers read. */
 	modelHostId?: string;
 	reviewerWarning?: (agent: string) => string | null;
@@ -213,7 +215,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
 						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						<div className="min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+						<div className="min-w-0 space-y-1.5"><AgentModelField role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}

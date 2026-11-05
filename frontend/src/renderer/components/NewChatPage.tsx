@@ -416,6 +416,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
+								cloudOrgId: task.catalogCloudOrgId,
 								hostId,
 								agents: task.agentChoices,
 								disabled: task.agent.disabled,

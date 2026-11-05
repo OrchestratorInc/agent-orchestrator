@@ -94,6 +94,8 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
+		// The models offered are Cloud's for the account, so a saved model is one its sessions run.
+		cloudOrgId={project.orgId}
 		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
 		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}

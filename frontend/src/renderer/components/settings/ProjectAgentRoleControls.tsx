@@ -5,6 +5,9 @@ import { useTranslation } from "react-i18next";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { agentLabel } from "../../lib/agent-options";
+import { cloudModelVerdict, listsLocalModelsForCloud } from "../../lib/cloud-model-catalog";
+import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../hooks/useCloudModelCatalog";
 import { LOCAL_HOST } from "../../lib/hosts";
 import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
@@ -31,6 +34,7 @@ export function AgentModelField({
 	followCatalogDefaults = true,
 	emptyLabel,
 	independentMode = false,
+	cloudOrgId,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	variant?: "settings" | "task";
@@ -52,11 +56,26 @@ export function AgentModelField({
 	emptyLabel?: string;
 	/** Cloud Cursor can select both a model and a launch mode. */
 	independentMode?: boolean;
+	/**
+	 * A Cloud project's organization: the field then lists Cloud's models for
+	 * the account (the ones its sessions run), and this computer's only where
+	 * Cloud has no list for the agent (an older control plane, opencode).
+	 */
+	cloudOrgId?: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
-	const catalog: AgentModelCatalog | undefined = query.data;
+	const cloud = useCloudModelCatalog({ orgId: cloudOrgId, agent: agentId, enabled: Boolean(cloudOrgId) && agentId !== "" });
+	const cloudListed = cloud.catalog;
+	// This computer's list stands in only where Cloud has none for the agent (an
+	// older control plane, opencode's credential-scoped list), never after a
+	// failed read: its models may not run in Cloud.
+	const localWanted = !cloudOrgId || listsLocalModelsForCloud(cloud.gap, agentId, projectId);
+	const query = useQuery({ ...agentModelsQueryOptions(agentId, projectId, hostId), enabled: localWanted });
+	const catalog: AgentModelCatalog | undefined = cloudListed
+		? cloudCatalogAsAgentCatalog(agentId, cloudListed)
+		: localWanted ? query.data : undefined;
+	const catalogFetching = cloudOrgId && !localWanted ? cloud.loading : query.isFetching && !catalog;
 	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
 	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
@@ -73,7 +92,11 @@ export function AgentModelField({
 	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = !independentMode && catalog?.selectionMode === "mode";
 	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
+	// The account's own Cloud list says a saved model will not run: its tasks
+	// start on the agent's default instead (the control plane sees to it).
+	const cloudUnavailable = cloudListed !== undefined && cloudModelVerdict(cloudListed, model) === "unavailable";
 	const warning =
+		(cloudUnavailable ? t("settings.models.cloudModelUnavailable", { model, agent: agentLabel(agentId) }) : undefined) ??
 		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
 		catalog?.warning ??
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
@@ -139,6 +162,10 @@ export function AgentModelField({
 	const unsetLabel = emptyLabel ?? (catalogDefault ? agentModelDisplayLabel(agentId, catalogDefault.label) : undefined);
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
 	const refreshCatalog = async () => {
+		if (cloudListed) {
+			await cloud.query.refetch();
+			return;
+		}
 		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
 	};
@@ -167,7 +194,7 @@ export function AgentModelField({
 						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 						refreshError={catalog?.refreshError}
 						retryAt={catalog?.retryAt}
-						disabled={(query.isFetching && !catalog) || agentId === ""}
+						disabled={catalogFetching || agentId === ""}
 						onChange={selectCatalogModel}
 						onCustom={selectCustomModel}
 						triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}

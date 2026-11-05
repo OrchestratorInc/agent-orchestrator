@@ -3,6 +3,7 @@ import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
@@ -1183,6 +1184,12 @@ export function CloudSessionChatSurface({
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
 			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
+			// The worker listed the account's own models, which the control plane
+			// keeps as the account's Cloud list: every New Task and settings picker
+			// for this agent reads it again now rather than on its next refresh.
+			if (catalog.accountListed && userId) {
+				void invalidateCloudModelCatalogs(queryClient, { baseUrl, userId, orgId: cloud!.orgId, agent: session.provider });
+			}
 			return { ...catalog, selectionVersionAtFetch };
 		},
 	});

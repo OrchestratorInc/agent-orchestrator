@@ -10,11 +10,11 @@ import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
-	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), templateParameters: vi.fn(), cues: vi.fn(), ready: true,
+	get: vi.fn(), patch: vi.fn(), localGet: vi.fn(), connections: vi.fn(), me: vi.fn(), templateParameters: vi.fn(), cues: vi.fn(), models: vi.fn(), ready: true,
 	templates: [] as Array<{ id: string; name: string; displayName: string }>,
 	orgCoderConfig: null as { baseUrl: string; templateId?: string } | null,
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me, getCoderTemplateParameters: mocks.templateParameters, listProjectCues: mocks.cues, evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) => mocks.templateParameters(orgId, templateId, options) }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listUserProviderConnections: mocks.connections, me: mocks.me, getCoderTemplateParameters: mocks.templateParameters, listProjectCues: mocks.cues, listUserAgentModels: mocks.models, evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) => mocks.templateParameters(orgId, templateId, options) }, ready: mocks.ready, baseUrl: "https://cloud.test" }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"], useWorkspaceQuery: () => ({ data: [] }),
@@ -41,6 +41,16 @@ beforeEach(() => {
 	mocks.get.mockReset();
 	mocks.patch.mockReset();
 	mocks.localGet.mockReset();
+	// Cloud's list for the account names the same models these tests pick, so
+	// they exercise the field through the list a Cloud project's settings use.
+	mocks.models.mockReset();
+	mocks.models.mockImplementation(async (_orgId: string, agent: string) => {
+		const local = await mocks.localGet("/api/v1/agents/{agent}/models", { params: { path: { agent } } });
+		const models = (local?.data?.models ?? []) as Array<{ id: string; label: string; isDefault?: boolean; efforts?: string[]; defaultEffort?: string }>;
+		return { source: "release", cliVersion: "test", models: models.map((model) => ({
+			id: model.id, displayName: model.label, default: Boolean(model.isDefault), efforts: model.efforts, defaultEffort: model.defaultEffort,
+		})) };
+	});
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
 	mocks.templateParameters.mockReset();
@@ -141,6 +151,51 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { worker: { agent: "codex", agentConfig: { model: "", mode: "", effort: "", permissions: "" } } },
 		}));
+	});
+
+	it("offers Cloud's models for the account, never this computer's", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [
+			{ id: "opus", displayName: "Opus", default: true },
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+		] });
+		mount();
+		const model = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(model).toBeEnabled());
+		await userEvent.click(model);
+		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
+		// Picking the model asks for its effort, as for any role's model.
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
+		}));
+	});
+
+	it("says a saved model the account's own Cloud list lacks won't run", async () => {
+		project.config = { worker: { agent: "claude-code", agentConfig: { model: "claude-opus-5-5" } }, orchestrator: { agent: "claude-code" } };
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		mount();
+		// The worker's role, and the reviewer's, which runs the worker's model.
+		expect((await screen.findAllByText("claude-opus-5-5 isn't available to your Claude Code account on Cloud, so tasks use the default. Pick another model.")).length).toBeGreaterThan(0);
+	});
+
+	it("lists nothing from this computer after a failed Cloud read", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
+		mount();
+		const model = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(mocks.models).toHaveBeenCalled());
+		expect(model).not.toHaveTextContent("Only On This Computer");
+		await userEvent.click(model);
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 	});
 
 	it("names Claude Code for a role without an agent and offers no empty choice for it", async () => {

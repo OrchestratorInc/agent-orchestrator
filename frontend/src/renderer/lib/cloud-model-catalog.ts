@@ -1,0 +1,73 @@
+import { CloudCpError, type CloudCpChatModelsResponse } from "./cloud-cp";
+import { isConcreteModelID } from "./agent-model-choices";
+
+/**
+ * Cloud's model list for an agent: the models a Cloud worker running the
+ * pinned CLI listed for the signed-in account (source "worker", verified), or,
+ * before any worker has, the ones that CLI release supports for every account
+ * (source "release"). The control plane learns the account's list from every
+ * session's worker on its own, for every agent with a lister, so "release" is
+ * only the brief state before the account's first one.
+ */
+export type CloudModelCatalog = CloudCpChatModelsResponse;
+
+/** Why the control plane gave a cloud task no model list. */
+export type CloudModelCatalogGap = "legacy" | "unavailable" | "failed";
+
+/** Why the control plane gave a cloud task no model catalog. */
+export function cloudModelCatalogGap(error: unknown): CloudModelCatalogGap {
+	if (!(error instanceof CloudCpError)) return "failed";
+	// An older control plane has no such route and answers 404 or 501 without an
+	// error envelope. A handler's own 404 carries a code and is a real failure.
+	if (!error.code && (error.status === 404 || error.status === 501)) return "legacy";
+	if (error.status === 409 && error.code === "MODEL_CATALOG_UNAVAILABLE") return "unavailable";
+	return "failed";
+}
+
+/**
+ * Whether a cloud task lists this computer's models in place of the control
+ * plane's: an older control plane's suggestions, or opencode's own discovery,
+ * scoped to the connected provider's credential type.
+ */
+export function listsLocalModelsForCloud(gap: CloudModelCatalogGap | undefined, agent: string, modelScope: string): boolean {
+	return gap === "legacy" || (gap === "unavailable" && agent === "opencode" && modelScope !== "");
+}
+
+/**
+ * Whether a model list offers the model id, for any agent: the control plane's
+ * modelcatalog.Offers, so the desktop and the server agree. It errs towards
+ * yes, because a model it wrongly says the list lacks is one a task stops
+ * using: the same ID in any case; a bracketed variant of a listed model
+ * ("sonnet[1m]" of "sonnet"); a listed dated release named without its date
+ * ("claude-opus-4-5" of "claude-opus-4-5-20251101"). An empty id is the
+ * agent's own default, which every list offers.
+ */
+export function cloudCatalogOffers(models: ReadonlyArray<{ id: string }>, id: string): boolean {
+	const wanted = id.trim();
+	if (!wanted) return true;
+	const open = wanted.indexOf("[");
+	const base = open > 0 && wanted.endsWith("]") ? wanted.slice(0, open) : wanted;
+	return models.some((model) => {
+		const listed = model.id.trim();
+		if (!listed) return false;
+		const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+		return same(listed, wanted) || same(listed, base) ||
+			(listed.length === base.length + 9 && same(listed.slice(0, base.length), base) && /^-\d{8}$/.test(listed.slice(base.length)));
+	});
+}
+
+/**
+ * What Cloud's list says about running a model:
+ * - "offered": the list has it (or it is the agent's default);
+ * - "unavailable": the list is the account's own (verified) and lacks it, so
+ *   a task on it fails;
+ * - "unverified": only the release list is known yet, which lacks it; the
+ *   account may still run it, and the control plane is learning the account's
+ *   list.
+ */
+export type CloudModelVerdict = "offered" | "unavailable" | "unverified";
+
+export function cloudModelVerdict(catalog: Pick<CloudModelCatalog, "models" | "source"> | undefined, model: string): CloudModelVerdict {
+	if (!catalog || !isConcreteModelID(model) || cloudCatalogOffers(catalog.models, model)) return "offered";
+	return catalog.source === "worker" ? "unavailable" : "unverified";
+}
