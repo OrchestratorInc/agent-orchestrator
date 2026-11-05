@@ -154,12 +154,12 @@ func urgentNudgeWaitingInputSafe(agents ports.AgentResolver) func(domain.AgentHa
 // so exits missed while AO was stopped are folded after the startup check has
 // kept those sessions stopped and resumable. The periodic loop starts after it.
 func (l *lifecycleStack) ReconcileRuntime(ctx context.Context) error {
-	defer l.StartReaperLoop()
 	return l.runtimeReaper.Tick(ctx)
 }
 
-// StartReaperLoop lets the periodic reaper run. The boot goroutine also defers
-// it, so a panic before ReconcileRuntime cannot leave the reaper off for good.
+// StartReaperLoop lets the periodic reaper run. The boot goroutine defers it,
+// so it runs after ReconcileRuntime, and a panic before that pass cannot leave
+// the reaper off for good.
 func (l *lifecycleStack) StartReaperLoop() {
 	l.reaperStartOnce.Do(func() { close(l.reaperStart) })
 }

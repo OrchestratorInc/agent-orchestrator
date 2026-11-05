@@ -495,6 +495,14 @@ func (s SessionProvisionState) IsProvisioning() bool {
 // IsStandalone reports whether the session has no registered project owner.
 func (s SessionRecord) IsStandalone() bool { return s.ProjectID == "" }
 
+// RuntimeReleased reports that AO ended the current terminal launch on purpose
+// and kept the session stopped. That launch's runtime is gone by design, so its
+// death is not a crash; a resume starts a new launch, which this never covers.
+func (s SessionRecord) RuntimeReleased() bool {
+	launch := s.Metadata.RuntimeLaunchID
+	return s.Activity.State == ActivityExited && launch != "" && s.Metadata.RuntimeReleasedLaunchID == launch
+}
+
 // SessionControllerOwner is the durable identity of the process/controller
 // currently allowed to act for a session. Narrow lifecycle writes compare this
 // snapshot before updating so stale launch work cannot mutate a replacement.

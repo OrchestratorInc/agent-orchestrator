@@ -227,6 +227,12 @@ func (r *Reaper) probeOne(ctx context.Context, sess domain.SessionRecord, now ti
 	if domain.NormalizeSessionMode(sess.Mode) == domain.SessionModeChat {
 		return ports.RuntimeFacts{}, false
 	}
+	// A stopped session keeps the handle of the launch AO released until it is
+	// resumed. The LCM ignores that launch's death, and counting it as dead on
+	// every pass would let stopped sessions trip the mass-death breaker.
+	if sess.RuntimeReleased() {
+		return ports.RuntimeFacts{}, false
+	}
 	handle, ok := handleFromRecord(sess)
 	if !ok {
 		// A session in the running-set without a handle is an anomaly worth
