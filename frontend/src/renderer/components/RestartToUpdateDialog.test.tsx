@@ -299,6 +299,45 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	expect(updInstall).toHaveBeenCalledTimes(1);
 });
 
+it("gives the buttons back when a relaunch request does not end AO (#6911)", async () => {
+	const install = deferredInstall();
+	updRelaunch.mockResolvedValue(true);
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
+	await screen.findByText("Safer updates");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	await act(async () => install.reject(new Error("Another update step didn't finish, so the install couldn't start. AO stayed open. Relaunch AO to try again.")));
+	vi.useFakeTimers();
+	try {
+		await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Relaunch AO" })); });
+		expect(updRelaunch).toHaveBeenCalledTimes(1);
+		const primary = screen.getByRole("button", { name: "Preparing update…" });
+		expect(primary).toBeDisabled();
+		await act(async () => { vi.advanceTimersByTime(19_999); });
+		expect(primary).toBeDisabled();
+		await act(async () => { vi.advanceTimersByTime(1); });
+		expect(screen.getByRole("button", { name: "Relaunch AO" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("gives the buttons back at once when the relaunch quit is cancelled", async () => {
+	const install = deferredInstall();
+	// The user chose to stay at the unsent-draft prompt.
+	updRelaunch.mockResolvedValue(false);
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
+	await screen.findByText("Safer updates");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	await act(async () => install.reject(new Error("Another update step didn't finish, so the install couldn't start. AO stayed open. Relaunch AO to try again.")));
+	await userEvent.click(screen.getByRole("button", { name: "Relaunch AO" }));
+	expect(updRelaunch).toHaveBeenCalledTimes(1);
+	expect(screen.getByRole("button", { name: "Relaunch AO" })).toBeEnabled();
+	expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+});
+
 it("hides the install-on-quit line once preparation fails", async () => {
 	const install = deferredInstall();
 	useUiStore.setState({ updateInstallPromptOpen: true });

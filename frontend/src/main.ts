@@ -3373,8 +3373,18 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
-	app.relaunch();
+	// app.relaunch() is armed in before-quit once the quit is certain: Electron
+	// can't take it back, so arming it here would make a quit the user cancels
+	// at the unsent-draft prompt relaunch AO whenever they next quit.
+	// Relaunch is the documented way out of a stuck update, so it gets the same
+	// exit deadline as an update restart. Without it a quit cleanup step that
+	// never settles leaves this process running and the dialog waiting (#6911).
+	updateRelaunchRequested = true;
 	desktopQuit.quitCompletely();
+	// before-quit runs inside quitCompletely(), so this already says whether the
+	// quit went ahead or was cancelled at the unsent-draft prompt. The dialog
+	// gives its buttons back at once when it was cancelled.
+	return updateRelaunchRequested;
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
@@ -3971,6 +3981,9 @@ setUpdateRestartFailureHandler(() => {
 });
 
 let updateQuitDeadlineArmed = false;
+let updateRelaunchRequested = false;
+let updateRelaunchArmed = false;
+const updateExitRequested = () => isUpdateRestartRequested() || updateRelaunchRequested;
 app.on("before-quit", (event) => {
 	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
@@ -3984,10 +3997,15 @@ app.on("before-quit", (event) => {
 			app.quit();
 		} else {
 			desktopQuit.cancelQuit();
+			updateRelaunchRequested = false;
 		}
 		return;
 	}
 	browserQuitRequested = true;
+	if (updateRelaunchRequested && !updateRelaunchArmed) {
+		updateRelaunchArmed = true;
+		app.relaunch();
+	}
 	// Never respawn the daemon while the app is shutting down; the daemon's own
 	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
 	cancelDaemonAutoRestart();
@@ -4024,12 +4042,12 @@ app.on("before-quit", (event) => {
 			};
 			browserQuitCleanupPromise = cleanup.then(() => undefined).finally(finishQuit);
 		}
-		if (isUpdateRestartRequested() && !updateQuitDeadlineArmed) {
+		if (updateExitRequested() && !updateQuitDeadlineArmed) {
 			updateQuitDeadlineArmed = true;
 			// Also cover a normal quit already waiting on the same cleanup.
 			void finishUpdateQuit(browserQuitCleanupPromise, {
 				quit: () => undefined, // The existing cleanup continuation owns normal quit.
-				exit: () => { if (isUpdateRestartRequested()) app.exit(0); },
+				exit: () => { if (updateExitRequested()) app.exit(0); },
 				log: (error) => console.error("update shutdown:", error),
 			});
 		}

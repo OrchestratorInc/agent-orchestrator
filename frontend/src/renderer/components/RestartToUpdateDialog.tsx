@@ -43,6 +43,9 @@ export function RestartToUpdateDialog() {
 	return <RestartToUpdateDialogBody />;
 }
 
+// A little longer than the main process's update shutdown deadline (15 s).
+const RELAUNCH_GIVE_UP_MS = 20_000;
+
 function RestartToUpdateDialogBody() {
 	const { t, i18n } = useTranslation();
 	const close = useUiStore((state) => state.closeUpdateInstallPrompt);
@@ -116,14 +119,28 @@ function RestartToUpdateDialogBody() {
 		if (installing.current) return;
 		installing.current = true;
 		setPending(true);
+		const release = () => {
+			installing.current = false;
+			if (mounted.current) setPending(false);
+		};
+		let quitting: boolean;
 		try {
-			await aoBridge.updates.relaunch();
+			quitting = await aoBridge.updates.relaunch();
 		} catch {
 			// Relaunch quits this process; a rejection means it didn't, and there
 			// is nothing further to do here.
-			installing.current = false;
-			if (mounted.current) setPending(false);
+			release();
+			return;
 		}
+		// The quit was cancelled at the unsent-draft prompt: AO stays open.
+		if (quitting === false) {
+			release();
+			return;
+		}
+		// The main process exits within its 15 s shutdown deadline. Still being
+		// here after that means it didn't, so give the buttons back instead of
+		// showing "Preparing update…" forever (#6911).
+		window.setTimeout(release, RELAUNCH_GIVE_UP_MS);
 	};
 
 	const confirm = async () => {
