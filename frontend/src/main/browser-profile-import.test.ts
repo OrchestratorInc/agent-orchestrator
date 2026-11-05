@@ -1221,7 +1221,10 @@ describe("BrowserProfileImportService", () => {
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
 		const historyStore = new BrowserHistoryStore({ stateDir });
-		vi.spyOn(historyStore, "mergeImportedEntries").mockRejectedValueOnce(new Error("disk full"));
+		vi.spyOn(historyStore, "mergeImportedEntries").mockImplementationOnce(async () => {
+			expect(profileStore.getDefaultProfileId()).toBeNull();
+			throw new Error("disk full");
+		});
 		const service = new BrowserProfileImportService({
 			stateDir,
 			profileStore,
@@ -1242,9 +1245,13 @@ describe("BrowserProfileImportService", () => {
 		};
 		await expect(service.import(request, vi.fn())).rejects.toThrow("disk full");
 		expect(profileStore.profiles).toEqual([]);
-		await expect(service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn())).resolves.toMatchObject({
-			entries: [expect.objectContaining({ importedHistoryEntries: 2 })],
-		});
+		expect(profileStore.getDefaultProfileId()).toBeNull();
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getDefaultProfileId()).toBeNull();
+		const result = await service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn());
+		expect(result).toMatchObject({ entries: [expect.objectContaining({ importedHistoryEntries: 2 })] });
+		expect(profileStore.getDefaultProfileId()).toBe(result.entries[0]!.destinationProfile.id);
 	});
 
 	it("makes a first import the default only after it commits", async () => {

@@ -204,6 +204,10 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBeNull();
 		await store.claimDefaultIfFirst(imported.id);
 		expect(store.getDefaultProfileId()).toBe(imported.id);
+
+		await store.setDefaultProfileId(later.id);
+		await store.claimDefaultIfFirst(imported.id);
+		expect(store.getDefaultProfileId()).toBe(later.id);
 	});
 
 	it("promotes the oldest remaining profile when the default is deleted", async () => {
