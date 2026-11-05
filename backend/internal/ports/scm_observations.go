@@ -7,6 +7,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -208,6 +209,44 @@ type SCMCIObservation struct {
 	// complete CI state — the observer must not overwrite durable checks as
 	// Fetched=true complete (review Item 13). Mirrors SCMReviewObservation.Partial.
 	Partial bool
+}
+
+// ApplyStoredLogTails fills the failed checks' log tails from stored checks of
+// the same head commit, so a re-read of an unchanged failure carries the same
+// tails as the observation that fetched them (the CI nudge's dedup signature
+// includes them). It reports false, changing nothing it cannot complete, when a
+// failed check has no stored tail.
+func (ci *SCMCIObservation) ApplyStoredLogTails(checks []domain.PullRequestCheck) bool {
+	tailsByName := map[string]string{}
+	for _, ch := range checks {
+		if ci.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != ci.HeadSHA {
+			continue
+		}
+		if ch.LogTail != "" && (ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled) {
+			tailsByName[ch.Name] = ch.LogTail
+		}
+	}
+	if len(tailsByName) == 0 {
+		return false
+	}
+	tails := make([]string, 0, len(ci.FailedChecks))
+	for i := range ci.FailedChecks {
+		tail := tailsByName[ci.FailedChecks[i].Name]
+		if tail == "" {
+			return false
+		}
+		tails = append(tails, tail)
+	}
+	for i := range ci.FailedChecks {
+		ci.FailedChecks[i].LogTail = tailsByName[ci.FailedChecks[i].Name]
+	}
+	for i := range ci.Checks {
+		if tail := tailsByName[ci.Checks[i].Name]; tail != "" {
+			ci.Checks[i].LogTail = tail
+		}
+	}
+	ci.FailureLogTail = strings.Join(tails, "\n---\n")
+	return true
 }
 
 // SCMCheckObservation is one normalized check/status context. ProviderID is an

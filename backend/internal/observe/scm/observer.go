@@ -1654,7 +1654,7 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	if strings.HasPrefix(local.CIHash, obs.CI.FailedFingerprint+":") {
 		checks, err := o.store.ListChecks(ctx, local.URL)
-		if err == nil && applyStoredFailedLogTails(obs, checks) {
+		if err == nil && obs.CI.ApplyStoredLogTails(checks) {
 			return
 		}
 	}
@@ -1689,37 +1689,6 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 
 func checkProviderKey(ch ports.SCMCheckObservation) string {
 	return ch.Name + "\x00" + ch.ProviderID
-}
-
-func applyStoredFailedLogTails(obs *ports.SCMObservation, checks []domain.PullRequestCheck) bool {
-	tailsByName := map[string]string{}
-	for _, ch := range checks {
-		if obs.CI.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != obs.CI.HeadSHA {
-			continue
-		}
-		if ch.LogTail != "" && (ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled) {
-			tailsByName[ch.Name] = ch.LogTail
-		}
-	}
-	if len(tailsByName) == 0 {
-		return false
-	}
-	tails := make([]string, 0, len(obs.CI.FailedChecks))
-	for i := range obs.CI.FailedChecks {
-		tail := tailsByName[obs.CI.FailedChecks[i].Name]
-		if tail == "" {
-			return false
-		}
-		obs.CI.FailedChecks[i].LogTail = tail
-		tails = append(tails, tail)
-	}
-	for i := range obs.CI.Checks {
-		if tail := tailsByName[obs.CI.Checks[i].Name]; tail != "" {
-			obs.CI.Checks[i].LogTail = tail
-		}
-	}
-	obs.CI.FailureLogTail = strings.Join(tails, "\n---\n")
-	return true
 }
 
 func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subject, observations map[string]ports.SCMObservation, subjectsByPR map[string]*subject, forced map[string]bool, reviewModes map[string]ports.ReviewWriteMode, localOnlyObservations, reviewStale map[string]bool, now time.Time) {

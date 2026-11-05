@@ -571,6 +571,14 @@ func (s *ActionService) notifyStateChange(ctx context.Context, tracked domain.Pu
 		return
 	}
 	fresh := observations[0]
+	// This read has no CI log tails (the observer fetches those). Without the
+	// stored ones, an unchanged failure would look new to the CI nudge's dedup
+	// and the agent would be told again about a failure it already has.
+	if fresh.CI.Summary == string(domain.CIFailing) && s.resolve != nil {
+		if checks, err := s.resolve.ListChecks(ctx, tracked.URL); err == nil {
+			fresh.CI.ApplyStoredLogTails(checks)
+		}
+	}
 	// The provider may answer the read before the mutation is visible; the
 	// mutation's confirmed result is authoritative for the state fields.
 	// Closing leaves a draft a draft; the other actions decide it.

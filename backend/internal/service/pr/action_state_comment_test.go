@@ -152,6 +152,32 @@ func TestActionServiceChangeState_TransitionsPersistAndNotifyLifecycle(t *testin
 	}
 }
 
+// The provider read after a state change has no CI log tails; the stored ones
+// keep an unchanged failure's CI nudge signature, so the agent is not told
+// about the same failure again because the PR went to draft.
+func TestActionServiceChangeState_CarriesStoredCILogTailsToLifecycle(t *testing.T) {
+	pr := openPRFixture()
+	failed := ports.SCMCheckObservation{Name: "format", Status: string(domain.PRCheckFailed), ProviderID: "job-1"}
+	reader := &fakeSCMAction{observation: ports.SCMObservation{Fetched: true, PR: ports.SCMPRObservation{URL: pr.URL, Number: 42}, CI: ports.SCMCIObservation{
+		Summary: string(domain.CIFailing), HeadSHA: pr.HeadSHA,
+		Checks: []ports.SCMCheckObservation{failed, {Name: "test", Status: string(domain.PRCheckPassed)}}, FailedChecks: []ports.SCMCheckObservation{failed},
+	}}}
+	store := &fakeActionStore{pr: pr, ok: true, checks: []domain.PullRequestCheck{
+		{Name: "format", CommitHash: pr.HeadSHA, Status: domain.PRCheckFailed, LogTail: "gofmt: main.go"},
+		// An older head's tail is not this failure's.
+		{Name: "format", CommitHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: domain.PRCheckFailed, LogTail: "stale"},
+	}}
+	lifecycle := &fakeActionLifecycle{}
+	svc := NewActionService(ActionDeps{Store: store, Reader: reader, StateChanger: &fakeStateCommentSCM{}, StateWriter: &fakeStateWriter{}, Lifecycle: lifecycle})
+	if _, err := svc.ChangeState(context.Background(), StateRequest{PRID: "42", PRURL: pr.URL, Action: "draft"}); err != nil {
+		t.Fatal(err)
+	}
+	ci := lifecycle.obs.CI
+	if lifecycle.calls != 1 || len(ci.FailedChecks) != 1 || ci.FailedChecks[0].LogTail != "gofmt: main.go" || ci.Checks[0].LogTail != "gofmt: main.go" || ci.FailureLogTail != "gofmt: main.go" {
+		t.Fatalf("lifecycle calls=%d ci=%+v", lifecycle.calls, ci)
+	}
+}
+
 func TestActionServiceChangeState_RejectsInvalidTransitionsWithoutCallingProvider(t *testing.T) {
 	for _, tc := range []struct {
 		action string
