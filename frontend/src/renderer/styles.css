@@ -3660,7 +3660,7 @@ html.sidebar-reordering * {
  * toggle inside the current session animates (data-motion="animated" on the
  * rail's gap), so switching sessions and drag-resizing stay immediate. Only the
  * simplified bar renders the divider, so the previous bar is left as it was. */
-.session-split:has([data-slot="inspector-gap"][data-motion="animated"]) .session-topbar-actions:has(.topbar-divider):not([data-fullscreen]) {
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .session-topbar-actions:has(.topbar-divider):not([data-fullscreen]) {
 	transition: padding-right var(--session-inspector-motion-duration, 300ms)
 		var(--session-inspector-motion-easing, ease-out);
 }
@@ -3706,7 +3706,7 @@ html.sidebar-reordering * {
 	background: color-mix(in srgb, var(--color-border) 50%, transparent);
 }
 
-.session-split:has([data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
 	transition:
 		width var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
 		margin-inline var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
