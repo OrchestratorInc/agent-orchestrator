@@ -73,3 +73,22 @@ func TestTransientCloneFailure(t *testing.T) {
 		}
 	}
 }
+
+// git prints its failure last, after the whole progress stream, so a long
+// clone's retry decision depends on the newest output.
+func TestLimitedCloneOutputKeepsTheFailureAfterLongProgress(t *testing.T) {
+	t.Parallel()
+
+	var out limitedCloneOutput
+	for range 1000 {
+		_, _ = out.Write([]byte("Receiving objects:  14% (1778575/12011002), 1.42 GiB | 10.88 MiB/s\r"))
+	}
+	_, _ = out.Write([]byte("fatal: early EOF\n"))
+
+	if !transientCloneFailure(out.String()) {
+		t.Fatalf("failure after long progress was not classified as transient: %q", out.String()[len(out.String())-40:])
+	}
+	if got := len(out.String()); got > 32*1024 {
+		t.Fatalf("retained %d bytes, want at most 32 KiB", got)
+	}
+}

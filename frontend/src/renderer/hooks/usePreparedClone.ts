@@ -53,16 +53,23 @@ export function usePreparedClone(hostId?: string) {
 		// The prepare call blocks until the clone finishes; poll its progress
 		// side-channel while it runs so the dialog can render live git output.
 		setProgress(null);
-		const timer = window.setInterval(() => {
+		// One poll at a time, so a slow host cannot stack requests or apply
+		// answers out of order. An answer landing after prepare settled is dropped.
+		let polling = true;
+		let pollTimer: number;
+		const poll = () => {
 			void client.GET("/api/v1/projects/clone/progress", {
 				params: { query: { remoteUrl, destinationParent } },
 			}).then(({ data }) => {
-				if (data && typeof data.phase === "string") setProgress(data);
+				if (polling && data && typeof data.phase === "string") setProgress(data);
 			}).catch(() => {
 				// Progress is best-effort: the route 404s before the clone
 				// registers and older daemons do not serve it at all.
+			}).finally(() => {
+				if (polling) pollTimer = window.setTimeout(poll, CLONE_PROGRESS_POLL_MS);
 			});
-		}, CLONE_PROGRESS_POLL_MS);
+		};
+		pollTimer = window.setTimeout(poll, CLONE_PROGRESS_POLL_MS);
 		try {
 			const { data, error } = await client.POST("/api/v1/projects/clone/prepare", {
 				body: { remoteUrl, destinationParent },
@@ -75,7 +82,8 @@ export function usePreparedClone(hostId?: string) {
 			inputRef.current = { remoteUrl, destinationParent };
 			return data;
 		} finally {
-			window.clearInterval(timer);
+			polling = false;
+			window.clearTimeout(pollTimer);
 			setProgress(null);
 			if (activeRequest.current === controller) activeRequest.current = null;
 		}

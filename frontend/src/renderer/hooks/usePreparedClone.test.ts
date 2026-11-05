@@ -189,6 +189,57 @@ describe("clone progress polling", () => {
 		expect(api.GET.mock.calls.length).toBe(callsAfterCompletion);
 	});
 
+	it("waits for each progress answer before asking again", async () => {
+		vi.useFakeTimers();
+		api.POST.mockReturnValue(new Promise(() => {}));
+		let answer: (value: { data: ReturnType<typeof progressSnapshot> }) => void = () => {};
+		api.GET.mockReturnValueOnce(new Promise((resolve) => {
+			answer = resolve;
+		}));
+		api.GET.mockResolvedValue({ data: progressSnapshot() });
+
+		const { result } = renderHook(() => usePreparedClone());
+		act(() => {
+			void result.current.prepare("https://example.com/repo.git", "/repos");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(3000);
+		});
+		expect(api.GET).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			answer({ data: progressSnapshot() });
+			await vi.advanceTimersByTimeAsync(500);
+		});
+		expect(api.GET).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a progress answer that lands after prepare settled", async () => {
+		vi.useFakeTimers();
+		let resolvePrepare: (value: { data: { path: string; remoteUrl: string; preparationId: string } }) => void = () => {};
+		api.POST.mockReturnValue(new Promise((resolve) => {
+			resolvePrepare = resolve;
+		}));
+		let answer: (value: { data: ReturnType<typeof progressSnapshot> }) => void = () => {};
+		api.GET.mockReturnValue(new Promise((resolve) => {
+			answer = resolve;
+		}));
+
+		const { result } = renderHook(() => usePreparedClone());
+		act(() => {
+			void result.current.prepare("https://example.com/repo.git", "/repos");
+		});
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(500);
+			resolvePrepare({ data: { path: "/repos/repo", remoteUrl: "https://example.com/repo.git", preparationId: "prep-1" } });
+			await vi.advanceTimersByTimeAsync(0);
+			answer({ data: progressSnapshot() });
+			await vi.advanceTimersByTimeAsync(0);
+		});
+
+		expect(result.current.progress).toBeNull();
+	});
+
 	it("ignores progress misses so older daemons keep the plain busy state", async () => {
 		vi.useFakeTimers();
 		api.POST.mockResolvedValue({

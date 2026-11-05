@@ -103,9 +103,6 @@ func (t *cloneProgressTracker) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.buf = append(t.buf, p...)
-	if len(t.buf) > maxCloneProgressLine {
-		t.buf = t.buf[:0]
-	}
 	for {
 		idx := bytes.IndexAny(t.buf, "\r\n")
 		if idx < 0 {
@@ -115,7 +112,20 @@ func (t *cloneProgressTracker) Write(p []byte) (int, error) {
 		t.buf = t.buf[idx+1:]
 		t.applyLine(string(line))
 	}
+	if len(t.buf) > maxCloneProgressLine {
+		t.buf = t.buf[:0]
+	}
 	return len(p), nil
+}
+
+// restart begins a retry. The counters reset so the failed attempt's numbers
+// do not linger; the log stays so the failure behind the retry remains readable.
+func (t *cloneProgressTracker) restart() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = t.buf[:0]
+	t.lastLogTask = ""
+	t.setPhase(clonePhaseConnecting)
 }
 
 // finish records that git exited and the preparation is completing the
@@ -146,10 +156,15 @@ const (
 	cloneLogTailMaxRunes = 200
 )
 
+// cloneLogURLUserinfo matches the credentials part of a URL in git's output.
+var cloneLogURLUserinfo = regexp.MustCompile(`://[^/\s'"]*@`)
+
 // appendLogTail records one stderr line in the tail. Task updates ("Receiving
 // objects: 41% (…)") collapse into the task's newest line; anything else
-// (remote banners, warnings, errors) always gets its own entry.
+// (remote banners, warnings, errors) always gets its own entry. URL credentials
+// are removed first: truncating before that could cut the "@" that marks them.
 func (t *cloneProgressTracker) appendLogTail(line, task string) {
+	line = cloneLogURLUserinfo.ReplaceAllString(line, "://***@")
 	if runes := []rune(line); len(runes) > cloneLogTailMaxRunes {
 		line = string(runes[:cloneLogTailMaxRunes])
 	}

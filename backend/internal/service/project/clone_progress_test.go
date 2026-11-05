@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -411,5 +412,111 @@ func TestCloneProgressTrackerLogTailSnapshotIsACopy(t *testing.T) {
 
 	if got := tracker.snapshot(); got.Log[0] == "mutated" {
 		t.Fatal("snapshot exposed the tracker's internal log tail")
+	}
+}
+
+func TestCloneProgressTrackerParsesAChunkLargerThanTheLineBound(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	banner := strings.Repeat("remote: long server banner\n", maxCloneProgressLine/20)
+	_, _ = tracker.Write([]byte(banner + "Receiving objects:  45% (1234/2748), 1.00 MiB | 2.00 MiB/s\r"))
+
+	snap := tracker.snapshot()
+	if snap.Phase != clonePhaseReceiving || snap.Percent != 45 {
+		t.Fatalf("snapshot = %+v, want receiving at 45%%", snap)
+	}
+}
+
+func TestCloneProgressTrackerDropsAnUnterminatedOverlongLine(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	_, _ = tracker.Write([]byte(strings.Repeat("x", maxCloneProgressLine+1)))
+	if got := len(tracker.buf); got != 0 {
+		t.Fatalf("buffered %d bytes of an overlong line", got)
+	}
+}
+
+func TestCloneProgressTrackerLogTailRemovesURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	tracker := newTestCloneProgressTracker()
+	padding := strings.Repeat("x", cloneLogTailMaxRunes-30)
+	_, _ = tracker.Write([]byte("fatal: unable to access 'https://user:s3cret@example.com/repo.git/'\n"))
+	// The secret straddles the truncation point, so it must go before the cut.
+	_, _ = tracker.Write([]byte("warning: " + padding + " https://user:s3cret-that-runs-past-the-cut@example.com/repo.git\n"))
+	_, _ = tracker.Write([]byte("warning: ssh://git@example.com/repo.git moved\n"))
+
+	log := strings.Join(tracker.snapshot().Log, "\n")
+	if strings.Contains(log, "s3cret") || strings.Contains(log, "git@") {
+		t.Fatalf("log tail kept credentials: %q", log)
+	}
+	if !strings.Contains(log, "https://***@example.com/repo.git") {
+		t.Fatalf("log tail lost the URL: %q", log)
+	}
+}
+
+// A failed attempt must stay readable through the backoff: the entry keeps
+// answering polls, its numbers are reset, and the reason for the retry stays
+// in the log.
+func TestPrepareCloneKeepsProgressAndLogAcrossARetry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake git is a shell script")
+	}
+	bin := t.TempDir()
+	attempts := filepath.Join(bin, "attempts")
+	script := `#!/bin/sh
+if [ ! -e "` + attempts + `" ]; then
+	: > "` + attempts + `"
+	printf 'Receiving objects:  45%% (1234/2748), 1.00 MiB | 2.00 MiB/s\r' >&2
+	echo "fatal: unable to access 'x': Could not resolve host: example.com" >&2
+	exit 128
+fi
+for destination; do :; done
+mkdir -p "$destination/.git"
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := New(nil)
+	parent := t.TempDir()
+	remote := "https://example.com/repo.git"
+	prepared := make(chan error, 1)
+	go func() {
+		_, err := m.PrepareClone(context.Background(), CloneInput{RemoteURL: remote, DestinationParent: parent})
+		prepared <- err
+	}()
+
+	query := CloneProgressQuery{RemoteURL: remote, DestinationParent: parent}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(attempts); err == nil {
+			progress, err := m.CloneProgress(context.Background(), query)
+			if err == nil && strings.Contains(strings.Join(progress.Log, "\n"), "Could not resolve host") {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the failed attempt's log never appeared")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Backoff is one second, so these polls land between the two attempts.
+	time.Sleep(100 * time.Millisecond)
+	progress, err := m.CloneProgress(context.Background(), query)
+	if err != nil {
+		t.Fatalf("poll during the retry backoff: %v", err)
+	}
+	if progress.Phase != clonePhaseConnecting || progress.Percent != 0 || progress.SpeedBytesPerSecond != 0 {
+		t.Fatalf("snapshot during backoff = %+v, want reset to connecting", progress)
+	}
+	if !strings.Contains(strings.Join(progress.Log, "\n"), "Could not resolve host") {
+		t.Fatalf("log during backoff = %q, want the failure", progress.Log)
+	}
+	if err := <-prepared; err != nil {
+		t.Fatalf("PrepareClone: %v", err)
 	}
 }

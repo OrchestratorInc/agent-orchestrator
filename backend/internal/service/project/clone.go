@@ -248,22 +248,16 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 		}
 	}()
 
-	// tracker follows the current clone attempt so the progress polling route
-	// can report it. The final (successful) tracker stays registered until
-	// prepareClone returns, so late polls still see the finalizing phase.
-	var tracker *cloneProgressTracker
-	defer func() {
-		if tracker != nil {
-			m.cloneProgress.remove(target, tracker)
-		}
-	}()
+	// One tracker spans every attempt, so polls keep answering through a retry
+	// and late polls still see the finalizing phase.
+	tracker := newCloneProgressTracker(m.clock)
+	m.cloneProgress.add(target, tracker)
+	defer m.cloneProgress.remove(target, tracker)
 
 	for attempt := 0; ; attempt++ {
 		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--progress", "--origin", "origin", "--", remoteURL, temporaryPath)
 		aoprocess.ConfigureTreeCancellation(cmd)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "LC_ALL=C")
-		tracker = newCloneProgressTracker(m.clock)
-		m.cloneProgress.add(target, tracker)
 		var stderr limitedCloneOutput
 		// git writes its progress stream to stderr: tee it into the bounded
 		// error buffer and the live progress parser.
@@ -276,7 +270,6 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 			tracker.finish()
 			break
 		}
-		m.cloneProgress.remove(target, tracker)
 		var executableError *exec.Error
 		if errors.As(err, &executableError) {
 			return ClonePreparationResult{}, apierr.Invalid("GIT_NOT_FOUND", "Git is required to clone a repository.", nil)
@@ -291,6 +284,7 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 			if attempt == 2 {
 				return ClonePreparationResult{}, apierr.Unavailable("GIT_CLONE_NETWORK_FAILED", "The connection failed after three attempts. Check your connection, then retry. Your URL and destination have been kept.")
 			}
+			tracker.restart()
 			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
 				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not reset the temporary clone. Choose another destination.", nil)
@@ -324,16 +318,20 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	return ClonePreparationResult{Path: target, RemoteURL: remoteURL, PreparationID: preparationID}, nil
 }
 
+// maxCloneOutput bounds the stderr kept for retry classification.
+const maxCloneOutput = 32 * 1024
+
 // Git may print a URL containing secrets. Inspect bounded output for retry
-// classification only; never return or log it.
+// classification only; never return or log it. git prints its failure last,
+// after the whole --progress stream, so the newest bytes are the ones kept.
 type limitedCloneOutput struct{ data []byte }
 
 func (b *limitedCloneOutput) Write(p []byte) (int, error) {
-	n := len(p)
-	if remaining := 32*1024 - len(b.data); remaining > 0 {
-		b.data = append(b.data, p[:min(len(p), remaining)]...)
+	b.data = append(b.data, p...)
+	if excess := len(b.data) - maxCloneOutput; excess > 0 {
+		b.data = append(b.data[:0], b.data[excess:]...)
 	}
-	return n, nil
+	return len(p), nil
 }
 
 func (b *limitedCloneOutput) String() string { return string(b.data) }

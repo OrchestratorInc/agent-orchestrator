@@ -549,13 +549,15 @@ function CloneProgressReport({ progress, repository }: { progress: CloneProgress
 						{showLogTail ? t("createProject.cloneLogsHide") : t("createProject.cloneLogsShow")}
 					</Button>
 					{showLogTail ? (
-						<pre
-							aria-live="polite"
-							className="max-h-32 overflow-auto rounded bg-muted p-2 font-mono text-[11px] leading-4 whitespace-pre-wrap text-muted-foreground"
-							data-testid="clone-log-tail"
-						>
-							{progress.log.join("\n")}
-						</pre>
+						// column-reverse starts the scroll at the bottom, so the newest line stays in view.
+						<div className="flex max-h-32 flex-col-reverse overflow-auto rounded bg-muted p-2">
+							<pre
+								className="font-mono text-[11px] leading-4 whitespace-pre-wrap text-muted-foreground"
+								data-testid="clone-log-tail"
+							>
+								{progress.log.join("\n")}
+							</pre>
+						</div>
 					) : null}
 				</div>
 			) : null}

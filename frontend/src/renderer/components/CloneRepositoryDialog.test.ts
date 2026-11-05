@@ -452,6 +452,26 @@ describe("clone progress", () => {
 		expect(screen.queryByTestId("clone-log-tail")).not.toBeInTheDocument();
 	});
 
+	it("keeps the newest log line in view and does not announce every poll", () => {
+		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
+		renderCloneDialog({
+			cloning: true,
+			disabled: true,
+			progress: {
+				phase: "receiving",
+				percent: 45,
+				startedAt: "2026-10-13T00:00:00Z",
+				updatedAt: "2026-10-13T00:00:01Z",
+				log: ["Receiving objects:  45% (1234/2748)"],
+			},
+		});
+
+		fireEvent.click(screen.getByRole("button", { name: "View logs" }));
+		const tail = screen.getByTestId("clone-log-tail");
+		expect(tail.parentElement).toHaveClass("flex-col-reverse", "overflow-auto");
+		expect(tail).not.toHaveAttribute("aria-live");
+	});
+
 	it("offers no log toggle before the daemon has sent any clone output", () => {
 		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
 		renderCloneDialog({
