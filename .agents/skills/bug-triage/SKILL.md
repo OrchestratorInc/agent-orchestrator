@@ -95,7 +95,7 @@ Collect only what helps explain this symptom:
 | Persisted state mismatch | Relevant rows and schema from a read-only SQLite query |
 
 Locate logs for the affected process rather than assuming `~/.ao/daemon.log` is current.
-Daemon output goes to stderr and may not persist; that file mostly covers keep-alive
+The daemon logs to `$AO_DATA_DIR/daemon.log`; that older file only covers keep-alive
 launches. Record missing evidence instead of enabling logging just to create it.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
