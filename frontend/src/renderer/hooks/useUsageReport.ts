@@ -73,3 +73,34 @@ export function useSaveUsagePrices() {
 		window.setTimeout(() => void queryClient.invalidateQueries({ queryKey: usageReportQueryKey }), 2_000);
 	};
 }
+
+export type CursorUsageStatus = components["schemas"]["CursorUsageStatus"];
+const cursorUsageQueryKey = ["usage", "cursor"] as const;
+
+/** Whether AO reads Cursor usage from cursor.com, and how the last read went. */
+export function useCursorUsage() {
+	return useQuery({
+		queryKey: cursorUsageQueryKey,
+		queryFn: async (): Promise<CursorUsageStatus> => {
+			const { data, error } = await apiClient.GET("/api/v1/usage/cursor");
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+		refetchInterval: 60_000,
+	});
+}
+
+/** Turns reading Cursor usage on, which reads at once, or off. */
+export function useSetCursorUsage() {
+	const queryClient = useQueryClient();
+	return async (enabled: boolean) => {
+		const { data, error } = await apiClient.PUT("/api/v1/usage/cursor", { body: { enabled } });
+		if (error) throw new Error(apiErrorMessage(error));
+		queryClient.setQueryData(cursorUsageQueryKey, data);
+		// The first read runs in the background; look again once it has had a moment.
+		window.setTimeout(() => {
+			void queryClient.invalidateQueries({ queryKey: cursorUsageQueryKey });
+			void queryClient.invalidateQueries({ queryKey: usageReportQueryKey });
+		}, 5_000);
+	};
+}

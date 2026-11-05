@@ -17,6 +17,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { UsageCursor } from "./UsageCursor";
 import { UsageLimits } from "./UsageLimits";
 import { UsageSpend } from "./UsageSpend";
 import { UsageWindows } from "./UsageWindows";
@@ -63,6 +64,10 @@ export function UsageView() {
 	const projectNames = useMemo(
 		() => new Map(projects.map((project) => [project.id, project.id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : project.name])),
 		[projects, t],
+	);
+	const hasCursorSessions = useMemo(
+		() => projects.some((project) => project.sessions.some((session) => session.provider === "cursor")),
+		[projects],
 	);
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
@@ -167,6 +172,7 @@ export function UsageView() {
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
 						<div className="mx-auto w-full max-w-6xl px-6 py-6">
+							{tab === "spend" ? <UsageCursor hasCursorSessions={hasCursorSessions} /> : null}
 							{isWindows ? (
 								limitWindows.isLoading ? (
 									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>

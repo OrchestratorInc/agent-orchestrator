@@ -13286,6 +13286,63 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/usage/cursor:
+    get:
+      operationId: getUsageCursor
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CursorUsageStatus'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read whether AO reads Cursor usage from cursor.com, and how the last
+        read went
+      tags:
+      - usage
+    put:
+      operationId: setUsageCursor
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageCursorRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CursorUsageStatus'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn reading the Cursor usage of AO sessions from cursor.com on or
+        off
+      tags:
+      - usage
   /api/v1/usage/limit-history:
     put:
       operationId: setUsageLimitHistory
@@ -17645,6 +17702,27 @@ components:
       - type
       - createdAt
       - updatedAt
+      type: object
+    CursorUsageStatus:
+      properties:
+        enabled:
+          type: boolean
+        error:
+          enum:
+          - signed_out
+          - keychain
+          - failed
+          type: string
+        readAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        supported:
+          type: boolean
+      required:
+      - supported
+      - enabled
       type: object
     DegradedProject:
       properties:
@@ -22652,6 +22730,15 @@ components:
       - path
       - content
       - expectedFileFingerprint
+      type: object
+    UsageCursorRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UsageHarnessResponse:
       properties:

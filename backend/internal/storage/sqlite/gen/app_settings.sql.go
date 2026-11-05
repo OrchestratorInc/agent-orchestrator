@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, limit_history FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, limit_history, cursor_usage FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -32,8 +32,20 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.ComputerUse,
 		&i.SessionRetentionDays,
 		&i.LimitHistory,
+		&i.CursorUsage,
 	)
 	return i, err
+}
+
+const getCursorUsage = `-- name: GetCursorUsage :one
+SELECT cursor_usage FROM app_settings WHERE id = 1
+`
+
+func (q *Queries) GetCursorUsage(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getCursorUsage)
+	var cursor_usage bool
+	err := row.Scan(&cursor_usage)
+	return cursor_usage, err
 }
 
 const getLimitHistory = `-- name: GetLimitHistory :one
@@ -75,6 +87,20 @@ type SetComputerUseParams struct {
 
 func (q *Queries) SetComputerUse(ctx context.Context, arg SetComputerUseParams) error {
 	_, err := q.db.ExecContext(ctx, setComputerUse, arg.ComputerUse, arg.UpdatedAt)
+	return err
+}
+
+const setCursorUsage = `-- name: SetCursorUsage :exec
+UPDATE app_settings SET cursor_usage = ?, updated_at = ? WHERE id = 1
+`
+
+type SetCursorUsageParams struct {
+	CursorUsage bool
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) SetCursorUsage(ctx context.Context, arg SetCursorUsageParams) error {
+	_, err := q.db.ExecContext(ctx, setCursorUsage, arg.CursorUsage, arg.UpdatedAt)
 	return err
 }
 

@@ -44,6 +44,13 @@ type UsagePriceService interface {
 	Replace(ctx context.Context, overrides []domain.UsagePriceOverride) error
 }
 
+// UsageCursorService reads Cursor usage from cursor.com while the user has it
+// turned on.
+type UsageCursorService interface {
+	Status(ctx context.Context) domain.CursorUsageStatus
+	SetEnabled(ctx context.Context, enabled bool) (domain.CursorUsageStatus, error)
+}
+
 // SessionMemoryService samples resident memory per live session.
 type SessionMemoryService interface {
 	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
@@ -83,6 +90,8 @@ type UsageController struct {
 	LimitHistorySetting UsageLimitHistorySetting
 	// Prices is optional: without it the prices routes are 501.
 	Prices UsagePriceService
+	// Cursor is optional: without it the Cursor usage routes are 501.
+	Cursor UsageCursorService
 }
 
 // Register mounts usage routes on the supplied router.
@@ -92,10 +101,45 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Put("/usage/limit-history", c.setLimitHistory)
 	r.Get("/usage/prices", c.getPrices)
 	r.Put("/usage/prices", c.setPrices)
+	r.Get("/usage/cursor", c.getCursor)
+	r.Put("/usage/cursor", c.setCursor)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+}
+
+func (c *UsageController) getCursor(w http.ResponseWriter, r *http.Request) {
+	if c.Cursor == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/cursor")
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.Cursor.Status(r.Context()))
+}
+
+func (c *UsageController) setCursor(w http.ResponseWriter, r *http.Request) {
+	if c.Cursor == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/usage/cursor")
+		return
+	}
+	var req UsageCursorRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CURSOR_USAGE_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	if *req.Enabled && !c.Cursor.Status(r.Context()).Supported {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CURSOR_USAGE_UNSUPPORTED", "Cursor usage can only be read on macOS", nil)
+		return
+	}
+	status, err := c.Cursor.SetEnabled(r.Context(), *req.Enabled)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, status)
 }
 
 func (c *UsageController) setLimitHistory(w http.ResponseWriter, r *http.Request) {

@@ -187,6 +187,7 @@ type AppSetting struct {
 	ComputerUse          bool
 	SessionRetentionDays int64
 	LimitHistory         bool
+	CursorUsage          bool
 }
 
 type Automation struct {
@@ -940,6 +941,11 @@ type UsageCodexSourceDiscovery struct {
 	NativeSessionID        string
 	DiscoveredChildIdsJson string
 	HasMixedChildTypes     int64
+}
+
+type UsageCursorRead struct {
+	AccountKey string
+	ReadUntil  time.Time
 }
 
 type UsageMessageSummary struct {

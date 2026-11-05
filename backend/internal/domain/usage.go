@@ -28,6 +28,10 @@ const (
 	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
 	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
 	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
+	// UsageSourceCursorDashboard is Cursor's account usage, read from
+	// cursor.com rather than a file. Its artifact path names the account, so
+	// the transcript watcher and session finalizer skip it.
+	UsageSourceCursorDashboard UsageSourceKind = "cursor_dashboard"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -49,6 +53,7 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceGrokUsage,
 	UsageSourceDeepSeekSession,
 	UsageSourceAgyConversation,
+	UsageSourceCursorDashboard,
 }
 
 // IsKnown reports whether k is a certified usage source kind.
@@ -566,4 +571,32 @@ type SessionStep struct {
 	// EndedAt is zero while the tool is still running.
 	EndedAt time.Time
 	Failed  bool
+}
+
+// CursorUsageRead is one read of a Cursor account's usage, attributed to the
+// AO sessions it was for. It replaces every event stored for the account from
+// Since to Until, both whole seconds and inclusive.
+type CursorUsageRead struct {
+	AccountKey   string
+	Since, Until time.Time
+	Events       []CursorSessionEvent
+	Now          time.Time
+}
+
+// CursorSessionEvent is one billed Cursor request in an AO session.
+type CursorSessionEvent struct {
+	SessionID      SessionID
+	ConversationID string
+	Event          ModelUsageEvent
+}
+
+// CursorUsageStatus is whether AO reads Cursor usage and how the last read
+// went.
+type CursorUsageStatus struct {
+	// Supported is false off macOS, where AO cannot read the Cursor login.
+	Supported bool       `json:"supported"`
+	Enabled   bool       `json:"enabled"`
+	ReadAt    *time.Time `json:"readAt,omitempty"`
+	// Error is why the last read failed.
+	Error string `json:"error,omitempty" enum:"signed_out,keychain,failed"`
 }

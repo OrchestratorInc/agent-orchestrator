@@ -2024,6 +2024,11 @@ type UsageLimitHistoryRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+// UsageCursorRequest turns reading Cursor usage on or off.
+type UsageCursorRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // UsageLimitHistoryResponse is whether limit readings are now kept.
 type UsageLimitHistoryResponse struct {
 	Enabled bool `json:"enabled"`

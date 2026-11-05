@@ -4433,6 +4433,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/cursor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read whether AO reads Cursor usage from cursor.com, and how the last read went */
+        get: operations["getUsageCursor"];
+        /** Turn reading the Cursor usage of AO sessions from cursor.com on or off */
+        put: operations["setUsageCursor"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/limit-history": {
         parameters: {
             query?: never;
@@ -6097,6 +6115,14 @@ export interface components {
             type: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        CursorUsageStatus: {
+            enabled: boolean;
+            /** @enum {string} */
+            error?: "signed_out" | "keychain" | "failed";
+            /** Format: date-time */
+            readAt?: null | string;
+            supported: boolean;
         };
         DegradedProject: {
             id: string;
@@ -8031,6 +8057,9 @@ export interface components {
             content: string;
             expectedFileFingerprint: string;
             path: string;
+        };
+        UsageCursorRequest: {
+            enabled: null | boolean;
         };
         UsageHarnessResponse: {
             harness: string;
@@ -24799,6 +24828,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelemetryIdentityResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageCursor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CursorUsageStatus"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsageCursor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageCursorRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CursorUsageStatus"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */
