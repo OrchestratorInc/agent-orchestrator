@@ -12973,25 +12973,6 @@ paths:
       summary: Rename a standalone shell terminal tab
       tags:
       - shellTerminals
-  /api/v1/shell-terminals/agents/events:
-    get:
-      operationId: streamShellTerminalAgents
-      responses:
-        "200":
-          content:
-            text/event-stream:
-              schema:
-                $ref: '#/components/schemas/ShellTerminalAgentsResponse'
-          description: OK
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Stream the coding agents running inside shell terminals and their status
-      tags:
-      - shellTerminals
   /api/v1/side-chats/launch/claim:
     post:
       operationId: claimSideChatLaunch
@@ -21126,36 +21107,6 @@ components:
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
-      type: object
-    ShellTerminalAgentResponse:
-      properties:
-        handleId:
-          type: string
-        harness:
-          type: string
-        since:
-          format: date-time
-          type: string
-        state:
-          enum:
-          - working
-          - idle
-          - waiting
-          type: string
-      required:
-      - handleId
-      - harness
-      - state
-      - since
-      type: object
-    ShellTerminalAgentsResponse:
-      properties:
-        agents:
-          items:
-            $ref: '#/components/schemas/ShellTerminalAgentResponse'
-          type: array
-      required:
-      - agents
       type: object
     ShellTerminalEnvelope:
       properties:

@@ -2,6 +2,7 @@ package shellagent
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,8 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeRuntime replays foreground readings pushed on readings, the way a
-// terminal host pushes a change, and serves a fixed screen.
+// fakeRuntime replays readings pushed on readings, the way a terminal host
+// pushes changes, and serves a fixed screen.
 type fakeRuntime struct {
 	readings chan ports.TerminalForeground
 	screen   string
@@ -31,100 +32,78 @@ func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (stri
 	return f.screen, nil
 }
 
-func newTestManager(t *testing.T, rt *fakeRuntime) *Manager {
+func newTestManager(t *testing.T) (*Manager, *fakeRuntime) {
 	t.Helper()
-	previous := startupGrace
-	startupGrace = 0
-	t.Cleanup(func() { startupGrace = previous })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return NewManager(ctx, rt, nil, nil)
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	return NewManager(ctx, rt, nil, nil), rt
 }
 
-func waitForAgent(t *testing.T, m *Manager, handleID string, want *Agent) {
+func waitForState(t *testing.T, m *Manager, want State) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var got *Agent
-		for _, a := range m.Snapshot() {
-			if a.HandleID == handleID {
-				got = &a
-			}
-		}
-		if (want == nil && got == nil) || (want != nil && got != nil && got.Harness == want.Harness && got.State == want.State) {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		m.mu.Lock()
+		got := m.current["shell-1"].State
+		m.mu.Unlock()
+		if got == want {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("agent for %s = %+v, want %+v", handleID, got, want)
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
+	t.Fatalf("state never became %q", want)
 }
 
 func TestManagerFollowsAnAgentThroughATurn(t *testing.T) {
-	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
-	m := newTestManager(t, rt)
+	m, rt := newTestManager(t)
 	m.TrackShellTerminal("shell-1")
+	claude := []string{"claude"}
 
-	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}, Busy: true}
-	waitForAgent(t, m, "shell-1", &Agent{Harness: domain.HarnessClaudeCode, State: StateWorking})
-
-	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}}
-	waitForAgent(t, m, "shell-1", &Agent{Harness: domain.HarnessClaudeCode, State: StateIdle})
+	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude, Busy: true}
+	waitForState(t, m, StateWorking)
+	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude}
+	waitForState(t, m, StateIdle)
 
 	rt.screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
-	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}, Busy: true}
-	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}}
-	waitForAgent(t, m, "shell-1", &Agent{Harness: domain.HarnessClaudeCode, State: StateWaiting})
+	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude, Busy: true}
+	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude}
+	waitForState(t, m, StateWaiting)
 
 	rt.readings <- ports.TerminalForeground{PGID: 10, Argv: []string{"-zsh"}}
-	waitForAgent(t, m, "shell-1", nil)
+	waitForState(t, m, "")
 }
 
-func TestManagerUntrackClearsTheAgent(t *testing.T) {
-	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
-	m := newTestManager(t, rt)
+// A screen read can finish after the terminal closed; its reading is dropped.
+func TestManagerDropsAReadingForAClosedTerminal(t *testing.T) {
+	m, _ := newTestManager(t)
+	closed, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.observe(closed, "shell-1", ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}, Busy: true})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.current) != 0 {
+		t.Fatalf("closed terminal's agent came back: %+v", m.current)
+	}
+}
+
+func TestManagerSendsSnapshotsToSubscribers(t *testing.T) {
+	m, rt := newTestManager(t)
+	got := make(chan []Agent, 4)
+	unsubscribe := m.SubscribeShellAgents(func(snapshot json.RawMessage) {
+		var agents []Agent
+		if err := json.Unmarshal(snapshot, &agents); err != nil {
+			t.Errorf("snapshot %s: %v", snapshot, err)
+		}
+		got <- agents
+	})
+	defer unsubscribe()
+	if agents := <-got; len(agents) != 0 {
+		t.Fatalf("first snapshot = %+v, want empty", agents)
+	}
+
 	m.TrackShellTerminal("shell-1")
 	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: []string{"codex"}, Busy: true}
-	waitForAgent(t, m, "shell-1", &Agent{Harness: domain.HarnessCodex, State: StateWorking})
-
-	m.UntrackShellTerminal("shell-1")
-	waitForAgent(t, m, "shell-1", nil)
-}
-
-// A recheck runs beside the watch loop. One that finishes after its terminal
-// closed must not bring the agent back.
-func TestManagerDropsAResultForAClosedTerminal(t *testing.T) {
-	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
-	m := newTestManager(t, rt)
-	m.TrackShellTerminal("shell-1")
-	m.mu.Lock()
-	w := m.tracked["shell-1"]
-	m.mu.Unlock()
-
-	m.UntrackShellTerminal("shell-1")
-	m.observe(context.Background(), "shell-1", w, ports.TerminalForeground{PGID: 20, Argv: []string{"claude"}, Busy: true})
-	if got := m.Snapshot(); len(got) != 0 {
-		t.Fatalf("Snapshot() = %+v after the terminal closed, want none", got)
-	}
-}
-
-// A result whose reading was superseded while it read the screen is dropped,
-// so it cannot overwrite the newer state.
-func TestManagerDropsASupersededResult(t *testing.T) {
-	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
-	m := newTestManager(t, rt)
-	m.TrackShellTerminal("shell-1")
-	m.mu.Lock()
-	w := m.tracked["shell-1"]
-	gen := w.gen
-	w.gen++ // a newer reading started
-	m.mu.Unlock()
-
-	if m.setIfCurrent("shell-1", w, gen, &Agent{HandleID: "shell-1", Harness: domain.HarnessClaudeCode, State: StateIdle}) {
-		t.Fatal("setIfCurrent applied a superseded result")
-	}
-	if got := m.Snapshot(); len(got) != 0 {
-		t.Fatalf("Snapshot() = %+v, want none", got)
+	want := Agent{HandleID: "shell-1", Harness: domain.HarnessCodex, State: StateWorking}
+	if agents := <-got; len(agents) != 1 || agents[0] != want {
+		t.Fatalf("snapshot = %+v, want [%+v]", agents, want)
 	}
 }

@@ -2,6 +2,7 @@ package shellagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -18,21 +19,19 @@ import (
 type State string
 
 const (
-	// StateWorking means the agent is drawing output (a turn is in progress).
+	// StateWorking means the agent is drawing output.
 	StateWorking State = "working"
 	// StateIdle means the agent is at its prompt with nothing to ask.
 	StateIdle State = "idle"
-	// StateWaiting means the agent stopped on a question or a permission prompt.
+	// StateWaiting means the agent stopped on a question or permission prompt.
 	StateWaiting State = "waiting"
 )
 
-// Agent is one shell terminal's current agent.
+// Agent is the coding agent running in one shell terminal.
 type Agent struct {
-	HandleID string
-	Harness  domain.AgentHarness
-	State    State
-	// Since is when State last changed.
-	Since time.Time
+	HandleID string              `json:"handleId"`
+	Harness  domain.AgentHarness `json:"harness"`
+	State    State               `json:"state"`
 }
 
 // Runtime is the slice of the runtime adapter the manager needs.
@@ -41,355 +40,204 @@ type Runtime interface {
 	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
 }
 
-// Timing knobs; variables so tests can shorten them.
+// Variables so tests can shorten them.
 var (
-	// screenLines is how much of the rendered screen a quiet agent is read for.
-	screenLines = 60
-	// screenReadTimeout bounds one screen read.
+	screenLines       = 60
 	screenReadTimeout = 3 * time.Second
-	// recheckAfter re-reads the screen of a quiet agent whose screen still
-	// claimed a turn in progress, so a stale "working" settles.
-	recheckAfter = 3 * time.Second
-	// watchRetryMin/Max bound the reconnect backoff to a terminal host.
-	watchRetryMin = 500 * time.Millisecond
-	watchRetryMax = 30 * time.Second
-	// maxWatchRetries ends a watch whose host keeps failing.
-	maxWatchRetries = 8
-	// startupGrace is how long after an agent appears its output is read as
-	// it drawing its first screen, not as a turn: the screen decides instead.
-	startupGrace = 2500 * time.Millisecond
+	watchRetryMin     = 500 * time.Millisecond
+	watchRetryMax     = 30 * time.Second
 )
 
-// Manager follows every tracked shell terminal. It holds one watcher
-// connection per terminal; the terminal host pushes a change the moment the
-// foreground program changes or starts or stops drawing, so detection needs no
-// polling.
+// Manager holds one watch per tracked shell terminal. The terminal host
+// pushes a reading whenever the foreground program changes or starts or stops
+// drawing, so nothing polls.
 type Manager struct {
 	rt     Runtime
 	styled ports.StyledTerminalOutputReader
 	agents ports.AgentResolver
 	log    *slog.Logger
-	now    func() time.Time
 	base   context.Context
 
 	mu      sync.Mutex
-	tracked map[string]*watch
+	tracked map[string]context.CancelFunc
 	current map[string]Agent
-	subs    map[*subscriber]struct{}
+	subs    map[int]func(json.RawMessage)
+	nextSub int
 }
-
-type watch struct {
-	cancel context.CancelFunc
-	// gen invalidates a pending recheck once a newer reading arrived.
-	gen uint64
-	// pgid and appeared identify the agent process currently in the
-	// foreground and when it showed up, for the startup grace.
-	pgid     int
-	appeared time.Time
-}
-
-type subscriber struct{ ch chan []Agent }
 
 // NewManager builds a manager whose watches live until ctx ends. agents may be
-// nil, in which case only the generic prompt patterns detect waiting.
+// nil; then only the generic prompt patterns detect waiting.
 func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
 	styled, _ := rt.(ports.StyledTerminalOutputReader)
 	return &Manager{
-		rt: rt, styled: styled, agents: agents, log: log, now: time.Now, base: ctx,
-		tracked: map[string]*watch{},
+		rt: rt, styled: styled, agents: agents, log: log, base: ctx,
+		tracked: map[string]context.CancelFunc{},
 		current: map[string]Agent{},
-		subs:    map[*subscriber]struct{}{},
+		subs:    map[int]func(json.RawMessage){},
 	}
 }
 
-// TrackShellTerminal starts following a shell terminal. Tracking one twice is
-// a no-op.
+// TrackShellTerminal starts following a shell terminal; tracking twice is a no-op.
 func (m *Manager) TrackShellTerminal(handleID string) {
-	if m == nil || handleID == "" {
-		return
-	}
 	m.mu.Lock()
-	if _, ok := m.tracked[handleID]; ok {
-		m.mu.Unlock()
+	defer m.mu.Unlock()
+	if _, ok := m.tracked[handleID]; ok || handleID == "" {
 		return
 	}
 	ctx, cancel := context.WithCancel(m.base)
-	w := &watch{cancel: cancel}
-	m.tracked[handleID] = w
-	m.mu.Unlock()
-	go m.run(ctx, handleID, w)
+	m.tracked[handleID] = cancel
+	go m.watch(ctx, handleID)
 }
 
 // UntrackShellTerminal stops following a terminal and forgets its agent.
 func (m *Manager) UntrackShellTerminal(handleID string) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	w := m.tracked[handleID]
-	delete(m.tracked, handleID)
-	m.mu.Unlock()
-	if w != nil {
-		w.cancel()
-	}
-	m.set(handleID, nil)
-}
-
-// Snapshot returns every terminal currently running an agent, ordered by
-// handle id.
-func (m *Manager) Snapshot() []Agent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.snapshotLocked()
-}
-
-func (m *Manager) snapshotLocked() []Agent {
-	out := make([]Agent, 0, len(m.current))
-	for _, a := range m.current {
-		out = append(out, a)
+	if cancel := m.tracked[handleID]; cancel != nil {
+		cancel()
+		delete(m.tracked, handleID)
 	}
-	slices.SortFunc(out, func(a, b Agent) int { return strings.Compare(a.HandleID, b.HandleID) })
-	return out
+	m.setLocked(handleID, nil)
 }
 
-// Subscribe delivers the current snapshot at once and the full snapshot again
-// after every change. A slow reader only ever sees the latest one.
-func (m *Manager) Subscribe() (<-chan []Agent, func()) {
-	sub := &subscriber{ch: make(chan []Agent, 1)}
+// SubscribeShellAgents calls fn with the current agents as JSON at once and
+// after every change. fn runs with the manager's lock held and must not block.
+func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 	m.mu.Lock()
-	m.subs[sub] = struct{}{}
-	sub.ch <- m.snapshotLocked()
-	m.mu.Unlock()
-	return sub.ch, func() {
+	defer m.mu.Unlock()
+	id := m.nextSub
+	m.nextSub++
+	m.subs[id] = fn
+	fn(m.snapshotLocked())
+	return func() {
 		m.mu.Lock()
-		delete(m.subs, sub)
+		delete(m.subs, id)
 		m.mu.Unlock()
 	}
 }
 
-func (m *Manager) run(ctx context.Context, handleID string, w *watch) {
-	defer func() {
-		m.mu.Lock()
-		if m.tracked[handleID] == w {
-			delete(m.tracked, handleID)
-		}
-		m.mu.Unlock()
-		m.set(handleID, nil)
-	}()
+func (m *Manager) watch(ctx context.Context, handleID string) {
+	defer m.apply(context.Background(), handleID, nil)
 	handle := ports.RuntimeHandle{ID: handleID}
-	backoff := watchRetryMin
-	for attempt := 0; attempt < maxWatchRetries; attempt++ {
-		started := m.now()
+	for backoff := watchRetryMin; ; backoff = min(backoff*2, watchRetryMax) {
 		err := m.rt.WatchTerminalForeground(ctx, handle, func(fg ports.TerminalForeground) {
-			m.observe(ctx, handleID, w, fg)
+			m.observe(ctx, handleID, fg)
 		})
 		if ctx.Err() != nil || errors.Is(err, ports.ErrTerminalForegroundUnavailable) {
 			return
 		}
-		// The host went away or the connection dropped. Forget the agent
-		// until the watch reconnects and the host reports it again.
-		m.set(handleID, nil)
-		if m.now().Sub(started) > watchRetryMax {
-			attempt, backoff = 0, watchRetryMin
-		}
+		// The host went away; forget the agent until a new reading arrives.
+		m.apply(ctx, handleID, nil)
 		m.log.Debug("shell agent watch interrupted; retrying", "handleId", handleID, "err", err, "in", backoff)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
 		}
-		backoff = min(backoff*2, watchRetryMax)
 	}
 }
 
-// observe turns one foreground reading into the terminal's agent state.
-func (m *Manager) observe(ctx context.Context, handleID string, w *watch, fg ports.TerminalForeground) {
+func (m *Manager) observe(ctx context.Context, handleID string, fg ports.TerminalForeground) {
 	harness := ClassifyArgv(fg.Argv)
-	now := m.now()
-	m.mu.Lock()
-	w.gen++
-	gen := w.gen
 	if harness == "" {
-		w.pgid = 0
-	} else if w.pgid != fg.PGID {
-		w.pgid, w.appeared = fg.PGID, now
-	}
-	appeared := w.appeared
-	starting := now.Sub(appeared) < startupGrace
-	m.mu.Unlock()
-
-	if harness == "" {
-		m.setIfCurrent(handleID, w, gen, nil)
+		m.apply(ctx, handleID, nil)
 		return
 	}
 	state := StateWorking
-	if !fg.Busy || starting {
-		state = m.quietState(ctx, handleID, harness)
+	if !fg.Busy {
+		state = StateIdle
+		if m.waiting(ctx, handleID, harness) {
+			state = StateWaiting
+		}
 	}
-	if !m.setIfCurrent(handleID, w, gen, &Agent{HandleID: handleID, Harness: harness, State: state}) {
-		return
-	}
-	recheck := time.Duration(0)
-	switch {
-	case fg.Busy && starting:
-		// Still drawing when the grace ends means a real turn; the host sends
-		// nothing new while it stays busy, so look again then.
-		recheck = startupGrace - now.Sub(appeared) + 50*time.Millisecond
-	case !fg.Busy && state == StateWorking:
-		// The screen still shows a turn in progress although nothing is being
-		// drawn. Look again shortly rather than trusting it indefinitely.
-		recheck = recheckAfter
-	}
-	if recheck > 0 {
-		time.AfterFunc(recheck, func() {
-			m.mu.Lock()
-			stale := w.gen != gen || m.tracked[handleID] != w
-			m.mu.Unlock()
-			if stale || ctx.Err() != nil {
-				return
-			}
-			m.observe(ctx, handleID, w, fg)
-		})
+	m.apply(ctx, handleID, &Agent{HandleID: handleID, Harness: harness, State: state})
+}
+
+// apply records a reading unless its watch already ended: a screen read can
+// finish after the terminal closed.
+func (m *Manager) apply(ctx context.Context, handleID string, next *Agent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() == nil {
+		m.setLocked(handleID, next)
 	}
 }
 
-// quietState decides between idle, waiting and working for an agent that has
-// stopped drawing, from what its screen shows. It prefers the harness's own
-// screen inspector, the same one AO uses for its managed sessions, and falls
-// back to recognizing a generic approval prompt.
-func (m *Manager) quietState(ctx context.Context, handleID string, harness domain.AgentHarness) State {
+// waiting reports whether a quiet agent's screen shows a question or a
+// permission prompt. It asks the harness's own screen check, the one AO uses
+// for its managed sessions, and falls back to common approval wording.
+func (m *Manager) waiting(ctx context.Context, handleID string, harness domain.AgentHarness) bool {
 	ctx, cancel := context.WithTimeout(ctx, screenReadTimeout)
 	defer cancel()
 	handle := ports.RuntimeHandle{ID: handleID}
-
-	var styled, plain string
-	var styledRead, plainRead bool
-	readStyled := func() string {
-		if !styledRead {
-			styledRead = true
-			if m.styled != nil {
-				styled, _ = m.styled.GetStyledOutput(ctx, handle, screenLines)
+	read := func(styled bool) string {
+		if styled && m.styled != nil {
+			if screen, _ := m.styled.GetStyledOutput(ctx, handle, screenLines); screen != "" {
+				return screen
 			}
 		}
-		return styled
+		screen, _ := m.rt.GetOutput(ctx, handle, screenLines)
+		return screen
 	}
-	readPlain := func() string {
-		if !plainRead {
-			plainRead = true
-			plain, _ = m.rt.GetOutput(ctx, handle, screenLines)
-		}
-		return plain
-	}
-
+	var agent ports.Agent
 	if m.agents != nil {
-		if agent, ok := m.agents.Agent(harness); ok {
-			if inspector, ok := agent.(ports.TerminalSurfaceInspector); ok {
-				if screen := readStyled(); screen != "" {
-					switch inspector.InspectTerminalSurface(screen).Work {
-					case ports.TerminalSurfaceWorkWaitingInput, ports.TerminalSurfaceWorkBlocked:
-						return StateWaiting
-					case ports.TerminalSurfaceWorkActive:
-						return StateWorking
-					case ports.TerminalSurfaceWorkIdle:
-						return StateIdle
-					}
-				}
-			}
-			if detector, ok := agent.(ports.TerminalActivityDetector); ok {
-				screen := readPlain()
-				if opts, ok := agent.(ports.TerminalActivityOptionsProvider); ok && opts.TerminalActivityOptions().PreferStyledOutput {
-					if s := readStyled(); s != "" {
-						screen = s
-					}
-				}
-				if activity, ok := detector.DetectTerminalActivity(screen); ok {
-					switch activity {
-					case domain.ActivityWaitingInput, domain.ActivityBlocked:
-						return StateWaiting
-					case domain.ActivityActive:
-						return StateWorking
-					case domain.ActivityIdle:
-						return StateIdle
-					}
-				}
-			}
+		agent, _ = m.agents.Agent(harness)
+	}
+	if inspector, ok := agent.(ports.TerminalSurfaceInspector); ok {
+		work := inspector.InspectTerminalSurface(read(true)).Work
+		return work == ports.TerminalSurfaceWorkWaitingInput || work == ports.TerminalSurfaceWorkBlocked
+	}
+	if detector, ok := agent.(ports.TerminalActivityDetector); ok {
+		opts, _ := agent.(ports.TerminalActivityOptionsProvider)
+		styled := opts != nil && opts.TerminalActivityOptions().PreferStyledOutput
+		if activity, ok := detector.DetectTerminalActivity(read(styled)); ok {
+			return activity == domain.ActivityWaitingInput || activity == domain.ActivityBlocked
 		}
 	}
-	screen := readStyled()
-	if screen == "" {
-		screen = readPlain()
-	}
-	if looksLikeApprovalPrompt(screen) {
-		return StateWaiting
-	}
-	return StateIdle
-}
-
-// setIfCurrent applies one observation's result unless a newer reading began
-// while it read the screen, or the terminal stopped being tracked. A recheck
-// runs beside the watch loop, so without this a slow screen read could
-// overwrite a fresher state, or bring back the agent of a closed terminal.
-// It reports whether the result was applied.
-func (m *Manager) setIfCurrent(handleID string, w *watch, gen uint64, next *Agent) bool {
-	m.mu.Lock()
-	if w.gen != gen || m.tracked[handleID] != w {
-		m.mu.Unlock()
-		return false
-	}
-	m.setLocked(handleID, next)
-	m.mu.Unlock()
-	return true
-}
-
-// set records a terminal's agent (nil clears it) and notifies subscribers
-// when anything visible changed.
-func (m *Manager) set(handleID string, next *Agent) {
-	m.mu.Lock()
-	m.setLocked(handleID, next)
-	m.mu.Unlock()
+	return looksLikeApprovalPrompt(read(true))
 }
 
 func (m *Manager) setLocked(handleID string, next *Agent) {
 	prev, had := m.current[handleID]
 	switch {
-	case next == nil && !had:
+	case next == nil && !had, next != nil && had && prev == *next:
 		return
 	case next == nil:
 		delete(m.current, handleID)
-	case had && prev.Harness == next.Harness && prev.State == next.State:
-		return
 	default:
-		next.Since = m.now().UTC()
 		m.current[handleID] = *next
 	}
 	snapshot := m.snapshotLocked()
-	for sub := range m.subs {
-		select {
-		case <-sub.ch:
-		default:
-		}
-		sub.ch <- snapshot
+	for _, fn := range m.subs {
+		fn(snapshot)
 	}
+}
+
+func (m *Manager) snapshotLocked() json.RawMessage {
+	agents := make([]Agent, 0, len(m.current))
+	for _, a := range m.current {
+		agents = append(agents, a)
+	}
+	slices.SortFunc(agents, func(a, b Agent) int { return strings.Compare(a.HandleID, b.HandleID) })
+	b, _ := json.Marshal(agents)
+	return b
 }
 
 var (
 	ansiEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x40-\x5f])`)
-	// approvalPrompt matches the questions agent TUIs ask before acting:
-	// permission dialogs and yes/no confirmations.
+	// approvalPrompt matches the questions agent TUIs ask before acting.
 	approvalPrompt = regexp.MustCompile(`(?i)(do you want to (proceed|continue|make this edit|create|run|allow|apply)|would you like to (run|make|apply|proceed)|allow (once|always|this|command|execution|edit|tool)|requires? (your )?(approval|permission)|permission (required|request)|approve (this|the|command|edit)|waiting for (your )?(approval|confirmation|input)|\((y/n|yes/no)\)|\[(y/n|yes/no)\])`)
-	// approvalPromptLines bounds the search to the bottom of the screen, where
-	// a live prompt sits, so a question answered earlier does not match.
-	approvalPromptLines = 15
 )
 
+// looksLikeApprovalPrompt checks the last 15 non-blank lines, where a live
+// prompt sits, so a question answered earlier does not match.
 func looksLikeApprovalPrompt(screen string) bool {
-	plain := ansiEscape.ReplaceAllString(strings.ReplaceAll(screen, "\r", ""), "")
-	lines := strings.Split(plain, "\n")
-	kept := make([]string, 0, approvalPromptLines)
-	for i := len(lines) - 1; i >= 0 && len(kept) < approvalPromptLines; i-- {
+	lines := strings.Split(ansiEscape.ReplaceAllString(strings.ReplaceAll(screen, "\r", ""), ""), "\n")
+	kept := make([]string, 0, 15)
+	for i := len(lines) - 1; i >= 0 && len(kept) < 15; i-- {
 		if strings.TrimSpace(lines[i]) != "" {
 			kept = append(kept, lines[i])
 		}

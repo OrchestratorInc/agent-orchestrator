@@ -13,9 +13,7 @@ import (
 const (
 	conPTYHostProtocolVersion         = 3
 	conPTYStyledOutputProtocolVersion = 2
-	// conPTYForegroundProtocolVersion is the first host that answers
-	// MsgWatchForegroundReq. Older hosts ignore the request and would stream
-	// raw output to the watcher instead, so clients check the version first.
+	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
 	conPTYForegroundProtocolVersion = 3
 )
 
@@ -51,12 +49,8 @@ type StatusPayload struct {
 	ProtocolVersion int  `json:"protocolVersion,omitempty"`
 }
 
-// ForegroundPayload is the JSON body for MsgForegroundState: the terminal's
-// foreground process group and whether a program in it is producing output.
-// PGID is zero when the platform cannot report it. Argv is the group leader's
-// command line, capped (see maxForegroundArgs). Busy is true while the
-// foreground program has drawn output recently that was not an echo of typed
-// input or a redraw after a resize.
+// ForegroundPayload is the MsgForegroundState body: the foreground process
+// group, its leader's argv (capped), and whether it is drawing output.
 type ForegroundPayload struct {
 	PGID int      `json:"pgid"`
 	Argv []string `json:"argv,omitempty"`

@@ -845,12 +845,11 @@ func Run(buildVersion string) error {
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
-	// Agents the user starts by hand inside a shell (claude, codex, ...) give
-	// that shell's tab the agent's logo and live status.
-	var shellAgents *shellagent.Manager
+	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
-		shellAgents = shellagent.NewManager(ctx, rt, agents, log)
+		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
 		shellTermSvc.SetAgentTracker(ctx, shellAgents)
+		termMgr.SetShellAgents(shellAgents)
 	}
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
@@ -1133,7 +1132,6 @@ func Run(buildVersion string) error {
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
-		ShellAgents:        shellAgentSource(shellAgents),
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

@@ -1,16 +1,12 @@
-// Coding agents the user started by hand inside a shell tab (claude, codex,
-// gemini, ...). The local daemon names each one from the terminal's foreground
-// process and streams its state; the tab swaps its terminal icon for the
-// agent's logo and shows whether it is working, done or waiting on the user.
-// Nothing here is persisted: when the agent exits, its entry disappears and the
-// tab goes back to a plain terminal.
+// Coding agents the user started by hand in a shell tab (claude, codex, ...).
+// The daemon names each from the terminal's foreground program and pushes the
+// set over the terminal mux. Nothing is persisted: when an agent exits, its tab
+// goes back to a plain terminal.
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import type { components } from "../../api/schema";
-import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
-
-type ShellTerminalAgentsResponse = components["schemas"]["ShellTerminalAgentsResponse"];
+import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { muxUrlFromApiBase } from "../lib/terminal-mux";
 
 export type ShellAgentState = "working" | "idle" | "waiting";
 
@@ -19,20 +15,14 @@ export type ShellAgent = {
 	state: ShellAgentState;
 };
 
+type Snapshot = ({ handleId: string } & ShellAgent)[];
+
 type ShellAgentStore = {
 	agents: Record<string, ShellAgent>;
-	/**
-	 * Tabs whose agent finished a turn the user has not looked at yet. The tab
-	 * keeps a "done" dot until it is selected, so a finished agent stands out
-	 * from one that was already idle.
-	 */
+	/** Tabs whose agent finished a turn the user has not seen; cleared on select. */
 	unseenDone: Record<string, true>;
-	replace: (agents: ShellTerminalAgentsResponse["agents"]) => void;
-	/**
-	 * Drops every agent while the stream is down, but keeps the unseen "done"
-	 * marks: the first frame after reconnecting keeps the mark of each agent
-	 * that is still idle.
-	 */
+	replace: (snapshot: Snapshot) => void;
+	/** Drops the agents while disconnected but keeps the done marks. */
 	clearAgents: () => void;
 	markSeen: (handleId: string) => void;
 };
@@ -40,18 +30,14 @@ type ShellAgentStore = {
 export const useShellAgentStore = create<ShellAgentStore>((set) => ({
 	agents: {},
 	unseenDone: {},
-	replace: (list) =>
+	replace: (snapshot) =>
 		set((current) => {
 			const agents: Record<string, ShellAgent> = {};
 			const unseenDone: Record<string, true> = {};
-			for (const entry of list ?? []) {
-				const agent: ShellAgent = { harness: entry.harness, state: entry.state };
-				agents[entry.handleId] = agent;
-				const previous = current.agents[entry.handleId];
-				const finishedNow = previous?.state === "working" && agent.state === "idle";
-				if (agent.state === "idle" && (finishedNow || current.unseenDone[entry.handleId])) {
-					unseenDone[entry.handleId] = true;
-				}
+			for (const { handleId, harness, state } of snapshot) {
+				agents[handleId] = { harness, state };
+				const finished = current.agents[handleId]?.state === "working" || current.unseenDone[handleId];
+				if (state === "idle" && finished) unseenDone[handleId] = true;
 			}
 			return { agents, unseenDone };
 		}),
@@ -65,69 +51,57 @@ export const useShellAgentStore = create<ShellAgentStore>((set) => ({
 		}),
 }));
 
-const EVENTSOURCE_CLOSED = 2;
 const RETRY_MS = 5_000;
 
 let listeners = 0;
-let source: EventSource | undefined;
-let sourceBaseUrl: string | undefined;
+let socket: WebSocket | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribeBaseUrl: (() => void) | undefined;
 
-function applyEvent(event: MessageEvent) {
-	try {
-		const body = JSON.parse(String(event.data)) as ShellTerminalAgentsResponse;
-		useShellAgentStore.getState().replace(body.agents ?? []);
-	} catch {
-		// A malformed frame changes nothing; the next one replaces everything.
-	}
+function connect() {
+	if (listeners === 0 || socket || typeof WebSocket === "undefined" || !hasTrustedApiBaseUrl()) return;
+	const ws = new WebSocket(muxUrlFromApiBase(getApiBaseUrl()));
+	socket = ws;
+	ws.onopen = () => ws.send(JSON.stringify({ ch: "shell-agents", type: "subscribe" }));
+	ws.onmessage = (event: MessageEvent) => {
+		try {
+			const frame = JSON.parse(String(event.data)) as { ch?: string; agents?: Snapshot };
+			if (frame.ch === "shell-agents") useShellAgentStore.getState().replace(frame.agents ?? []);
+		} catch {
+			// A malformed frame changes nothing; the next snapshot replaces everything.
+		}
+	};
+	ws.onclose = () => {
+		if (socket !== ws) return;
+		socket = undefined;
+		// Statuses are live facts: show plain tabs rather than stale ones.
+		useShellAgentStore.getState().clearAgents();
+		retryTimer = setTimeout(() => {
+			retryTimer = undefined;
+			connect();
+		}, RETRY_MS);
+	};
 }
 
 function disconnect() {
-	if (retryTimer) clearTimeout(retryTimer);
+	clearTimeout(retryTimer);
 	retryTimer = undefined;
-	source?.close();
-	source = undefined;
-	sourceBaseUrl = undefined;
+	const ws = socket;
+	socket = undefined;
+	ws?.close();
 }
 
-function connect() {
-	if (listeners === 0 || typeof EventSource === "undefined" || !hasTrustedApiBaseUrl()) return;
-	const baseUrl = getApiBaseUrl();
-	if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
-	disconnect();
-	sourceBaseUrl = baseUrl;
-	try {
-		const connected = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/shell-terminals/agents/events`);
-		source = connected;
-		connected.addEventListener("shell_terminal_agents", applyEvent as EventListener);
-		connected.onerror = () => {
-			if (source !== connected) return;
-			// States are live facts: while the stream is down, show plain
-			// terminals rather than a status that may already be stale. The
-			// first frame after reconnecting restores them.
-			useShellAgentStore.getState().clearAgents();
-			if (connected.readyState === EVENTSOURCE_CLOSED && !retryTimer) {
-				retryTimer = setTimeout(() => {
-					retryTimer = undefined;
-					connect();
-				}, RETRY_MS);
-			}
-		};
-	} catch {
-		source = undefined;
-	}
-}
-
-/**
- * Keeps the agent stream open while at least one shell tab is mounted. The
- * stream is shared: each tab only reads its own entry from the store.
- */
+/** Keeps one shared mux subscription open while any shell tab is mounted. */
 export function useShellAgentStream(enabled: boolean): void {
 	useEffect(() => {
 		if (!enabled) return;
 		listeners += 1;
-		if (listeners === 1) unsubscribeBaseUrl = subscribeApiBaseUrl(connect);
+		if (listeners === 1) {
+			unsubscribeBaseUrl = subscribeApiBaseUrl(() => {
+				disconnect();
+				connect();
+			});
+		}
 		connect();
 		return () => {
 			listeners -= 1;

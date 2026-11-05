@@ -2393,14 +2393,9 @@ function ChatHeader({
 	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
 	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
 	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
-	// Keyed on the joined ids so memoized shell tabs keep the same array
-	// across renders that don't add, remove or reorder a shell.
-	const stripShellHandleIdsKey = orderedAuxiliaryTabs
-		.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal.handleId] : []))
-		.join("\n");
 	const stripShellHandleIds = useMemo(
-		() => (stripShellHandleIdsKey ? stripShellHandleIdsKey.split("\n") : []),
-		[stripShellHandleIdsKey],
+		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal.handleId] : [])),
+		[orderedAuxiliaryTabs],
 	);
 	// The chat tab is "selected" only when neither terminal pane is the body.
 	const timelineActive = !workspaceActiveTabKey && !reviewerActive && !shellActiveHandleId;

@@ -6,46 +6,52 @@ import (
 	"time"
 )
 
+// foregroundReader is implemented by PTYs that can name their foreground
+// process group. Windows ConPTY has no process groups, so it never reports one.
+type foregroundReader interface {
+	ForegroundPGID() (pgid int, ok bool)
+}
+
 // Timing for foreground tracking. Variables so tests can shorten them.
 var (
 	// foregroundMinInterval coalesces a burst of output into one evaluation.
 	foregroundMinInterval = 100 * time.Millisecond
-	// foregroundBusyWindow is how long after its last output a program still
-	// counts as busy. Agent TUIs animate a spinner or timer several times a
-	// second while they work and draw nothing while they wait, so a quiet
-	// window this long is the end of a burst of work.
+	// foregroundBusyWindow: agent TUIs redraw several times a second while
+	// they work and draw nothing while they wait.
 	foregroundBusyWindow = 2 * time.Second
-	// foregroundEchoWindow treats output this soon after typed input as the
-	// terminal echoing it, not the program working.
-	foregroundEchoWindow = 250 * time.Millisecond
-	// foregroundResizeWindow treats output this soon after a resize as the
-	// program redrawing for the new grid.
+	// Output this soon after typed input is its echo, and this soon after a
+	// resize is a redraw; neither means the program is working.
+	foregroundEchoWindow   = 250 * time.Millisecond
 	foregroundResizeWindow = 600 * time.Millisecond
-	// foregroundSafetyInterval re-reads the foreground while nothing is
-	// printed, for a program that starts or exits without drawing anything.
-	foregroundSafetyInterval = 5 * time.Second
-	// foregroundArgvRefresh re-reads the leader's argv for an unchanged group,
-	// which catches `exec agent` replacing the shell in place.
+	// foregroundStartGrace: a program drawing its first screen is not working.
+	foregroundStartGrace = 2500 * time.Millisecond
+	// foregroundArgvRefresh re-reads argv for an unchanged group, which
+	// catches `exec agent` replacing the shell in place.
 	foregroundArgvRefresh = 2 * time.Second
 )
 
+// maxForegroundArgs and maxForegroundArgLen bound the argv sent to watchers.
+const (
+	maxForegroundArgs   = 8
+	maxForegroundArgLen = 512
+)
+
 // foregroundTracker follows which program owns the terminal and whether it is
-// drawing. It is driven by the host's own events (output, input, resize), so a
-// program that starts is reported as soon as it draws its first frame, without
-// polling the process table. A nil tracker ignores every call.
+// drawing. The host's own output, input and resize events drive it, so a new
+// program is reported as soon as it draws, without polling. A nil tracker
+// ignores every call.
 type foregroundTracker struct {
 	reader foregroundReader
 	poke   chan struct{}
 
-	mu              sync.Mutex
-	lastInput       time.Time
-	lastResize      time.Time
-	lastAgentOutput time.Time
-	state           ForegroundPayload
-	hasState        bool
-	argvPGID        int
-	argvReadAt      time.Time
-	argv            []string
+	mu         sync.Mutex
+	lastInput  time.Time
+	lastResize time.Time
+	lastOutput time.Time // output that was not an echo or a resize redraw
+	since      time.Time // when the current foreground group appeared
+	state      ForegroundPayload
+	hasState   bool
+	argvReadAt time.Time
 }
 
 func newForegroundTracker(reader foregroundReader) *foregroundTracker {
@@ -68,31 +74,28 @@ func (t *foregroundTracker) noteOutput(now time.Time) {
 	}
 	t.mu.Lock()
 	if now.Sub(t.lastInput) > foregroundEchoWindow && now.Sub(t.lastResize) > foregroundResizeWindow {
-		t.lastAgentOutput = now
+		t.lastOutput = now
 	}
 	t.mu.Unlock()
 	t.wake()
 }
 
 func (t *foregroundTracker) noteInput(now time.Time) {
-	if t == nil {
-		return
+	if t != nil {
+		t.mu.Lock()
+		t.lastInput = now
+		t.mu.Unlock()
 	}
-	t.mu.Lock()
-	t.lastInput = now
-	t.mu.Unlock()
 }
 
 func (t *foregroundTracker) noteResize(now time.Time) {
-	if t == nil {
-		return
+	if t != nil {
+		t.mu.Lock()
+		t.lastResize = now
+		t.mu.Unlock()
 	}
-	t.mu.Lock()
-	t.lastResize = now
-	t.mu.Unlock()
 }
 
-// current returns the last evaluated state, if any.
 func (t *foregroundTracker) current() (ForegroundPayload, bool) {
 	if t == nil {
 		return ForegroundPayload{}, false
@@ -103,7 +106,7 @@ func (t *foregroundTracker) current() (ForegroundPayload, bool) {
 }
 
 // run evaluates on every wake, at most once per foregroundMinInterval, and
-// publishes each change. It returns when done closes.
+// publishes each change until done closes.
 func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPayload)) {
 	if t == nil {
 		return
@@ -120,7 +123,7 @@ func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPay
 		}
 		now := time.Now()
 		if wait := foregroundMinInterval - now.Sub(lastEval); wait > 0 {
-			resetTimer(timer, wait)
+			timer.Reset(wait)
 			continue
 		}
 		lastEval = now
@@ -128,39 +131,41 @@ func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPay
 		if changed {
 			publish(state)
 		}
-		resetTimer(timer, next)
+		if next > 0 {
+			timer.Reset(next)
+		}
 	}
 }
 
+// evaluate reads the foreground and returns the new state, whether it
+// changed, and when to look again to report the busy-to-quiet edge (0: only
+// on the next event).
 func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed bool, state ForegroundPayload) {
-	pgid, ok := t.reader.ForegroundPGID()
+	pgid, _ := t.reader.ForegroundPGID()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if ok {
-		if pgid != t.argvPGID || now.Sub(t.argvReadAt) >= foregroundArgvRefresh {
-			t.argv = capForegroundArgv(processArgv(pgid))
-			t.argvPGID, t.argvReadAt = pgid, now
-		}
-		state.PGID, state.Argv = pgid, t.argv
+	state.PGID, state.Argv = pgid, t.state.Argv
+	if pgid != t.state.PGID {
+		t.since = now
 	}
-	sinceOutput := now.Sub(t.lastAgentOutput)
-	state.Busy = !t.lastAgentOutput.IsZero() && sinceOutput < foregroundBusyWindow
-	next = foregroundSafetyInterval
+	if pgid != t.state.PGID || now.Sub(t.argvReadAt) >= foregroundArgvRefresh {
+		state.Argv, t.argvReadAt = capForegroundArgv(processArgv(pgid)), now
+	}
+	quiet := now.Sub(t.lastOutput)
+	state.Busy = t.lastOutput.After(t.since.Add(foregroundStartGrace)) && quiet < foregroundBusyWindow
 	if state.Busy {
-		// Wake just after the window closes to report the quiet edge.
-		next = foregroundBusyWindow - sinceOutput + 10*time.Millisecond
+		next = foregroundBusyWindow - quiet + 10*time.Millisecond
 	}
 	changed = !t.hasState || state.PGID != t.state.PGID || state.Busy != t.state.Busy || !slices.Equal(state.Argv, t.state.Argv)
 	t.state, t.hasState = state, true
 	return next, changed, state
 }
 
-func resetTimer(timer *time.Timer, d time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
+func capForegroundArgv(argv []string) []string {
+	argv = argv[:min(len(argv), maxForegroundArgs)]
+	out := make([]string, len(argv))
+	for i, arg := range argv {
+		out[i] = arg[:min(len(arg), maxForegroundArgLen)]
 	}
-	timer.Reset(d)
+	return out
 }

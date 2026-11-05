@@ -327,10 +327,8 @@ func clientKill(addr string) error {
 	return nil
 }
 
-// clientWatchForeground turns one connection into a foreground watcher and
-// calls fn for every MsgForegroundState until ctx ends or the host goes away.
-// Output the host queued before it saw the request (the replay snapshot) is
-// discarded.
+// clientWatchForeground calls fn for every MsgForegroundState until ctx ends
+// or the host goes away. The replay sent before the request is ignored.
 func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
 	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {

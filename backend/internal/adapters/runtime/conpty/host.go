@@ -90,9 +90,7 @@ func newHost(cfg ServeConfig) *host {
 type clientState struct {
 	cols, rows int
 	sized      bool
-	// watcher marks a connection that asked only for foreground updates
-	// (MsgWatchForegroundReq). It receives no terminal output.
-	watcher bool
+	watcher    bool // sent MsgWatchForegroundReq; gets no terminal output
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -146,9 +144,7 @@ type host struct {
 	// modeTracker). record updates it together with the ring under mu, so when
 	// handleConn snapshots the ring, the tracker is up to the same chunk.
 	modes *modeTracker
-	// fg follows the terminal's foreground program; nil where the PTY cannot
-	// name it.
-	fg *foregroundTracker
+	fg    *foregroundTracker // nil where the PTY cannot name its foreground
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -323,12 +319,8 @@ func (h *host) record(chunk []byte) {
 	h.fg.noteOutput(time.Now())
 }
 
-// publishForeground queues a foreground change to the watchers only.
 func (h *host) publishForeground(state ForegroundPayload) {
-	frame, ok := foregroundFrame(state)
-	if !ok {
-		return
-	}
+	frame := foregroundFrame(state)
 	h.mu.Lock()
 	for _, client := range h.clients {
 		if client.watcher {
@@ -338,13 +330,11 @@ func (h *host) publishForeground(state ForegroundPayload) {
 	h.mu.Unlock()
 }
 
-func foregroundFrame(state ForegroundPayload) ([]byte, bool) {
-	b, err := json.Marshal(state)
-	if err != nil {
-		return nil, false
-	}
-	frame, err := EncodeMessage(MsgForegroundState, b)
-	return frame, err == nil
+// foregroundFrame cannot fail: the payload is small and its argv is capped.
+func foregroundFrame(state ForegroundPayload) []byte {
+	b, _ := json.Marshal(state)
+	frame, _ := EncodeMessage(MsgForegroundState, b)
+	return frame
 }
 
 // broadcast queues msg to all connected clients. Socket writes happen only in
@@ -608,18 +598,14 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		h.sendTo(conn, statusFrame(alive, pid, codePtr))
 
 	case MsgWatchForegroundReq:
-		// From here on this connection hears only foreground changes. It gets
-		// the current state at once so a watcher that attaches to a terminal
-		// already running an agent does not wait for the next change.
+		// The watcher gets the current state at once, then each change.
 		h.mu.Lock()
 		if cs := h.clients[conn]; cs != nil {
 			cs.watcher = true
 		}
 		h.mu.Unlock()
 		if state, ok := h.fg.current(); ok {
-			if frame, ok := foregroundFrame(state); ok {
-				h.sendTo(conn, frame)
-			}
+			h.sendTo(conn, foregroundFrame(state))
 		}
 		h.fg.wake()
 

@@ -20,7 +20,7 @@ type ShellTerminalTabProps = {
 	appearance?: "pill" | "connected";
 	/** Commit a new tab title. Omitted where rename is not wired. */
 	onRename?: (title: string) => void;
-	/** Handles of every shell tab in this strip, used to number agent-named tabs that share an agent. */
+	/** Every shell tab handle in this strip; tabs running the same agent keep their numbers. */
 	stripShellHandleIds?: readonly string[];
 };
 
@@ -49,31 +49,21 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// The local daemon watches its own shells; remote, cloud and not-yet-created
-	// shells keep the plain terminal icon.
+	// Only the local daemon watches its shells for agents.
 	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
-	// While an agent runs, a default-named tab ("Terminal 3") reads as the
-	// agent ("Claude Code"). When another tab in the strip runs the same agent,
-	// both keep their numbers ("Claude Code 3", "Claude Code 5") so they stay
-	// distinct. A name the user chose stays. This is display only: rename still
-	// edits the stored title, and the tab reads "Terminal 3" again once the
-	// agent exits.
-	const defaultNumber = defaultShellTitleNumber(shell.title);
+	// A default-named tab ("Terminal 3") reads as its agent ("Claude Code"),
+	// keeping the number when another tab runs the same agent. Display only:
+	// rename edits the stored title, which returns when the agent exits.
+	const defaultNumber = /^Terminal (\d+)$/.exec(shell.title)?.[1];
 	const sharesAgent = useShellAgentStore((state) =>
-		Boolean(
-			agent &&
-				stripShellHandleIds?.some(
-					(handleId) => handleId !== shell.handleId && state.agents[handleId]?.harness === agent.harness,
-				),
-		),
+		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const agentNumber = agentName && sharesAgent ? defaultNumber : undefined;
-	const title = agentName ? (agentNumber ? `${agentName} ${agentNumber}` : agentName) : shell.title;
+	const title = agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -211,8 +201,7 @@ export function ShellTerminalTab({
 						<SquareTerminal aria-hidden="true" className="size-icon-sm" />
 					)
 				}
-				label={agentName ?? title}
-				labelSuffix={agentNumber}
+				label={title}
 				trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 			/>
 		);
@@ -280,42 +269,25 @@ export function ShellTerminalTab({
 	);
 }
 
-// The daemon names new shells "Terminal N" (shellterm nextShellTerminalTitle).
-// Returns N for such a name, or undefined for a name the user chose.
-function defaultShellTitleNumber(title: string): string | undefined {
-	return /^Terminal (\d+)$/.exec(title)?.[1];
-}
+const AGENT_STATUS = {
+	working: {
+		label: "terminal.agentWorking",
+		icon: <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />,
+	},
+	waiting: { label: "terminal.agentWaiting", icon: <CircleAlert aria-hidden="true" className="size-3 text-destructive" /> },
+	done: { label: "terminal.agentDone", icon: <span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" /> },
+} as const;
 
-// The agent's state in the tab, in the sidebar's vocabulary: a spinner while
-// it works, the red alert when it is waiting on the user, and the unread dot
-// once it finished a turn the user has not looked at. An idle agent the user
-// has already seen shows nothing beyond its logo.
+// The sidebar's status vocabulary: a spinner while the agent works, the red
+// alert while it waits on the user, and a dot for a finished turn not yet seen.
 function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
-	const name = agentLabel(agent.harness);
-	if (agent.state === "working") {
-		const label = t("terminal.agentWorking", { agent: name });
-		return (
-			<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="working" title={label}>
-				<LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />
-				<span className="sr-only">{label}</span>
-			</span>
-		);
-	}
-	if (agent.state === "waiting") {
-		const label = t("terminal.agentWaiting", { agent: name });
-		return (
-			<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="waiting" title={label}>
-				<CircleAlert aria-hidden="true" className="size-3 text-destructive" />
-				<span className="sr-only">{label}</span>
-			</span>
-		);
-	}
-	if (!done) return null;
-	const label = t("terminal.agentDone", { agent: name });
+	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
+	if (!state) return null;
+	const label = t(AGENT_STATUS[state].label, { agent: agentLabel(agent.harness) });
 	return (
-		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="done" title={label}>
-			<span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" />
+		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state={state} title={label}>
+			{AGENT_STATUS[state].icon}
 			<span className="sr-only">{label}</span>
 		</span>
 	);

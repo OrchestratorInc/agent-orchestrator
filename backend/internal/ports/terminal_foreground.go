@@ -5,24 +5,21 @@ import (
 	"errors"
 )
 
-// TerminalForeground is a factual, ephemeral reading of the program that owns
-// a terminal: its foreground process group, that group leader's command line
-// (capped), and whether it has been drawing output recently. It names no
-// harness; callers classify Argv themselves.
+// TerminalForeground is a reading of the program that owns a terminal: its
+// process group, the group leader's argv (capped), and whether it is drawing.
 type TerminalForeground struct {
 	PGID int
 	Argv []string
 	Busy bool
 }
 
-// ErrTerminalForegroundUnavailable reports a runtime or terminal host that
-// cannot name its foreground program (tmux handles, Windows ConPTY, or a
-// detached host started by an older AO).
+// ErrTerminalForegroundUnavailable reports a terminal that cannot name its
+// foreground program: tmux, Windows ConPTY, or a host from an older AO.
 var ErrTerminalForegroundUnavailable = errors.New("terminal foreground is unavailable")
 
-// TerminalForegroundWatcher is an optional runtime capability. Watch blocks,
-// calling fn with the current foreground and again on every change, until ctx
-// ends or the connection to the terminal host is lost.
+// TerminalForegroundWatcher is an optional runtime capability. It blocks,
+// calling fn with the current reading and each change, until ctx ends or the
+// host connection drops.
 type TerminalForegroundWatcher interface {
 	WatchTerminalForeground(ctx context.Context, handle RuntimeHandle, fn func(TerminalForeground)) error
 }

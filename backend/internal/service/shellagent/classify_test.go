@@ -1,6 +1,7 @@
 package shellagent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,7 +22,6 @@ func TestClassifyArgv(t *testing.T) {
 		{"muse versioned binary", []string{"/Users/me/.local/bin/muse-bin-1.4.14-R7309.1"}, domain.HarnessMuse},
 		{"versioned binary of an unknown tool", []string{"/usr/local/bin/tool-bin-2.0"}, ""},
 		{"aider under python", []string{"python3.12", "/Users/me/.local/bin/aider"}, domain.HarnessAider},
-		{"windows exe", []string{`C:\Users\me\AppData\Roaming\npm\codex.cmd`}, domain.HarnessCodex},
 		{"login shell", []string{"-zsh"}, ""},
 		{"plain shell", []string{"/bin/zsh", "-l"}, ""},
 		{"editor opening a file named after an agent", []string{"vim", "codex.md"}, ""},
@@ -48,7 +48,7 @@ func TestLooksLikeApprovalPrompt(t *testing.T) {
 		{"codex approval", "Would you like to run the following command?\n  $ npm test\n› 1. Yes, proceed", true},
 		{"yes/no confirmation", "Overwrite config? (y/n)", true},
 		{"idle prompt", "✻ Welcome back\n\n> \n  ? for shortcuts", false},
-		{"question far above the live screen", "Do you want to proceed?\n" + repeatLines("output", 30) + "> ", false},
+		{"question far above the live screen", "Do you want to proceed?\n" + strings.Repeat("output\n", 30) + "> ", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,12 +57,4 @@ func TestLooksLikeApprovalPrompt(t *testing.T) {
 			}
 		})
 	}
-}
-
-func repeatLines(line string, n int) string {
-	out := ""
-	for range n {
-		out += line + "\n"
-	}
-	return out
 }

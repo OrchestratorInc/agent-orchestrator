@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useShellAgentStore } from "./shell-agent-store";
 
-const entry = (state: "working" | "idle" | "waiting") => ({
-	handleId: "shellterm-1",
-	harness: "claude-code",
-	state,
-	since: "2026-11-05T00:00:00Z",
-});
+const entry = (state: "working" | "idle" | "waiting") => ({ handleId: "shellterm-1", harness: "claude-code", state });
 
 afterEach(() => useShellAgentStore.setState({ agents: {}, unseenDone: {} }));
 

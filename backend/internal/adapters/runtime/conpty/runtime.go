@@ -692,9 +692,6 @@ var osProcessFinder = defaultOSProcessFinder
 var _ ports.TerminalForegroundWatcher = (*Runtime)(nil)
 
 // WatchTerminalForeground streams the host's foreground program and activity.
-// Hosts started before foreground tracking existed report
-// ports.ErrTerminalForegroundUnavailable rather than flooding the watcher with
-// raw output it would ignore.
 func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {

@@ -1,7 +1,6 @@
-// Package shellagent notices coding agents started by hand inside a user's
-// shell terminal and follows whether each one is working, done, or waiting on
-// the user. It never stores anything: state lives in memory for as long as the
-// agent owns the terminal's foreground.
+// Package shellagent notices coding agents started by hand in a user's shell
+// terminal and follows whether each is working, idle or waiting on the user.
+// Nothing is stored; state lives in memory while the agent owns the terminal.
 package shellagent
 
 import (
@@ -11,10 +10,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// executableHarness maps the command a harness installs onto AO's harness id.
-// Names generic enough to collide with ordinary tools (Command Code's `cmd`,
-// FX's `fx`, which is also a popular JSON viewer) are left out: a wrong agent
-// logo on a shell tab is worse than none.
+// executableHarness maps the command a harness installs onto its harness id.
+// Names that collide with ordinary tools (Command Code's `cmd`, FX's `fx`) are
+// left out: a wrong logo is worse than none.
 var executableHarness = map[string]domain.AgentHarness{
 	"claude":       domain.HarnessClaudeCode,
 	"claude-code":  domain.HarnessClaudeCode,
@@ -59,9 +57,8 @@ var executableHarness = map[string]domain.AgentHarness{
 	"hermes":       domain.HarnessHermes,
 }
 
-// packageDirHarness names harnesses by a directory their files live under,
-// for launchers that run an interpreter on a script with a generic name
-// (Cursor's `node …/cursor-agent/versions/<v>/index.js`).
+// packageDirHarness names harnesses whose launcher runs a generic script from
+// the package directory, like Cursor's `node …/cursor-agent/versions/<v>/index.js`.
 var packageDirHarness = map[string]domain.AgentHarness{
 	"cursor-agent": domain.HarnessCursor,
 	"claude-code":  domain.HarnessClaudeCode,
@@ -70,40 +67,20 @@ var packageDirHarness = map[string]domain.AgentHarness{
 	"qwen-code":    domain.HarnessQwen,
 }
 
-// interpreters run a script that names the real program in a later argument.
-var interpreters = map[string]bool{
-	"node": true, "nodejs": true, "bun": true, "deno": true, "tsx": true,
-	"python": true, "python3": true, "uv": true, "uvx": true, "pipx": true,
-}
+var interpreters = map[string]bool{"node": true, "nodejs": true, "bun": true, "deno": true, "python": true, "python3": true}
 
-// maxScriptArgs bounds how far past an interpreter the classifier looks.
-const maxScriptArgs = 4
-
-// ClassifyArgv names the harness a foreground command line is running, or ""
-// for anything else (the user's shell, an editor, a build). Only the program
-// itself counts: `vim codex.md` is vim. An interpreter's script is the program
-// when it is the interpreter's first non-flag arguments.
+// ClassifyArgv names the harness a foreground command line runs, or "". Only
+// the program counts (`vim codex.md` is vim), or an interpreter's script.
 func ClassifyArgv(argv []string) domain.AgentHarness {
-	if len(argv) == 0 {
-		return ""
-	}
-	if harness := classifyProgram(argv[0]); harness != "" {
-		return harness
-	}
-	if !interpreters[trimVersion(baseName(argv[0]))] {
-		return ""
-	}
-	seen := 0
-	for _, arg := range argv[1:] {
-		if strings.HasPrefix(arg, "-") {
+	for i, arg := range argv[:min(len(argv), 5)] {
+		if i > 0 && strings.HasPrefix(arg, "-") {
 			continue
 		}
 		if harness := classifyProgram(arg); harness != "" {
 			return harness
 		}
-		seen++
-		if seen >= maxScriptArgs {
-			break
+		if i == 0 && !interpreters[strings.TrimRight(baseName(arg), "0123456789.")] {
+			return ""
 		}
 	}
 	return ""
@@ -111,40 +88,27 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 
 func classifyProgram(arg string) domain.AgentHarness {
 	name := baseName(arg)
+	// Muse's launcher execs a versioned binary: muse-bin-1.4.14-R7309.1.
+	if prefix, _, ok := strings.Cut(name, "-bin-"); ok {
+		name = prefix
+	}
 	if harness, ok := executableHarness[name]; ok {
 		return harness
 	}
-	// Some launchers exec a versioned binary beside themselves: Muse's `muse`
-	// script runs `muse-bin-1.4.14-R7309.1`.
-	if prefix, _, ok := strings.Cut(name, "-bin-"); ok {
-		if harness, ok := executableHarness[prefix]; ok {
-			return harness
-		}
-	}
-	for _, segment := range strings.Split(filepathSlash(arg), "/") {
-		if harness, ok := packageDirHarness[strings.ToLower(segment)]; ok {
+	for _, dir := range strings.Split(arg, "/") {
+		if harness, ok := packageDirHarness[dir]; ok {
 			return harness
 		}
 	}
 	return ""
 }
 
-// baseName lowercases a command's file name without its directory, a login
-// shell's leading dash, or a script/executable extension.
+// baseName is a command's lowercased file name without a login shell's
+// leading dash or a script extension.
 func baseName(arg string) string {
-	name := strings.ToLower(path.Base(filepathSlash(arg)))
-	name = strings.TrimPrefix(name, "-")
-	for _, ext := range []string{".js", ".mjs", ".cjs", ".ts", ".py", ".exe", ".cmd"} {
-		if strings.HasSuffix(name, ext) {
-			return strings.TrimSuffix(name, ext)
-		}
+	name := strings.TrimPrefix(strings.ToLower(path.Base(arg)), "-")
+	for _, ext := range []string{".js", ".mjs", ".cjs", ".py"} {
+		name = strings.TrimSuffix(name, ext)
 	}
 	return name
 }
-
-// trimVersion drops a version suffix from an interpreter name (python3.12).
-func trimVersion(name string) string {
-	return strings.TrimRight(name, "0123456789.")
-}
-
-func filepathSlash(arg string) string { return strings.ReplaceAll(arg, `\`, "/") }

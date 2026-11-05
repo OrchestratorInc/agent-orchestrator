@@ -157,10 +157,7 @@ func (d *deferredPTY) PID() int {
 	return d.conn.PID()
 }
 
-// ForegroundPGID forwards to the started PTY. Shell terminals start on attach,
-// so without it a user shell would never report the agent running in it.
-// Before the start, and on PTYs that cannot name their foreground, it reports
-// nothing.
+// ForegroundPGID forwards to the started PTY; shell terminals start on attach.
 func (d *deferredPTY) ForegroundPGID() (int, bool) {
 	d.mu.Lock()
 	conn := d.conn
