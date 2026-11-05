@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
+import { isMacPlatform } from "../../lib/platform";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { useUiStore, type GlobalSettingsSection } from "../../stores/ui-store";
 import { Button } from "../ui/button";
@@ -51,13 +53,15 @@ async function fetchChromeStatus(): Promise<ChromeStatus> {
 }
 
 // Chrome mode lets agents browse in the user's own Chrome through the AO
-// Browser Bridge extension. Setup registers AO's native host with Chrome;
-// loading the unpacked extension is the user's own step in chrome://extensions.
+// Browser Bridge extension. Setup registers AO's native host with Chrome and
+// takes the user to chrome://extensions with the folder path on the clipboard.
+// Chrome only lets a person load an unpacked extension, so those steps remain.
 export function BrowserChromeSection() {
 	const { t } = useTranslation();
 	const developerMode = useUiStore((state) => state.developerMode);
 	const queryClient = useQueryClient();
 	const [copied, setCopied] = useState(false);
+	const [openFailed, setOpenFailed] = useState(false);
 	const query = useQuery({ queryKey: browserChromeQueryKey, queryFn: fetchChromeStatus, refetchInterval: 3000 });
 	const change = useMutation({
 		mutationFn: async (enable: boolean) => {
@@ -67,6 +71,7 @@ export function BrowserChromeSection() {
 				: await apiClient.DELETE("/api/v1/browser/chrome");
 			if (error || !data) throw new Error(apiErrorMessage(error));
 			queryClient.setQueryData(browserChromeQueryKey, data);
+			if (enable && !data.connected) await startLoading(data.extensionPath);
 		},
 		onSettled: () => void queryClient.invalidateQueries({ queryKey: browserChromeQueryKey }),
 	});
@@ -81,12 +86,19 @@ export function BrowserChromeSection() {
 				? t("settings.browserChrome.status.connected", { version: status.clientVersion ?? "" })
 				: t("settings.browserChrome.status.setUp");
 
-	const copyPath = async () => {
-		if (!status) return;
-		await navigator.clipboard.writeText(status.extensionPath);
+	const copyPath = async (path = status?.extensionPath) => {
+		if (!path) return;
+		await navigator.clipboard.writeText(path);
 		setCopied(true);
 		setTimeout(() => setCopied(false), 1500);
 	};
+
+	// One click: the path is ready to paste by the time Chrome's page appears.
+	async function startLoading(path: string) {
+		setOpenFailed(false);
+		await copyPath(path).catch(() => undefined);
+		await aoBridge.app.openChromeExtensions().catch(() => setOpenFailed(true));
+	}
 
 	// A developer-mode feature; stays visible once set up so Remove is reachable.
 	if (!developerMode && !status?.enabled) return null;
@@ -130,7 +142,12 @@ export function BrowserChromeSection() {
 					description={
 						status.extensionBundled ? (
 							<>
-								{t("settings.browserChrome.loadSteps")}
+								<ol className="list-decimal space-y-1 pl-4">
+									<li>{t("settings.browserChrome.loadStep1")}</li>
+									<li>{t(isMacPlatform() ? "settings.browserChrome.loadStep2Mac" : "settings.browserChrome.loadStep2Other")}</li>
+									<li>{t("settings.browserChrome.loadStep3")}</li>
+								</ol>
+								{openFailed ? <span className="mt-1 block text-error">{t("settings.browserChrome.openFailed")}</span> : null}
 								<span className="mt-1 block font-mono break-all">{status.extensionPath}</span>
 								<span className="mt-1 block">
 									{t("settings.browserChrome.extensionId")}: <span className="font-mono">{status.extensionId}</span>
@@ -142,9 +159,14 @@ export function BrowserChromeSection() {
 					}
 				>
 					{status.extensionBundled ? (
-						<Button onClick={() => void copyPath()} size="sm" type="button" variant="ghost">
-							{copied ? t("settings.browserChrome.copied") : t("settings.browserChrome.copyPath")}
-						</Button>
+						<div className="flex items-center gap-2">
+							<Button onClick={() => void copyPath()} size="sm" type="button" variant="ghost">
+								{copied ? t("settings.browserChrome.copied") : t("settings.browserChrome.copyPath")}
+							</Button>
+							<Button onClick={() => void startLoading(status.extensionPath)} size="sm" type="button" variant="primary">
+								{t("settings.browserChrome.openChrome")}
+							</Button>
+						</div>
 					) : null}
 				</SettingsRow>
 			) : null}

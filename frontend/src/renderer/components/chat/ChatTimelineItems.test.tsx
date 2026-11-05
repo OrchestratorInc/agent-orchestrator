@@ -112,7 +112,7 @@ describe("TurnOutcome", () => {
 
 	it("ends a refused login on one quiet line under the message, and never the CLI's advice", () => {
 		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry: vi.fn() }}
-			onRollback={vi.fn()} durationMs={1000} login={{ status: "queued", align: "end" }} />);
+			onRollback={vi.fn()} login={{ status: "queued", align: "end" }} />);
 
 		expect(screen.getByTestId("login-status")).toHaveTextContent("Queued");
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
@@ -230,24 +230,6 @@ describe("TurnOutcome", () => {
 		fireEvent.click(actions[2]!);
 		expect(onRetry).toHaveBeenCalledOnce();
 		expect(onRollback).toHaveBeenCalledOnce();
-	});
-
-	it("ends the row with how long the turn ran when no fold above says so", () => {
-		render(
-			<TurnOutcome
-				state="interrupted"
-				durationMs={61_000}
-				copyText="The partial answer"
-				onRollback={vi.fn()}
-			/>,
-		);
-
-		const duration = screen.getByText("1m");
-		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
-		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		// Alone on the row, the number carries its name for a screen reader.
-		expect(duration).toHaveTextContent("Worked for 1m");
 	});
 
 	it("says why a retry was refused, under the row it came from", () => {
