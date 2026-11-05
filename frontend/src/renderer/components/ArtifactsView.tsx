@@ -325,7 +325,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						</span>
 					</Pressable>
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
-						<ArtifactActionsMenu
+						{row.bundle ? null : <ArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
@@ -333,7 +333,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
-						/>
+						/>}
 					</div>
 					<time dateTime={row.updatedAt} className="pointer-events-none relative z-[1] w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 						{formatTimeCompact(row.updatedAt)}
@@ -349,7 +349,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			previewLive={previewLive}
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
-			actions={
+			actions={row.bundle ? null : (
 				<ArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
@@ -359,7 +359,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
 				/>
-			}
+			)}
 		/>
 	);
 }

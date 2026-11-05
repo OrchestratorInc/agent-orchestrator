@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -2518,6 +2520,81 @@ func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
 	}
 	if evs, err := s.EventsAfter(ctx, base, 100); err != nil || len(evs) != 0 {
 		t.Fatalf("unchanged checklist events = %+v err=%v, want none", evs, err)
+	}
+}
+
+func TestRegisteredArtifactPaths(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() []string {
+		t.Helper()
+		rec, ok, err := st.GetSession(ctx, sess.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: ok=%v err=%v", ok, err)
+		}
+		return rec.RegisteredArtifactPaths
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("new session paths = %v, want none", got)
+	}
+	got, found, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"a.html", "b.md", "a.html"})
+	if err != nil || !found || !slices.Equal(got, []string{"a.html", "b.md"}) {
+		t.Fatalf("add = %v, %v, %v", got, found, err)
+	}
+	if got, _, err = st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"b.md"}); err != nil || len(got) != 2 {
+		t.Fatalf("add again = %v, %v", got, err)
+	}
+	if err := st.RemoveSessionRegisteredArtifactPath(ctx, sess.ID, "a.html"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !slices.Equal(got, []string{"b.md"}) {
+		t.Fatalf("after remove = %v", got)
+	}
+
+	tooMany := make([]string, domain.MaxRegisteredArtifactPaths)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("f%d.md", i)
+	}
+	if _, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, tooMany); !errors.Is(err, domain.ErrRegisteredArtifactLimit) {
+		t.Fatalf("add past the limit err = %v", err)
+	}
+	if got := read(); !slices.Equal(got, []string{"b.md"}) {
+		t.Fatalf("a refused add changed the paths: %v", got)
+	}
+
+	if err := st.ClearSessionRegisteredArtifactPaths(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("after clear = %v", got)
+	}
+	if _, found, err := st.AddSessionRegisteredArtifactPaths(ctx, "missing", []string{"a.md"}); err != nil || found {
+		t.Fatalf("add for an unknown session: found=%v err=%v", found, err)
+	}
+}
+
+func TestUpdateSessionDoesNotOverwriteRegisteredArtifactPaths(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"a.html"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateSession(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := st.GetSession(ctx, sess.ID)
+	if err != nil || !slices.Equal(rec.RegisteredArtifactPaths, []string{"a.html"}) {
+		t.Fatalf("paths after a stale UpdateSession = %v, %v", rec.RegisteredArtifactPaths, err)
 	}
 }
 

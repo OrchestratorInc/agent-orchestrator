@@ -340,7 +340,7 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - When a decision or missing input blocks progress, run `+"`ao report --needs-input --note <text>`"+`.
 - When work cannot proceed for another reason, run `+"`ao report --stuck --note <text>`"+`.
 - When the assigned work is complete, run `+"`ao report --done --note <text>`"+`. Attach deliverables with `+"`--artifact`"+` and PRs with `+"`--pr-created`"+` or `+"`--pr-reviewed`"+`; summarize validation and mention anything else, such as issues you filed, in the note.
-- Attach each deliverable with `+"`--artifact <absolute-path>`"+` as soon as it exists, on the report for that milestone; do not wait for `+"`--done`"+`. `+"`--artifact`"+` takes only a path to a file in the session artifact directory, one flag per deliverable, not its supporting files.
+- Attach each deliverable with `+"`--artifact <absolute-path>`"+` as soon as it exists, on the report for that milestone; do not wait for `+"`--done`"+`. `+"`--artifact`"+` takes only a path to a file in the session artifact directory, one flag per deliverable, not its supporting files. `+"`--artifact`"+` tells the orchestrator about a file but does not register it, so run `+"`ao artifact add <path>`"+` first.
 - Do not file a report for routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session. This limit applies to `+"`ao report`"+` only, not to what you tell the user in the conversation.
 
 ## In-App Session Links

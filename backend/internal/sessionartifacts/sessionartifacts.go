@@ -103,13 +103,7 @@ func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error)
 			return nil //nolint:nilerr // an entry outside root is skipped, not fatal
 		}
 		rel = filepath.ToSlash(rel)
-		files = append(files, domain.SessionArtifactFile{
-			Path:      rel,
-			Name:      filepath.Base(path),
-			Kind:      inferKind(rel),
-			Size:      info.Size(),
-			UpdatedAt: info.ModTime().UTC(),
-		})
+		files = append(files, artifactFile(rel, info))
 		return nil
 	})
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
@@ -150,6 +144,166 @@ func ignored(name string) bool {
 func Skips(rel string) bool {
 	parts := strings.Split(rel, "/")
 	return parts[0] == VersionsDir || slices.ContainsFunc(parts, ignored)
+}
+
+// bundleSuffixes name directories that are one document on macOS. Keep this in
+// step with BUNDLE_SUFFIXES in packages/shared/artifacts/deliverables.ts.
+var bundleSuffixes = []string{".icon", ".app", ".bundle", ".xcassets"}
+
+// IsBundleDir reports whether name is a bundle directory's name.
+func IsBundleDir(name string) bool {
+	return slices.Contains(bundleSuffixes, strings.ToLower(filepath.Ext(name)))
+}
+
+// RelPath is reference as a slash-separated path inside dir: an absolute path
+// under dir, or a path relative to it, once cleaned.
+func RelPath(dir, reference string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	rel := filepath.Clean(reference)
+	if filepath.IsAbs(rel) {
+		var err error
+		if rel, err = filepath.Rel(filepath.Clean(dir), rel); err != nil {
+			return "", false
+		}
+	}
+	if !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// Errors from Registrable.
+var (
+	// ErrOutsideDir reports a reference outside the artifact directory.
+	ErrOutsideDir = errors.New("not in the session's artifact directory")
+	// ErrNotFound reports a reference to nothing.
+	ErrNotFound = errors.New("no such file in the session's artifact directory")
+	// ErrNotRegistrable reports something that cannot be an artifact: a
+	// directory that is not a bundle, a symlink, or a path List leaves out.
+	ErrNotRegistrable = errors.New("only a file or a bundle directory can be registered")
+)
+
+// Registrable returns reference's path in dir if it is a regular file or a
+// bundle directory that List can reach.
+func Registrable(dir, reference string) (string, error) {
+	rel, ok := RelPath(dir, reference)
+	if !ok {
+		return "", ErrOutsideDir
+	}
+	if rel == "." || Skips(rel) {
+		return "", ErrNotRegistrable
+	}
+	root, err := os.OpenRoot(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat(filepath.FromSlash(rel))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", ErrNotRegistrable //nolint:nilerr // os.Root refuses a path that leaves dir
+	}
+	if info.Mode().IsRegular() || (info.IsDir() && IsBundleDir(info.Name())) {
+		return rel, nil
+	}
+	return "", ErrNotRegistrable
+}
+
+// ListRegistered is List with Registered set on each file that a path in
+// registered names, or that sits inside a bundle directory it names. List stops
+// at MaxFiles in lexical order, so assets/ can use up the budget before
+// brand.html: a registered path the walk did not reach is added here, which is
+// why the result can pass MaxFiles. A path that names nothing is ignored.
+func ListRegistered(ctx context.Context, dir string, registered []string) ([]domain.SessionArtifactFile, error) {
+	files, err := List(ctx, dir)
+	if err != nil || len(registered) == 0 {
+		return files, err
+	}
+	seen := make(map[string]bool, len(files))
+	for _, file := range files {
+		seen[file.Path] = true
+	}
+	for _, path := range registered {
+		missing, err := missedFiles(ctx, dir, path, seen)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, missing...)
+	}
+	names := make(map[string]bool, len(registered))
+	for _, path := range registered {
+		names[path] = true
+	}
+	for i := range files {
+		files[i].Registered = namedBy(files[i].Path, names)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files, nil
+}
+
+// namedBy reports whether path, or a directory above it, is in names.
+func namedBy(path string, names map[string]bool) bool {
+	for {
+		if names[path] {
+			return true
+		}
+		cut := strings.LastIndexByte(path, '/')
+		if cut < 0 {
+			return false
+		}
+		path = path[:cut]
+	}
+}
+
+// missedFiles returns the files at the registered path rel that are not in seen.
+func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool) ([]domain.SessionArtifactFile, error) {
+	if seen[rel] {
+		return nil, nil
+	}
+	path, err := Registrable(dir, rel)
+	if err != nil {
+		return nil, nil //nolint:nilerr // a path that names nothing listable is ignored, not fatal
+	}
+	full := filepath.Join(dir, filepath.FromSlash(path))
+	info, err := os.Lstat(full)
+	if err != nil {
+		return nil, nil //nolint:nilerr // removed since the check
+	}
+	if !info.IsDir() {
+		return []domain.SessionArtifactFile{artifactFile(path, info)}, nil
+	}
+	inside, err := List(ctx, full)
+	if err != nil {
+		return nil, err
+	}
+	var missing []domain.SessionArtifactFile
+	for _, file := range inside {
+		file.Path = path + "/" + file.Path
+		file.Kind = inferKind(file.Path)
+		if !seen[file.Path] {
+			missing = append(missing, file)
+		}
+	}
+	return missing, nil
+}
+
+func artifactFile(rel string, info fs.FileInfo) domain.SessionArtifactFile {
+	return domain.SessionArtifactFile{
+		Path:      rel,
+		Name:      info.Name(),
+		Kind:      inferKind(rel),
+		Size:      info.Size(),
+		UpdatedAt: info.ModTime().UTC(),
+	}
 }
 
 func inferKind(relPath string) domain.SessionArtifactKind {
