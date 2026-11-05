@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -162,6 +163,77 @@ func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.Session
 		updated = rows > 0
 		return err
 	})
+	return updated, err
+}
+
+// errPreparedImportLost rolls back a prepared identity whose workspace write
+// lost its ownership proof after the session handles moved.
+var errPreparedImportLost = errors.New("prepared import lost ownership")
+
+// SetPreparedImportIdentity records a preparer's new native copy before the
+// first launch. The session's agent and provider handles move from the source
+// identity to the copy in the same transaction, so a chat conversation created
+// for the launch binds the copy rather than the untouched original.
+func (s *Store) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	if expected == nil || next == nil || next.ResumeNativeID == "" {
+		return false, errors.New("prepared import identity is required")
+	}
+	previous := cmp.Or(expected.ResumeNativeID, expected.NativeID)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	updated := false
+	err := s.inTxDB(ctx, "set prepared import identity", func(q *gen.Queries, db gen.DBTX) error {
+		row, err := q.GetSession(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rec := rowToRecord(row)
+		if current := rec.Metadata.ImportSource; rec.IsTerminated || current == nil || *current != *expected {
+			return nil
+		}
+		if next.ResumeNativeID != previous && rec.Metadata.ProviderConversationID == previous &&
+			(rec.Metadata.AgentSessionID == previous || rec.Metadata.AgentSessionID == "") {
+			rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = next.ResumeNativeID, next.ResumeNativeID
+			rec.Metadata.AgentSessionIDLaunchID = ""
+			rec.UpdatedAt = now
+			if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+				return err
+			}
+			if db == nil {
+				return errors.New("prepared import identity requires its own transaction")
+			}
+			// A conversation opened before preparation still names the source.
+			// Its root moves too while no turn of its own has used that handle.
+			if _, err := db.ExecContext(ctx, `
+UPDATE conversation_branches SET provider_conversation_id = ?
+WHERE parent_branch_id IS NULL AND provider_conversation_id = ?
+  AND id = (SELECT active_branch_id FROM conversations WHERE session_id = ? AND current_session_id = ?)
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS t JOIN conversations AS c ON c.id = t.conversation_id
+      WHERE c.session_id = ?
+  )`, next.ResumeNativeID, previous, id, id, id); err != nil {
+				return fmt.Errorf("rebind imported conversation: %w", err)
+			}
+		}
+		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{
+			ID: id, NewSource: marshalImportSource(next), Branch: workspace.Branch, WorkspacePath: workspace.WorkspacePath,
+			WorkspaceRepoPath: workspace.WorkspaceRepoPath, DiffBaseSha: workspace.DiffBaseSHA, DiffBaseRef: workspace.DiffBaseRef, UpdatedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return errPreparedImportLost
+		}
+		updated = true
+		return nil
+	})
+	if errors.Is(err, errPreparedImportLost) {
+		return false, nil
+	}
 	return updated, err
 }
 
