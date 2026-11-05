@@ -41,6 +41,7 @@
 	"settings.harness.availableVersion": "利用可能なバージョン",
 	"settings.harness.viewDetails": "詳細を見る",
 	"chat.attachment.list": "添付ファイル",
+	"chat.attachment.remove": "{{name}} を削除",
 	"chat.attachment.save": "{{name}} を保存",
 	"chat.attachment.saveFailed": "ファイルを保存できませんでした",
 	"chat.annotationReferences": "Referenced chat annotations",

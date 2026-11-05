@@ -41,6 +41,7 @@
 	"settings.harness.availableVersion": "Verfügbare Version",
 	"settings.harness.viewDetails": "Details anzeigen",
 	"chat.attachment.list": "Angehängte Dateien",
+	"chat.attachment.remove": "{{name}} entfernen",
 	"chat.attachment.save": "{{name}} speichern",
 	"chat.attachment.saveFailed": "Die Datei konnte nicht gespeichert werden",
 	"chat.annotationReferences": "Referenced chat annotations",

@@ -41,6 +41,7 @@
 	"settings.harness.availableVersion": "可用版本",
 	"settings.harness.viewDetails": "查看详情",
 	"chat.attachment.list": "附件",
+	"chat.attachment.remove": "移除 {{name}}",
 	"chat.attachment.save": "保存 {{name}}",
 	"chat.attachment.saveFailed": "无法保存文件",
 	"chat.annotationReferences": "Referenced chat annotations",

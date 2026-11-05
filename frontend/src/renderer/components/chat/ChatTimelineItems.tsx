@@ -999,6 +999,8 @@ export function HumanMessage({
 				<HumanMessageEditor
 					text={editText ?? visibleMessageText}
 					content={message.content ?? []}
+					sessionId={sessionId}
+					apiBaseUrl={apiBaseUrl}
 					pending={editPending}
 					locked={Boolean(editRecoveryLabel)}
 					recoveryLabel={editRecoveryLabel}

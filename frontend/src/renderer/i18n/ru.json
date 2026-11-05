@@ -43,6 +43,7 @@
 	"settings.harness.availableVersion": "Доступная версия",
 	"settings.harness.viewDetails": "Подробнее",
 	"chat.attachment.list": "Прикреплённые файлы",
+	"chat.attachment.remove": "Удалить {{name}}",
 	"chat.attachment.save": "Сохранить {{name}}",
 	"chat.attachment.saveFailed": "Не удалось сохранить файл",
 	"chat.annotationReferences": "Упомянутые аннотации чата",

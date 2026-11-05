@@ -4637,6 +4637,8 @@ export function Timeline({
 							<HumanMessageEditor
 								text={messageEdit.text}
 								content={messageEdit.content}
+								sessionId={snapshot.sessionId}
+								apiBaseUrl={apiBaseUrl}
 								pending={inlineEditPending}
 								locked={Boolean(inlineEditRecoveryLabel)}
 								recoveryLabel={translateDraft(inlineEditRecoveryLabel)}

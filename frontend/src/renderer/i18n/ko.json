@@ -41,6 +41,7 @@
 	"settings.harness.availableVersion": "사용 가능한 버전",
 	"settings.harness.viewDetails": "세부 정보 보기",
 	"chat.attachment.list": "첨부 파일",
+	"chat.attachment.remove": "{{name}} 제거",
 	"chat.attachment.save": "{{name}} 저장",
 	"chat.attachment.saveFailed": "파일을 저장하지 못했습니다",
 	"chat.annotationReferences": "Referenced chat annotations",
