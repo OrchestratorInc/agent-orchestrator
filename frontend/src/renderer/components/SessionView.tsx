@@ -973,6 +973,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		});
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 
+	const openShellTerminal = useOpenShellTerminal(hostId);
+	const shellOpening = openShellTerminal.isPending;
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -989,16 +991,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const groups = useMemo(() => {
 		if (!shellListKnown) return storedGroups;
 		// A shell opened into a split is a placeholder until the daemon answers:
-		// keep its pane, then follow it to the shell it becomes.
+		// keep its pane while it opens, then follow it to the shell it becomes.
+		// A placeholder whose open failed is dropped like a closed shell.
 		let available: ReadonlySet<string> = splittableKeys;
-		for (const group of storedGroups) {
+		if (shellOpening) for (const group of storedGroups) {
 			for (const key of leafKeys(group.root)) {
 				if (!key.startsWith(PENDING_SHELL_KEY_PREFIX) || adoptedShellHandle(key) || available.has(key)) continue;
 				available = new Set([...available, key]);
 			}
 		}
 		return reconcileGroups(storedGroups, available, adoptedShellHandle);
-	}, [shellListKnown, splittableKeys, storedGroups]);
+	}, [shellListKnown, shellOpening, splittableKeys, storedGroups]);
 	const updateGroups = useCallback(
 		(update: (current: TabGroup[]) => TabGroup[]) => {
 			setGroupsBySession((current) => {
@@ -1059,7 +1062,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const mainActiveFilePath = shownGroup || !fileTabs.activePath ? null : fileTabs.activePath;
 	const mainReviewerChatId = shownGroup ? null : reviewerChatId;
 	const reviewerChatContent = mainReviewerChatId ? renderReviewerChat(mainReviewerChatId) : undefined;
-	const openShellTerminal = useOpenShellTerminal(hostId);
 	const closeShellTerminal = useCloseShellTerminal(hostId);
 	const renameShellTerminal = useRenameShellTerminal(hostId);
 	const activeShellTerminalHandleId = useUiStore((state) => state.activeShellTerminalHandleId);
@@ -1742,38 +1744,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			? { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, sessionId, title: shell.title }
 			: undefined;
 	};
-	const groupMember = (key: string): SplitGroupMember => {
-		const onSelect = () => selectTab(key);
-		const onClose = () => closePane(key);
-		if (key === SESSION_TAB_KEY) {
-			return {
-				key,
-				onSelect,
-				onClose,
-				label: session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession"),
-				icon: session ? <AgentAvatar className="size-icon-sm!" decorative provider={session.provider} /> : null,
-			};
-		}
-		if (key.startsWith("file:")) {
-			const path = key.slice("file:".length);
-			const request = centerFileRequestsBySession[uiSessionId]?.[path];
-			const sourceLabel = request?.source?.kind === "snapshot" ? (request.source as { label?: string }).label : undefined;
-			const name = `${(request?.path ?? path).split("/").pop() || path}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-			return { key, onSelect, onClose, label: name, icon: <WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} /> };
-		}
-		if (key.startsWith("reviewer")) {
-			const harness = reviewerTerminal?.harness ?? reviewerChat?.harness;
-			return {
-				key,
-				onSelect,
-				onClose,
-				label: t("terminal.reviewer"),
-				icon: harness ? <AgentAvatar className="size-icon-sm!" decorative provider={harness} /> : null,
-			};
-		}
-		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-		return { key, onSelect, onClose, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
-	};
 	// A group remembers the member last focused, so its tab names that member
 	// and selecting it returns there.
 	useEffect(() => {
@@ -1781,23 +1751,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const id = shownGroup.id;
 		updateGroups((current) => current.map((group) => (group.id === id ? { ...group, focus: selectedTabKey } : group)));
 	}, [selectedTabKey, shownGroup, updateGroups]);
-	const groupFocus = (group: TabGroup) => {
-		const members = leafKeys(group.root);
-		return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
-	};
-	const groupWorkspaceTabs = groups.map((group) => ({
-		key: groupTabKey(group),
-		content: (
-			<SplitGroupTab
-				active={group === shownGroup}
-				focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
-				members={leafKeys(group.root).map(groupMember)}
-				onUngroup={() => updateGroups((current) => current.filter((candidate) => candidate.id !== group.id))}
-			/>
-		),
-		onSelect: () => selectTab(groupFocus(group)),
-	}));
-
 	// Closing a pane (⌘W, or the ✕ on its group tab) keeps the rest of the
 	// split on screen. The session's own pane and reviewers are not closable,
 	// so they return to the strip as tabs of their own.
@@ -1836,6 +1789,76 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const closePane = useCallback((key: string) => closePaneRef.current(key), []);
 	const closeFocusedPane = useCallback(() => closePaneRef.current(selectedTabKeyRef.current), []);
 
+	// The group tabs only change with the groups, the selection and the
+	// members' names, so the strips do not redo their work on every render.
+	const sessionLabel = session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession");
+	const sessionProvider = session?.provider;
+	const reviewerHarness = reviewerTerminal?.harness ?? reviewerChat?.harness;
+	const groupWorkspaceTabs = useMemo(() => {
+		const groupMember = (key: string): SplitGroupMember => {
+			const onSelect = () => selectTab(key);
+			const onClose = () => closePane(key);
+			if (key === SESSION_TAB_KEY) {
+				return {
+					key,
+					onSelect,
+					onClose,
+					label: sessionLabel,
+					icon: sessionProvider ? <AgentAvatar className="size-icon-sm!" decorative provider={sessionProvider} /> : null,
+				};
+			}
+			if (key.startsWith("file:")) {
+				const path = key.slice("file:".length);
+				const request = centerFileRequestsBySession[uiSessionId]?.[path];
+				const sourceLabel = request?.source?.kind === "snapshot" ? (request.source as { label?: string }).label : undefined;
+				const name = `${(request?.path ?? path).split("/").pop() || path}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
+				return { key, onSelect, onClose, label: name, icon: <WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} /> };
+			}
+			if (key.startsWith("reviewer")) {
+				return {
+					key,
+					onSelect,
+					onClose,
+					label: t("terminal.reviewer"),
+					icon: reviewerHarness ? <AgentAvatar className="size-icon-sm!" decorative provider={reviewerHarness} /> : null,
+				};
+			}
+			const shell = shellTerminals.find((candidate) => candidate.handleId === key);
+			return { key, onSelect, onClose, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
+		};
+		const groupFocus = (group: TabGroup) => {
+			const members = leafKeys(group.root);
+			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
+		};
+		return groups.map((group) => ({
+			key: groupTabKey(group),
+			content: (
+				<SplitGroupTab
+					active={group === shownGroup}
+					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
+					members={leafKeys(group.root).map(groupMember)}
+					onUngroup={() => updateGroups((current) => current.filter((candidate) => candidate.id !== group.id))}
+				/>
+			),
+			onSelect: () => selectTab(groupFocus(group)),
+		}));
+	}, [
+		centerFileRequestsBySession,
+		closePane,
+		groups,
+		reviewerHarness,
+		selectTab,
+		selectedTabKey,
+		sessionLabel,
+		sessionProvider,
+		shellTerminals,
+		shownGroup,
+		t,
+		uiSessionId,
+		updateGroups,
+	]);
+
+
 	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
 	// below it, splitting the tab on screen if it is not split yet.
 	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
@@ -1865,7 +1888,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), Boolean(session) && !isOrchestrator);
 	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), Boolean(session) && !isOrchestrator);
 
-	const mainWorkspaceTabs = groups.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs;
+	const mainWorkspaceTabs = useMemo(
+		() => (groupWorkspaceTabs.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs),
+		[centerFileTabs, groupWorkspaceTabs],
+	);
 	useEffect(() => {
 		if (!chatViewActive) return;
 		const viewId = crypto.randomUUID();

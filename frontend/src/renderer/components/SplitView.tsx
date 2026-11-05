@@ -141,14 +141,13 @@ export function SplitDivider({
 		event.preventDefault();
 		onResize(divider.path, clampRatio(ratioNow() + direction * KEYBOARD_STEP));
 	};
-	const ratio = ratioNow();
 	return (
 		<div
 			aria-label={t("splitPane.resize")}
 			aria-orientation={row ? "vertical" : "horizontal"}
 			aria-valuemax={100}
 			aria-valuemin={0}
-			aria-valuenow={Math.round(ratio * 100)}
+			aria-valuenow={Math.round(divider.ratio * 100)}
 			className="pane-split-divider"
 			data-orientation={row ? "vertical" : "horizontal"}
 			data-testid="split-divider"

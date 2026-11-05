@@ -153,7 +153,7 @@ export function ratioVar(path: string): string {
 }
 
 export type CssBox = { left: string; top: string; width: string; height: string };
-export type CssDivider = { path: string; dir: "row" | "column"; style: CssBox; box: Box };
+export type CssDivider = { path: string; dir: "row" | "column"; ratio: number; style: CssBox; box: Box };
 
 /**
  * The same layout as CSS that reads each split's ratio variable. Moving a
@@ -176,13 +176,13 @@ export function layoutCss(root: SplitNode): { leaves: Map<string, CssBox>; divid
 		if (node.dir === "row") {
 			const w = `(${box.w}) * ${ratio}`;
 			const edge = `(${box.x}) + ${w}`;
-			dividers.push({ path, dir: "row", box: numeric, style: { left: pct(edge), top: pct(box.y), width: "", height: pct(box.h) } });
+			dividers.push({ path, dir: "row", ratio: node.ratio, box: numeric, style: { left: pct(edge), top: pct(box.y), width: "", height: pct(box.h) } });
 			walk(node.a, { ...box, w }, `${path}a`);
 			walk(node.b, { ...box, x: edge, w: `(${box.w}) * (1 - ${ratio})` }, `${path}b`);
 		} else {
 			const h = `(${box.h}) * ${ratio}`;
 			const edge = `(${box.y}) + ${h}`;
-			dividers.push({ path, dir: "column", box: numeric, style: { left: pct(box.x), top: pct(edge), width: pct(box.w), height: "" } });
+			dividers.push({ path, dir: "column", ratio: node.ratio, box: numeric, style: { left: pct(box.x), top: pct(edge), width: pct(box.w), height: "" } });
 			walk(node.a, { ...box, h }, `${path}a`);
 			walk(node.b, { ...box, y: edge, h: `(${box.h}) * (1 - ${ratio})` }, `${path}b`);
 		}

@@ -56,6 +56,8 @@ type ActiveDrag = {
 	y: number;
 	startX: number;
 	startY: number;
+	/** What the press landed on; a slow click is replayed there. */
+	pressTarget: EventTarget | null;
 	holdTimer: number | null;
 	frame: number | null;
 	ghost: HTMLElement | null;
@@ -77,7 +79,7 @@ export function isPaneTabDragging(): boolean {
  * tab (it is cloned for the ghost). `onDetach` stops the strip's own drag.
  */
 export function beginPaneTabDrag(
-	event: { pointerId: number; clientX: number; clientY: number; button: number },
+	event: { pointerId: number; clientX: number; clientY: number; button: number; target?: EventTarget | null },
 	key: string,
 	source: HTMLElement,
 	onDetach?: () => void,
@@ -97,6 +99,7 @@ export function beginPaneTabDrag(
 		y: event.clientY,
 		startX: event.clientX,
 		startY: event.clientY,
+		pressTarget: event.target ?? null,
 		holdTimer: null,
 		frame: null,
 		ghost: null,
@@ -256,15 +259,23 @@ function finish(drag: ActiveDrag, commit: boolean): void {
 	if (drag.holdTimer !== null) window.clearTimeout(drag.holdTimer);
 	if (drag.frame !== null) cancelAnimationFrame(drag.frame);
 	if (!drag.detached) return;
-	// The release lands on the captured tab; its click must not select it.
+	// The release lands on the captured tab, not what was pressed; that click
+	// must not act.
 	const swallowClick = (clickEvent: MouseEvent) => {
 		clickEvent.stopPropagation();
 		clickEvent.preventDefault();
 	};
 	window.addEventListener("click", swallowClick, true);
-	window.setTimeout(() => window.removeEventListener("click", swallowClick, true), 0);
+	// A tab lifted by holding and released where it was pressed was a slow
+	// click: put it down and replay the click on what was pressed, so it still
+	// selects the tab.
+	const stayedPut = Math.hypot(drag.x - drag.startX, drag.y - drag.startY) <= HOLD_SLOP_PX;
+	window.setTimeout(() => {
+		window.removeEventListener("click", swallowClick, true);
+		if (stayedPut && drag.pressTarget instanceof HTMLElement && drag.pressTarget.isConnected) drag.pressTarget.click();
+	}, 0);
 	// Resolve against the final pointer position, not the last painted frame.
-	const resolution = commit ? (dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null) : null;
+	const resolution = commit && !stayedPut ? (dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null) : null;
 	drag.source.removeAttribute("data-pane-drag-source");
 	document.body.classList.remove("is-pane-dragging");
 	const { ghost, preview } = drag;
