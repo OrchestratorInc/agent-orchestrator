@@ -3,6 +3,7 @@ package kimi
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,6 +47,32 @@ func TestDetectTerminalActivityReadsCapturedKimiFrames(t *testing.T) {
 				t.Fatalf("DetectTerminalActivity = (%q, %v), want (%q, true)", got, ok, tc.want)
 			}
 		})
+	}
+}
+
+// Kimi appends optional key hints to the approval row: preview when the
+// approval holds a diff or file (an edit or write), scroll when its body
+// overflows. The captured frames are a shell approval, which has neither.
+func TestDetectTerminalActivityReadsApprovalHintSuffixes(t *testing.T) {
+	for _, frame := range []string{"terminal_permission.txt", "plain_wide_permission.txt"} {
+		data, err := os.ReadFile(filepath.Join("testdata", frame))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, suffix := range map[string]string{
+			"shell":                "",
+			"preview":              " · ctrl+e preview",
+			"overflow":             " · shift+↑/↓ scroll",
+			"preview and overflow": " · ctrl+e preview · shift+↑/↓ scroll",
+		} {
+			t.Run(frame+"/"+name, func(t *testing.T) {
+				output := strings.Replace(string(data), "↵ confirm", "↵ confirm"+suffix, 1)
+				got, ok := (&Plugin{}).DetectTerminalActivity(output)
+				if !ok || got != domain.ActivityWaitingInput {
+					t.Fatalf("DetectTerminalActivity = (%q, %v), want (waiting_input, true)", got, ok)
+				}
+			})
+		}
 	}
 }
 

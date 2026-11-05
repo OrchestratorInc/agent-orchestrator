@@ -130,10 +130,13 @@ func kimiActivityLine(line string) bool {
 }
 
 // kimiApprovalPanel reports the tool approval panel's key hints near the
-// bottom of the screen.
+// bottom of the screen. Kimi appends "· ctrl+e preview" when the approval
+// holds a diff or file, then "· shift+↑/↓ scroll" when its body overflows.
 func kimiApprovalPanel(lines []string) bool {
 	for _, line := range lines[max(0, len(lines)-kimiApprovalScanLines):] {
 		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, " · shift+↑/↓ scroll")
+		line = strings.TrimSuffix(line, " · ctrl+e preview")
 		if strings.HasPrefix(line, "↑/↓ select") && strings.HasSuffix(line, "confirm") {
 			return true
 		}
