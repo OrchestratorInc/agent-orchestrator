@@ -20,6 +20,8 @@ type ShellTerminalTabProps = {
 	appearance?: "pill" | "connected";
 	/** Commit a new tab title. Omitted where rename is not wired. */
 	onRename?: (title: string) => void;
+	/** Handles of every shell tab in this strip, used to number agent-named tabs that share an agent. */
+	stripShellHandleIds?: readonly string[];
 };
 
 // One shell tab in the session pane's tab strip (CenterPane). Session-pane
@@ -39,6 +41,7 @@ export function ShellTerminalTab({
 	onClose,
 	appearance = "pill",
 	onRename,
+	stripShellHandleIds,
 }: ShellTerminalTabProps) {
 	const { t } = useTranslation();
 	const [isEditing, setIsEditing] = useState(false);
@@ -54,11 +57,26 @@ export function ShellTerminalTab({
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
 	// While an agent runs, a default-named tab ("Terminal 3") reads as the
-	// agent with the same number ("Claude Code 3"). A name the user chose
-	// stays. This is display only: rename still edits the stored title, and
-	// the tab reads "Terminal 3" again once the agent exits.
+	// agent ("Claude Code"). When another tab in the strip runs the same agent,
+	// both keep their numbers ("Claude Code 3", "Claude Code 5") so they stay
+	// distinct. A name the user chose stays. This is display only: rename still
+	// edits the stored title, and the tab reads "Terminal 3" again once the
+	// agent exits.
 	const defaultNumber = defaultShellTitleNumber(shell.title);
-	const title = agent && defaultNumber ? `${agentLabel(agent.harness)} ${defaultNumber}` : shell.title;
+	const sharesAgent = useShellAgentStore((state) =>
+		Boolean(
+			agent &&
+				stripShellHandleIds?.some(
+					(handleId) => handleId !== shell.handleId && state.agents[handleId]?.harness === agent.harness,
+				),
+		),
+	);
+	const title =
+		agent && defaultNumber
+			? sharesAgent
+				? `${agentLabel(agent.harness)} ${defaultNumber}`
+				: agentLabel(agent.harness)
+			: shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);

@@ -215,23 +215,47 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 });
 
 describe("ShellTerminalTab agent name", () => {
-	it("names a default-named tab after its agent, keeping the number", () => {
-		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
-		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
+	const claude = { harness: "claude-code", state: "idle" } as const;
+
+	it("names a default-named tab after its agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" }, stripShellHandleIds: ["shellterm-1"] });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
 		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
 	});
 
+	it("keeps the number when another tab in the strip runs the same agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude, "shellterm-2": claude } });
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
+	});
+
+	it("drops the number when the other tab runs a different agent", () => {
+		useShellAgentStore.setState({
+			agents: { "shellterm-1": claude, "shellterm-2": { harness: "codex", state: "idle" } },
+		});
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+	});
+
 	it("keeps a name the user chose", () => {
-		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
 		renderTab({ appearance: "connected" });
 		expect(screen.getByRole("tab", { name: "ao" })).toBeInTheDocument();
 	});
 
 	it("renames from the stored title, not the agent's name", () => {
-		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
 		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code 3" }));
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code" }));
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toHaveValue("Terminal 3");
 	});
 });
