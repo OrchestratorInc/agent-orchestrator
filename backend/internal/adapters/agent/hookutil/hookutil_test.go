@@ -1,11 +1,15 @@
 package hookutil
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 func TestEnsureWorkspaceGitignoreWritesSelfIgnoringFile(t *testing.T) {
@@ -110,5 +114,63 @@ func TestEnsureWorkspaceGitignoreLeavesForeignFileUntouched(t *testing.T) {
 	}
 	if string(data) != foreign {
 		t.Fatalf("foreign .gitignore was modified: %q", data)
+	}
+}
+
+func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
+	workspace := t.TempDir()
+	if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	skillsDir := filepath.Join(workspace, ".harness", "skills")
+	// The using-ao install owns this .gitignore and rewrites it with only its marker.
+	if err := EnsureWorkspaceGitignore(skillsDir, ".using-ao.ao-managed"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := InstallBugTriageSkill(skillsDir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skill, err := os.ReadFile(filepath.Join(skillsDir, "bug-triage", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(skill, skillassets.BugTriageSkill()) {
+		t.Fatal("installed skill differs from the embedded one")
+	}
+	// Untracked files here would make git worktree remove refuse at teardown.
+	status, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v: %s", err, status)
+	}
+	if len(status) != 0 {
+		t.Fatalf("install left untracked files:\n%s", status)
+	}
+	if err := UninstallBugTriageSkill(skillsDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(skillsDir, "bug-triage")); !os.IsNotExist(err) {
+		t.Fatalf("skill survived uninstall: %v", err)
+	}
+}
+
+func TestBugTriageSkillLeavesAProjectsOwnSkill(t *testing.T) {
+	skillsDir := t.TempDir()
+	own := filepath.Join(skillsDir, "bug-triage", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(own), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(own, []byte("project skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallBugTriageSkill(skillsDir); err != nil {
+		t.Fatalf("a project's own skill must not stop the session: %v", err)
+	}
+	if err := UninstallBugTriageSkill(skillsDir); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(own); err != nil || string(data) != "project skill" {
+		t.Fatalf("project skill changed: data=%q err=%v", data, err)
 	}
 }

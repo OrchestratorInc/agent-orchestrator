@@ -228,7 +228,7 @@ func Run(buildVersion string) error {
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
-		log.Warn("install using-ao skill", "err", err)
+		log.Warn("install AO skills", "err", err)
 	}
 	// Before any session starts: an AppImage remounts under a new path on every
 	// launch, so sessions get a link under the data dir that follows it.

@@ -12197,6 +12197,18 @@ func TestAOSkillPointerRemoteHostNamesRemoteBrowserGuide(t *testing.T) {
 	}
 }
 
+func TestAOSkillPointerNamesBugTriageSkill(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	skill := filepath.ToSlash(filepath.Join(dir, "skills", "bug-triage", "SKILL.md"))
+	for _, chat := range []bool{false, true} {
+		pointer := m.aoSkillPointer(chat)
+		if !strings.Contains(pointer, "bug-triage skill") || !strings.Contains(pointer, "`"+skill+"`") {
+			t.Fatalf("chat=%v pointer does not lead to the skill:\n%s", chat, pointer)
+		}
+	}
+}
+
 func TestAOSkillPointerDesktopHostKeepsDesktopGuide(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
 	pointer := m.aoSkillPointer(false)

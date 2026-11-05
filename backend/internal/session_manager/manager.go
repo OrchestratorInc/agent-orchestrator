@@ -6090,6 +6090,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 func (m *Manager) aoSkillPointer(chat bool) string {
 	dir := skillassets.Dir(m.dataDir)
 	skillFile := filepath.ToSlash(filepath.Join(dir, "SKILL.md"))
+	bugTriageFile := filepath.ToSlash(filepath.Join(skillassets.BugTriageDir(m.dataDir), "SKILL.md"))
 	commandsGlob := filepath.ToSlash(filepath.Join(dir, "commands", "*.md"))
 	browserFile := filepath.ToSlash(filepath.Join(dir, "commands", "browser.md"))
 	browserRemoteFile := filepath.ToSlash(filepath.Join(dir, "commands", "browser-remote.md"))
@@ -6111,6 +6112,8 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 	}
 	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`; do not load unrelated command guides.\n\n" +
+		"## Reporting an Orchestrator bug\n\n" +
+		"When the user wants to report a problem with Orchestrator or names the bug-triage skill, read `" + bugTriageFile + "` and follow it.\n\n" +
 		browserSection
 	if !chat {
 		return pointer
