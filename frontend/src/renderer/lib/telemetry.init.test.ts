@@ -16,6 +16,7 @@ const posthogStub = {
 	setPersonProperties: vi.fn(),
 	opt_in_capturing: vi.fn(),
 	opt_out_capturing: vi.fn(),
+	featureFlags: { setReloadingPaused: vi.fn() },
 };
 
 function mockPosthog() {
@@ -381,6 +382,18 @@ describe("PostHog identity and opt-out", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("pauses feature flag reloads on an in-session analytics opt-out and resumes on opt-in", async () => {
+		localStorage.clear();
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		await initTelemetry();
+		await applyAnalyticsOptOut(true);
+		expect(posthogStub.featureFlags.setReloadingPaused).toHaveBeenLastCalledWith(true);
+		expect(posthogStub.opt_out_capturing).toHaveBeenCalled();
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.featureFlags.setReloadingPaused).toHaveBeenLastCalledWith(false);
 	});
 
 	it("stamps is_signed_in, days_since_install and lifetime_sessions on every event", async () => {
