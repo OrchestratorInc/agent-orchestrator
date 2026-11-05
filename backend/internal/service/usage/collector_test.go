@@ -1469,6 +1469,16 @@ func TestCollectorDiscoveryLimitRotatesPendingBindings(t *testing.T) {
 	if len(firstSources) != 0 || len(secondSources) != 1 {
 		t.Fatalf("first/second sources=%+v/%+v", firstSources, secondSources)
 	}
+
+	// The cursor is now past the last binding, so the next bounded pass has to
+	// wrap to the start to reach the first binding's newly written rollout.
+	firstPath := filepath.Join(root, "2026", "07", "28", "rollout-native-first.jsonl")
+	writeUsageFixture(t, firstPath, codexSessionMetaFixture(t, "native-first", ""))
+	mustNoError(t, collector.ReconcileSources(context.Background(), 1), "wrapped reconcile")
+	firstSources, _ = store.ListUsageSourcesForBinding(context.Background(), firstBindings[0].ID)
+	if len(firstSources) != 1 {
+		t.Fatalf("bounded discovery did not wrap to the first binding: sources=%+v", firstSources)
+	}
 }
 
 func TestCollectorReconcileLeavesUnchangedBindingsAlone(t *testing.T) {
