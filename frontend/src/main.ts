@@ -167,7 +167,7 @@ import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -3038,17 +3038,19 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		exists: existsSync,
 	});
 	const bootstrap = await buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
-	if (!bootstrap || daemonStatus.state !== "ready" || !daemonStatus.port) return bootstrap;
-	try {
-		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
-		if (!response.ok) return bootstrap;
-		const identity = await response.json() as { lifetimeSessions?: unknown };
-		if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
-			bootstrap.lifetimeSessions = identity.lifetimeSessions;
+	if (!bootstrap) return bootstrap;
+	if (daemonStatus.state === "ready" && daemonStatus.port) {
+		try {
+			const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+			const identity = response.ok ? await response.json() as { lifetimeSessions?: unknown } : {};
+			if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
+				bootstrap.lifetimeSessions = identity.lifetimeSessions;
+			}
+		} catch {
+			// A missing daemon count stays absent.
 		}
-	} catch {
-		// A missing daemon count stays absent.
 	}
+	if (await claimFirstOpen(desktopDataDir, bootstrap)) bootstrap.firstOpen = true;
 	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());

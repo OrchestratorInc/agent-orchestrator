@@ -27,6 +27,8 @@ export type TelemetryBootstrap = {
 	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
 	installTimestampMs?: number;
 	lifetimeSessions?: number;
+	/** This launch owns ao.app.first_opened; see claimFirstOpen. */
+	firstOpen?: boolean;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -150,6 +152,24 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 		}
 	}
 	return undefined;
+}
+
+/**
+ * Claims ao.app.first_opened for this install: true at most once, ever, and
+ * only for a fresh install (install day 0, no session yet). The marker is
+ * created exclusively under the data dir, so a reload, a second window or a
+ * cleared localStorage cannot claim it again. Installs that ran a build which
+ * sent ao.install.created already hold this file, so an upgrade never claims
+ * it. A marker that cannot be created is not claimed.
+ */
+export async function claimFirstOpen(dataDir: string, bootstrap: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<boolean> {
+	if (bootstrap.daysSinceInstall !== 0 || (bootstrap.lifetimeSessions ?? 0) > 0) return false;
+	try {
+		await writeFile(path.join(dataDir, "telemetry_first_open_emitted"), "", { mode: 0o600, flag: "wx" });
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
