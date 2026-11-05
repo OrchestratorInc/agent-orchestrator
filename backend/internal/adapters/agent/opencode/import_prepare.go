@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // OpenCode binds a session to the directory it was created in. An ACP
@@ -307,7 +307,7 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 }
 
 func runOpenCode(ctx context.Context, binary, dir string, env []string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := aoprocess.CommandContext(ctx, binary, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	stdout := &boundedBuffer{limit: maxOpenCodeExportBytes}
