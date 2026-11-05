@@ -3620,7 +3620,6 @@
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "Temps de travail",
 	"chat.rollBackToHere": "Revenir jusqu'ici",
-	"chat.showReplyWork": "Afficher le travail derrière cette réponse",
 	"chat.taskNamed": "Nouvelle tâche nommée <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<strong>La CI échoue</strong> sur <pr>#{{number}}</pr>",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong> a commenté <pr>#{{number}}</pr>",
