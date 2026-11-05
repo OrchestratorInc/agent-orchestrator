@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	edgeAt,
+	expandGroupTabOrder,
+	groupTabKey,
 	halfOf,
 	insertBeside,
 	layoutBoxes,
@@ -15,6 +17,17 @@ import {
 
 const leaf = (key: string): SplitNode => ({ type: "leaf", key });
 const twoColumns: SplitNode = { type: "split", dir: "row", ratio: 0.5, a: leaf("chat"), b: leaf("shell") };
+
+describe("group tab order", () => {
+	it("keeps the members together at the position where their group was reordered", () => {
+		const group: TabGroup = { id: "g", root: twoColumns };
+		expect(expandGroupTabOrder(["file", groupTabKey(group), "other"], [group])).toEqual(["file", "chat", "shell", "other"]);
+	});
+	it("leaves the pinned session out of the auxiliary order", () => {
+		const group: TabGroup = { id: "g", root: { ...twoColumns, a: leaf("session") } };
+		expect(expandGroupTabOrder([groupTabKey(group), "file"], [group])).toEqual(["shell", "file"]);
+	});
+});
 
 describe("insertBeside", () => {
 	it("splits only the pane the tab was dropped on", () => {

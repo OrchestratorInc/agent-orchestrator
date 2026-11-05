@@ -1,6 +1,7 @@
 import {
 	Fragment,
 	useCallback,
+	useEffect,
 	useRef,
 	useState,
 	type KeyboardEvent as ReactKeyboardEvent,
@@ -84,6 +85,14 @@ export function SplitDivider({
 	const { t } = useTranslation();
 	const row = divider.dir === "row";
 	const dragRef = useRef<{ frame: number | null; ratio: number } | null>(null);
+	useEffect(() => () => {
+		const drag = dragRef.current;
+		if (!drag) return;
+		dragRef.current = null;
+		if (drag.frame !== null) cancelAnimationFrame(drag.frame);
+		document.body.classList.remove("is-resizing-x");
+		document.body.style.cursor = "";
+	}, []);
 	const ratioNow = () => {
 		const value = Number.parseFloat(screenRef.current?.style.getPropertyValue(ratioVar(divider.path)) ?? "");
 		return Number.isFinite(value) ? value : 0.5;

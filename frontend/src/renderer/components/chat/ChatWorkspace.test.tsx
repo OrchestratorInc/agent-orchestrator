@@ -5537,6 +5537,16 @@ describe("ChatWorkspace shell tabs", () => {
 		expect(onSelectChat).toHaveBeenCalledOnce();
 	});
 
+	it("leaves tab shortcuts to the owning strip when the chat header is hidden", () => {
+		const view = render(<ChatWorkspace hideHeader snapshot={idleSnapshot()} />);
+		expect(previousTabListeners.size).toBe(0);
+		expect(nextTabListeners.size).toBe(0);
+		expect(closeShellTerminalListeners.size).toBe(0);
+		expect(closeShellTerminalShortcutStates).toEqual([]);
+		view.unmount();
+		expect(closeShellTerminalShortcutStates).toEqual([]);
+	});
+
 	it("enables the close-shell shortcut and closes the active shell tab", () => {
 		const onCloseShellTerminal = vi.fn();
 		const view = render(

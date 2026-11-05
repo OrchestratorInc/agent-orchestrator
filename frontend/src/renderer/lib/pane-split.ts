@@ -28,6 +28,12 @@ export function leafKeys(node: SplitNode): string[] {
 	return node.type === "leaf" ? [node.key] : [...leafKeys(node.a), ...leafKeys(node.b)];
 }
 
+/** Store a group's members at its strip position so reordering survives regrouping. */
+export function expandGroupTabOrder(order: readonly string[], groups: readonly TabGroup[]): string[] {
+	const members = new Map(groups.map((group) => [groupTabKey(group), leafKeys(group.root)]));
+	return order.flatMap((key) => members.get(key) ?? [key]).filter((key) => key !== SESSION_TAB_KEY);
+}
+
 export function groupContaining(groups: readonly TabGroup[], key: string): TabGroup | undefined {
 	return groups.find((group) => leafKeys(group.root).includes(key));
 }

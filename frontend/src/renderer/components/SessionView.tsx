@@ -19,9 +19,8 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { isFileViewCapture } from "../../shared/chat-file-reference";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
-import { CenterPane, SessionPaneTab } from "./CenterPane";
+import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
-import { ShellTerminalTab } from "./ShellTerminalTab";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
@@ -29,6 +28,7 @@ import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-dra
 import {
 	containsPoint,
 	edgeAt,
+	expandGroupTabOrder,
 	GROUP_KEY_PREFIX,
 	groupContaining,
 	groupTabKey,
@@ -1061,11 +1061,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		for (const group of groups) place(group);
 		return order;
 	}, [groupedKeySet, groups, resolvedAuxiliaryTabOrder]);
+	const setMainAuxiliaryTabOrder = useCallback(
+		(order: string[]) => setAuxiliaryTabOrder(expandGroupTabOrder(order, groups)),
+		[groups, setAuxiliaryTabOrder],
+	);
 	// While a group is on screen, the session's own surface shows its own view
 	// (chat or agent terminal); the other members have panes of their own.
 	const mainActiveFilePath = shownGroup || !fileTabs.activePath ? null : fileTabs.activePath;
 	const mainReviewerChatId = shownGroup ? null : reviewerChatId;
-	const reviewerChatContent = mainReviewerChatId ? renderReviewerChat(mainReviewerChatId) : undefined;
 	const closeShellTerminal = useCloseShellTerminal(hostId);
 	const renameShellTerminal = useRenameShellTerminal(hostId);
 	const activeShellTerminalHandleId = useUiStore((state) => state.activeShellTerminalHandleId);
@@ -1733,6 +1736,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const box = shownLayout?.leaves.get(key);
 		return box ? { position: "absolute", ...box } : FULL_PANE_STYLE;
 	};
+	const visitedReviewerChatId = useRef<string | null>(null);
+	if (reviewerChatId) visitedReviewerChatId.current = reviewerChatId;
+	const retainedReviewerChatId = reviewerChatId ?? (reviewerChat?.reviewId === visitedReviewerChatId.current ? visitedReviewerChatId.current : null);
+	const reviewerPaneKey = retainedReviewerChatId ? `reviewer-chat:${retainedReviewerChatId}` : undefined;
+	const reviewerInPane = Boolean(reviewerPaneKey && shownLayout?.leaves.has(reviewerPaneKey));
+	const reviewerVisible = reviewerInPane || Boolean(retainedReviewerChatId && mainReviewerChatId === retainedReviewerChatId);
 	const sessionPaneHidden = Boolean(shownLayout && !shownLayout.leaves.has(SESSION_TAB_KEY));
 	const paneCreateMux = useMemo(
 		() => (remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined),
@@ -2452,9 +2461,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<div
-								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || sessionPaneHidden) && "invisible pointer-events-none")}
+								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
-								inert={mainActiveFilePath || sessionPaneHidden ? true : undefined}
+								inert={mainActiveFilePath || mainReviewerChatId || sessionPaneHidden ? true : undefined}
 								style={paneStyle(SESSION_TAB_KEY)}
 							>
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
@@ -2487,12 +2496,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
-									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
 									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
 								/>
-								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
 								</>
 							) : showChatSurface ? (
 								<>
@@ -2529,7 +2537,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
-									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
@@ -2558,7 +2566,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
 								</>
 							) : (
 								<CenterPane
@@ -2577,7 +2584,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(mainReviewerChatId)}
-									reviewerChatContent={reviewerChatContent}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}
@@ -2589,7 +2595,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
-									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 								/>
 							)}
 							</div>
@@ -2597,7 +2603,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							</SplitCloseFocusedContext.Provider>
 							{shownGroup
 								? leafKeys(shownGroup.root)
-									.filter((key) => key !== SESSION_TAB_KEY && !key.startsWith("file:"))
+									.filter((key) => key !== SESSION_TAB_KEY && !key.startsWith("file:") && !key.startsWith("reviewer-chat:"))
 									.map((key) => {
 										const target = paneTerminalTarget(key);
 										return (
@@ -2618,13 +2624,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 															theme={theme}
 														/>
 													)
-												) : reviewerChat && key === `reviewer-chat:${reviewerChat.reviewId}` ? (
-													renderReviewerChat(reviewerChat.reviewId)
 												) : null}
 											</div>
 										);
 									})
 								: null}
+							{retainedReviewerChatId && reviewerPaneKey ? (
+								<div
+									className={cn("min-h-0 min-w-0 overflow-hidden bg-background", !reviewerVisible && "invisible pointer-events-none [content-visibility:hidden]")}
+									data-split-pane={reviewerInPane ? reviewerPaneKey : undefined}
+									inert={!reviewerVisible ? true : undefined}
+									key={`reviewer-chat:${retainedReviewerChatId}`}
+									style={{ ...(reviewerInPane ? paneStyle(reviewerPaneKey) : FULL_PANE_STYLE), visibility: reviewerVisible ? undefined : "hidden" }}
+								>
+									{renderReviewerChat(retainedReviewerChatId)}
+								</div>
+							) : null}
 							{(session?.cloud ? Boolean(mainActiveFilePath) : fileTabs.openPaths.length > 0) ? (
 								<div className="pointer-events-none absolute inset-0">
 					{session?.cloud ? (

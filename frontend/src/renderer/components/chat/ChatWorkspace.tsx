@@ -1448,29 +1448,31 @@ function ChatWorkspaceContent({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
+			!hideHeader ? aoBridge.app.onCloseShellTerminalShortcut(() => {
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
-			}),
-		[activeWorkspaceTab, closeFocusedSplitPane, onCloseShellTerminal, shellTarget],
+			}) : undefined,
+		[activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget],
 	);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
 		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
 		};
-	}, [selectAdjacentTab]);
+	}, [hideHeader, selectAdjacentTab]);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
 			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, closeFocusedSplitPane, onCloseShellTerminal, shellTarget]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget]);
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.
