@@ -12,6 +12,7 @@ import {
 	normalizeBrowserProfileName,
 	type BrowserProfile,
 	type BrowserProfileBinding,
+	type BrowserProfileId,
 	type BrowserProfileListState,
 	type BrowserProfileRegistry,
 	type BrowserProfileStoreError as BrowserProfileStoreErrorInfo,
@@ -44,10 +45,11 @@ const DEFAULT_REGISTRY: BrowserProfileRegistry = {
 	profiles: [],
 	bindings: {},
 	defaultProfileId: null,
+	defaultProfileSeeded: true,
 };
 
 function emptyRegistry(): BrowserProfileRegistry {
-	return { version: DEFAULT_REGISTRY.version, profiles: [], bindings: {}, defaultProfileId: null };
+	return { version: DEFAULT_REGISTRY.version, profiles: [], bindings: {}, defaultProfileId: null, defaultProfileSeeded: true };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -124,12 +126,16 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 		bindings[sessionId] = { profileId, updatedAt: value.updatedAt };
 	}
 
-	const defaultProfileId = raw.defaultProfileId ?? null;
-	if (defaultProfileId !== null && (!isBrowserProfileId(defaultProfileId) || !profileIds.has(defaultProfileId))) {
+	const savedDefaultProfileId = raw.defaultProfileId ?? null;
+	if (savedDefaultProfileId !== null && (!isBrowserProfileId(savedDefaultProfileId) || !profileIds.has(savedDefaultProfileId))) {
 		throw invalidRegistry("The browser profile registry has an invalid default profile.");
 	}
+	// Registries saved before the first profile became the default get their
+	// oldest profile as the default once. The next write records the marker.
+	const defaultProfileId: BrowserProfileId | null =
+		savedDefaultProfileId ?? (raw.defaultProfileSeeded === true ? null : (profiles[0]?.id ?? null));
 
-	return { version: BROWSER_PROFILE_REGISTRY_VERSION, profiles, bindings, defaultProfileId };
+	return { version: BROWSER_PROFILE_REGISTRY_VERSION, profiles, bindings, defaultProfileId, defaultProfileSeeded: true };
 }
 
 function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry {
@@ -140,6 +146,7 @@ function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry
 			Object.entries(registry.bindings).map(([sessionId, binding]) => [sessionId, { ...binding }]),
 		),
 		defaultProfileId: registry.defaultProfileId,
+		defaultProfileSeeded: true,
 	};
 }
 
@@ -276,7 +283,12 @@ export class BrowserProfileStore {
 		}
 	}
 
-	async createProfile(rawName: unknown): Promise<BrowserProfile> {
+	/**
+	 * The first profile becomes the default. An import passes
+	 * `claimDefault: false` and calls `claimDefaultIfFirst` after it commits,
+	 * so no unbound worker opens a half-imported or rolled-back profile.
+	 */
+	async createProfile(rawName: unknown, { claimDefault = true }: { claimDefault?: boolean } = {}): Promise<BrowserProfile> {
 		const name = normalizeBrowserProfileName(rawName);
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
 		return this.enqueueMutation((current) => {
@@ -289,7 +301,18 @@ export class BrowserProfileStore {
 			const now = this.now().toISOString();
 			const profile: BrowserProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now };
 			current.profiles.push(profile);
+			if (claimDefault && current.profiles.length === 1) current.defaultProfileId = profile.id;
 			return { registry: current, result: { ...profile } };
+		});
+	}
+
+	/** Makes `profileId` the default if no default is set and it is the oldest profile. */
+	async claimDefaultIfFirst(profileId: string): Promise<void> {
+		return this.enqueueMutation((current) => {
+			if (current.defaultProfileId === null && current.profiles[0]?.id === profileId) {
+				current.defaultProfileId = profileId;
+			}
+			return { registry: current, result: undefined };
 		});
 	}
 
@@ -353,12 +376,14 @@ export class BrowserProfileStore {
 			const bindings = Object.fromEntries(
 				Object.entries(current.bindings).filter(([, binding]) => binding.profileId !== profileId),
 			);
+			const profiles = current.profiles.filter((profile) => profile.id !== profileId);
 			return {
 				registry: {
 					...current,
-					profiles: current.profiles.filter((profile) => profile.id !== profileId),
+					profiles,
 					bindings,
-					defaultProfileId: current.defaultProfileId === profileId ? null : current.defaultProfileId,
+					// Deleting the default promotes the oldest remaining profile.
+					defaultProfileId: current.defaultProfileId === profileId ? (profiles[0]?.id ?? null) : current.defaultProfileId,
 				},
 				result: undefined,
 			};

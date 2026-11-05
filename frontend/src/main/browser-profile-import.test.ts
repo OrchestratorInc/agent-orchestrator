@@ -1271,7 +1271,10 @@ describe("BrowserProfileImportService", () => {
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
 		const historyStore = new BrowserHistoryStore({ stateDir });
-		vi.spyOn(historyStore, "mergeImportedEntries").mockRejectedValueOnce(new Error("disk full"));
+		vi.spyOn(historyStore, "mergeImportedEntries").mockImplementationOnce(async () => {
+			expect(profileStore.getDefaultProfileId()).toBeNull();
+			throw new Error("disk full");
+		});
 		const service = new BrowserProfileImportService({
 			stateDir,
 			profileStore,
@@ -1292,9 +1295,68 @@ describe("BrowserProfileImportService", () => {
 		};
 		await expect(service.import(request, vi.fn())).rejects.toThrow("disk full");
 		expect(profileStore.profiles).toEqual([]);
-		await expect(service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn())).resolves.toMatchObject({
-			entries: [expect.objectContaining({ importedHistoryEntries: 2 })],
+		expect(profileStore.getDefaultProfileId()).toBeNull();
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(reloaded.getDefaultProfileId()).toBeNull();
+		const result = await service.import({ ...request, requestId: "55555555-5555-4555-8555-555555555555" }, vi.fn());
+		expect(result).toMatchObject({ entries: [expect.objectContaining({ importedHistoryEntries: 2 })] });
+		expect(profileStore.getDefaultProfileId()).toBe(result.entries[0]!.destinationProfile.id);
+	});
+
+	it("makes a first import the default only after it commits", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const defaultsDuringImport: Array<string | null> = [];
+		let releaseCookie!: () => void;
+		const cookieBlocked = new Promise<void>((resolve) => {
+			releaseCookie = resolve;
 		});
+		const setCookie = vi.fn(async () => {
+			defaultsDuringImport.push(profileStore.getDefaultProfileId());
+			await cookieBlocked;
+		});
+		const options = {
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32" as const,
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({
+				cookies: { set: setCookie },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		};
+		const interrupted = new BrowserProfileImportService(options);
+		const source = (await interrupted.discover()).sources[0]!;
+		const request = {
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge" as const, name: "Imported Chrome" },
+		};
+		const importing = interrupted.import({ ...request, requestId: "96969696-9696-4696-8696-969696969696" }, vi.fn());
+		await vi.waitFor(() => expect(setCookie).toHaveBeenCalled());
+		const disposing = interrupted.dispose();
+		releaseCookie();
+		await expect(importing).rejects.toThrow("app is closing");
+		await disposing;
+		expect(profileStore.profiles).toEqual([]);
+		expect(profileStore.getDefaultProfileId()).toBeNull();
+
+		const result = await new BrowserProfileImportService(options).import(
+			{ ...request, requestId: "97979797-9797-4797-8797-979797979797" },
+			vi.fn(),
+		);
+		expect(defaultsDuringImport.length).toBeGreaterThan(1);
+		expect(defaultsDuringImport.every((id) => id === null)).toBe(true);
+		expect(profileStore.getDefaultProfileId()).toBe(result.entries[0]!.destinationProfile.id);
 	});
 
 	it("rejects a separate import before reading when destination capacity is insufficient", async () => {
