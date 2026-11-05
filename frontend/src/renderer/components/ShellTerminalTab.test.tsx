@@ -215,10 +215,10 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 });
 
 describe("ShellTerminalTab agent name", () => {
-	it("shows the agent's name on a default-named tab while it runs", () => {
+	it("names a default-named tab after its agent, keeping the number", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
 		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
 		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
 	});
 
@@ -231,7 +231,7 @@ describe("ShellTerminalTab agent name", () => {
 	it("renames from the stored title, not the agent's name", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": { harness: "claude-code", state: "idle" } } });
 		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code" }));
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code 3" }));
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toHaveValue("Terminal 3");
 	});
 });

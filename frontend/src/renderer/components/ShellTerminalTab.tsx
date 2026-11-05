@@ -54,10 +54,11 @@ export function ShellTerminalTab({
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
 	// While an agent runs, a default-named tab ("Terminal 3") reads as the
-	// agent ("Claude Code"). A name the user chose stays. This is display only:
-	// rename still edits the stored title, and the tab reads "Terminal 3" again
-	// once the agent exits.
-	const title = agent && isDefaultShellTitle(shell.title) ? agentLabel(agent.harness) : shell.title;
+	// agent with the same number ("Claude Code 3"). A name the user chose
+	// stays. This is display only: rename still edits the stored title, and
+	// the tab reads "Terminal 3" again once the agent exits.
+	const defaultNumber = defaultShellTitleNumber(shell.title);
+	const title = agent && defaultNumber ? `${agentLabel(agent.harness)} ${defaultNumber}` : shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -264,8 +265,9 @@ export function ShellTerminalTab({
 }
 
 // The daemon names new shells "Terminal N" (shellterm nextShellTerminalTitle).
-function isDefaultShellTitle(title: string): boolean {
-	return /^Terminal \d+$/.test(title);
+// Returns N for such a name, or undefined for a name the user chose.
+function defaultShellTitleNumber(title: string): string | undefined {
+	return /^Terminal (\d+)$/.exec(title)?.[1];
 }
 
 // The agent's state in the tab, in the sidebar's vocabulary: a spinner while
