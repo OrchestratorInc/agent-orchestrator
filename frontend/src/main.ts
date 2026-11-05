@@ -153,6 +153,7 @@ import {
 	getCloudAccessToken,
 	getCloudSession,
 	installCloudIPC,
+	readAuthStore,
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
@@ -167,7 +168,7 @@ import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -3051,6 +3052,13 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		}
 	}
 	if (await claimFirstOpen(desktopDataDir, bootstrap)) bootstrap.firstOpen = true;
+	// Start the renderer identified when this desktop is signed in to the same
+	// AO Cloud account the daemon durably recorded, so launch events (active,
+	// loaded, first open) are not sent under a throwaway anonymous ID. Only the
+	// production WorkOS account is identified, as in TelemetryIdentityRuntime.
+	const stored = await readAuthStore(cloudDataDir()).catch(() => null);
+	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
+	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());

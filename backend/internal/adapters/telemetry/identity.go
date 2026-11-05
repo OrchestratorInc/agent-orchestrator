@@ -79,7 +79,15 @@ func NewIdentity(dataDir string) (*Identity, error) {
 			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
 		}
 	}
-	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
+	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}
+	// The bound user is the last sign-in the desktop handed off and the daemon
+	// recorded; a sign-out removes it. Restoring it lets a restarted or
+	// CLI-started daemon report under the signed-in Cloud ID without waiting
+	// for the desktop to push it again. Signed out, nothing is restored.
+	if cloudUserIDPattern.MatchString(bound) {
+		ident.cloudUserID, ident.cloudUserKnown = bound, true
+	}
+	return ident, nil
 }
 
 // FreshInstall reports whether this process is the first run of a brand new
