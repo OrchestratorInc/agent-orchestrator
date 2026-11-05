@@ -6,6 +6,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
+import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -605,6 +606,8 @@ export interface ChatWorkspaceProps {
 	openingStartedAt?: string;
 	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
 	composerTray?: ReactNode;
+	/** Off where another flow owns an unanswered send, such as the new chat page's pending launch. */
+	parkUnsentSends?: boolean;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
@@ -823,6 +826,7 @@ function ChatWorkspaceContent({
 	draftNotice,
 	openingStartedAt,
 	composerTray,
+	parkUnsentSends = true,
 	centerInWindow = false,
 	showSetupStep = true,
 	holdAttachments,
@@ -2122,6 +2126,7 @@ function ChatWorkspaceContent({
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
+										parkUnsentSends={parkUnsentSends}
 									/>
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
@@ -2392,26 +2397,23 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
 			className={slideIn ? "chat-header-slide-in" : undefined}
 			fullscreen={fullscreen}
-			actions={
-				<>
-					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{headerActions}
-				</>
-			}
+			actions={headerActions}
 			clearanceClassName={cn(
 				isMac && "session-topbar-titlebar-clearance-mac",
 				!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 			)}
 			clearanceRef={clearanceRef}
+			tabsTrailing={tabStripAction}
 			tabs={
 					<div
 						aria-label="Chat tabs"
-						className="flex h-full min-w-0 flex-1 items-stretch"
+						className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						ref={tabListRef}
 						role="tablist"

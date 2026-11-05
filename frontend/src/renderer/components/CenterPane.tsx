@@ -14,6 +14,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -504,26 +505,23 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
-			actions={
-				<>
-					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{topbarActions}
-				</>
-			}
+			actions={topbarActions}
 			clearanceClassName={cn(
 				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 			)}
 			clearanceRef={clearanceRef}
+			tabsTrailing={tabStripAction}
 			hideActions={isFullscreen}
 			regionWidth={terminalBounds.width > 0 ? terminalBounds.width : "100%"}
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className="flex h-full min-w-0 flex-1 items-stretch"
+							className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"

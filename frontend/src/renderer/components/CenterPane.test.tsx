@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
 import { TooltipProvider } from "./ui/tooltip";
@@ -111,6 +112,8 @@ function renderCenterPane(props: Partial<ComponentProps<typeof CenterPane>> = {}
 }
 
 beforeEach(() => {
+	// The simplified top bar is a Developer Mode preview; this suite covers it.
+	useUiStore.setState({ developerMode: true });
 	shortcutMocks.closeListener = undefined;
 	shortcutMocks.nextTabListener = undefined;
 	shortcutMocks.previousTabListener = undefined;
@@ -510,7 +513,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(tablist.classList.contains("h-full")).toBe(true);
 	});
 
-	it("keeps session tab actions on the primary agent tab and groups terminal creation with workspace actions", () => {
+	it("keeps session tab actions on the primary agent tab and puts terminal creation right after the last tab", () => {
 		renderCenterPane({
 			session: worker,
 			sessionTabAction: <button type="button">Session tab action</button>,
@@ -523,7 +526,11 @@ describe("CenterPane toolbar session label", () => {
 		expect(workspaceTopbar).toHaveClass("session-topbar-surface");
 		expect(workspaceTopbar).toContainElement(terminalRegion);
 		expect(terminalRegion).toContainElement(screen.getByRole("tablist", { name: "Open terminals" }));
-		expect(terminalRegion).not.toContainElement(screen.getByRole("button", { name: "New terminal" }));
+		const tabStripAction = screen.getByTestId("session-tab-strip-action");
+		expect(terminalRegion).toContainElement(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toContainElement(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" }).nextElementSibling).toBe(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
 		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "left-2", "top-1/2");
@@ -532,11 +539,27 @@ describe("CenterPane toolbar session label", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
+		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "New terminal" }));
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-strip-action")).toHaveTextContent("New terminal");
+		expect(tabStripAction).toHaveTextContent("New terminal");
 		expect(document.querySelector(".session-tab-scroll-fade")).not.toBeInTheDocument();
+	});
+
+	it("keeps terminal creation with the workspace actions without Developer Mode", () => {
+		useUiStore.setState({ developerMode: false });
+		renderCenterPane({
+			session: worker,
+			tabStripAction: <button type="button">New terminal</button>,
+			topbarActions: <button type="button">Workspace action</button>,
+		});
+
+		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
+		const actionRegion = screen.getByTestId("session-action-region");
+		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
+		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
+		expect(screen.getByTestId("session-terminal-region")).not.toContainElement(screen.getByTestId("session-tab-strip-action"));
+		expect(tablist).toHaveClass("flex-1");
 	});
 
 	it("keeps the tab strip flush with the action controls", () => {
@@ -597,10 +620,11 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.queryByRole("button", { name: "Scroll tabs left" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Scroll tabs right" })).toBeNull();
 
-		// Both display actions live outside this topbar; the flexible scroll region
-		// can therefore consume the remaining terminal-region width.
+		// The tab list sizes to its tabs and shrinks into a scroll strip when
+		// they overflow, so New terminal can sit right after the last tab.
 		const tabList = screen.getByRole("tablist", { name: "Open terminals" });
-		expect(tabList).toHaveClass("flex-1");
+		expect(tabList).toHaveClass("min-w-0");
+		expect(tabList).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 	});
 

@@ -41,6 +41,7 @@ import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
@@ -2344,7 +2345,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
 							}
 							aria-pressed={isInspectorOpen}
-							onClick={handleToggleInspector}
+							onClick={() => {
+								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
+								handleToggleInspector();
+							}}
 							style={noDragStyle}
 							variant="icon"
 						>
