@@ -52,9 +52,7 @@ afterEach(async () => {
 });
 
 const options = (overrides: Partial<Parameters<typeof workerFilterMenu>[0]> = {}) => ({
-	environments: [{ id: "mac", name: "Mac" }, { id: "dev", name: "Dev" }],
 	selectedEnvironmentId: "all",
-	onSelectEnvironment: vi.fn(),
 	projects: [{ id: "ao", name: "AO", hostId: "mac" }],
 	selectedProjectId: "all",
 	onSelectProject: vi.fn(),
@@ -81,23 +79,27 @@ it("is the circled filter glyph in the bar's own ink, no glass or fill, named fo
 	expect(names).not.toContain("clipShape");
 });
 
-it("fills the glyph and names the filters once the board is filtered", async () => {
-	await act(async () => { renderer = create(workerFilterMenu(options({ selectedEnvironmentId: "mac", selectedProjectId: JSON.stringify(["mac", "ao"]) }))); });
+// A chosen machine is the chip row's to show; the filter names its project.
+it("fills the glyph and names the project once one filters the board", async () => {
+	await act(async () => { renderer = create(workerFilterMenu(options({ selectedEnvironmentId: "mac" }))); });
+	expect(renderer!.root.findAllByType("Menu" as never)[0].props.label.props.systemName).toBe("line.3.horizontal.decrease.circle");
+	await act(async () => { renderer!.update(workerFilterMenu(options({ selectedEnvironmentId: "mac", selectedProjectId: JSON.stringify(["mac", "ao"]) }))); });
 	const menu = renderer!.root.findAllByType("Menu" as never)[0];
 	expect(menu.props.label.props.systemName).toBe("line.3.horizontal.decrease.circle.fill");
-	expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Filter workers, filtered to Mac, AO"]);
+	expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Filter workers, filtered to AO"]);
 });
 
-it("chooses a machine and a project from their submenus", async () => {
+// Machines are the chip row's; the menu is the projects, one tap each.
+it("lists the projects directly, with no machine section", async () => {
 	const props = options();
 	await act(async () => { renderer = create(workerFilterMenu(props)); });
 	const sections = renderer!.root.findAllByType("Section" as never);
-	expect(sections.map((section) => section.props.title)).toEqual(["Machine", "Project"]);
+	expect(sections.map((section) => section.props.title)).toEqual(["Project"]);
+	expect(renderer!.root.findAllByType("Menu" as never)).toHaveLength(1);
 	const choice = (label: string) => renderer!.root.findAllByType("Toggle" as never).find((node) => node.props.label === label)!;
-	await act(async () => { choice("Dev").props.onIsOnChange(true); });
-	expect(props.onSelectEnvironment).toHaveBeenCalledWith("dev");
+	expect(choice("Mac")).toBeUndefined();
 	await act(async () => { choice("AO").props.onIsOnChange(true); });
 	// Projects are keyed by their machine too.
 	expect(props.onSelectProject).toHaveBeenCalledWith(JSON.stringify(["mac", "ao"]));
-	expect(fixtures.select).toHaveBeenCalledTimes(2);
+	expect(fixtures.select).toHaveBeenCalledTimes(1);
 });

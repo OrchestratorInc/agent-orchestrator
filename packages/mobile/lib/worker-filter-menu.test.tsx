@@ -40,7 +40,8 @@ afterEach(async () => {
 
 // The native menu is still dismissing when a choice lands, and the board for
 // the new scope may suspend while it loads: the old board stays up meanwhile.
-it.each(["Dev", "Test project"])("keeps the existing board usable while choosing %s prepares its replacement", async (label) => {
+it("keeps the existing board usable while choosing a project prepares its replacement", async () => {
+	const label = "Test project";
 	const pending = new Promise<void>(() => {});
 	function Board({ selected }: { selected: string }) {
 		if (selected !== "mac") throw pending;
@@ -50,9 +51,7 @@ it.each(["Dev", "Test project"])("keeps the existing board usable while choosing
 		const [selected, setSelected] = useState("mac");
 		return <Suspense fallback={<p>Loading replacement</p>}>
 			{workerFilterMenu({
-				environments: [{ id: "mac", name: "Mac" }, { id: "dev", name: "Dev" }],
 				selectedEnvironmentId: "mac",
-				onSelectEnvironment: setSelected,
 				projects: [{ id: "test", name: "Test project", hostId: "mac" }],
 				selectedProjectId: "all",
 				onSelectProject: setSelected,

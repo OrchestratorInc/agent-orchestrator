@@ -64,6 +64,9 @@ vi.mock("./machine-menu-image", async (importOriginal) => {
 	const real = await importOriginal<typeof import("./machine-menu-image")>();
 	return { machineMenuImage: (symbol: Parameters<typeof real.machineMenuImage>[0]) => fixtures.platform === "android" ? `drawable:${symbol}` : real.machineMenuImage(symbol) };
 });
+// The machine chips are tested on their own (worker-environment-filter.test and
+// its Android twin); here they are a host whose props are the board's wiring.
+vi.mock("./worker-environment-filter", () => ({ WorkerEnvironmentFilter: "WorkerEnvironmentFilter" }));
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
 vi.mock("./store", () => ({ useApp: () => ({
@@ -106,6 +109,7 @@ import { startNewTask } from "./newTaskAction";
 import FleetScreen from "../app/(tabs)/(workers)/index";
 import { WorkerBoardList } from "./worker-board-list";
 import { WorkerEnvironmentFilter } from "./worker-environment-filter";
+import { ALL_WORKER_ENVIRONMENTS } from "./worker-controls";
 
 let renderer: ReactTestRenderer;
 
@@ -118,12 +122,15 @@ function filterMenu(): ReactTestInstance {
 	// Depth first, so the root menu comes before the submenus inside it.
 	return bar.findAllByType("StackToolbarMenu" as never)[0];
 }
-function submenu(title: string | RegExp): ReactTestInstance {
-	return filterMenu().findAllByType("StackToolbarMenu" as never).find((node) => typeof title === "string" ? node.props.title === title : title.test(node.props.title ?? ""))!;
+/** The machine chips over the board: the one place to choose a machine. */
+function chips(): ReactTestInstance {
+	return renderer.root.findByType(WorkerEnvironmentFilter);
 }
-/** Titled with its current choice, so it is found by its glyph. */
-function environmentMenu(): ReactTestInstance {
-	return filterMenu().findAllByType("StackToolbarMenu" as never).find((node) => node.props.icon === "tray.2")!;
+function chooseMachine(name: string) {
+	const strip = chips();
+	const id = name === "All machines" ? ALL_WORKER_ENVIRONMENTS : strip.props.environments.find((environment: { name: string }) => environment.name === name)?.id;
+	if (!id) throw new Error(`No "${name}" chip`);
+	act(() => strip.props.onSelectEnvironment(id));
 }
 function choices(menu: ReactTestInstance): ReactTestInstance[] {
 	return menu.findAllByType("StackToolbarMenuAction" as never);
@@ -134,11 +141,13 @@ function choose(menu: ReactTestInstance, label: string) {
 	act(() => action.props.onPress());
 }
 function selectedEnvironment(): string | undefined {
-	return choices(environmentMenu()).find((node) => node.props.isOn)?.props.children;
+	const strip = chips();
+	const id = strip.props.selectedEnvironmentId;
+	return id === ALL_WORKER_ENVIRONMENTS ? "All machines" : strip.props.environments.find((environment: { id: string }) => environment.id === id)?.name;
 }
 function selectWindows() {
 	act(() => { renderer = create(<FleetScreen />); });
-	choose(environmentMenu(), "Windows");
+	chooseMachine("Windows");
 }
 function emptyState() {
 	const status = renderer.root.findAllByProps({ testID: "worker-machine-status" })[0];
@@ -237,77 +246,69 @@ describe("Workers header", () => {
 });
 
 describe("Workers filter menu", () => {
-	// iOS leads the bar with the filter, across from the actions.
-	it("leads the iOS bar with the environment and project choices, current ones checked", () => {
+	// iOS leads the bar with the filter, across from the actions. It holds the
+	// projects alone: machines are the chip row's.
+	it("leads the iOS bar with the project choices, the current one checked, and no machines", () => {
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers");
-		expect(environmentMenu().props.title).toBe("All machines");
-		expect(choices(environmentMenu()).map((node) => [node.props.children, node.props.isOn])).toEqual([
-			["All machines", true],
-			["Mac", false],
-			["Windows", false],
+		expect(filterMenu().findAllByType("StackToolbarMenu" as never).flatMap((node) => node.props.title ? [node.props.title] : [])).toEqual(["Project"]);
+		expect(choices(filterMenu()).map((node) => [node.props.children, node.props.isOn])).toEqual([
+			["All projects", true],
+			["AO · Mac", false],
+			["Game · Windows", false],
 		]);
-		// Both are titled with their selection alone, which is also what it holds.
-		expect(choices(submenu("All projects")).map((node) => [node.props.children, node.props.isOn])).toEqual([["All projects", true]]);
+		expect(JSON.stringify(choices(filterMenu()).map((node) => node.props.children))).not.toMatch(/All machines/);
 	});
 
-	// The state is in the glyph, not in colour alone.
-	it("fills the iOS filter symbol once the board is filtered", () => {
-		selectWindows();
-		expect(fixtures.select).toHaveBeenCalledOnce();
-		expect(selectedEnvironment()).toBe("Windows");
-		expect(environmentMenu().props.title).toBe("Windows");
-		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle.fill", accessibilityLabel: "Filter workers, filtered to Windows" });
+	// The state is in the glyph, not in colour alone; a chosen machine is the
+	// chips' to show, not the filter's.
+	it("fills the iOS filter symbol once a project filters the board", () => {
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
+		act(() => { renderer = create(<FleetScreen />); });
+		chooseMachine("Windows");
+		expect(filterMenu().props.icon).toBe("line.3.horizontal.decrease.circle");
+		choose(filterMenu(), "Game");
+		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle.fill", accessibilityLabel: "Filter workers, filtered to Game" });
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 	});
 
 	// Android's top app bar has no leading actions, and badges a filtered board.
-	it("heads the Android bar's trailing actions and badges a filtered board", () => {
+	it("heads the Android bar's trailing actions and badges a project-filtered board", () => {
 		fixtures.platform = "android";
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("web", "Web", "mac", "Mac")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(toolbar("left")).toBeUndefined();
 		expect(toolbar("right")!.props.children[0].props.accessibilityLabel).toBe("Filter workers");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		choose(environmentMenu(), "Windows");
+		choose(filterMenu(), "AO");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(1);
-		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Windows");
+		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to AO");
 	});
 
-	// Compose's menu items draw the check with no selected state for TalkBack,
-	// and one machine leaves no chip row to say it, so the titles carry it.
-	it("names the chosen machine and project on Android, where the check is silent", () => {
-		fixtures.platform = "android";
-		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
-		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("web", "Web", "mac", "Mac")];
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(0);
-		choose(environmentMenu(), "Mac");
-		expect(environmentMenu().props.title).toBe("Mac");
-		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac");
-		choose(submenu("All projects"), "AO");
-		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac, AO");
-	});
-
-	it("leaves the filter out with one machine and one project", () => {
-		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
+	// Machines are filtered by the chips alone; with one project there is
+	// nothing left for the filter to narrow.
+	it("leaves the filter out with one project, however many machines", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(renderer.root.findAllByType("StackToolbarMenu" as never)).toHaveLength(0);
+		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
 	});
 
-	it("scopes the project choices to the environment and drops one it does not have", () => {
+	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
-		choose(submenu("All projects"), "Game · Windows");
-		expect(choices(submenu("Game · Windows")).find((node) => node.props.isOn)?.props.children).toBe("Game · Windows");
-		choose(environmentMenu(), "Mac");
+		choose(filterMenu(), "Game · Windows");
+		expect(choices(filterMenu()).find((node) => node.props.isOn)?.props.children).toBe("Game · Windows");
+		chooseMachine("Mac");
 		expect(selectedEnvironment()).toBe("Mac");
-		expect(choices(submenu("All projects")).map((node) => node.props.children)).toEqual(["All projects", "AO"]);
+		expect(choices(filterMenu()).map((node) => node.props.children)).toEqual(["All projects", "AO"]);
 	});
 
 	// Rebuilding the menu re-registers the header, which can close it under the
 	// finger, so a poll that changes only machine state leaves it alone.
 	it("keeps the header items across polls that change only machine state", () => {
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		const menu = toolbar("left")!.props.children;
 		const trailing = toolbar("right")!.props;
@@ -315,12 +316,6 @@ describe("Workers filter menu", () => {
 		act(() => renderer.update(<FleetScreen />));
 		expect(toolbar("left")!.props.children).toBe(menu);
 		expect(toolbar("right")!.props).toBe(trailing);
-
-		fixtures.hostStates = fixtures.hostStates.map((host) => host.hostId === "windows" ? { ...host, name: "Gaming PC" } : host);
-		act(() => renderer.update(<FleetScreen />));
-		expect(toolbar("left")!.props.children).not.toBe(menu);
-		// Machines are listed by name, so the rename also moves it first.
-		expect(choices(environmentMenu()).map((node) => node.props.children)).toEqual(["All machines", "Gaming PC", "Mac"]);
 	});
 });
 
@@ -349,17 +344,17 @@ describe("Workers spawn action", () => {
 	});
 
 	it("carries the project filter into the spawn sheet", () => {
-		fixtures.projects = [project("game", "Game", "windows", "Windows")];
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
-		choose(submenu("All projects"), "Game");
+		choose(filterMenu(), "Game · Windows");
 		act(() => renderer.root.findByType("AddFab" as never).props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows", projectId: "game" } });
 	});
 });
 
 describe("Workers environment chips", () => {
-	// Material's filter chips on Android (worker-environment-filter.android.test);
-	// iOS draws nothing for them and keeps the choice in the header's menu.
+	// The one place to choose a machine, on both platforms: Material's filter
+	// chips on Android, the app's own pills on iOS.
 	it("offers the machine chips only once two machines are paired", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
@@ -389,7 +384,7 @@ describe("Workers machine label", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(renderer.root.findAllByProps({ testID: "worker-machine-heading" })).toHaveLength(0);
 		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(true);
-		choose(environmentMenu(), "Windows");
+		chooseMachine("Windows");
 		expect(renderer.root.findAllByProps({ testID: "worker-machine-heading" })).toHaveLength(0);
 		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
 

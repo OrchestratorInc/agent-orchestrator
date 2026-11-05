@@ -3,19 +3,10 @@ import { Image, Menu, Section } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, accessibilityLabel, buttonStyle, contentShape, frame, menuOrder, shapes } from "@expo/ui/swift-ui/modifiers";
 import { Stack } from "expo-router";
 import { startTransition, type ReactElement } from "react";
-import { machineAppearance } from "./machineAppearance";
-import { machineMenuImage } from "./machine-menu-image";
 import { Choice } from "./model-controls.ios";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { iconSize, touchTarget } from "./tokens";
-import {
-	ALL_WORKER_ENVIRONMENTS,
-	ALL_WORKER_PROJECTS,
-	workerEnvironmentLabel,
-	workerEnvironmentOptions,
-	workerProjectLabel,
-	workerProjectOptions,
-} from "./worker-controls";
+import { ALL_WORKER_PROJECTS, workerProjectLabel, workerProjectOptions } from "./worker-controls";
 import type { WorkerFilterMenuOptions } from "./worker-filter-menu";
 
 export type { WorkerFilterMenuOptions } from "./worker-filter-menu";
@@ -24,9 +15,9 @@ export type { WorkerFilterMenuOptions } from "./worker-filter-menu";
  * The Workers filter on iOS: a SwiftUI menu on the circled filter glyph with a
  * 44pt target, held in the bar as a custom view. No glass and no fill behind
  * it: DESIGN.md keeps glass out of the working UI. Not `Stack.Toolbar.Menu`: UIKit sizes a bar
- * button's frame under the touch target and offers no way to grow it. The
- * menus inside are the same as before, a Machine and a Project submenu each
- * with the system's check on the current choice.
+ * button's frame under the touch target and offers no way to grow it. Inside
+ * are the projects, with the system's check on the current choice. Machines are
+ * not in it: the board's row of machine chips is the one place to choose one.
  *
  * Still a function handing Stack.Toolbar its own item type; memoise the result.
  */
@@ -38,16 +29,11 @@ export function workerFilterMenu(options: WorkerFilterMenuOptions): ReactElement
 	);
 }
 
-function WorkerFilterButton({ environments, selectedEnvironmentId, onSelectEnvironment, projects, selectedProjectId, onSelectProject }: WorkerFilterMenuOptions) {
+function WorkerFilterButton({ selectedEnvironmentId, projects, selectedProjectId, onSelectProject }: WorkerFilterMenuOptions) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const environmentLabel = workerEnvironmentLabel(environments, selectedEnvironmentId);
 	const projectLabel = workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId);
-	const activeFilters = [
-		selectedEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? environmentLabel : null,
-		selectedProjectId !== ALL_WORKER_PROJECTS ? projectLabel : null,
-	].filter((label) => label !== null);
-	const filtered = activeFilters.length > 0;
+	const filtered = selectedProjectId !== ALL_WORKER_PROJECTS;
 	return (
 		<Host style={{ width: touchTarget, height: touchTarget }} colorScheme={scheme}>
 			<Menu
@@ -65,38 +51,22 @@ function WorkerFilterButton({ environments, selectedEnvironmentId, onSelectEnvir
 				modifiers={[
 					buttonStyle("plain"),
 					menuOrder("fixed"),
-					accessibilityLabel(filtered ? `Filter workers, filtered to ${activeFilters.join(", ")}` : "Filter workers"),
+					accessibilityLabel(filtered ? `Filter workers, filtered to ${projectLabel}` : "Filter workers"),
 					accessibilityIdentifier("workers-filter"),
 				]}
 			>
-				{/* Each submenu is titled with its current choice, under a section
-				    saying what it filters by. */}
-				<Section title="Machine">
-					<Menu label={environmentLabel} systemImage="tray.2">
-						{workerEnvironmentOptions(environments).map((environment) => (
-							<Choice
-								key={environment.id}
-								label={environment.label}
-								systemImage={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
-								selected={environment.id === selectedEnvironmentId}
-								// Preparing a replacement board must not block the menu closing.
-								onChoose={() => startTransition(() => onSelectEnvironment(environment.id))}
-							/>
-						))}
-					</Menu>
-				</Section>
+				{/* The projects themselves, under a title saying what they filter. */}
 				<Section title="Project">
-					<Menu label={projectLabel} systemImage="folder">
-						{workerProjectOptions(projects, selectedEnvironmentId).map((project) => (
-							<Choice
-								key={project.id}
-								label={project.label}
-								systemImage="folder"
-								selected={project.id === selectedProjectId}
-								onChoose={() => startTransition(() => onSelectProject(project.id))}
-							/>
-						))}
-					</Menu>
+					{workerProjectOptions(projects, selectedEnvironmentId).map((project) => (
+						<Choice
+							key={project.id}
+							label={project.label}
+							systemImage="folder"
+							selected={project.id === selectedProjectId}
+							// Preparing a replacement board must not block the menu closing.
+							onChoose={() => startTransition(() => onSelectProject(project.id))}
+						/>
+					))}
 				</Section>
 			</Menu>
 		</Host>
