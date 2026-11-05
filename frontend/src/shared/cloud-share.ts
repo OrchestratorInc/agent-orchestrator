@@ -78,7 +78,7 @@ export interface CloudShareInspection {
 	size: number;
 	/** Kinds of credential the file looks like it holds, such as "AWS access key". */
 	secretFindings: string[];
-	/** Video is not shared yet. */
+	/** A video format no browser plays, which a link could not show. */
 	unsupported: boolean;
 	/** The link this file was last published to from this computer, if any. */
 	shareId?: string;

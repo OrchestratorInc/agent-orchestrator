@@ -24,10 +24,20 @@ const READ_CHUNK = 1 << 20;
 /** Only the start of a large file is scanned for credentials. */
 export const MAX_SCANNED_BYTES = 32 << 20;
 const SCAN_OVERLAP = 512;
-/** Parts presigned per request; the control plane allows up to 100. */
-const PRESIGN_BATCH = 8;
 /** Parts uploaded at once. */
 const UPLOAD_CONCURRENCY = 2;
+/**
+ * Parts presigned per request. A presigned URL lasts five minutes, so a part
+ * is signed only when it is about to be sent, however slow the connection.
+ */
+const PRESIGN_BATCH = UPLOAD_CONCURRENCY;
+/** Sends of one part before the upload gives up. */
+const PART_ATTEMPTS = 4;
+/** The wait before a part's first retry; it doubles each time. */
+const PART_RETRY_DELAY_MS = 1_000;
+/** How often and how long to look for a link the control plane is still copying. */
+const COPY_POLL_MS = 5_000;
+const COPY_POLL_ATTEMPTS = 120;
 /**
  * Headers Chromium sets itself: net.fetch refuses a request that names them
  * (net::ERR_INVALID_ARGUMENT). The body's own length is the signed one.
@@ -395,15 +405,57 @@ export async function inspectCloudSessionArtifact(
  * the file's committed version to the link inside its bucket, so nothing is
  * uploaded from here. It refuses (artifact_share_source_changed) when the
  * committed version is no longer sha256, the one the person was shown.
+ *
+ * The load balancer gives up on the request after a minute, sooner than a
+ * large file's copy ends. The control plane finishes it regardless, so a
+ * timed out request is followed by waiting for the link to appear.
  */
-export function shareCloudSessionArtifact(
+export async function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
 	ref: CloudSessionArtifactRef & { sha256: string; shareId?: string },
 	signal?: AbortSignal,
+	pollMs = COPY_POLL_MS,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
-	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
-		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+	try {
+		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
+			{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+	} catch (error) {
+		if (!(error instanceof CloudShareError) || (error.status !== 502 && error.status !== 504)) throw error;
+	}
+	const name = ref.path.split("/").pop();
+	for (let attempt = 0; attempt < COPY_POLL_ATTEMPTS; attempt += 1) {
+		if (attempt > 0) await wait(pollMs, signal);
+		const { shares } = await listShareLinks(api, baseUrl);
+		const share = shares.find((link) => link.name === name && link.sha256 === ref.sha256 && !link.revokedAt);
+		if (share) return { share, replaced: Boolean(ref.shareId) };
+	}
+	throw new CloudShareError("share_copy_pending", "This file is taking a while to publish. Look for it in your shared links later.");
+}
+
+/** Resolves after ms, or rejects as soon as signal aborts. */
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const done = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", stopped);
+		};
+		const timer = setTimeout(() => {
+			done();
+			resolve();
+		}, ms);
+		const stopped = () => {
+			done();
+			reject(new CloudShareError("cancelled", "Sharing was cancelled."));
+		};
+		if (signal?.aborted) stopped();
+		else signal?.addEventListener("abort", stopped, { once: true });
+	});
+}
+
+/** Whether sending a part again may work: a network failure, an expired URL, or storage being busy. */
+function retryablePartStatus(status: number): boolean {
+	return status === 0 || status === 403 || status === 408 || status === 429 || status >= 500;
 }
 
 export interface ShareUploadInput {
@@ -479,8 +531,32 @@ export async function uploadShare(
 			for (const number of numbers) {
 				parts.push({ partNumber: number, sha256: await hashRange(handle, partRange(start, snapshot.size, number)) });
 			}
-			const presigned = await callApi<{ parts: PresignedPart[] }>(api, baseUrl, "POST", "/me/artifact-shares/uploads/parts",
-				{ uploadToken: start.uploadToken, parts }, signal);
+			const presign = (list: typeof parts, stop?: AbortSignal) => callApi<{ parts: PresignedPart[] }>(api, baseUrl, "POST", "/me/artifact-shares/uploads/parts",
+				{ uploadToken: start.uploadToken, parts: list }, stop);
+			const presigned = await presign(parts, signal);
+			// One part, sent until it lands or stops being worth retrying. A
+			// retry is signed afresh: the URL it failed on may have expired.
+			const send = async (first: PresignedPart, signed: (typeof parts)[number], body: Buffer<ArrayBuffer>): Promise<string> => {
+				let part = first;
+				for (let attempt = 1; ; attempt += 1) {
+					let status = 0;
+					try {
+						const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal: batch.signal });
+						const etag = response.headers.get("etag");
+						if (response.ok && etag) return etag;
+						status = response.status;
+					} catch (error) {
+						if (batch.signal.aborted) throw error;
+					}
+					if (attempt >= PART_ATTEMPTS || !retryablePartStatus(status)) {
+						throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${status}).`, status);
+					}
+					await wait(PART_RETRY_DELAY_MS * 2 ** (attempt - 1), batch.signal);
+					const fresh = (await presign([signed], batch.signal)).parts[0];
+					if (fresh?.partNumber !== signed.partNumber) throw new CloudShareError("upload_failed", "The upload was signed for another part.");
+					part = fresh;
+				}
+			};
 			const queue = [...presigned.parts];
 			// The snapshot does not change, so each part is read again only as it
 			// is sent: at most UPLOAD_CONCURRENCY parts are in memory.
@@ -491,9 +567,7 @@ export async function uploadShare(
 					const range = partRange(start, snapshot.size, part.partNumber);
 					const body = Buffer.alloc(range.length);
 					await handle.read(body, 0, range.length, range.offset);
-					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal: batch.signal });
-					const etag = response.headers.get("etag");
-					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
+					const etag = await send(part, signed, body);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
 					sent += body.byteLength;
 					onProgress(sent);

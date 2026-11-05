@@ -318,9 +318,33 @@ describe("ShareArtifactButton", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy());
 	});
 
-	it("disables Share for a video", async () => {
+	it("disables Share for a video no browser plays", async () => {
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mkv" }} name="clip.mkv" /></TooltipProvider>);
+		expect(await screen.findByRole("button", { name: "Share: clip.mkv" })).toBeDisabled();
+	});
+
+	it("publishes a video, reminding the person a recording can show private details", async () => {
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "cancelled" });
 		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
-		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
+		await userEvent.click(await screen.findByRole("button", { name: "Share: clip.mp4" }));
+		expect(await screen.findByText(/Recordings can show private details/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+	});
+
+	it("shows the control plane's own reason when it refuses a file", async () => {
+		// An older control plane refuses every video, including one that plays.
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "unsupported", message: "Sharing videos is coming soon." });
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: clip.mp4" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("Sharing videos is coming soon.")).toBeTruthy();
+	});
+
+	it("says a compressed file's contents are not checked", async () => {
+		stub({ ...inspection, name: "repo.zip" }, links, { status: "cancelled" });
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "repo.zip" }} name="repo.zip" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: repo.zip" }));
+		expect(await screen.findByText(/compressed files/)).toBeTruthy();
 	});
 
 });

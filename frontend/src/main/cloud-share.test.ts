@@ -18,6 +18,7 @@ import {
 	SecretScanner,
 	snapshotShareFile,
 	listShareLinks,
+	shareCloudSessionArtifact,
 	uploadShare,
 	type CloudShareApi,
 } from "./cloud-share";
@@ -163,7 +164,7 @@ interface Call {
 	body?: string | Uint8Array;
 }
 
-function fakeControlPlane(partSize: number, options: { failPart?: number; finalizeError?: { status: number; code: string } } = {}) {
+function fakeControlPlane(partSize: number, options: { failPart?: number; failTimes?: Map<number, number>; finalizeError?: { status: number; code: string } } = {}) {
 	const calls: Call[] = [];
 	const stored = new Map<number, Uint8Array>();
 	const api: CloudShareApi = {
@@ -185,6 +186,11 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 			if (pathname.startsWith("/part/")) {
 				const number = Number(pathname.split("/").pop());
 				if (number === options.failPart) return new Response("", { status: 400 });
+				const failures = options.failTimes?.get(number) ?? 0;
+				if (failures > 0) {
+					options.failTimes?.set(number, failures - 1);
+					return new Response("", { status: 403 });
+				}
 				stored.set(number, new Uint8Array(body as Uint8Array));
 				return new Response("", { headers: { etag: `"etag-${number}"` } });
 			}
@@ -219,8 +225,11 @@ describe("uploadShare", () => {
 
 		const start = JSON.parse(calls[0].body as string);
 		expect(start).toEqual({ name: "upload.txt", size: 10, sha256: sha("0123456789"), project: "p", feature: "sess-1" });
-		const presign = JSON.parse(calls.find((call) => call.url.endsWith("/uploads/parts"))!.body as string);
-		expect(presign.parts).toEqual([{ partNumber: 1, sha256: sha("0123") }, { partNumber: 2, sha256: sha("4567") }, { partNumber: 3, sha256: sha("89") }]);
+		const presigns = calls.filter((call) => call.url.endsWith("/uploads/parts")).map((call) => (JSON.parse(call.body as string) as { parts: unknown[] }).parts);
+		expect(presigns.flat()).toEqual([{ partNumber: 1, sha256: sha("0123") }, { partNumber: 2, sha256: sha("4567") }, { partNumber: 3, sha256: sha("89") }]);
+		// Only what is about to be sent is signed, so a slow connection never
+		// reaches a part whose URL expired.
+		expect(Math.max(...presigns.map((parts) => parts.length))).toBe(2);
 		const finalize = JSON.parse(calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 		expect(finalize.parts.map((part: { partNumber: number; etag: string }) => [part.partNumber, part.etag])).toEqual([[1, '"etag-1"'], [2, '"etag-2"'], [3, '"etag-3"']]);
 
@@ -265,6 +274,16 @@ describe("uploadShare", () => {
 		expect(failing.calls.filter((call) => call.url.startsWith("https://s3.test/")).length).toBeLessThan(5);
 	});
 
+	it("sends a failed part again on a freshly signed URL", async () => {
+		const snapshot = await snapshotOf("0123456789");
+		const { api, calls, stored } = fakeControlPlane(4, { failTimes: new Map([[2, 1]]) });
+		await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f" }, () => undefined);
+		expect(Buffer.from(stored.get(2)!).toString()).toBe("4567");
+		expect(calls.some((call) => call.url.endsWith("/uploads/abort"))).toBe(false);
+		const signed = calls.filter((call) => call.url.endsWith("/uploads/parts")).flatMap((call) => (JSON.parse(call.body as string) as { parts: Array<{ partNumber: number }> }).parts);
+		expect(signed.filter((part) => part.partNumber === 2)).toHaveLength(2);
+	});
+
 	it("needs a signed-in user and a safe control plane URL", async () => {
 		const { api } = fakeControlPlane(4);
 		token.value = null;
@@ -297,5 +316,35 @@ describe("cloud control-plane proxy", () => {
 		// Reading a session's files is still allowed.
 		await expect(request("GET", "/api/cloud/v1/orgs/o/sessions/s/artifacts")).resolves.toMatchObject({ status: 200 });
 		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("shareCloudSessionArtifact", () => {
+	const ref = { orgId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222", path: "clips/demo.mp4", sha256: "a".repeat(64) };
+	const link = { id: "s-1", slug: "abc", name: "demo.mp4", sha256: ref.sha256 };
+
+	function timingOut(lists: Array<Array<Record<string, unknown>>>, status = 504) {
+		const requests: string[] = [];
+		const api: CloudShareApi = {
+			getToken: async () => "token-1",
+			fetch: vi.fn(async (url: string) => {
+				requests.push(new URL(url).pathname);
+				if (url.endsWith("/artifacts/share")) return new Response("", { status });
+				return new Response(JSON.stringify({ shares: lists.shift() ?? [], limit: 3, used: 1 }));
+			}),
+		};
+		return { api, requests };
+	}
+
+	it("waits for the link when the load balancer gives up on a long copy", async () => {
+		const { api, requests } = timingOut([[], [{ ...link, name: "other.mp4" }], [link]]);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).resolves.toEqual({ share: link, replaced: false });
+		expect(requests.filter((request) => request.endsWith("/artifacts/share"))).toHaveLength(1);
+	});
+
+	it("does not take another refusal for a long copy", async () => {
+		const { api, requests } = timingOut([], 500);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).rejects.toMatchObject({ status: 500 });
+		expect(requests).toHaveLength(1);
 	});
 });
