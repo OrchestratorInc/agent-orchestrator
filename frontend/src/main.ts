@@ -844,6 +844,8 @@ async function createWindowInternal(): Promise<void> {
 		stateDir: browserProfileStateDir(),
 		profileIds: browserProfileStore.profiles.map((profile) => profile.id),
 		fromProfile: (profileId) => session.fromPartition(browserProfilePartition(profileId)),
+		cookieDatabase: (profileId) =>
+			path.join(app.getPath("userData"), "Partitions", browserProfilePartition(profileId).replace(/^persist:/, ""), "Cookies"),
 		log: (message) => console.info(message),
 	});
 	const browserHistoryStore = new BrowserHistoryStore({ stateDir: browserProfileStateDir() });

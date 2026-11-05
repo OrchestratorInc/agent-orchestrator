@@ -5,11 +5,16 @@
 //     Google answers with its cookie error page;
 //   - imports copied anti-bot cookies, which only work in the browser that
 //     earned them, so sites keep challenging.
+import Database from "better-sqlite3";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isAntiBotCookie } from "./browser-profile-import";
 
 const STATE_FILE = "browser-cookie-repair.json";
+// An import writes cookies far faster than sites set them: a real imported
+// profile holds 407 created within 21 ms.
+const IMPORT_BURST_GAP_MICROSECONDS = 100_000;
+const IMPORT_BURST_MIN_COOKIES = 20;
 
 export type RepairCookie = {
 	domain?: string;
@@ -50,6 +55,48 @@ function urlOf(cookie: RepairCookie): string {
 	return `${cookie.secure ? "https" : "http"}://${hostOf(cookie)}${cookie.path || "/"}`;
 }
 
+export function cookieKey(cookie: Pick<RepairCookie, "domain" | "name" | "path">): string {
+	return `${cookie.domain ?? ""}\0${cookie.name}\0${cookie.path || "/"}`;
+}
+
+/**
+ * Old imports left no record, but the cookie store shows them: nothing else
+ * creates this many cookies this fast. Unreadable means nothing is reported, so
+ * a duplicate is only ever removed on evidence.
+ */
+export function importedCookieKeys(databaseFile: string, log?: (message: string) => void): Set<string> {
+	const keys = new Set<string>();
+	try {
+		const database = new Database(databaseFile, { readonly: true, fileMustExist: true, timeout: 250 });
+		try {
+			const rows = database.prepare("SELECT host_key, name, path, creation_utc FROM cookies ORDER BY creation_utc").all() as Array<{
+				host_key: string;
+				name: string;
+				path: string;
+				creation_utc: number | bigint;
+			}>;
+			let burst: typeof rows = [];
+			const flush = () => {
+				if (burst.length >= IMPORT_BURST_MIN_COOKIES) {
+					for (const row of burst) keys.add(cookieKey({ domain: row.host_key, name: row.name, path: row.path }));
+				}
+				burst = [];
+			};
+			for (const row of rows) {
+				const previous = burst.at(-1);
+				if (previous && Number(row.creation_utc) - Number(previous.creation_utc) > IMPORT_BURST_GAP_MICROSECONDS) flush();
+				burst.push(row);
+			}
+			flush();
+		} finally {
+			database.close();
+		}
+	} catch (error) {
+		log?.(`AO: could not read a browser profile's cookie store, so its duplicates stay: ${String(error)}`);
+	}
+	return keys;
+}
+
 function sameCookie(a: RepairCookie, b: RepairCookie): boolean {
 	return a.name === b.name && a.domain === b.domain && (a.path ?? "/") === (b.path ?? "/");
 }
@@ -72,14 +119,24 @@ function expire(session: RepairSession, cookie: RepairCookie): Promise<void> {
 	});
 }
 
-export async function repairCookies(session: RepairSession): Promise<RepairResult> {
+export async function repairCookies(session: RepairSession, importedKeys: ReadonlySet<string>): Promise<RepairResult> {
 	const cookies = await session.cookies.get({});
 	const antiBot = cookies.filter((item) => isAntiBotCookie(item.name));
+	// A site can set both forms itself. It is only import damage when the domain
+	// copy came from an import and the site's real cookie arrived later.
 	const widened = cookies.filter(
 		(item) =>
 			!isAntiBotCookie(item.name) &&
 			item.domain?.startsWith(".") &&
-			cookies.some((other) => other.hostOnly && other.name === item.name && other.domain === hostOf(item) && (other.path ?? "/") === (item.path ?? "/")),
+			importedKeys.has(cookieKey(item)) &&
+			cookies.some(
+				(other) =>
+					other.hostOnly &&
+					other.name === item.name &&
+					other.domain === hostOf(item) &&
+					(other.path ?? "/") === (item.path ?? "/") &&
+					!importedKeys.has(cookieKey(other)),
+			),
 	);
 	for (const cookie of [...antiBot, ...widened]) await expire(session, cookie).catch(() => undefined);
 
@@ -94,6 +151,7 @@ type RepairOptions = {
 	stateDir: string;
 	profileIds: string[];
 	fromProfile: (profileId: string) => RepairSession;
+	cookieDatabase: (profileId: string) => string;
 	log?: (message: string) => void;
 };
 
@@ -124,8 +182,7 @@ async function writeState(file: string, pending: string[]): Promise<void> {
 
 /**
  * Repairs the profiles that existed when this version first ran, once each. Later
- * profiles earned their own cookies, and a pair a site set itself looks the same
- * as a widened import, so they are never touched. Failures are logged and not
+ * profiles earned their own cookies, so they are never touched. Failures are logged and not
  * retried: repeating this at every launch would wipe freshly earned anti-bot
  * cookies. Never throws, so a failed repair cannot stop AO starting.
  */
@@ -151,7 +208,9 @@ async function runRepair(file: string, options: RepairOptions): Promise<void> {
 		for (const profileId of [...pending]) {
 			if (options.profileIds.includes(profileId)) {
 				try {
-					const result = await repairCookies(options.fromProfile(profileId));
+					// Read before opening the session, which takes over the cookie store.
+					const importedKeys = importedCookieKeys(options.cookieDatabase(profileId), options.log);
+					const result = await repairCookies(options.fromProfile(profileId), importedKeys);
 					options.log?.(`AO: repaired browser profile cookies: ${result.antiBot} anti-bot, ${result.duplicates} duplicates, ${result.failed} failed`);
 				} catch (error) {
 					options.log?.(`AO: browser profile cookie repair failed: ${String(error)}`);
