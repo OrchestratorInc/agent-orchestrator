@@ -4,7 +4,8 @@ import type { ClientRect } from "./pane-split";
  * Dragging a tab out of a tab strip to split the center pane.
  *
  * A tab press starts its strip's own reorder drag. Once the pointer leaves the
- * strip vertically, the tab lifts out: the strip's reorder stops, a ghost of
+ * strip vertically, or the press is held still for a moment, the tab lifts
+ * out (so a held tab can also be moved sideways onto another tab to merge): the strip's reorder stops, a ghost of
  * the tab follows the pointer and the drop target (the session view) shows
  * where the tab would land. Everything during the drag is imperative DOM work
  * batched to one write per frame: the ghost moves by transform, the preview
@@ -36,6 +37,10 @@ export function registerPaneDropTarget(target: PaneDropTarget): () => void {
 
 /** Distance past the strip's edge before a tab lifts out of it. */
 const DETACH_DISTANCE_PX = 14;
+/** A press held this long without moving lifts the tab out in place. */
+const HOLD_MS = 320;
+/** Movement within this distance still counts as holding still. */
+const HOLD_SLOP_PX = 5;
 /** Matches the preview's CSS fade so the nodes leave after it. */
 const FADE_MS = 150;
 
@@ -49,6 +54,9 @@ type ActiveDrag = {
 	grabY: number;
 	x: number;
 	y: number;
+	startX: number;
+	startY: number;
+	holdTimer: number | null;
 	frame: number | null;
 	ghost: HTMLElement | null;
 	preview: HTMLElement | null;
@@ -87,6 +95,9 @@ export function beginPaneTabDrag(
 		grabY: 0,
 		x: event.clientX,
 		y: event.clientY,
+		startX: event.clientX,
+		startY: event.clientY,
+		holdTimer: null,
 		frame: null,
 		ghost: null,
 		preview: null,
@@ -100,6 +111,11 @@ export function beginPaneTabDrag(
 		drag.x = moveEvent.clientX;
 		drag.y = moveEvent.clientY;
 		if (!drag.detached) {
+			// Moving off the spot first makes this a reorder, not a hold.
+			if (drag.holdTimer !== null && Math.hypot(drag.x - drag.startX, drag.y - drag.startY) > HOLD_SLOP_PX) {
+				window.clearTimeout(drag.holdTimer);
+				drag.holdTimer = null;
+			}
 			const outside =
 				drag.y > drag.strip.bottom + DETACH_DISTANCE_PX || drag.y < drag.strip.top - DETACH_DISTANCE_PX;
 			if (!outside) return;
@@ -134,6 +150,12 @@ export function beginPaneTabDrag(
 		window.removeEventListener("keydown", onKey, true);
 		window.removeEventListener("blur", onBlur);
 	};
+	drag.holdTimer = window.setTimeout(() => {
+		drag.holdTimer = null;
+		if (active !== drag || drag.detached) return;
+		detach(drag);
+		schedule(drag);
+	}, HOLD_MS);
 	active = drag;
 }
 
@@ -231,6 +253,7 @@ function finish(drag: ActiveDrag, commit: boolean): void {
 	if (active !== drag) return;
 	active = null;
 	drag.cleanup();
+	if (drag.holdTimer !== null) window.clearTimeout(drag.holdTimer);
 	if (drag.frame !== null) cancelAnimationFrame(drag.frame);
 	if (!drag.detached) return;
 	// The release lands on the captured tab; its click must not select it.

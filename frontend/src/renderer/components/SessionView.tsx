@@ -1738,10 +1738,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	};
 	const groupMember = (key: string): SplitGroupMember => {
 		const onSelect = () => selectTab(key);
+		const onClose = () => closePane(key);
 		if (key === SESSION_TAB_KEY) {
 			return {
 				key,
 				onSelect,
+				onClose,
 				label: session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession"),
 				icon: session ? <AgentAvatar className="size-icon-sm!" decorative provider={session.provider} /> : null,
 			};
@@ -1751,19 +1753,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const request = centerFileRequestsBySession[uiSessionId]?.[path];
 			const sourceLabel = request?.source?.kind === "snapshot" ? (request.source as { label?: string }).label : undefined;
 			const name = `${(request?.path ?? path).split("/").pop() || path}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-			return { key, onSelect, label: name, icon: <WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} /> };
+			return { key, onSelect, onClose, label: name, icon: <WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} /> };
 		}
 		if (key.startsWith("reviewer")) {
 			const harness = reviewerTerminal?.harness ?? reviewerChat?.harness;
 			return {
 				key,
 				onSelect,
+				onClose,
 				label: t("terminal.reviewer"),
 				icon: harness ? <AgentAvatar className="size-icon-sm!" decorative provider={harness} /> : null,
 			};
 		}
 		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-		return { key, onSelect, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
+		return { key, onSelect, onClose, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
 	};
 	// A group remembers the member last focused, so its tab names that member
 	// and selecting it returns there.
@@ -1783,21 +1786,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				active={group === shownGroup}
 				focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 				members={leafKeys(group.root).map(groupMember)}
+				onUngroup={() => updateGroups((current) => current.filter((candidate) => candidate.id !== group.id))}
 			/>
 		),
 		onSelect: () => selectTab(groupFocus(group)),
 	}));
 
-	// ⌘W closes the focused pane and keeps the rest of the split on screen.
-	// The session's own pane and reviewers are not closable, so they return to
-	// the strip as tabs of their own.
-	const closeFocusedPaneRef = useRef<() => void>(() => undefined);
-	closeFocusedPaneRef.current = () => {
-		if (!shownGroup) return;
-		const key = selectedTabKey;
-		const members = leafKeys(shownGroup.root);
+	// Closing a pane (⌘W, or the ✕ on its group tab) keeps the rest of the
+	// split on screen. The session's own pane and reviewers are not closable,
+	// so they return to the strip as tabs of their own.
+	const closePaneRef = useRef<(key: string) => void>(() => undefined);
+	closePaneRef.current = (key) => {
+		const group = groupContaining(groups, key);
+		if (!group) return;
+		const members = leafKeys(group.root);
 		const index = members.indexOf(key);
-		const sibling = members[index - 1] ?? members[index + 1];
+		const sibling = selectedTabKey === key ? (members[index - 1] ?? members[index + 1]) : undefined;
 		if (key.startsWith("file:")) {
 			const path = key.slice("file:".length);
 			const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
@@ -1821,7 +1825,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 		if (sibling) selectTab(sibling);
 	};
-	const closeFocusedPane = useCallback(() => closeFocusedPaneRef.current(), []);
+	const selectedTabKeyRef = useRef(selectedTabKey);
+	selectedTabKeyRef.current = selectedTabKey;
+	const closePane = useCallback((key: string) => closePaneRef.current(key), []);
+	const closeFocusedPane = useCallback(() => closePaneRef.current(selectedTabKeyRef.current), []);
 
 	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
 	// below it, splitting the tab on screen if it is not split yet.
@@ -2978,7 +2985,8 @@ function resolveStripDrop(
 	const targetGroup = over?.key.startsWith(GROUP_KEY_PREFIX)
 		? state.groups.find((group) => groupTabKey(group) === over?.key)
 		: undefined;
-	if (sourceGroup && (!over || targetGroup === sourceGroup)) {
+	if (sourceGroup && targetGroup === sourceGroup) return null;
+	if (sourceGroup && !over) {
 		// Off its group: the tab stands alone again and the rest stays on screen.
 		const remaining = leafKeys(sourceGroup.root).find((candidate) => candidate !== key);
 		return {

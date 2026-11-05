@@ -8,6 +8,7 @@ import {
 	type ReactNode,
 	type RefObject,
 } from "react";
+import { Ungroup, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -19,6 +20,8 @@ import type { WorkspaceSession } from "../types/workspace";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { terminalTabActionClassName } from "./TerminalTabFrame";
 
 /**
  * A terminal shown in a split pane. Shell terminals come from the shared
@@ -170,25 +173,31 @@ export type SplitGroupMember = {
 	label: string;
 	icon: ReactNode;
 	onSelect: () => void;
+	/** Closes the member's pane (a member that cannot close leaves the group). */
+	onClose: () => void;
 };
 
 /**
  * One strip tab for tabs shown together. The focused member shows its name;
  * the others show only their icon, named by a tooltip. Each member is its own
  * target: clicking it shows the group with that pane focused, and dragging it
- * moves it within the split or out of the group.
+ * moves it within the split or out of the group. Hovering the tab swaps the
+ * focused member's icon for a close button, as on other tabs, and its context
+ * menu ungroups it.
  */
 export function SplitGroupTab({
 	active,
 	focusedKey,
 	members,
+	onUngroup,
 }: {
 	active: boolean;
 	focusedKey?: string;
 	members: SplitGroupMember[];
+	onUngroup: () => void;
 }) {
 	const { t } = useTranslation();
-	return (
+	const frame = (
 		<span
 			aria-label={t("splitPane.group", { names: members.map((member) => member.label).join(", ") })}
 			className={cn(
@@ -224,7 +233,14 @@ export function SplitGroupTab({
 						tabIndex={active && focused ? 0 : -1}
 						type="button"
 					>
-						<span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{member.icon}</span>
+						<span
+							className={cn(
+								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
+								focused && "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0",
+							)}
+						>
+							{member.icon}
+						</span>
 						{focused ? <span className="truncate">{member.label}</span> : null}
 					</Pressable>
 				);
@@ -233,7 +249,29 @@ export function SplitGroupTab({
 						{index > 0 ? (
 							<span aria-hidden="true" className="my-2.5 w-px shrink-0 self-stretch bg-border" />
 						) : null}
-						{focused ? segment : (
+						{focused ? (
+							<span className="relative inline-flex min-w-0">
+								{segment}
+								{/* Takes the icon's slot on hover, like the close button on other tabs. */}
+								<span
+									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+									data-terminal-tab-action
+								>
+									<Pressable
+										aria-label={t("splitPane.closePane", { name: member.label })}
+										className={terminalTabActionClassName}
+										onClick={(event) => {
+											event.stopPropagation();
+											member.onClose();
+										}}
+										onPointerDown={(event) => event.stopPropagation()}
+										type="button"
+									>
+										<X aria-hidden="true" className="size-icon-sm" />
+									</Pressable>
+								</span>
+							</span>
+						) : (
 							<Tooltip>
 								<TooltipTrigger asChild>{segment}</TooltipTrigger>
 								<TooltipContent side="bottom">{member.label}</TooltipContent>
@@ -250,5 +288,16 @@ export function SplitGroupTab({
 				/>
 			) : null}
 		</span>
+	);
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>{frame}</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-44">
+				<ContextMenuItem onSelect={onUngroup}>
+					<Ungroup aria-hidden="true" />
+					{t("splitPane.ungroup")}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
 	);
 }
