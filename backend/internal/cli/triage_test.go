@@ -123,6 +123,30 @@ func TestTriageAgentSelection(t *testing.T) {
 	}
 }
 
+func TestTriageWithNoAgentWritesAPromptThatCanPost(t *testing.T) {
+	deps, out, state := triageTestDeps(t)
+	deps.RunInteractiveCommand = func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
+		t.Fatal("unexpected launch")
+		return nil
+	}
+	cmd := NewRootCommand(deps)
+	cmd.SetArgs([]string{"triage"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := os.ReadFile(filepath.Join(state, "triage", "2026-10-20T12-34-56.000000000Z", "prompt.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The program has exited, so nothing is left to take the agent's text to GitHub.
+	if strings.Contains(string(prompt), "Terminal mode") || !strings.Contains(string(prompt), "In-app mode") {
+		t.Fatalf("prompt.md hands off to a program that already exited:\n%s", prompt)
+	}
+	if !strings.Contains(out.String(), "Paste prompt.md into any coding agent") {
+		t.Fatalf("output: %s", out.String())
+	}
+}
+
 func TestTriageLaunchArgvAndCwd(t *testing.T) {
 	for _, agent := range []string{"claude", "codex"} {
 		t.Run(agent, func(t *testing.T) {

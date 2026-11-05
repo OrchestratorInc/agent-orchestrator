@@ -72,6 +72,14 @@ func newTriageCommand(c *commandContext) *cobra.Command {
 				}
 				defer func() { c.deps.LookPath = lookup }()
 			}
+			// Pick first: prompt.md says who posts, and only a launched agent
+			// returns here for finishTriage to ask for approval.
+			selected := ""
+			if !noLaunch {
+				if selected, err = c.selectTriageAgent(cmd, agent); err != nil {
+					return err
+				}
+			}
 			parent := filepath.Join(state, "triage")
 			if err := pruneTriage(parent, c.deps.Now()); err != nil {
 				return err
@@ -85,7 +93,7 @@ func newTriageCommand(c *commandContext) *cobra.Command {
 			}
 			defer func() { _, _ = fmt.Fprintln(cmd.OutOrStdout(), "Triage files:", dir) }()
 			snapshot, draft, github := c.triageSnapshot(cmd.Context(), state, data, run)
-			prompt := triagePrompt(dir, !noLaunch)
+			prompt := triagePrompt(dir, selected != "")
 			for name, body := range map[string][]byte{"context.md": []byte(snapshot), "bug-report.md": []byte(draft), "prompt.md": []byte(prompt), "SKILL.md": skillassets.BugTriageSkill()} {
 				if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
 					return err
@@ -96,10 +104,6 @@ func newTriageCommand(c *commandContext) *cobra.Command {
 			}
 			if noLaunch {
 				return nil
-			}
-			selected, err := c.selectTriageAgent(cmd, agent)
-			if err != nil {
-				return err
 			}
 			if selected == "" {
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), "Paste prompt.md into any coding agent to investigate.")
