@@ -583,9 +583,10 @@ export function cloneEtaSeconds(progress: CloneProgress | null | undefined): num
 
 export function formatEta(seconds: number): string {
 	if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
-	if (seconds < 60) return `${Math.round(seconds)}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+	const total = Math.round(seconds);
+	if (total < 60) return `${total}s`;
+	const minutes = Math.floor(total / 60);
+	if (minutes < 60) return `${minutes}m ${total % 60}s`;
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 

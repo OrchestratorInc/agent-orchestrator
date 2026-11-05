@@ -519,6 +519,12 @@ describe("clone progress helpers", () => {
 		expect(formatEta(3720)).toBe("1h 2m");
 	});
 
+	it("carries a rounded-up minute instead of showing 60 seconds", () => {
+		expect(formatEta(59.7)).toBe("1m 0s");
+		expect(formatEta(119.7)).toBe("2m 0s");
+		expect(formatEta(3599.7)).toBe("1h 0m");
+	});
+
 	it("formats transfer sizes the way downloads do", () => {
 		expect(formatTransferBytes(0)).toBe("0 B");
 		expect(formatTransferBytes(512)).toBe("512 B");
