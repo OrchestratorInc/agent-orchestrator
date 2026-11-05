@@ -2458,9 +2458,11 @@ function ScratchpadSection({
 					</div>
 				</ContextMenuTrigger>
 				<ContextMenuContent className="min-w-44">
-					<ContextMenuItem data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
-						<Plus aria-hidden="true" />
-						{t("shell.openNewAgent")}
+					<ContextMenuItem asChild data-ph-capture-attribute-ao_action="new_task" onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+						<button className="w-full" type="button">
+							<Plus aria-hidden="true" />
+							{t("shell.openNewAgent")}
+						</button>
 					</ContextMenuItem>
 					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
 						<Archive aria-hidden="true" />
