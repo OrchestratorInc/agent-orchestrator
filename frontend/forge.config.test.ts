@@ -67,8 +67,7 @@ function withHostArch<T>(arch: string, run: () => T): T {
 
 let fixtureDir: string;
 
-// The nested Node must sit at the real bundle path shape: the endsWith gate
-// and the content selector are two halves of one decision.
+/** 使用 macOS bundle 路径格式，让路径门禁和真实 Mach-O 字节共同参与签名判断。 */
 function acpNodeWith(contents: Buffer): string {
 	const binDir = join(
 		fixtureDir,
@@ -81,7 +80,7 @@ function acpNodeWith(contents: Buffer): string {
 	);
 	mkdirSync(binDir, { recursive: true });
 	writeFileSync(join(binDir, "node"), contents);
-	return join(binDir, "node");
+	return join(binDir, "node").replaceAll("\\", "/");
 }
 
 beforeEach(() => {

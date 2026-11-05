@@ -28,6 +28,9 @@ var ErrNoController = errors.New("no live chat controller for session")
 // fact later, but callers must route from the persisted mode they read now.
 var ErrNotChatMode = errors.New("session is not in chat mode")
 
+// ErrWorkspaceInvalid 表示派发前工作区核验失败，Provider 尚未收到该 turn。
+var ErrWorkspaceInvalid = errors.New("chat workspace validation failed")
+
 var (
 	// ErrExcerptInvalid reports malformed or unauthorized excerpt references.
 	ErrExcerptInvalid = errors.New("chat excerpt is invalid")
@@ -83,6 +86,8 @@ type Service struct {
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
 	versionRefresh func() (time.Duration, bool)
+	// capabilityEvidence records what a provider actually did. Nil records nothing.
+	capabilityEvidence CapabilityEvidenceRecorder
 	// versionSwitches holds the release each stopped-for-refresh session is
 	// moving to, until its wake succeeds or fails.
 	versionSwitchMu sync.Mutex
@@ -201,6 +206,24 @@ type Options struct {
 	// harness release moves to the installed one on its next message, and the
 	// quiet time required first. Nil never moves a session.
 	VersionRefresh func() (time.Duration, bool)
+	// CapabilityEvidence records what a live provider actually performed, so a later
+	// capability gate can rely on confirmed_runtime evidence instead of a guess.
+	// Nil records nothing and changes no behavior.
+	CapabilityEvidence CapabilityEvidenceRecorder
+}
+
+// CapabilityEvidenceRecorder is the narrow slice of the capability recorder the
+// chat service needs. It is declared here rather than importing the capability
+// package's concrete Recorder so a nil-safe optional dependency stays optional:
+// wiring no recorder must be a supported configuration, not a panic.
+type CapabilityEvidenceRecorder interface {
+	RecordConfirmed(
+		ctx context.Context,
+		harness domain.AgentHarness,
+		sessionID domain.SessionID,
+		generation string,
+		features ...domain.CapabilityFeature,
+	) error
 }
 
 // New builds a Chat service.
@@ -233,6 +256,7 @@ func New(opts Options) *Service {
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		versionRefresh:         opts.VersionRefresh,
+		capabilityEvidence:     opts.CapabilityEvidence,
 		controllers:            make(map[domain.SessionID]*Controller),
 		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -1041,7 +1065,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
@@ -1273,6 +1297,77 @@ func cleanupUnpublishedConversation(conv ports.ChatConversation, fresh bool) err
 	return conv.Close()
 }
 
+// RunningProviderTurn reports the provider turn AO believes is in flight for a
+// session, and the controller generation that owns it. ok is false when no turn is
+// in flight or no live controller exists.
+//
+// The production gateway needs this to pin a steer at the turn it observed. It is
+// deliberately an observation of AO's own state rather than a provider query: the
+// gateway is deciding whether the turn it is answering still exists, and a
+// provider round trip would both cost a call and introduce a second answer to
+// reconcile.
+//
+// The durable fallback exists because memory can lag in exactly one direction: a
+// reconnect that restored ownership, or a dispatch whose binding landed while the
+// in-memory field was cleared. It reports only rows the store already considers
+// visible and running, so it cannot invent a turn.
+func (s *Service) RunningProviderTurn(
+	ctx context.Context,
+	id domain.SessionID,
+) (providerTurnID string, generation string, ok bool) {
+	controller, err := s.Controller(id)
+	if err != nil || controller == nil || controller.State() == ports.ChatControllerStopped {
+		return "", "", false
+	}
+	controller.mu.Lock()
+	pending := controller.pendingTurnID
+	generation = controller.Generation()
+	controller.mu.Unlock()
+	if pending != "" {
+		return pending, generation, true
+	}
+	running, err := controller.store.ListVisibleRunningTurnProviderIDs(ctx, controller.conversation.ID)
+	if err != nil || len(running) == 0 || running[0] == "" {
+		return "", generation, false
+	}
+	// The list follows the snapshot's visibility and ordering rules, so its first
+	// row is the running turn a client would render — the same rule Interrupt uses
+	// when memory has nothing and the disk does.
+	return running[0], generation, true
+}
+
+// recordConfirmedCapability tells the capability layer that a live provider really
+// performed one feature in this session generation.
+//
+// Best effort by design: the operation already succeeded, and failing it (or
+// reporting its failure) because evidence could not be stored would turn a
+// capability memo into a request-path dependency. A missing recorder, a missing
+// controller field, or a store error all change nothing about the caller's result.
+//
+// It runs on the caller's context rather than context.WithoutCancel: this is a
+// three-column upsert that should not outlive the request that caused it.
+func (s *Service) recordConfirmedCapability(
+	ctx context.Context,
+	controller *Controller,
+	feature domain.CapabilityFeature,
+) {
+	if s == nil || s.capabilityEvidence == nil || controller == nil {
+		return
+	}
+	harness := controller.harness
+	sessionID := controller.sessionID
+	generation := controller.Generation()
+	if harness == "" || sessionID == "" || generation == "" {
+		return
+	}
+	if err := s.capabilityEvidence.RecordConfirmed(
+		ctx, harness, sessionID, generation, feature,
+	); err != nil {
+		s.log.Debug("record confirmed capability failed",
+			"session", sessionID, "harness", harness, "feature", feature, "error", err)
+	}
+}
+
 // Controller returns a session's live controller.
 func (s *Service) Controller(sessionID domain.SessionID) (*Controller, error) {
 	s.mu.RLock()
@@ -1340,9 +1435,48 @@ func (s *Service) requireChatSession(ctx context.Context, id domain.SessionID) (
 }
 
 // Send delivers a message to a session's agent.
+//
+// It carries no generation fence: the caller is a UI acting on whatever controller
+// currently owns the session. A caller that observed a specific controller must use
+// SendPinned, so a controller swap between observation and dispatch is a refusal
+// instead of a message delivered to whoever holds the session now.
 func (s *Service) Send(
 	ctx context.Context,
 	id domain.SessionID,
+	msg ports.ChatUserMessage,
+) (domain.ConversationTurn, error) {
+	return s.send(ctx, id, "", msg)
+}
+
+// SendPinned delivers a message only if the resolved controller is still the
+// generation the caller observed.
+//
+// The generation is checked inside the controller, under the same lock that
+// serialises dispatch, so a replacement controller cannot take over between the
+// check and the provider call. An empty expectedGeneration is refused: a send that
+// cannot name its controller cannot be fenced, and refusing is the whole point.
+func (s *Service) SendPinned(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedGeneration string,
+	msg ports.ChatUserMessage,
+) (domain.ConversationTurn, error) {
+	if strings.TrimSpace(expectedGeneration) == "" {
+		return domain.ConversationTurn{}, fmt.Errorf(
+			"%w: a pinned send must name the controller generation",
+			ErrStaleControllerGeneration)
+	}
+	return s.send(ctx, id, expectedGeneration, msg)
+}
+
+// send is the one implementation behind Send and SendPinned.
+//
+// expectedGeneration "" means "no fence". Every dispatch site below therefore routes
+// through sendOnController, which is the only place a message reaches a controller.
+func (s *Service) send(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedGeneration string,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
 	record, err := s.requireChatSession(ctx, id)
@@ -1368,7 +1502,7 @@ func (s *Service) Send(
 					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
 				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
-				return controller.Send(ctx, msg)
+				return s.sendOnController(ctx, controller, expectedGeneration, msg)
 			}
 		}
 	}
@@ -1386,6 +1520,10 @@ func (s *Service) Send(
 		msg.Text = reports.AppendToUserMessage(msg.Text)
 	}
 	var turn domain.ConversationTurn
+	// dispatched is the controller that actually started a turn, so capability
+	// evidence is recorded only for work a provider accepted. A message that stayed
+	// on the durable queue proves nothing about whether the provider can stream.
+	var dispatched *Controller
 	if record.ProvisionState.IsProvisioning() || record.HibernatedAt != nil {
 		// Keep messages on the durable queue until provisioning finishes so a
 		// new message cannot overtake the opening prompt during handoff.
@@ -1402,7 +1540,8 @@ func (s *Service) Send(
 					if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
 						err = hydrateErr
 					} else {
-						turn, err = controller.Send(ctx, msg)
+						turn, err = s.sendOnController(ctx, controller, expectedGeneration, msg)
+						dispatched = controller
 					}
 					release()
 				}
@@ -1419,7 +1558,8 @@ func (s *Service) Send(
 			if hydrateErr := hydrateExcerptReferences(ctx, controller, &msg); hydrateErr != nil {
 				err = hydrateErr
 			} else {
-				turn, err = controller.Send(ctx, msg)
+				turn, err = s.sendOnController(ctx, controller, expectedGeneration, msg)
+				dispatched = controller
 			}
 			release()
 		}
@@ -1429,6 +1569,12 @@ func (s *Service) Send(
 			_ = s.reports.ReleasePiggyback(ctx, reports, err)
 		}
 		return turn, err
+	}
+	// A turn the provider acknowledged is proof this harness streams. It is
+	// recorded before the report piggyback on purpose: the evidence describes
+	// what the provider did, and a later reports failure must not erase it.
+	if dispatched != nil && turn.ProviderTurnID != "" {
+		s.recordConfirmedCapability(ctx, dispatched, domain.CapabilityFeatureStreaming)
 	}
 	if s.reports != nil {
 		if turn.ID == "" {
@@ -1441,6 +1587,24 @@ func (s *Service) Send(
 		}
 	}
 	return turn, nil
+}
+
+// sendOnController is the only place the send path hands a message to a controller.
+//
+// An empty expectedGeneration selects the unfenced controller.Send that Send has
+// always used. A non-empty one selects Controller.SendPinned, which compares the
+// generation under sendMu — the same lock that serialises dispatch — so a controller
+// swapped after the caller observed it cannot take this message.
+func (s *Service) sendOnController(
+	ctx context.Context,
+	controller *Controller,
+	expectedGeneration string,
+	msg ports.ChatUserMessage,
+) (domain.ConversationTurn, error) {
+	if strings.TrimSpace(expectedGeneration) == "" {
+		return controller.Send(ctx, msg)
+	}
+	return controller.SendPinned(ctx, expectedGeneration, msg)
 }
 
 // SendForOwner sends a user message to an owner-specific chat controller.
@@ -1621,7 +1785,39 @@ func (s *Service) ResolveInputForOwner(ctx context.Context, owner domain.Convers
 }
 
 // Interrupt cancels a session's in-flight turn.
+//
+// It carries no generation fence: the caller is a control acting on whatever
+// controller owns the session now. A caller that observed a specific controller must
+// use InterruptPinned, so stopping a replacement controller is a refusal instead of a
+// stop of work nobody asked to stop.
 func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
+	return s.interrupt(ctx, id, "")
+}
+
+// InterruptPinned cancels the in-flight turn only if the resolved controller is
+// still the generation the caller observed.
+//
+// An empty expectedGeneration is refused for the same reason SendPinned refuses it:
+// a stop that cannot name its controller cannot be fenced, and an unfenced stop is
+// exactly the blind retry the M2 stop path exists to prevent.
+func (s *Service) InterruptPinned(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedGeneration string,
+) error {
+	if strings.TrimSpace(expectedGeneration) == "" {
+		return fmt.Errorf("%w: a pinned interrupt must name the controller generation",
+			ErrStaleControllerGeneration)
+	}
+	return s.interrupt(ctx, id, expectedGeneration)
+}
+
+// interrupt is the one implementation behind Interrupt and InterruptPinned.
+func (s *Service) interrupt(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedGeneration string,
+) error {
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return err
 	}
@@ -1629,7 +1825,19 @@ func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 	if err != nil {
 		return err
 	}
-	return controller.Interrupt(ctx)
+	if strings.TrimSpace(expectedGeneration) != "" {
+		// The generation is fixed for a controller's lifetime and a replacement is a
+		// different object, so this comparison cannot be invalidated underneath the
+		// call: either this controller is the one the caller observed, or it is not.
+		if err := controller.checkPinnedGeneration(expectedGeneration); err != nil {
+			return err
+		}
+	}
+	if err := controller.Interrupt(ctx); err != nil {
+		return err
+	}
+	s.recordConfirmedCapability(ctx, controller, domain.CapabilityFeatureInterrupt)
+	return nil
 }
 
 // InterruptForOwner cancels the in-flight turn for an owner-specific controller.

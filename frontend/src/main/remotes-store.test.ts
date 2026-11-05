@@ -1,8 +1,35 @@
-import { describe, expect, it } from "vitest";
-import { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import fs, { chmod, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { addRemote, readRemotes, removeRemote, RemotesFilePermissionError, updateRemote } from "./remotes-store";
+
+const hostPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+let writeFileSpy: MockInstance<typeof fs.writeFile>;
+beforeEach(() => {
+	writeFileSpy = vi.spyOn(fs, "writeFile");
+	syncBuiltinESMExports();
+	vi.resetModules();
+});
+afterEach(() => {
+	Object.defineProperty(process, "platform", hostPlatform);
+	vi.restoreAllMocks();
+	syncBuiltinESMExports();
+});
+
+/** 真实权限位作为输入验证 POSIX 拒绝规则；独立用例仍验证 Windows 的生产豁免。 */
+function usePosixPermissionCheck(): void {
+	Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+}
+
+/** Windows 验证写入时申请 0600，POSIX 同时核验真实落盘权限。 */
+async function expectOwnerOnlyWrite(path: string): Promise<void> {
+	expect(writeFileSpy).toHaveBeenLastCalledWith(expect.stringMatching(/\.tmp$/), expect.any(String), {
+		encoding: "utf8", mode: 0o600, flag: "wx",
+	});
+	if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
+}
 
 async function tempFile(contents?: string, mode = 0o600): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "ao-remotes-"));
@@ -29,6 +56,7 @@ describe("readRemotes", () => {
 
 	it("refuses a file readable by others, naming the fix", async () => {
 		const path = await tempFile('{"remotes":[]}', 0o644);
+		usePosixPermissionCheck();
 		await expect(readRemotes(path)).rejects.toBeInstanceOf(RemotesFilePermissionError);
 		await expect(readRemotes(path)).rejects.toThrow(/chmod 600/);
 	});
@@ -38,13 +66,8 @@ describe("readRemotes", () => {
 	// The CLI exempts win32 for the same reason (cli/remote.go:154).
 	it("does not apply the mode check on windows", async () => {
 		const path = await tempFile('{"remotes":[]}', 0o644);
-		const platform = Object.getOwnPropertyDescriptor(process, "platform");
 		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-		try {
-			await expect(readRemotes(path)).resolves.toEqual([]);
-		} finally {
-			if (platform) Object.defineProperty(process, "platform", platform);
-		}
+		await expect(readRemotes(path)).resolves.toEqual([]);
 	});
 });
 
@@ -56,10 +79,11 @@ describe("addRemote", () => {
 		expect((await readRemotes(path))[0]?.hostId).toBe("h_workbox");
 	});
 
-	it("creates the file 0600 when absent", async () => {
+	it("requests owner-only creation when absent", async () => {
 		const path = await tempFile();
-		await addRemote(path, { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" });
-		expect((await stat(path)).mode & 0o777).toBe(0o600);
+		const store = await import("./remotes-store");
+		await store.addRemote(path, { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" });
+		await expectOwnerOnlyWrite(path);
 		expect(JSON.parse(await readFile(path, "utf8")).remotes).toHaveLength(1);
 		expect(await readdir(dirname(path))).toEqual(["remotes.json"]);
 	});
@@ -153,14 +177,16 @@ describe("updateRemote", () => {
 		await expect(updateRemote(path, "http://192.0.2.7:7", { label: "ghost" })).rejects.toThrow(/no saved host/);
 	});
 
-	it("keeps the file 0600", async () => {
+	it("requests owner-only replacement", async () => {
 		const path = await tempFile(TWO_HOSTS);
-		await updateRemote(path, "http://192.0.2.1:1", { password: "rotated" });
-		expect((await stat(path)).mode & 0o777).toBe(0o600);
+		const store = await import("./remotes-store");
+		await store.updateRemote(path, "http://192.0.2.1:1", { password: "rotated" });
+		await expectOwnerOnlyWrite(path);
 	});
 
 	it("refuses to touch a file others can read", async () => {
 		const path = await tempFile(TWO_HOSTS, 0o644);
+		usePosixPermissionCheck();
 		await expect(updateRemote(path, "http://192.0.2.1:1", { password: "rotated" })).rejects.toBeInstanceOf(
 			RemotesFilePermissionError,
 		);
@@ -176,10 +202,11 @@ describe("removeRemote", () => {
 		expect(await savedRemotes(path)).toEqual([{ label: "mini", url: "http://192.0.2.9:9", password: "m" }]);
 	});
 
-	it("keeps the file 0600", async () => {
+	it("requests owner-only replacement", async () => {
 		const path = await tempFile(TWO_HOSTS);
-		await removeRemote(path, "http://192.0.2.1:1");
-		expect((await stat(path)).mode & 0o777).toBe(0o600);
+		const store = await import("./remotes-store");
+		await store.removeRemote(path, "http://192.0.2.1:1");
+		await expectOwnerOnlyWrite(path);
 	});
 
 	it("is a no-op for a host that was never saved", async () => {
@@ -190,6 +217,7 @@ describe("removeRemote", () => {
 
 	it("refuses to touch a file others can read", async () => {
 		const path = await tempFile(TWO_HOSTS, 0o644);
+		usePosixPermissionCheck();
 		await expect(removeRemote(path, "http://192.0.2.1:1")).rejects.toBeInstanceOf(RemotesFilePermissionError);
 		expect(await readFile(path, "utf8")).toBe(TWO_HOSTS);
 	});

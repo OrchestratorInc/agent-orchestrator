@@ -58,9 +58,9 @@ export function decideRelocation(inputs: RelocationInputs): RelocationAction {
 	return semver.lt(installed, running) ? "relocate" : "handoff";
 }
 
-/** Path the running bundle would occupy under /Applications. */
+/** 使用 macOS 路径规则定位同名应用包在 /Applications 下的目标位置。 */
 export function installedBundlePath(runningBundlePath: string): string {
-	return path.join(APPLICATIONS_DIR, path.basename(runningBundlePath));
+	return path.posix.join(APPLICATIONS_DIR, path.posix.basename(runningBundlePath));
 }
 
 /**

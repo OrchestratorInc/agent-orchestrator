@@ -422,6 +422,136 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "WorkflowAttemptState"
+          - column: "workflow_attempt_bindings.attempt_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowAttemptID"
+          - column: "workflow_attempt_bindings.workflow_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowID"
+          - column: "workflow_attempt_bindings.task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+          - column: "workflow_attempt_bindings.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
+          - column: "workflow_attempt_bindings.state"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowBindingState"
+          - column: "workflow_attempt_repo_bindings.attempt_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowAttemptID"
+          - column: "workflow_attempt_repo_bindings.workflow_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowID"
+          - column: "workflow_attempt_repo_bindings.repo_key"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowRepoKey"
+          - column: "workflow_attempt_repo_bindings.project_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ProjectID"
+          - column: "workflow_attempt_repo_bindings.state"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowRepoBindingState"
+          - column: "workflow_interventions.workflow_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowID"
+          - column: "workflow_interventions.task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+          - column: "workflow_interventions.attempt_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowAttemptID"
+              pointer: true
+          - column: "workflow_interventions.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
+          - column: "workflow_interventions.mode"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowInterventionMode"
+          - column: "workflow_interventions.state"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowInterventionState"
+          - column: "workflow_interventions.queue_available"
+            go_type: "bool"
+          - column: "workflow_messages.workflow_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowID"
+          - column: "workflow_messages.from_task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+          - column: "workflow_messages.to_task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+              pointer: true
+          - column: "workflow_messages.sender_task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+              pointer: true
+          - column: "workflow_messages.sender_session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
+          - column: "workflow_messages.target_session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
+              pointer: true
+          - column: "workflow_messages.sender_kind"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowMessageSenderKind"
+          - column: "workflow_messages.kind"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowMessageKind"
+          - column: "workflow_messages.delivery_state"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowMessageDeliveryState"
+          - column: "workflow_task_requests.workflow_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowID"
+          - column: "workflow_task_requests.requester_task_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskID"
+          - column: "workflow_task_requests.request_kind"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskRequestKind"
+          - column: "workflow_task_requests.state"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskRequestState"
+          - column: "workflow_task_requests.decided_by_kind"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "WorkflowTaskRequestDeciderKind"
+              pointer: true
           - column: "workflow_idempotency.workflow_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

@@ -1053,6 +1053,9 @@ describe("startRemoteProxy over HTTP/2", () => {
 	let h2upstream: Http2Server | undefined;
 
 	afterEach(async () => {
+		// 先释放代理持有的会话，否则服务端关闭会等待活动 HTTP/2 连接。
+		await proxy?.close();
+		proxy = undefined;
 		await new Promise<void>((resolve) => (h2upstream ? h2upstream.close(() => resolve()) : resolve()));
 		h2upstream = undefined;
 	});

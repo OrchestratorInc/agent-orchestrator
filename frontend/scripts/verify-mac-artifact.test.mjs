@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync, statSync, mkdirSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bash, bashEnv, bashPath, bashSearchPath } from "./test-fixtures/git-posix-tools.mjs";
 
 // Smoke coverage for scripts/verify-mac-artifact.sh.
 //
@@ -23,9 +24,10 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "verify-mac-artifact.sh");
 
+/** 使用真实 Bash，文件参数与替代工具路径保持 POSIX 表示。 */
 function run(args, env = {}) {
 	return new Promise((resolve) => {
-		execFile("bash", [SCRIPT, ...args], { env: { ...process.env, ...env } }, (err, stdout, stderr) => {
+		execFile(bash, [bashPath(SCRIPT), ...args.map(bashPath)], { env: bashEnv(env) }, (err, stdout, stderr) => {
 			resolve({ code: err?.code ?? 0, stdout, stderr });
 		});
 	});
@@ -46,12 +48,13 @@ afterAll(() => {
 
 describe("verify-mac-artifact.sh", () => {
 	it("is committed executable so CI and humans invoke it the same way", () => {
-		expect(statSync(SCRIPT).mode & 0o111).not.toBe(0);
+		const [mode] = execFileSync("git", ["ls-files", "--stage", "--", SCRIPT], { encoding: "utf8" }).split(" ");
+		expect(mode).toBe("100755");
 	});
 
 	it("parses under bash", async () => {
 		const { code } = await new Promise((resolve) => {
-			execFile("bash", ["-n", SCRIPT], (err) => resolve({ code: err?.code ?? 0 }));
+			execFile(bash, ["-n", bashPath(SCRIPT)], { env: bashEnv() }, (err) => resolve({ code: err?.code ?? 0 }));
 		});
 		expect(code).toBe(0);
 	});
@@ -145,7 +148,7 @@ describe("verify-mac-artifact.sh", () => {
 		for (const [tool, stage] of [["pkgutil", "signature"], ["spctl", "gatekeeper"], ["xcrun", "staple"]]) {
 			writeExecutable(join(mockBin, tool), `echo "${tool} $*" >> "$PKG_CALLS"\nexit ${failure === stage ? 1 : 0}\n`);
 		}
-		const { code } = await run([artifact], { PATH: `${mockBin}:${process.env.PATH}`, PKG_CALLS: calls });
+		const { code } = await run([artifact], { PATH: `${bashPath(mockBin)}:${bashSearchPath}`, PKG_CALLS: bashPath(calls) });
 		expect(code).toBe(failure === "none" ? 0 : 1);
 		const { readFileSync } = await import("node:fs");
 		const commands = readFileSync(calls, "utf8");
@@ -177,8 +180,8 @@ describe("verify-mac-artifact.sh", () => {
 		writeExecutable(node, 'echo executed > "$ACP_NODE_SENTINEL"\n');
 
 		const { code, stderr } = await run([app], {
-			PATH: `${mockBin}:${process.env.PATH}`,
-			ACP_NODE_SENTINEL: sentinel,
+			PATH: `${bashPath(mockBin)}:${bashSearchPath}`,
+			ACP_NODE_SENTINEL: bashPath(sentinel),
 		});
 
 		expect(code).toBe(1);

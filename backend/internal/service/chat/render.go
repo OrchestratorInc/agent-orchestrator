@@ -233,14 +233,17 @@ func (s *Service) SaveRenderAsArtifact(ctx context.Context, id domain.SessionID,
 		if sameRenderArtifact(root, name, doc) {
 			return artifact, nil
 		}
-		f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		f, err := createRenderArtifact(ctx, root, name)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil {
 			return RenderArtifact{}, fmt.Errorf("save render artifact: %w", err)
 		}
-		_, err = f.Write(doc)
+		err = ctx.Err()
+		if err == nil {
+			_, err = f.Write(doc)
+		}
 		if closeErr := f.Close(); err == nil {
 			err = closeErr
 		}

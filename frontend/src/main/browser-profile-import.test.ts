@@ -1,6 +1,7 @@
 import { createCipheriv, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -10,6 +11,8 @@ import { BrowserProfileImportService, decryptWindowsChromiumCookie, readMacChrom
 import { BrowserProfileStore } from "./browser-profile-store";
 import { BROWSER_PROFILE_MAX_COUNT } from "../shared/browser-profiles";
 
+// junction 不需要 Windows 符号链接权限，lstat 仍将其识别为链接。
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const temporaryDirectories: string[] = [];
 
 describe("macOS import credentials", () => {
@@ -36,6 +39,7 @@ describe("macOS import credentials", () => {
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	syncBuiltinESMExports();
 	await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -43,6 +47,24 @@ async function fixtureRoot(): Promise<string> {
 	const directory = await mkdtemp(path.join(os.tmpdir(), "ao-browser-import-"));
 	temporaryDirectories.push(directory);
 	return directory;
+}
+
+/** Windows 在 lstat 边界注入链接属性，并重载缓存内置函数的源码；真实夹具仍可被误读以检验拒绝规则。 */
+async function fixtureFileSymlink(target: string, link: string): Promise<typeof BrowserProfileImportService> {
+	if (process.platform !== "win32") {
+		await symlink(target, link, "file");
+		return BrowserProfileImportService;
+	}
+	await writeFile(link, await readFile(target));
+	const original = fs.lstat;
+	vi.spyOn(fs, "lstat").mockImplementation((async (file, options) => {
+		const metadata = await original(file, options);
+		if (String(file) === link) metadata.isSymbolicLink = () => true;
+		return metadata;
+	}) as typeof fs.lstat);
+	syncBuiltinESMExports();
+	vi.resetModules();
+	return (await import("./browser-profile-import")).BrowserProfileImportService;
 }
 
 async function createChromeFixture(root: string): Promise<{ localAppData: string; profileRoot: string }> {
@@ -300,8 +322,8 @@ describe("BrowserProfileImportService", () => {
 		const db = new Database(path.join(profileRoot, "places.sqlite"));
 		db.exec("CREATE TABLE moz_places (url TEXT)");
 		db.close();
-		await symlink(profileRoot, path.join(browserRoot, "linked"));
-		await symlink(profileRoot, path.join(root, "outside"));
+		await symlink(profileRoot, path.join(browserRoot, "linked"), directoryLinkType);
+		await symlink(profileRoot, path.join(root, "outside"), directoryLinkType);
 		const selected = kind === "relative" ? "Profiles/abc.default-release" : kind === "absolute" ? profileRoot
 			: kind === "escape" ? "../../outside" : "linked";
 		await writeFile(path.join(browserRoot, "profiles.ini"), `[InstallABC123]\nDefault=${selected}\nLocked=1\n[Profile0]\nName=Client Research\nIsRelative=1\nPath=Profiles/abc.default-release\n[Profile1]\nName=Client Research\nIsRelative=0\nPath=${profileRoot}\n[Profile2]\nName=Client Research\nIsRelative=1\nPath=./Profiles/abc.default-release\n`);
@@ -322,7 +344,7 @@ describe("BrowserProfileImportService", () => {
 		const browserRoot = path.join(canonicalHome, ".mozilla", "firefox");
 		const profileRoot = path.join(browserRoot, "Profiles", "abc.Work");
 		await mkdir(profileRoot, { recursive: true });
-		await symlink(canonicalHome, aliasHome);
+		await symlink(canonicalHome, aliasHome, directoryLinkType);
 		const databaseFile = path.join(profileRoot, "places.sqlite");
 		const db = new Database(databaseFile);
 		db.exec("CREATE TABLE moz_places (url TEXT)");
@@ -388,7 +410,7 @@ describe("BrowserProfileImportService", () => {
 		}
 		const selected = kind === "outside" ? path.join(root, "outside") : path.join(browserRoot, "linked");
 		if (kind === "outside") await mkdir(selected);
-		else await symlink(path.join(browserRoot, "Profiles", "work.Work"), selected);
+		else await symlink(path.join(browserRoot, "Profiles", "work.Work"), selected, directoryLinkType);
 		await writeFile(path.join(browserRoot, "profiles.ini"), `[InstallABC123]\nDefault=${selected}\n[Profile0]\nName=Legacy\nIsRelative=1\nPath=Profiles/legacy.Legacy\nDefault=1\n[Profile1]\nName=Work\nIsRelative=1\nPath=Profiles/work.Work\n`);
 		const stateDir = path.join(root, "ao-state");
 		const service = new BrowserProfileImportService({
@@ -414,19 +436,20 @@ describe("BrowserProfileImportService", () => {
 			db.close();
 		}
 		const file = path.join(browserRoot, "profiles.ini");
+		let ImportService = BrowserProfileImportService;
 		if (kind === "malformed") await writeFile(file, "[Profile0\nName=Wrong\nIsRelative=1\nPath=abc.Work\nDefault=1");
 		if (kind === "oversized") await writeFile(file, "x".repeat(5 * 1024 * 1024));
 		if (kind === "symlink") {
 			await writeFile(path.join(root, "registry"), "[Profile0]\nName=Wrong\nIsRelative=1\nPath=abc.Work\nDefault=1");
-			await symlink(path.join(root, "registry"), file);
+			ImportService = await fixtureFileSymlink(path.join(root, "registry"), file);
 		}
 		if (kind === "escape") await writeFile(file, `[Profile0]\nName=Outside\nIsRelative=1\nPath=../../outside\n[Profile1]\nName=Outside absolute\nIsRelative=0\nPath=${path.join(root, "outside")}\n`);
 		if (kind === "profile-symlink") {
-			await symlink(path.join(root, "outside"), path.join(browserRoot, "linked"));
+			await symlink(path.join(root, "outside"), path.join(browserRoot, "linked"), directoryLinkType);
 			await writeFile(file, "[Profile0]\nName=Outside\nIsRelative=1\nPath=linked\n");
 		}
 		const stateDir = path.join(root, "ao-state");
-		const service = new BrowserProfileImportService({
+		const service = new ImportService({
 			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
 			platform: "linux", homeDir: root, env: {}, fromPartition: vi.fn(),
 		});
@@ -1593,17 +1616,12 @@ describe("BrowserProfileImportService", () => {
 		await writeFile(path.join(profileRoot, "Network", "Cookies"), "");
 		const outside = path.join(root, "outside-history.sqlite");
 		await writeFile(outside, "not a browser database");
-		try {
-			await symlink(outside, path.join(profileRoot, "History"), "file");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EPERM") return;
-			throw error;
-		}
+		const ImportService = await fixtureFileSymlink(outside, path.join(profileRoot, "History"));
 
 		const stateDir = path.join(root, "ao-state");
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
-		const service = new BrowserProfileImportService({
+		const service = new ImportService({
 			stateDir,
 			profileStore,
 			historyStore: new BrowserHistoryStore({ stateDir }),

@@ -1,6 +1,6 @@
 # 多编码 Agent 桌面编排平台 — 详细设计 V0.1
 
-> 状态：**初版详细设计已完成；Workflow 业务代码尚未实现。M0 已完成无预算范围的环境、构建和部分桌面/Agent 预检，正式验收仍为 BLOCKED；M0-05 预算暂缓。M1-01～M1-05 的限定零 Provider 任务计划已建立，尚未开始代码实现**（见 [m0-report.md](m0-report.md) 与 [m1-plan.md](m1-plan.md)）。
+> 状态：**总体设计 V0.1；M1 Workflow 核心后端已完成并经独立复核判 PASS。M0 已完成无预算范围的环境、构建和部分桌面/Agent 预检，正式验收仍为 BLOCKED；M0-05 预算暂缓。M2 实现及回归修复已落盘，用户决定先本地提交，第六轮离线独立复验与真实 Agent 完整验收暂缓留档；M2 仍为 NOT ACCEPTED**（见 [m0-report.md](m0-report.md)、[m1-plan.md](m1-plan.md) 与 [M2 后续验收留档](m2-handoff.md)）。
 > 日期：2026-11-03；基座：Orchestrator.inc 上游 `23840aa54104`；本地改造分支：`feat/multi-agent-desktop`。
 > 需求输入：`requirements.md` Q1–Q10；源码事实：`gap-analysis.md`。未来调整以验证结果和明确需求变更为准。
 

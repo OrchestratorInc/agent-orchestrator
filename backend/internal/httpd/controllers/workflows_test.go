@@ -41,6 +41,9 @@ type fakeWorkflowService struct {
 	// inserted (201), false means the idempotency key replayed it (200).
 	applied bool
 
+	// resolveErr stands in for the resolved-attempt path's classified failures.
+	resolveErr error
+
 	// createErr, claimErr, and settleErr are returned verbatim, standing in for
 	// the service's classified failures.
 	createErr error
@@ -117,6 +120,16 @@ func (f *fakeWorkflowService) Retry(context.Context, workflowsvc.RetryInput) (do
 
 func (f *fakeWorkflowService) RecoverExpired(context.Context) (int64, error) {
 	return f.recovered, nil
+}
+
+func (f *fakeWorkflowService) Resolve(
+	context.Context,
+	workflowsvc.ResolveInput,
+) (domain.WorkflowAttempt, bool, error) {
+	if f.resolveErr != nil {
+		return domain.WorkflowAttempt{}, false, f.resolveErr
+	}
+	return f.attempts[0], true, nil
 }
 
 func workflowTestTime() time.Time { return time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC) }

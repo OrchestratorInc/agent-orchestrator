@@ -667,16 +667,21 @@ describe("registerCloudProtocol", () => {
 
 describe("resolveCloudAuthDir", () => {
   it("keeps the sign-in in the configured data dir, so instances with their own data dir never share an account", () => {
-    const home = "/Users/someone";
-    const first = resolveCloudAuthDir({ AO_DATA_DIR: "/tmp/ao/alice" }, home, "/work", false);
-    const second = resolveCloudAuthDir({ AO_DATA_DIR: "/tmp/ao/bob" }, home, "/work", false);
-    expect(first).toBe("/tmp/ao/alice");
-    expect(second).toBe("/tmp/ao/bob");
-    expect(resolveCloudAuthDir({ AO_DATA_DIR: " relative/data " }, home, "/work", true)).toBe("/work/relative/data");
+    const home = path.join(os.tmpdir(), "someone");
+    const workingDirectory = path.join(os.tmpdir(), "work");
+    const alice = path.join(os.tmpdir(), "ao", "alice");
+    const bob = path.join(os.tmpdir(), "ao", "bob");
+    const first = resolveCloudAuthDir({ AO_DATA_DIR: alice }, home, workingDirectory, false);
+    const second = resolveCloudAuthDir({ AO_DATA_DIR: bob }, home, workingDirectory, false);
+    expect(first).toBe(alice);
+    expect(second).toBe(bob);
+    expect(resolveCloudAuthDir({ AO_DATA_DIR: " relative/data " }, home, workingDirectory, true)).toBe(path.join(workingDirectory, "relative", "data"));
   });
 
   it("uses ~/.ao for a packaged build and ~/.ao/dev for a development build", () => {
-    expect(resolveCloudAuthDir({}, "/Users/someone", "/work", true)).toBe("/Users/someone/.ao");
-    expect(resolveCloudAuthDir({ AO_DATA_DIR: "  " }, "/Users/someone", "/work", false)).toBe("/Users/someone/.ao/dev");
+    const home = path.join(os.tmpdir(), "someone");
+    const workingDirectory = path.join(os.tmpdir(), "work");
+    expect(resolveCloudAuthDir({}, home, workingDirectory, true)).toBe(path.join(home, ".ao"));
+    expect(resolveCloudAuthDir({ AO_DATA_DIR: "  " }, home, workingDirectory, false)).toBe(path.join(home, ".ao", "dev"));
   });
 });

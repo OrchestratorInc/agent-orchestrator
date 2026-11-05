@@ -1,6 +1,7 @@
 // @vitest-environment node
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -629,9 +630,20 @@ describe("pruneNodeDistribution", () => {
 		writeFileSync(join(bin, "node"), "node");
 		writeFileSync(join(npmBin, "npm-cli.js"), "npm");
 		writeFileSync(join(npmBin, "npx-cli.js"), "npx");
-		symlinkSync("../lib/node_modules/npm/bin/npm-cli.js", join(bin, "npm"));
-		symlinkSync("../lib/node_modules/npm/bin/npx-cli.js", join(bin, "npx"));
-		symlinkSync("../lib/node_modules/corepack/dist/corepack.js", join(bin, "corepack"));
+		expect(readFileSync(join(npmBin, "npm-cli.js"), "utf8")).toBe("npm");
+		expect(readFileSync(join(npmBin, "npx-cli.js"), "utf8")).toBe("npx");
+		for (const [name, target] of [
+			["npm", "../lib/node_modules/npm/bin/npm-cli.js"],
+			["npx", "../lib/node_modules/npm/bin/npx-cli.js"],
+			["corepack", "../lib/node_modules/corepack/dist/corepack.js"],
+		]) {
+			// Windows 对文件的 junction 为真实 dangling link，实跑 unlink 删除入口。
+			const windows = process.platform === "win32";
+			const link = join(bin, name);
+			symlinkSync(windows ? join(bin, target) : target, link, windows ? "junction" : "file");
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		}
+		if (process.platform === "win32") expect(existsSync(join(bin, "npm"))).toBe(false);
 
 		pruneNodeDistribution(nodeRoot);
 

@@ -244,20 +244,28 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
+	// The MCP server list is built here, but its workflow capability is only known
+	// once PrepareControllerEnv mints the bearer. The env map inside each server
+	// config is shared with the callback below, which fills that one key in before
+	// the driver reads the list.
+	mcpServers := m.aoMCPServers(ctx, in.cfg.Harness, env, in.cfg.WorkflowSpawn)
 	_, err = m.chat.StartChat(ctx, ChatStart{
-		SessionID:               id,
-		ProjectID:               in.cfg.ProjectID,
-		Kind:                    in.cfg.Kind,
-		Harness:                 in.cfg.Harness,
-		DataDir:                 m.dataDir,
-		WorkspacePath:           in.workspace.Path,
+		SessionID:     id,
+		ProjectID:     in.cfg.ProjectID,
+		Kind:          in.cfg.Kind,
+		Harness:       in.cfg.Harness,
+		DataDir:       m.dataDir,
+		WorkspacePath: in.workspace.Path,
+		ValidateWorkspace: func(validationCtx context.Context) error {
+			return m.VerifySessionWorktrees(validationCtx, id)
+		},
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
+		MCPServers:              mcpServers,
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -268,6 +276,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			}
 			if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+			}
+			// The capability is minted above, so the tool server can only be given
+			// it now. It is the same token this launch puts in the agent's own
+			// environment: the tool server inherits nothing it could not already use.
+			if in.cfg.WorkflowSpawn != nil {
+				applyWorkflowMCPEnvToServers(mcpServers, launchEnv[EnvBrowserCapability])
 			}
 			in.record = prepared
 			return launchEnv, nil
@@ -348,8 +362,19 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 // on, read like the system prompt when the chat starts or restores. Chat
 // Service keeps it for every later start and resume of the session (edit,
 // rollback, fork). Its env holds only what the CLI needs to reach this daemon
-// for this session, never a credential such as AO_BROWSER_CAPABILITY.
-func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
+// for this session.
+//
+// For a workflow attempt the env additionally carries the attempt identity and the
+// lease, so the agent's own tool server can act as that attempt. That env is
+// delivered to the MCP subprocess only: it never reaches the prompt and never
+// appears in a tool result, and the capability it carries is the very token the
+// agent process already holds, so no new privilege is created.
+func (m *Manager) aoMCPServers(
+	ctx context.Context,
+	harness domain.AgentHarness,
+	env map[string]string,
+	workflow *ports.WorkflowSpawnContext,
+) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
 		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
@@ -362,7 +387,7 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	}
 	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
 	// without it config.Load needs $HOME to find the data dir.
-	serverEnv := make(map[string]string, 4)
+	serverEnv := make(map[string]string, 8)
 	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
 		if value := env[key]; value != "" {
 			serverEnv[key] = value
@@ -370,6 +395,10 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 	}
 	if m.computerUseEnabled(ctx) {
 		serverEnv[envComputerUse] = "1"
+	}
+	if workflow != nil {
+		// The lease is read from the spawn config and goes nowhere else.
+		applyWorkflowMCPEnv(serverEnv, workflow, env[EnvBrowserCapability])
 	}
 	return []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
@@ -465,13 +494,8 @@ func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.Ses
 	return domain.NormalizeSessionMode(defaultMode)
 }
 
-// resumeChatController reattaches a chat session to its provider conversation
-// after a daemon restart.
-//
-// It resumes the stored conversation rather than starting a new one. A resume
-// that fails is reported, not silently replaced with a fresh conversation:
-// presenting unrelated history as continuous is worse than an error the user can
-// act on, and it would strand the work the old conversation was holding.
+// resumeChatController 恢复已存会话并保持历史归属；显式 Repo 必须在启动或重连前实时核验。
+// 历史恢复失败不会静默新建会话，避免丢失原有成果与 generation 归属。
 func (m *Manager) resumeChatController(
 	ctx context.Context,
 	operation string,
@@ -487,6 +511,9 @@ func (m *Manager) resumeChatController(
 	if m.chat == nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w: chat mode is not available in this build",
 			operation, rec.ID, ports.ErrChatUnsupported)
+	}
+	if _, err := m.observeSessionWorktrees(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: workspace verification: %w", operation, rec.ID, err)
 	}
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
 	if err != nil {
@@ -530,22 +557,39 @@ func (m *Manager) resumeChatController(
 		awakeTarget = &target
 	}
 	var completionErr error
+	// A resume has no spawn config, so the attempt identity is recovered from
+	// durable state instead: the binding names the attempt, and the attempt row holds
+	// the lease. The lease is carried only while it is still valid, so an expired
+	// session presents no dead credential and the daemon answers its own clean 403.
+	// A session with no binding (every ordinary session) gets nil and is unchanged.
+	workflowContext, workflowErr := m.workflowSpawnContext(ctx, rec)
+	if workflowErr != nil {
+		// A resume that cannot read its own durable identity facts says so rather than
+		// silently downgrading the session to "not a workflow attempt".
+		return RestoreResult{}, relaunchFailed("workflow identity",
+			fmt.Errorf("%s %s: recover workflow identity: %w", operation, rec.ID, workflowErr))
+	}
+	validationSessionID := rec.ID
+	resumeMCPServers := m.aoMCPServers(ctx, rec.Harness, env, workflowContext)
 	_, err = m.chat.StartChat(ctx, ChatStart{
-		AwakeReconnectTarget:    awakeTarget,
-		ReconnectOnly:           reconnectOnly,
-		SessionID:               rec.ID,
-		ProjectID:               rec.ProjectID,
-		Kind:                    rec.Kind,
-		Harness:                 rec.Harness,
-		DataDir:                 m.dataDir,
-		WorkspacePath:           ws.Path,
+		AwakeReconnectTarget: awakeTarget,
+		ReconnectOnly:        reconnectOnly,
+		SessionID:            rec.ID,
+		ProjectID:            rec.ProjectID,
+		Kind:                 rec.Kind,
+		Harness:              rec.Harness,
+		DataDir:              m.dataDir,
+		WorkspacePath:        ws.Path,
+		ValidateWorkspace: func(validationCtx context.Context) error {
+			return m.VerifySessionWorktrees(validationCtx, validationSessionID)
+		},
 		Env:                     env,
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
+		MCPServers:              resumeMCPServers,
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -556,6 +600,12 @@ func (m *Manager) resumeChatController(
 			}
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+			}
+			// Same rule as the spawn path: the capability is minted above, so the tool
+			// server can only be given it here. It is the token this launch already puts
+			// in the agent's own environment.
+			if workflowContext != nil {
+				applyWorkflowMCPEnvToServers(resumeMCPServers, launchEnv[EnvBrowserCapability])
 			}
 			rec = prepared
 			return launchEnv, nil
@@ -741,12 +791,15 @@ func (m *Manager) restoredWorkspaceProjectDirectories(
 	project domain.ProjectRecord,
 	root string,
 ) ([]string, error) {
-	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
-		return nil, nil
-	}
 	rows, err := m.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
 		return nil, err
+	}
+	// A multi-repo workflow session records one row per repository on an ordinary
+	// project, and its agent must be able to reach every one of them after a
+	// resume, not only the root.
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace && len(rows) <= 1 {
+		return nil, nil
 	}
 	root = filepath.Clean(root)
 	directories := make([]string, 0, len(rows))

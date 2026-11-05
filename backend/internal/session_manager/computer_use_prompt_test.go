@@ -88,7 +88,7 @@ func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 	env := map[string]string{EnvSessionID: "mer-1"}
 	for _, on := range []bool{false, true} {
 		enabled = on
-		servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, env)
+		servers := m.aoMCPServers(context.Background(), domain.HarnessClaudeCode, env, nil)
 		if len(servers) != 1 {
 			t.Fatalf("ao tool servers = %v", servers)
 		}

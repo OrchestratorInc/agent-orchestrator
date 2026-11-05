@@ -445,6 +445,29 @@ type DeletedSessionAccountUsage struct {
 	EstimatedCostNanos int64
 }
 
+type HarnessCapabilitySnapshot struct {
+	Harness    string
+	Source     string
+	AuthState  string
+	Readiness  string
+	Surfaces   string
+	Streaming  string
+	Tools      string
+	Interrupt  string
+	Steer      string
+	Queue      string
+	Resume     string
+	Approval   string
+	ApplyAt    string
+	Usage      string
+	ModelsJson sql.NullString
+	Executable string
+	Version    string
+	ReasonCode string
+	ObservedAt time.Time
+	ExpiresAt  time.Time
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string
@@ -784,6 +807,31 @@ type SessionArtifactVersion struct {
 	RestoredFrom int64
 }
 
+type SessionCapabilitySnapshot struct {
+	SessionID  string
+	Harness    string
+	Generation string
+	Source     string
+	AuthState  string
+	Readiness  string
+	Surfaces   string
+	Streaming  string
+	Tools      string
+	Interrupt  string
+	Steer      string
+	Queue      string
+	Resume     string
+	Approval   string
+	ApplyAt    string
+	Usage      string
+	ModelsJson sql.NullString
+	Executable string
+	Version    string
+	ReasonCode string
+	ObservedAt time.Time
+	ExpiresAt  time.Time
+}
+
 type SessionCleanupFact struct {
 	SessionID            domain.SessionID
 	SessionGeneration    int64
@@ -866,6 +914,8 @@ type SessionWorktree struct {
 	State        string
 	BaseRef      string
 	CreationSha  string
+	ProjectID    string
+	RepoPath     string
 }
 
 type ShellTerminal struct {
@@ -1004,6 +1054,48 @@ type WorkflowAttempt struct {
 	UpdatedAt   time.Time
 }
 
+type WorkflowAttemptBinding struct {
+	AttemptID            domain.WorkflowAttemptID
+	WorkflowID           domain.WorkflowID
+	TaskID               domain.WorkflowTaskID
+	SpawnRequestID       string
+	SpawnHash            string
+	State                domain.WorkflowBindingState
+	SessionID            *domain.SessionID
+	ControllerGeneration string
+	BoundAt              sql.NullTime
+	FailureCode          string
+	Revision             int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+type WorkflowAttemptRepoBinding struct {
+	AttemptID          domain.WorkflowAttemptID
+	WorkflowID         domain.WorkflowID
+	RepoKey            domain.WorkflowRepoKey
+	ProjectID          domain.ProjectID
+	ExpectedBaseSha    string
+	SessionWorktreeRef string
+	ObservedHeadSha    string
+	State              domain.WorkflowRepoBindingState
+	Revision           int64
+	UpdatedAt          time.Time
+}
+
+type WorkflowAuditLog struct {
+	ID               string
+	ActorKind        string
+	ActorRef         string
+	WorkflowID       string
+	AttemptID        string
+	RequestID        string
+	Decision         string
+	Outcome          string
+	TokenFingerprint string
+	CreatedAt        string
+}
+
 type WorkflowEdge struct {
 	WorkflowID domain.WorkflowID
 	FromTaskID domain.WorkflowTaskID
@@ -1018,6 +1110,48 @@ type WorkflowIdempotency struct {
 	ResultType         string
 	ResultID           string
 	CreatedAt          time.Time
+}
+
+type WorkflowIntervention struct {
+	ID                   string
+	WorkflowID           domain.WorkflowID
+	TaskID               domain.WorkflowTaskID
+	AttemptID            *domain.WorkflowAttemptID
+	Mode                 domain.WorkflowInterventionMode
+	State                domain.WorkflowInterventionState
+	SessionID            *domain.SessionID
+	ControllerGeneration string
+	ClientMessageID      string
+	OperationSha         string
+	TargetProviderTurnID string
+	ChatTurnID           string
+	ProviderTurnID       string
+	ReasonCode           string
+	QueueAvailable       bool
+	Revision             int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	SettledAt            sql.NullTime
+}
+
+type WorkflowMessage struct {
+	ID              string
+	WorkflowID      domain.WorkflowID
+	FromTaskID      domain.WorkflowTaskID
+	ToTaskID        *domain.WorkflowTaskID
+	SenderSessionID *domain.SessionID
+	TargetSessionID *domain.SessionID
+	SenderKind      domain.WorkflowMessageSenderKind
+	SenderTaskID    *domain.WorkflowTaskID
+	Kind            domain.WorkflowMessageKind
+	DeliveryState   domain.WorkflowMessageDeliveryState
+	Body            string
+	PayloadRef      string
+	ClientMessageID string
+	PayloadSha      string
+	Revision        int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type WorkflowRepository struct {
@@ -1050,6 +1184,24 @@ type WorkflowTaskRepo struct {
 	RepoKey          domain.WorkflowRepoKey
 	AllowedPathsJson string
 	BaseSha          string
+}
+
+type WorkflowTaskRequest struct {
+	ID               string
+	WorkflowID       domain.WorkflowID
+	RequesterTaskID  domain.WorkflowTaskID
+	RequestKind      domain.WorkflowTaskRequestKind
+	RequestJson      string
+	RequestSha       string
+	State            domain.WorkflowTaskRequestState
+	DecidedByKind    *domain.WorkflowTaskRequestDeciderKind
+	DecidedByRef     string
+	DecidedAt        sql.NullTime
+	Reason           string
+	WorkflowRevision int64
+	Revision         int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type WorkspaceRepo struct {

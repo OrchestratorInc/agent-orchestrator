@@ -10,6 +10,14 @@ func revParseVerifyArgs(repo, ref string) []string {
 	return []string{"-C", repo, "rev-parse", "--verify", "--quiet", ref}
 }
 
+// revParseCommitArgs resolves ref to the commit id it names in repo. The
+// "^{commit}" peel makes a tag resolve to its commit and rejects a blob or tree
+// outright, and --end-of-options keeps a caller-supplied value such as "--all"
+// from being read as a flag.
+func revParseCommitArgs(repo, ref string) []string {
+	return []string{"-C", repo, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}"}
+}
+
 func remoteListArgs(repo string) []string {
 	return []string{"-C", repo, "remote"}
 }

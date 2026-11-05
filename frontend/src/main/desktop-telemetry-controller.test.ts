@@ -87,12 +87,18 @@ describe("DesktopTelemetryController", () => {
 				platform: "linux",
 				fs: {
 					...base,
+					// Windows 的真实 mode 不含 POSIX 权限；此用例专门验证 POSIX fsync 失败后的代际恢复。
+					lstat: async (file) => {
+						const metadata = await base.lstat(file);
+						return { ...metadata, mode: process.platform === "win32" ? 0o600 : metadata.mode,
+							isFile: () => metadata.isFile(), isSymbolicLink: () => metadata.isSymbolicLink() };
+					},
 					syncDirectory: async (target) => {
 						if (failDirectorySync) {
 							failDirectorySync = false;
 							throw new Error("directory fsync failed");
 						}
-						await base.syncDirectory(target);
+						if (process.platform !== "win32") await base.syncDirectory(target);
 					},
 				},
 			});
@@ -218,7 +224,7 @@ describe("DesktopTelemetryController", () => {
 			})}\n`, { mode: 0o600 });
 			const transportFactory = vi.fn(async () => ({ closeAndDrain: async () => {}, capture: vi.fn(), clearCache: async () => {} }));
 			const boot = () => new DesktopTelemetryController({
-				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux" }),
+				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true }),
 				transportFactory,
 				environmentAllowsEvents: true,
 			});

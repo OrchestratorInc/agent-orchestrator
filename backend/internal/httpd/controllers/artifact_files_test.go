@@ -228,15 +228,15 @@ func TestArtifactFileRouteServesTheFilesNextToAPage(t *testing.T) {
 	wantSandboxHeaders(t, unknown, "application/octet-stream")
 }
 
+// TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory 验证文件路由
+// 拒绝路径越界与外部链接；Unix 使用文件 symlink，Windows 使用目录 junction。
 func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "secret.html")
 	if err := os.WriteFile(outside, []byte("<p>secret</p>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	srv, dir := artifactFileServer(t, map[string]string{"report/index.html": "<p>report</p>"})
-	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
-		t.Fatal(err)
-	}
+	escapePath := linkArtifactFileOutside(t, dir, outside)
 	// One byte past the cap; sparse, so cheap.
 	if err := os.WriteFile(filepath.Join(dir, "huge.html"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -246,12 +246,12 @@ func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T)
 	}
 
 	for name, rawPath := range map[string]string{
-		"dot-dot":          "report/../../secret.html",
-		"escaped dot-dot":  "..%2Fsecret.html",
-		"escaping symlink": "escape.html",
-		"directory":        "report",
-		"over the cap":     "huge.html",
-		"missing":          "report/gone.html",
+		"dot-dot":         "report/../../secret.html",
+		"escaped dot-dot": "..%2Fsecret.html",
+		"escaping link":   escapePath,
+		"directory":       "report",
+		"over the cap":    "huge.html",
+		"missing":         "report/gone.html",
 	} {
 		resp, body := getArtifactFile(t, srv, rawPath, "")
 		var apiErr struct {

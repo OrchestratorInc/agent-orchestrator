@@ -33,10 +33,12 @@ type ChatControllerStart struct {
 	Harness       domain.AgentHarness
 	DataDir       string
 	WorkspacePath string
-	Env           map[string]string
-	Model         string
-	Effort        string
-	Permissions   PermissionMode
+	// ValidateWorkspace 在实际派发前重验会话工作区；nil 保留旧会话行为。
+	ValidateWorkspace func(context.Context) error
+	Env               map[string]string
+	Model             string
+	Effort            string
+	Permissions       PermissionMode
 	// ReadOnly forces the provider's native sandbox to reject workspace writes.
 	// Reviewer-owned conversations set this independently of approval behavior.
 	ReadOnly              bool

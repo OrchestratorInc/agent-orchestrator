@@ -4113,6 +4113,154 @@ paths:
       summary: Stream notification changes
       tags:
       - notifications
+  /api/v1/operator/approvals:
+    post:
+      operationId: createOperatorApproval
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersCreateOperatorApprovalRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersOperatorApprovalEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Request an approval for one exact operator operation and payload digest;
+        creating one grants nothing
+      tags:
+      - operator
+  /api/v1/operator/approvals/{approvalId}/confirm:
+    post:
+      operationId: confirmOperatorApproval
+      parameters:
+      - description: Approval identifier returned when the approval was requested.
+        in: path
+        name: approvalId
+        required: true
+        schema:
+          description: Approval identifier returned when the approval was requested.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersConfirmOperatorApprovalRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersOperatorApprovalEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Confirm one approval after native OS user verification of the exact
+        operation and payload
+      tags:
+      - operator
+  /api/v1/operator/approvals/{approvalId}/status:
+    post:
+      operationId: getOperatorApprovalStatus
+      parameters:
+      - description: Approval identifier returned when the approval was requested.
+        in: path
+        name: approvalId
+        required: true
+        schema:
+          description: Approval identifier returned when the approval was requested.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersOperatorApprovalStatusRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersOperatorApprovalEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Poll one approval's state with its id and code; returns no credential
+        and grants no authority
+      tags:
+      - operator
   /api/v1/orchestrators:
     get:
       operationId: listOrchestrators
@@ -13399,6 +13547,441 @@ paths:
       summary: Activate a draft workflow and derive its initially ready tasks
       tags:
       - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/bind:
+    post:
+      operationId: bindWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindWorkflowAttemptRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BindWorkflowAttemptResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create or resume one attempt's session binding intent; a frozen outcome
+        is a 409, never a success
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/binding:
+    get:
+      operationId: getWorkflowAttemptBinding
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowBindingEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one attempt's session binding state; never returns a lease token
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions:
+    post:
+      operationId: createWorkflowIntervention
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowInterventionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInterventionEnvelope'
+          description: OK
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInterventionEnvelope'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Steer into a running turn, queue a message, or stop and request a replan
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/observe:
+    get:
+      operationId: observeWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObserveWorkflowAttemptResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one attempt's session facts and binding state; live/reasonCode
+        appear only when this daemon can check liveness
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/reconcile:
+    post:
+      operationId: reconcileWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BindWorkflowAttemptResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Gather evidence for an unknown spawn; never spawns again, and a still-uncertain
+        binding is a 409
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/resolve:
+    post:
+      operationId: resolveWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveWorkflowAttemptRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowAttemptEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record an operator's decided outcome for an attempt whose lease expired;
+        the only exit from UNKNOWN
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/resume:
+    post:
+      operationId: resumeWorkflowAttempt
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BindWorkflowAttemptResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Re-attach a bound attempt to its existing session after a restart;
+        501 when this daemon cannot resume
+      tags:
+      - workflows
   /api/v1/workflows/{workflowId}/attempts/{attemptId}/settle:
     post:
       operationId: settleWorkflowAttempt
@@ -13525,6 +14108,411 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Mark a claimed attempt as running after checking its lease capability
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/messages:
+    get:
+      operationId: listWorkflowMessages
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Restrict the page to one durable workflow state.
+        in: query
+        name: state
+        schema:
+          description: Restrict the page to one durable workflow state.
+          enum:
+          - draft
+          - active
+          - paused
+          - completed
+          - failed
+          - cancelled
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowMessagesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a workflow's peer collaboration messages
+      tags:
+      - workflows
+    post:
+      operationId: createWorkflowMessage
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowMessageRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkflowMessageResponse'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkflowMessageResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Store one peer collaboration message; the sender is derived from the
+        caller's attempt, never supplied
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/task-requests:
+    get:
+      operationId: listWorkflowTaskRequests
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Restrict the page to one durable workflow state.
+        in: query
+        name: state
+        schema:
+          description: Restrict the page to one durable workflow state.
+          enum:
+          - draft
+          - active
+          - paused
+          - completed
+          - failed
+          - cancelled
+          type: string
+      - in: query
+        name: limit
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+      - in: query
+        name: cursor
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkflowTaskRequestsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a workflow's task requests with their redacted summaries; the
+        stored payload is never returned
+      tags:
+      - workflows
+    post:
+      operationId: createWorkflowTaskRequest
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowTaskRequestRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkflowTaskRequestResponse'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateWorkflowTaskRequestResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Store a task or resource request that only an owner may decide
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/task-requests/{requestId}:
+    get:
+      operationId: getWorkflowTaskRequest
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Task request identifier, unique inside its workflow.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: Task request identifier, unique inside its workflow.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTaskRequestDetailEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one task request and its redacted summary; a request from another
+        workflow is not found
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/task-requests/{requestId}/decide:
+    post:
+      operationId: decideWorkflowTaskRequest
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Task request identifier, unique inside its workflow.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: Task request identifier, unique inside its workflow.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecideWorkflowTaskRequestRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecideWorkflowTaskRequestResponse'
+          description: OK
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecideWorkflowTaskRequestResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record an owner decision; a rejection answers 200, an approval that
+        created no task answers 202 with materialization=pending, and only a materialized
+        approval answers 200
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/tasks:
@@ -13798,6 +14786,50 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Reopen a retry_wait task after a failed attempt
+      tags:
+      - workflows
+  /api/v1/workflows/capabilities:
+    get:
+      operationId: getWorkflowCapabilities
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetWorkflowCapabilitiesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report graded capability evidence per launch harness, with its source
+        and expiry
       tags:
       - workflows
   /api/v1/workflows/recover-expired:
@@ -15299,6 +16331,50 @@ components:
       - paused
       - networkOutcome
       type: object
+    BindWorkflowAttemptRequest:
+      properties:
+        harness:
+          enum:
+          - codex
+          - claude-code
+          - omp
+          - deepseek-harness
+          type: string
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        mode:
+          enum:
+          - chat
+          - tui
+          type: string
+        prompt:
+          maxLength: 65536
+          type: string
+        repoKeys:
+          items:
+            type: string
+          maxLength: 32
+          type: array
+      required:
+      - idempotencyKey
+      type: object
+    BindWorkflowAttemptResponse:
+      properties:
+        binding:
+          $ref: '#/components/schemas/WorkflowAttemptBindingResponse'
+        frozen:
+          type: boolean
+        reasonCode:
+          type: string
+        spawned:
+          type: boolean
+      required:
+      - binding
+      - spawned
+      - frozen
+      type: object
     BrowserCommandRequest:
       properties:
         action:
@@ -16422,6 +17498,43 @@ components:
       - hostPath
       - channels
       type: object
+    ControllersConfirmOperatorApprovalRequest:
+      properties:
+        code:
+          maxLength: 64
+          minLength: 1
+          type: string
+        payloadDigest:
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - code
+      - payloadDigest
+      type: object
+    ControllersCreateOperatorApprovalRequest:
+      properties:
+        operationMethod:
+          maxLength: 8
+          minLength: 3
+          type: string
+        operationPath:
+          maxLength: 1024
+          minLength: 1
+          type: string
+        payload:
+          maxLength: 65536
+          type: string
+        payloadDigest:
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - operationMethod
+      - operationPath
+      - payloadDigest
+      - payload
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -16450,6 +17563,63 @@ components:
       properties:
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersOperatorApprovalEnvelope:
+      properties:
+        approval:
+          $ref: '#/components/schemas/ControllersOperatorApprovalResponse'
+      required:
+      - approval
+      type: object
+    ControllersOperatorApprovalOperationResponse:
+      properties:
+        method:
+          type: string
+        path:
+          type: string
+      required:
+      - method
+      - path
+      type: object
+    ControllersOperatorApprovalResponse:
+      properties:
+        approvalId:
+          type: string
+        code:
+          type: string
+        confirmedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        expiresAt:
+          format: date-time
+          type: string
+        operation:
+          $ref: '#/components/schemas/ControllersOperatorApprovalOperationResponse'
+        payloadDigest:
+          type: string
+        state:
+          enum:
+          - pending
+          - confirmed
+          - consumed
+          - expired
+          type: string
+      required:
+      - approvalId
+      - state
+      - operation
+      - expiresAt
+      type: object
+    ControllersOperatorApprovalStatusRequest:
+      properties:
+        code:
+          maxLength: 64
+          minLength: 1
+          type: string
+      required:
+      - code
       type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
@@ -17754,6 +18924,42 @@ components:
       required:
       - id
       type: object
+    CreateWorkflowMessageRequest:
+      properties:
+        body:
+          maxLength: 4096
+          type: string
+        clientMessageId:
+          maxLength: 200
+          minLength: 1
+          type: string
+        kind:
+          enum:
+          - progress
+          - question
+          - result
+          - handoff
+          - reference
+          type: string
+        payloadRef:
+          maxLength: 512
+          type: string
+        toTaskId:
+          type: string
+      required:
+      - kind
+      - clientMessageId
+      type: object
+    CreateWorkflowMessageResponse:
+      properties:
+        created:
+          type: boolean
+        message:
+          $ref: '#/components/schemas/WorkflowMessageResponse'
+      required:
+      - message
+      - created
+      type: object
     CreateWorkflowRequest:
       properties:
         dependencies:
@@ -17792,6 +18998,36 @@ components:
       - repositories
       - tasks
       - idempotencyKey
+      type: object
+    CreateWorkflowTaskRequestRequest:
+      properties:
+        payload: {}
+        requestId:
+          maxLength: 200
+          minLength: 1
+          type: string
+        requestKind:
+          enum:
+          - create_task
+          - add_dependency
+          - expand_repos
+          - increase_concurrency
+          - increase_budget
+          type: string
+      required:
+      - requestId
+      - requestKind
+      - payload
+      type: object
+    CreateWorkflowTaskRequestResponse:
+      properties:
+        created:
+          type: boolean
+        request:
+          $ref: '#/components/schemas/WorkflowTaskRequestResponse'
+      required:
+      - request
+      - created
       type: object
     CueDefinitionRequest:
       properties:
@@ -17852,6 +19088,38 @@ components:
       - type
       - createdAt
       - updatedAt
+      type: object
+    DecideWorkflowTaskRequestRequest:
+      properties:
+        approve:
+          type: boolean
+        expectedRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        reason:
+          maxLength: 1024
+          type: string
+      required:
+      - approve
+      - expectedRevision
+      type: object
+    DecideWorkflowTaskRequestResponse:
+      properties:
+        materialization:
+          type: string
+        materialized:
+          type: boolean
+        message:
+          type: string
+        reasonCode:
+          type: string
+        request:
+          $ref: '#/components/schemas/WorkflowTaskRequestResponse'
+      required:
+      - request
+      - materialization
+      - materialized
       type: object
     DegradedProject:
       properties:
@@ -18294,6 +19562,15 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GetWorkflowCapabilitiesResponse:
+      properties:
+        capabilities:
+          items:
+            $ref: '#/components/schemas/WorkflowCapabilityResponse'
+          type: array
+      required:
+      - capabilities
       type: object
     GitHubRepo:
       properties:
@@ -19016,6 +20293,28 @@ components:
       required:
       - shellTerminals
       type: object
+    ListWorkflowMessagesResponse:
+      properties:
+        messages:
+          items:
+            $ref: '#/components/schemas/WorkflowMessageResponse'
+          type: array
+        nextCursor:
+          type: string
+      required:
+      - messages
+      type: object
+    ListWorkflowTaskRequestsResponse:
+      properties:
+        nextCursor:
+          type: string
+        requests:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskRequestDetailResponse'
+          type: array
+      required:
+      - requests
+      type: object
     ListWorkflowTasksResponse:
       properties:
         nextCursor:
@@ -19411,6 +20710,21 @@ components:
       required:
       - kind
       - sessionId
+      type: object
+    ObserveWorkflowAttemptResponse:
+      properties:
+        bindingState:
+          type: string
+        live:
+          type:
+          - "null"
+          - boolean
+        observation:
+          $ref: '#/components/schemas/WorkflowSessionObservationResponse'
+        reasonCode:
+          type: string
+      required:
+      - bindingState
       type: object
     OpenCodexAccountLoginTerminalResponse:
       properties:
@@ -20160,6 +21474,29 @@ components:
           type: string
       required:
       - state
+      type: object
+    ResolveWorkflowAttemptRequest:
+      properties:
+        errorCode:
+          maxLength: 256
+          type: string
+        expectedTaskRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        outcome:
+          enum:
+          - succeeded
+          - failed
+          type: string
+      required:
+      - outcome
+      - expectedTaskRevision
+      - idempotencyKey
       type: object
     RestoreArtifactVersionRequest:
       properties:
@@ -23027,12 +24364,102 @@ components:
       required:
       - status
       type: object
+    WorkflowAttemptBindingResponse:
+      properties:
+        attemptId:
+          type: string
+        boundAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        controllerGeneration:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        failureCode:
+          type: string
+        repositories:
+          items:
+            $ref: '#/components/schemas/WorkflowAttemptRepoBindingResponse'
+          type: array
+        revision:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        spawnRequestId:
+          type: string
+        state:
+          enum:
+          - unbound
+          - intent_persisted
+          - spawn_requested
+          - session_provisioning
+          - bound_ready
+          - running
+          - spawn_unknown
+          - reconcile_required
+          - failed_confirmed
+          - stop_requested
+          - stop_confirmed
+          - stop_unknown
+          - recovery_uncertain
+          type: string
+        taskId:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+      required:
+      - attemptId
+      - workflowId
+      - taskId
+      - spawnRequestId
+      - state
+      - revision
+      - createdAt
+      - updatedAt
+      - repositories
+      type: object
     WorkflowAttemptEnvelope:
       properties:
         attempt:
           $ref: '#/components/schemas/WorkflowAttemptResponse'
       required:
       - attempt
+      type: object
+    WorkflowAttemptRepoBindingResponse:
+      properties:
+        expectedBaseSha:
+          type: string
+        observedHeadSha:
+          type: string
+        projectId:
+          type: string
+        repoKey:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sessionWorktreeRef:
+          type: string
+        state:
+          enum:
+          - pending
+          - verified
+          - mismatch
+          - missing
+          - unknown
+          type: string
+      required:
+      - repoKey
+      - projectId
+      - state
+      - revision
       type: object
     WorkflowAttemptResponse:
       properties:
@@ -23095,6 +24522,152 @@ components:
       - createdAt
       - updatedAt
       type: object
+    WorkflowBindingEnvelope:
+      properties:
+        binding:
+          $ref: '#/components/schemas/WorkflowAttemptBindingResponse'
+      required:
+      - binding
+      type: object
+    WorkflowCapabilityModelResponse:
+      properties:
+        defaultEffort:
+          type: string
+        effort:
+          items:
+            type: string
+          type: array
+        model:
+          type: string
+      required:
+      - model
+      type: object
+    WorkflowCapabilityResponse:
+      properties:
+        applyAt:
+          enum:
+          - launch
+          - turn
+          - request
+          - unknown
+          type: string
+        approval:
+          enum:
+          - enforced
+          - advertised_only
+          - unknown
+          type: string
+        authState:
+          enum:
+          - authorized
+          - configured
+          - unauthorized
+          - unknown
+          - not_applicable
+          type: string
+        expired:
+          type: boolean
+        expiresAt:
+          format: date-time
+          type: string
+        generation:
+          type: string
+        harness:
+          type: string
+        interrupt:
+          enum:
+          - supported
+          - unsupported
+          - unknown
+          type: string
+        models:
+          items:
+            $ref: '#/components/schemas/WorkflowCapabilityModelResponse'
+          type: array
+        observedAt:
+          format: date-time
+          type: string
+        observedSessionId:
+          type: string
+        queue:
+          enum:
+          - supported
+          - unsupported
+          - unknown
+          type: string
+        readiness:
+          enum:
+          - ready
+          - blocked_auth
+          - blocked_binary
+          - unknown
+          type: string
+        reasonCode:
+          type: string
+        resume:
+          enum:
+          - load_with_history
+          - resume_no_history
+          - none
+          - unknown
+          type: string
+        source:
+          enum:
+          - static
+          - local_probe
+          - provider_handshake
+          - confirmed_runtime
+          type: string
+        steer:
+          enum:
+          - supported
+          - unsupported
+          - unknown
+          type: string
+        streaming:
+          enum:
+          - supported
+          - unsupported
+          - unknown
+          type: string
+        surfaces:
+          enum:
+          - chat
+          - tui
+          - both
+          - unknown
+          type: string
+        tools:
+          enum:
+          - supported
+          - unsupported
+          - unknown
+          type: string
+        usage:
+          enum:
+          - exact
+          - estimated
+          - unknown
+          type: string
+      required:
+      - harness
+      - source
+      - authState
+      - readiness
+      - surfaces
+      - streaming
+      - tools
+      - interrupt
+      - steer
+      - queue
+      - resume
+      - approval
+      - applyAt
+      - usage
+      - observedAt
+      - expiresAt
+      - expired
+      type: object
     WorkflowDefinitionResponse:
       properties:
         edges:
@@ -23150,6 +24723,203 @@ components:
           $ref: '#/components/schemas/WorkflowResponse'
       required:
       - workflow
+      type: object
+    WorkflowInterventionEnvelope:
+      properties:
+        frozen:
+          type: boolean
+        intervention:
+          $ref: '#/components/schemas/WorkflowInterventionResponse'
+        performed:
+          type: boolean
+        queueAvailable:
+          type: boolean
+        reasonCode:
+          type: string
+        replan:
+          $ref: '#/components/schemas/WorkflowReplanResponse'
+      required:
+      - intervention
+      - performed
+      - frozen
+      - queueAvailable
+      type: object
+    WorkflowInterventionRequest:
+      properties:
+        clientMessageId:
+          maxLength: 200
+          minLength: 1
+          type: string
+        controllerGeneration:
+          maxLength: 200
+          type: string
+        harness:
+          type: string
+        mode:
+          enum:
+          - steer
+          - queue
+          - stop
+          type: string
+        targetProviderTurnId:
+          maxLength: 200
+          type: string
+        text:
+          maxLength: 65536
+          type: string
+      required:
+      - mode
+      - clientMessageId
+      type: object
+    WorkflowInterventionResponse:
+      properties:
+        attemptId:
+          type: string
+        chatTurnId:
+          type: string
+        clientMessageId:
+          type: string
+        controllerGeneration:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        mode:
+          enum:
+          - steer
+          - queue
+          - stop
+          type: string
+        providerTurnId:
+          type: string
+        reasonCode:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        settledAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - requested
+          - queued
+          - delivered
+          - applied
+          - rejected
+          - cancelled
+          - unknown
+          - stop_requested
+          - stop_confirmed
+          - stop_unknown
+          type: string
+        targetProviderTurnId:
+          type: string
+        taskId:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - taskId
+      - mode
+      - state
+      - controllerGeneration
+      - clientMessageId
+      - revision
+      - createdAt
+      - updatedAt
+      type: object
+    WorkflowMessageResponse:
+      properties:
+        body:
+          type: string
+        clientMessageId:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        deliveryState:
+          enum:
+          - persisted
+          - forwarded
+          - rejected
+          - unknown
+          type: string
+        fromTaskId:
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - progress
+          - question
+          - result
+          - handoff
+          - reference
+          type: string
+        payloadRef:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        senderKind:
+          enum:
+          - agent
+          - human
+          - daemon
+          type: string
+        toTaskId:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - fromTaskId
+      - senderKind
+      - kind
+      - deliveryState
+      - clientMessageId
+      - revision
+      - createdAt
+      - updatedAt
+      type: object
+    WorkflowReplanResponse:
+      properties:
+        interventionId:
+          type: string
+        preservedWorktrees:
+          items:
+            type: string
+          type: array
+        reasonCode:
+          type: string
+        requestedAt:
+          format: date-time
+          type: string
+        taskId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - interventionId
+      - workflowId
+      - taskId
+      - requestedAt
       type: object
     WorkflowRepositoryInput:
       properties:
@@ -23227,6 +24997,46 @@ components:
       - revision
       - createdAt
       - updatedAt
+      type: object
+    WorkflowSessionObservationResponse:
+      properties:
+        clientRequestCommitted:
+          type: boolean
+        clientRequestId:
+          type: string
+        controllerGeneration:
+          type: string
+        harness:
+          type: string
+        kind:
+          type: string
+        mode:
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        providerConversationId:
+          type: string
+        readiness:
+          enum:
+          - unknown
+          - provisioning
+          - ready
+          - exited
+          - failed
+          type: string
+        sessionId:
+          type: string
+        terminated:
+          type: boolean
+      required:
+      - sessionId
+      - readiness
+      - clientRequestCommitted
+      - terminated
+      - observedAt
       type: object
     WorkflowTaskEnvelope:
       properties:
@@ -23351,6 +25161,169 @@ components:
       - taskId
       - repoKey
       - allowedPaths
+      type: object
+    WorkflowTaskRequestDetailEnvelope:
+      properties:
+        request:
+          $ref: '#/components/schemas/WorkflowTaskRequestDetailResponse'
+      required:
+      - request
+      type: object
+    WorkflowTaskRequestDetailResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        decidedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        decidedByKind:
+          enum:
+          - human
+          - daemon
+          type: string
+        decidedByRef:
+          type: string
+        id:
+          type: string
+        reason:
+          type: string
+        requestKind:
+          enum:
+          - create_task
+          - add_dependency
+          - expand_repos
+          - increase_concurrency
+          - increase_budget
+          type: string
+        requestSha:
+          type: string
+        requesterTaskId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - expired
+          type: string
+        summary:
+          $ref: '#/components/schemas/WorkflowTaskRequestSummary'
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+        workflowRevision:
+          format: int64
+          type: integer
+      required:
+      - id
+      - workflowId
+      - requesterTaskId
+      - requestKind
+      - requestSha
+      - state
+      - workflowRevision
+      - revision
+      - createdAt
+      - updatedAt
+      - summary
+      type: object
+    WorkflowTaskRequestResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        decidedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        decidedByKind:
+          enum:
+          - human
+          - daemon
+          type: string
+        decidedByRef:
+          type: string
+        id:
+          type: string
+        reason:
+          type: string
+        requestKind:
+          enum:
+          - create_task
+          - add_dependency
+          - expand_repos
+          - increase_concurrency
+          - increase_budget
+          type: string
+        requestSha:
+          type: string
+        requesterTaskId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - pending
+          - approved
+          - rejected
+          - expired
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+        workflowRevision:
+          format: int64
+          type: integer
+      required:
+      - id
+      - workflowId
+      - requesterTaskId
+      - requestKind
+      - requestSha
+      - state
+      - workflowRevision
+      - revision
+      - createdAt
+      - updatedAt
+      type: object
+    WorkflowTaskRequestSummary:
+      properties:
+        budgetDelta:
+          type:
+          - "null"
+          - integer
+        concurrencyDelta:
+          type:
+          - "null"
+          - integer
+        notesRef:
+          type: string
+        repos:
+          items:
+            type: string
+          type: array
+        taskCount:
+          type: integer
+        titleHints:
+          items:
+            type: string
+          type: array
+      required:
+      - taskCount
+      - titleHints
+      - repos
       type: object
     WorkflowTaskResponse:
       properties:
@@ -24163,6 +26136,9 @@ tags:
 - description: Durable multi-repository workflow DAGs, their tasks, and worker claim
     leases
   name: workflows
+- description: 'Human approval for operator-only workflow actions: request, confirm,
+    poll, and list'
+  name: operator
 - description: Pull-request actions (SCM lane)
   name: prs
 - description: Code-review runs and findings

@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
@@ -95,6 +96,32 @@ type APIDeps struct {
 	// every workflow route mounted and answering 501, like the other optional
 	// surfaces.
 	Workflows controllers.WorkflowService
+	// WorkflowCapabilities, WorkflowBindings, WorkflowBinder, WorkflowInterventions,
+	// WorkflowCollaboration, and WorkflowOwnership are the M2 slots. Each is independent so a
+	// deployment can wire the M1 surface alone; a nil slot leaves only its own routes answering
+	// 501. WorkflowBinder may additionally implement controllers.AttemptResumer and
+	// controllers.AttemptLiveTarget; those capabilities are discovered per request, so wiring a
+	// coordinator that lacks them is valid and answers 501 / omits the liveness fields.
+	WorkflowCapabilities  controllers.CapabilityResolver
+	WorkflowBindings      controllers.BindingReader
+	WorkflowBinder        controllers.AttemptBinder
+	WorkflowInterventions controllers.InterventionCoordinator
+	WorkflowCollaboration controllers.CollaborationCoordinator
+	// WorkflowOwnership resolves the durable Task/Project/Repo facts a bind must carry. A nil
+	// slot leaves the bind route answering 501: binding with body-supplied facts is exactly the
+	// defect the M2 acceptance found (B-03).
+	WorkflowOwnership controllers.OwnershipResolver
+	// WorkflowPrincipals derives the trusted caller for the M2 routes. A nil resolver refuses
+	// every M2 request: an unwired identity check is not permission.
+	WorkflowPrincipals *principal.Resolver
+	// WorkflowAudit appends sensitive operator decisions to the audit trail. A nil recorder means
+	// "no durable audit table exists yet" — the decisions still work — and a WIRED recorder that
+	// fails makes the request fail rather than reporting an unrecorded decision.
+	WorkflowAudit principal.AuditRecorder
+	// OperatorApprovals 是本次 daemon 启动的一次性审批表，缺失时拒绝审批授权。
+	OperatorApprovals *principal.ApprovalStore
+	// OperatorConsent 是 OS 原生人工验证边界，缺失或验证失败都不确认审批。
+	OperatorConsent principal.ConsentVerifier
 
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
@@ -125,6 +152,24 @@ type APIDeps struct {
 func normalizeAPIDeps(deps APIDeps, log *slog.Logger) APIDeps {
 	if deps.DeviceLive == nil && deps.Presence != nil {
 		deps.DeviceLive = deps.Presence
+	}
+	// An unwired M2 principal resolver would make every M2 route refuse (a nil resolver refuses
+	// everything), which is correct but says nothing about why. The fallback below keeps that
+	// refusal AND makes it diagnosable: it installs a resolver with NO operator trust, so every
+	// operator request is refused and every agent request is refused too, because there is no
+	// verifier or lease prover to check one against.
+	//
+	// It is fail-closed by construction rather than by intent: there is no loopback shortcut here
+	// any more. A loopback peer proves only "some local process" — every worker AO launches shares
+	// that address — so a resolver that treated the address as the operator would let a worker
+	// approve its own task request or resolve its own attempt. Production wiring must supply
+	// WorkflowPrincipals built over a native consent approval table
+	// (principal.ApprovalOperatorTrust + a per-boot ApprovalStore); see daemon/daemon.go.
+	if deps.WorkflowPrincipals == nil && (deps.WorkflowBinder != nil || deps.WorkflowBindings != nil ||
+		deps.WorkflowCollaboration != nil || deps.WorkflowInterventions != nil) {
+		deps.WorkflowPrincipals = principal.NewResolver(nil, nil, nil)
+		log.Warn("M2 workflow routes are wired without an identity resolver; " +
+			"every M2 caller is refused until an operator trust is configured")
 	}
 	if deps.DeviceRoster != nil && deps.DeviceLive == nil {
 		log.Warn("mobile device roster has no liveness tracker wired; every device will report offline")
@@ -168,6 +213,7 @@ type API struct {
 	linkPreview   *controllers.LinkPreviewController
 	github        *controllers.GitHubController
 	workflows     *controllers.WorkflowsController
+	operator      *controllers.OperatorController
 	events        *EventsController
 }
 
@@ -232,8 +278,22 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
-		workflows:     &controllers.WorkflowsController{Svc: deps.Workflows},
-		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
+		workflows: &controllers.WorkflowsController{
+			Svc:           deps.Workflows,
+			Capabilities:  deps.WorkflowCapabilities,
+			Bindings:      deps.WorkflowBindings,
+			Binder:        deps.WorkflowBinder,
+			Interventions: deps.WorkflowInterventions,
+			Collaboration: deps.WorkflowCollaboration,
+			Ownership:     deps.WorkflowOwnership,
+			Principals:    deps.WorkflowPrincipals,
+			Audit:         deps.WorkflowAudit,
+		},
+		operator: &controllers.OperatorController{
+			Approvals: deps.OperatorApprovals,
+			Consent:   deps.OperatorConsent,
+		},
+		events: &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 }
 
@@ -357,6 +417,8 @@ func (a *API) Register(root chi.Router) {
 			a.linkPreview.Register(r)
 			a.github.Register(r)
 			a.workflows.Register(r)
+			a.workflows.RegisterM2(r)
+			a.operator.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.

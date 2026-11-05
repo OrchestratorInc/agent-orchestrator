@@ -57,6 +57,16 @@ var (
 	// ErrSteerContentUnsupported means the provider cannot accept every structured
 	// block. The whole queued message stays undelivered.
 	ErrSteerContentUnsupported = errors.New("steer content is unsupported")
+	// ErrSteerTargetRequired reports a pinned steer with no turn to pin. It is a
+	// caller bug rather than a race: a caller that has no turn id should ask for
+	// the ordinary steer, which resolves the running turn itself.
+	ErrSteerTargetRequired = errors.New("steer target turn is required")
+	// ErrStaleControllerGeneration reports a steer fenced against a controller
+	// generation that no longer exists. The controller was replaced (restart,
+	// reconnect, interface switch), so it must not act on the caller's evidence:
+	// a turn id from the previous generation names work this controller does not
+	// own.
+	ErrStaleControllerGeneration = errors.New("chat controller generation is stale")
 )
 
 // SteerResult is what a steer did, for a client that has to attribute it.
@@ -132,7 +142,50 @@ func (s *Service) Steer(
 		return SteerResult{}, err
 	}
 	defer release()
-	return controller.Steer(ctx, msg)
+	result, err := controller.Steer(ctx, msg)
+	if err == nil {
+		s.recordConfirmedCapability(ctx, controller, domain.CapabilityFeatureSteer)
+	}
+	return result, err
+}
+
+// SteerPinned delivers guidance into exactly providerTurnID, and refuses rather
+// than redirecting when that turn is no longer the one in flight.
+//
+// Unlike Steer it never falls back: not to the running turn, and not to a normal
+// send. A caller that named a turn is answering that turn, and turning the
+// request into a new message while the conversation is idle would deliver
+// guidance about work that already finished as if it were a fresh instruction.
+// The gateway that uses this models "send" and "steer" as separate requests, and
+// silently converting one into the other is the failure that split exists to
+// prevent.
+//
+// Idempotency is the same durable contract as Steer: a repeated ClientMessageID
+// replays from its stored receipt and never reaches the provider twice.
+func (s *Service) SteerPinned(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedGeneration string,
+	providerTurnID string,
+	msg ports.ChatUserMessage,
+) (SteerResult, error) {
+	if strings.TrimSpace(msg.Text) == "" {
+		return SteerResult{}, ErrSteerTextRequired
+	}
+	msg = s.resolveSteerSender(ctx, msg)
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
+	}
+	controller, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return SteerResult{}, err
+	}
+	defer release()
+	result, err := controller.SteerPinned(ctx, expectedGeneration, providerTurnID, msg)
+	if err == nil {
+		s.recordConfirmedCapability(ctx, controller, domain.CapabilityFeatureSteer)
+	}
+	return result, err
 }
 
 // RecoverSteer reads only the durable receipt. A missing controller or a changed
@@ -379,6 +432,52 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 }
 
 func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
+	return c.steerLockedForTurn(ctx, msg, "")
+}
+
+// SteerPinned is Steering with a precondition the caller can rely on: the guidance
+// joins exactly providerTurnID, and nothing is sent when that turn is not the one in
+// flight.
+//
+// Why a caller needs this at all: Steer picks the running turn itself, which is
+// right for a UI acting on whatever the user is watching, and wrong for a caller
+// that observed a specific turn and is answering it. When that turn is no longer
+// the one in flight, the guidance is about work that has already ended, and
+// delivering it into the successor would apply a correction to a turn that never
+// made the mistake. AO therefore refuses rather than redirecting.
+//
+// Two refusals are made without contacting the provider and without recording a
+// delivery rejection: an empty target (ErrSteerTargetRequired) and a generation
+// that is no longer the controller's (ErrStaleControllerGeneration). Both describe
+// the caller's evidence rather than the provider's answer, and persisting a
+// rejection would make the same client handle unable to deliver once the caller's
+// evidence is correct again.
+func (c *Controller) SteerPinned(
+	ctx context.Context,
+	expectedGeneration, providerTurnID string,
+	msg ports.ChatUserMessage,
+) (SteerResult, error) {
+	if strings.TrimSpace(providerTurnID) == "" {
+		return SteerResult{}, ErrSteerTargetRequired
+	}
+	// The generation is fixed for a controller's lifetime, so reading it outside
+	// the lock cannot race a write; a replaced controller is a different object.
+	if expectedGeneration != "" && expectedGeneration != c.Generation() {
+		return SteerResult{}, fmt.Errorf("%w: caller expected %q, live controller is %q",
+			ErrStaleControllerGeneration, expectedGeneration, c.Generation())
+	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return c.steerLockedForTurn(ctx, msg, providerTurnID)
+}
+
+// steerLockedForTurn 在 sendMu 内执行 Steer；空 pinnedTurn 选择当前 turn，非空值要求归属匹配。
+// ack 等待结束后先核验工作区，再预留 client handle 和 queued 消息，拒绝时保留原队列。
+func (c *Controller) steerLockedForTurn(
+	ctx context.Context,
+	msg ports.ChatUserMessage,
+	pinnedTurn string,
+) (SteerResult, error) {
 
 	requestJSON, err := encodeSteerDeliveryRequest(msg)
 	if err != nil {
@@ -415,18 +514,42 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			})
 	}
 
-	turn, ok := c.awaitAcknowledgedTurn(ctx)
-	if !ok {
-		// Nothing is in flight. Reusing the interrupt sentinel keeps one code for
-		// "there is no turn" across every command that needs one; the endpoint says
-		// what to do about it.
-		return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
-			durableSteerRefusal{
-				kind:           domain.ConversationSteerRejectedNoActiveTurn,
-				cause:          ErrNoActiveTurn,
-				reserveContext: "reserve refusal",
-				persistContext: "persist no-active-turn refusal",
-			})
+	var turn string
+	if pinnedTurn != "" {
+		// The pin is a precondition, so the only question is whether it still
+		// names the turn in flight. awaitTurnAcknowledged answers both halves: it
+		// rides out the gap between dispatch and the provider's turn-started
+		// event, and it returns false the moment ownership moves to another turn.
+		// The durable no-active-turn rejection below still applies, because the
+		// caller's handle must stay reusable if the same turn comes back.
+		if !c.awaitTurnAcknowledged(ctx, pinnedTurn) {
+			return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
+				durableSteerRefusal{
+					kind:           domain.ConversationSteerRejectedNoActiveTurn,
+					cause:          ErrNoActiveTurn,
+					reserveContext: "reserve refusal",
+					persistContext: "persist no-active-turn refusal",
+				})
+		}
+		turn = pinnedTurn
+	} else {
+		acknowledged, ok := c.awaitAcknowledgedTurn(ctx)
+		if !ok {
+			// Nothing is in flight. Reusing the interrupt sentinel keeps one code for
+			// "there is no turn" across every command that needs one; the endpoint says
+			// what to do about it.
+			return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
+				durableSteerRefusal{
+					kind:           domain.ConversationSteerRejectedNoActiveTurn,
+					cause:          ErrNoActiveTurn,
+					reserveContext: "reserve refusal",
+					persistContext: "persist no-active-turn refusal",
+				})
+		}
+		turn = acknowledged
+	}
+	if err := c.checkWorkspace(ctx); err != nil {
+		return SteerResult{}, err
 	}
 	if msg.ClientMessageID != "" {
 		delivery, created, reserveErr := c.store.ReserveSteerDelivery(
@@ -561,8 +684,8 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 }
 
-// SteerOrSend selects and persists one delivery outcome while holding the same
-// lock used by ordinary sends and steering.
+// SteerOrSend 在 sendMu 内选择并保存一次发送或 Steer 结果。
+// 预留后仍在接受新消息前核验工作区，明确拒绝时释放此前已接受的 followers。
 func (c *Controller) SteerOrSend(
 	ctx context.Context,
 	msg ports.ChatUserMessage,
@@ -631,6 +754,9 @@ func (c *Controller) SteerOrSend(
 		}
 	}
 
+	if err := c.checkWorkspace(ctx); err != nil {
+		return SteerOrSendResult{}, err
+	}
 	batch, batchErr := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, false, 0, c.now())
 	if errors.Is(batchErr, domain.ErrNoQueuedTurn) {
 		batch = nil
@@ -649,7 +775,11 @@ func (c *Controller) SteerOrSend(
 	turn, err := c.sendLocked(ctx, msg, false, override, queuedBatchIDs(batch))
 	if err != nil {
 		if len(batch) > 0 {
-			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+			if errors.Is(err, ErrWorkspaceInvalid) {
+				if releaseErr := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); releaseErr != nil {
+					return SteerOrSendResult{}, errors.Join(err, releaseErr)
+				}
+			} else if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
 				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
 				c.log.Error("failed to settle fallback batch", "error", failErr)
 			}

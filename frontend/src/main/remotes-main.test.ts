@@ -43,9 +43,10 @@ async function tempFile(): Promise<string> {
 
 describe("remotesFilePath", () => {
 	it("keeps an isolated AO_DATA_DIR out of the real home credentials", () => {
-		vi.stubEnv("AO_DATA_DIR", "/tmp/ao-remote-proof");
+		const dataDir = join(tmpdir(), "ao-remote-proof");
+		vi.stubEnv("AO_DATA_DIR", dataDir);
 		try {
-			expect(remotesFilePath()).toBe("/tmp/ao-remote-proof/remotes.json");
+			expect(remotesFilePath()).toBe(join(dataDir, "remotes.json"));
 		} finally {
 			vi.unstubAllEnvs();
 		}

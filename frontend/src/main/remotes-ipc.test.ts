@@ -84,7 +84,14 @@ describe("removeSavedRemote", () => {
 	it("refuses to touch a file others can read", async () => {
 		const path = await tempFile(TWO_HOSTS, 0o644);
 		const disconnect = dropped();
-		await expect(removeSavedRemote(path, "http://192.0.2.1:1", disconnect)).rejects.toThrow(/chmod 600/);
-		expect(disconnect).not.toHaveBeenCalled();
+		// 验证 POSIX 权限拒绝经 IPC 保持失败闭锁，Windows 豁免由存储测试单独覆盖。
+		const hostPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+		try {
+			await expect(removeSavedRemote(path, "http://192.0.2.1:1", disconnect)).rejects.toThrow(/chmod 600/);
+			expect(disconnect).not.toHaveBeenCalled();
+		} finally {
+			Object.defineProperty(process, "platform", hostPlatform);
+		}
 	});
 });

@@ -85,13 +85,30 @@ func TestMigrationWorkflowCDCWidensChangeLogAndInstallsTriggers(t *testing.T) {
 			t.Errorf("trigger %s count = %d, want 1", trigger, count)
 		}
 	}
-	var triggersAfter int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'`).Scan(&triggersAfter); err != nil {
+	// This assertion is about the CDC migration itself, so it counts only the workflow CDC
+	// triggers it installs. A later migration may legitimately add triggers on other
+	// tables (for example the M2 binding-loss trigger on sessions); counting every trigger
+	// in the database would make this test fail for a change it does not cover.
+	var workflowTriggersAfter int
+	if err := db.QueryRow(`
+SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN (
+    'workflows_cdc_insert', 'workflows_cdc_update',
+    'workflow_tasks_cdc_insert', 'workflow_tasks_cdc_update',
+    'workflow_attempts_cdc_insert', 'workflow_attempts_cdc_update'
+)`).Scan(&workflowTriggersAfter); err != nil {
+		t.Fatalf("count workflow CDC triggers after migration: %v", err)
+	}
+	if workflowTriggersAfter != len(workflowCDCTriggers) {
+		t.Errorf("workflow CDC trigger count = %d, want %d", workflowTriggersAfter, len(workflowCDCTriggers))
+	}
+	// The pre-existing triggers are still present: the widening dropped nothing.
+	var totalAfter int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'`).Scan(&totalAfter); err != nil {
 		t.Fatalf("count triggers after migration: %v", err)
 	}
-	if triggersAfter != triggersBefore+len(workflowCDCTriggers) {
-		t.Errorf("trigger count = %d, want %d: the in-place widening dropped or added triggers",
-			triggersAfter, triggersBefore+len(workflowCDCTriggers))
+	if totalAfter < triggersBefore {
+		t.Errorf("trigger count dropped from %d to %d: the in-place widening removed triggers",
+			triggersBefore, totalAfter)
 	}
 	// The widening is schema text only: the nullable project_id from 0140 and
 	// the retention index must both survive.

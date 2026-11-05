@@ -6,6 +6,11 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		operator: {
+			runVerb: async () => {
+				throw new Error("Operator actions require the desktop app.");
+			},
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,

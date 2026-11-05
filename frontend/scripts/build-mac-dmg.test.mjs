@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -12,6 +13,12 @@ import {
 	readDsStoreLayout,
 	validateMountedLayout,
 } from "./build-mac-dmg.mjs";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal();
+	const readlink = vi.fn(actual.readlink);
+	return { ...actual, default: { ...actual, readlink }, readlink };
+});
 
 // Platform-independent coverage. The end-to-end proof (a real dmg built,
 // mounted and checked) runs on the macOS runner in frontend.yml's
@@ -196,13 +203,17 @@ describe("validateMountedLayout", () => {
 	beforeEach(() => {
 		volume = mkdtempSync(path.join(tmpdir(), "ao-dmg-volume-"));
 	});
-	afterEach(() => rmSync(volume, { recursive: true, force: true }));
+	afterEach(() => { vi.mocked(readlink).mockReset(); rmSync(volume, { recursive: true, force: true }); });
 
 	// What `hdiutil create -srcfolder` produced for every stable release up to
 	// v0.14.7: the app and the link, and nothing that tells Finder how to draw.
 	it("rejects a bare image with only the app and the Applications link", async () => {
 		mkdirSync(path.join(volume, APP_BUNDLE_NAME));
-		symlinkSync("/Applications", path.join(volume, "Applications"));
+		if (process.platform === "win32") {
+			// Windows 创建此链接需要额外权限，只替换 macOS 的 readlink 边界。
+			writeFileSync(path.join(volume, "Applications"), "");
+			vi.mocked(readlink).mockResolvedValueOnce("/Applications");
+		} else symlinkSync("/Applications", path.join(volume, "Applications"));
 		expect(await validateMountedLayout(volume)).toEqual([
 			"missing .VolumeIcon.icns",
 			"expected one background image, found 0",

@@ -104,15 +104,13 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := writeArtifact(t, t.TempDir(), "outside.html")
-	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
-		t.Fatal(err)
-	}
+	escape := linkArtifactOutside(t, dir, outside)
 	for _, reference := range []string{
 		"notes.md",
 		filepath.Join(dir, "notes.md"),
 		outside,
 		"../outside.html",
-		"escape.html",
+		escape,
 		"folder.html",
 		"huge.html",
 		"gone.html",

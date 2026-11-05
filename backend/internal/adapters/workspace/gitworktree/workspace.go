@@ -81,6 +81,15 @@ var (
 	ErrWorktreeLocked = ports.ErrWorkspaceLocked
 	// ErrPathOccupied is an adapter-local alias of ports.ErrWorkspacePathOccupied.
 	ErrPathOccupied = ports.ErrWorkspacePathOccupied
+	// ErrBaseSHAUnavailable and ErrBaseSHAMismatch are adapter-local aliases of
+	// the ports sentinels for a pinned seed commit, following the same
+	// aliasing convention:
+	//   - Unavailable: the requested value is not a full hexadecimal commit id,
+	//     or that commit cannot be resolved in this repository.
+	//   - Mismatch: the commit is valid, but the branch (or live worktree) a
+	//     Create would reuse is not at it.
+	ErrBaseSHAUnavailable = ports.ErrWorkspaceBaseSHAUnavailable
+	ErrBaseSHAMismatch    = ports.ErrWorkspaceBaseSHAMismatch
 )
 
 // RepoResolver maps a project to the absolute path of its source git repo.
@@ -291,6 +300,13 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if err := w.validateBranch(ctx, repo, cfg.Branch); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
+	// A pinned base commit is validated BEFORE anything is created: an unknown
+	// or malformed pin must cost nothing, and a pin that only failed after the
+	// branch existed would leave state behind on every retry.
+	pinnedSHA, err := w.resolvePinnedBaseSHA(ctx, repo, cfg.BaseSHA)
+	if err != nil {
+		return ports.WorkspaceInfo{}, err
+	}
 	if cfg.RequireNewBranch {
 		exists, err := w.branchNameTaken(ctx, repo, cfg.Branch, true)
 		if err != nil {
@@ -326,6 +342,22 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 		if cfg.FreshBranch {
 			return ports.WorkspaceInfo{}, fmt.Errorf("gitworktree: prepared workspace path %q already exists", path)
 		}
+		if pinnedSHA != "" {
+			// Re-attaching must not hand back a worktree built from some other
+			// commit: this path is reused across sessions of one project, so a
+			// leftover worktree at it says nothing about the pinned commit.
+			head, readErr := w.worktreeHead(ctx, path)
+			if readErr != nil {
+				return ports.WorkspaceInfo{}, readErr
+			}
+			if !strings.EqualFold(head, pinnedSHA) {
+				return ports.WorkspaceInfo{}, fmt.Errorf("%w: existing worktree %s is at %s, pinned base is %s",
+					ErrBaseSHAMismatch, path, head, pinnedSHA)
+			}
+			info.BaseSHA = pinnedSHA
+			info.BaseRef = firstNonEmpty(cfg.BaseRef, pinnedSHA)
+			return info, nil
+		}
 		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -335,32 +367,51 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	}
 	seedRef := ""
 	seedSHA := ""
-	if cfg.FreshBranch {
+	addBaseRef := cfg.BaseRef
+	resolveExistingBase := true
+	if pinnedSHA != "" {
+		// The pin IS the seed. Resolving the repository default here is the
+		// defect this field exists to prevent, so it is not resolved at all;
+		// the comparison base falls back to the pinned commit, which is the
+		// commit this work started from.
+		seedRef, seedSHA = pinnedSHA, pinnedSHA
+		addBaseRef = firstNonEmpty(cfg.BaseRef, pinnedSHA)
+		// A branch this spawn created earlier is reused only while it still
+		// sits on the pin (addWorktree enforces that), so there is no default
+		// base left to resolve for it either.
+		resolveExistingBase = false
+	} else if cfg.FreshBranch {
 		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		addBaseRef = cfg.BaseRef
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true, cfg.RequireNewBranch)
+	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, addBaseRef, seedRef, pinnedSHA, resolveExistingBase, cfg.RequireNewBranch)
 	if err != nil {
 		// An occupied path is refused before git runs, so there is no prepared
 		// branch or worktree to roll back, and the rollback would misreport the
 		// untouched folder as an unregistered partial worktree.
-		if cfg.FreshBranch && !errors.Is(err, ErrPathOccupied) {
+		if (cfg.FreshBranch || pinnedSHA != "") && !errors.Is(err, ErrPathOccupied) {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			info := ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: seedSHA, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}
+			info := ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: seedSHA, BaseRef: addBaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}
 			remaining, cleanupErr := w.rollbackPreparedAdd(cleanupCtx, info)
 			if cleanupErr != nil {
 				return remaining, errors.Join(err, cleanupErr)
 			}
 		}
 		return ports.WorkspaceInfo{}, err
+	}
+	if pinnedSHA != "" {
+		// The pin is the recorded base whether or not a fresh branch was
+		// requested: it is the commit this caller planned from.
+		return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: pinnedSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 	}
 	var baseSHA string
 	if cfg.FreshBranch {
@@ -1478,7 +1529,7 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err := w.validateBranch(ctx, repo, recreateBranch); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", false, false)
+	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", "", false, false)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -1571,7 +1622,7 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 	return false, nil
 }
 
-func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase, requireNewBranch bool) (string, error) {
+func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef, pinSHA string, resolveExistingBase, requireNewBranch bool) (string, error) {
 	// Refuse early if the branch is already checked out in another worktree:
 	// `git worktree add` will fail, but its stderr leaks through as an opaque
 	// 500. A typed sentinel lets the HTTP layer surface a 409.
@@ -1607,6 +1658,23 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		if requireNewBranch {
 			return "", fmt.Errorf("%w: %q", ports.ErrWorkspaceBranchAlreadyExists, branch)
 		}
+		if pinSHA != "" {
+			// Idempotent retry of a pinned spawn: accept the branch the earlier
+			// attempt created only while it is still exactly at the pin. A
+			// branch that moved (a commit landed on it, or it came from a
+			// different seed) would hand the session a tree it did not ask for.
+			exists, atPin, err := w.branchTipAt(ctx, repo, branch, pinSHA)
+			if err != nil {
+				return "", err
+			}
+			if !exists || !atPin {
+				tip, tipErr := w.revParse(ctx, repo, "refs/heads/"+branch)
+				if tipErr != nil {
+					return "", tipErr
+				}
+				return "", fmt.Errorf("%w: branch %q is at %s, pinned base is %s", ErrBaseSHAMismatch, branch, tip, pinSHA)
+			}
+		}
 		// Create needs a freshly resolved base for accurate initial diffs even
 		// when the requested branch already exists. Restore already has durable
 		// base metadata and only needs to reattach that branch; making it resolve
@@ -1623,6 +1691,18 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		}
 		if _, err := w.run(ctx, w.binary, worktreeAddBranchArgs(repo, path, branch, force)...); err != nil {
 			return "", fmt.Errorf("gitworktree: worktree add existing branch %q: %w", branch, err)
+		}
+		return baseRef, nil
+	}
+	if pinSHA != "" {
+		// The pin is the seed, full stop. Resolving a repository default here
+		// (the branches below) is exactly the fallback a pinned caller must not
+		// get, so the pinned commit goes straight to `worktree add -b`.
+		if baseRef == "" {
+			baseRef = pinSHA
+		}
+		if err := w.addNewBranchWorktree(ctx, repo, branch, path, pinSHA, force); err != nil {
+			return "", fmt.Errorf("gitworktree: worktree add branch %q from pinned base %q: %w", branch, pinSHA, err)
 		}
 		return baseRef, nil
 	}
@@ -1925,7 +2005,7 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	}
 	// addWorktree handles both the ordinary new-branch path and a preparation
 	// recovered after a daemon crash left this branch or registration behind.
-	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false, requireNewBranch); err != nil {
+	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, "", false, requireNewBranch); err != nil {
 		return "", fmt.Errorf("gitworktree: workspace repo %q worktree add branch %q from %q: %w", repo.name, branch, seedRef, err)
 	}
 	return baseSHA, nil

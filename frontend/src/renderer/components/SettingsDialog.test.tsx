@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -129,6 +129,14 @@ vi.mock("../lib/cloud-session", () => ({
 
 describe("SettingsDialog", () => {
 	beforeEach(() => {
+		// 设置页允许延迟协调在关闭后继续；清理本用例的计时器，避免写入下一用例的 API mock。
+		const timers = vi.spyOn(window, "setTimeout");
+		onTestFinished(() => {
+			for (const result of timers.mock.results) {
+				if (result.type === "return") window.clearTimeout(result.value);
+			}
+			timers.mockRestore();
+		});
 		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
 		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn, type SpawnOptions } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { access, chmod, lstat, mkdtemp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -95,8 +95,12 @@ function knownBinDirs(): string[] {
 	];
 }
 
+/** 按平台执行规则寻找普通文件；Windows 的 X_OK 不验证可执行性，必须遵循 PATHEXT。 */
 export async function firstExecutable(name: string, dirs: readonly string[]): Promise<string | null> {
-	const names = process.platform === "win32" ? [`${name}.cmd`, `${name}.exe`, name] : [name];
+	const names = process.platform === "win32"
+		? [...new Set((process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+			.map((extension) => `${name}${extension.toLowerCase()}`))]
+		: [name];
 	const seen = new Set<string>();
 	for (const dir of dirs) {
 		if (!dir || seen.has(dir)) continue;
@@ -104,6 +108,7 @@ export async function firstExecutable(name: string, dirs: readonly string[]): Pr
 		for (const candidateName of names) {
 			const candidate = path.join(dir, candidateName);
 			try {
+				if (!(await stat(candidate)).isFile()) continue;
 				await access(candidate, fsConstants.X_OK);
 				return candidate;
 			} catch {

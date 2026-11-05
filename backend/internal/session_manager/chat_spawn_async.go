@@ -179,7 +179,15 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
 		progress.complete(ctx, domain.SessionProvisionStepFetch)
 		stageStarted = time.Now()
-		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
+		if len(in.cfg.Repos) > 0 {
+			var repoInfos []ports.WorkspaceRepoInfo
+			ws, repoInfos, err = m.createMultiRepoSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
+			if err == nil {
+				workspaceProject = &ports.WorkspaceProjectInfo{Root: ws, Worktrees: repoInfos}
+			}
+		} else {
+			ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
+		}
 	} else {
 		m.logAsyncChatSpawnStage(id, "prepared_workspace_wait", stageStarted)
 		stageStarted = time.Now()

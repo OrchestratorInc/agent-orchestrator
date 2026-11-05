@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -36,6 +37,8 @@ func New() *Service { return &Service{} }
 
 // List returns the visible subdirectories of path. An empty path uses the
 // daemon user's home directory.
+// Windows 的 junction 在当前 Go 中标为 ModeIrregular，只有 Stat 确认目录
+// 后才展示；与符号链接共用错误过滤和 maxEntries 上限，其他平台保持原分类。
 func (*Service) List(ctx context.Context, path string) (Listing, error) {
 	if err := ctx.Err(); err != nil {
 		return Listing{}, err
@@ -54,6 +57,24 @@ func (*Service) List(ctx context.Context, path string) (Listing, error) {
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
+		// Windows 把普通文件及其子路径也报告为不存在。最近的现存组件
+		// 若不是目录，必须保留非目录错误，而真正缺失的目录仍返回 404。
+		if errors.Is(err, os.ErrNotExist) {
+			for current := path; ; {
+				info, statErr := os.Stat(current)
+				if statErr == nil {
+					if !info.IsDir() {
+						return Listing{}, apierr.Invalid("FS_NOT_A_DIRECTORY", "not a directory", nil)
+					}
+					break
+				}
+				parent := filepath.Dir(current)
+				if !errors.Is(statErr, os.ErrNotExist) || parent == current {
+					break
+				}
+				current = parent
+			}
+		}
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			return Listing{}, apierr.NotFound("FS_NOT_FOUND", "no such directory on the daemon host")
@@ -71,7 +92,8 @@ func (*Service) List(ctx context.Context, path string) (Listing, error) {
 		}
 		child := filepath.Join(path, entry.Name())
 		if !entry.IsDir() {
-			if entry.Type()&os.ModeSymlink == 0 {
+			isLink := entry.Type()&os.ModeSymlink != 0 || runtime.GOOS == "windows" && entry.Type()&os.ModeIrregular != 0
+			if !isLink {
 				continue
 			}
 			target, statErr := os.Stat(child)

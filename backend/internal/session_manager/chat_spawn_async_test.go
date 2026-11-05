@@ -1188,7 +1188,7 @@ func TestSpawnAsyncChat_PublishesStartChecklist(t *testing.T) {
 	m.browserCapabilities = browsersvc.NewAuthority()
 	m.workspace.(*fakeWorkspace).path = t.TempDir()
 	project := st.projects[string(chatTestProject)]
-	project.Config.PostCreate = []string{"true"}
+	project.Config.PostCreate = []string{"exit 0"}
 	st.projects[string(chatTestProject)] = project
 	deferred := deferredBackground(m)
 

@@ -102,7 +102,8 @@ describe("selection creation activation", () => {
 		let request!: Promise<{ id: string }>;
 		act(() => { request = chat.create(excerpt, false, "creation", { shouldActivate: () => true }); });
 		await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-		act(() => chat.show("A"));
+		// 先结清 A 的异步快照与编辑器挂载，再检查原生焦点。
+		await act(async () => chat.show("A"));
 		await waitFor(() => expect(screen.getByRole("combobox", { name: "Side chat question" })).toHaveFocus());
 		const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
 		act(() => elsewhere.focus());

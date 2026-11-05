@@ -46,14 +46,15 @@ describe("Electron main Sentry configuration", () => {
 
 	it("creates an offline client with consent-owned crash integrations and an install user", async () => {
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const userData = path.join(os.tmpdir(), "ao-electron-test");
+		const transport = await initMainSentry("1.0.0", path.join(os.tmpdir(), "ao-test"), userData);
 		expect(transport).toBeTruthy();
 		expect(sdk.init).toHaveBeenCalledOnce();
 		const options = sdk.init.mock.calls[0]?.[0];
 		expect(options).toMatchObject({
 			dsn: DEFAULT_ELECTRON_SENTRY_DSN,
 			transport: sdkTransport,
-			transportOptions: { queuePath: "/tmp/ao-electron-test/sentry/queue", shouldSend: expect.any(Function), shouldStore: expect.any(Function) },
+			transportOptions: { queuePath: path.join(userData, "sentry", "queue"), shouldSend: expect.any(Function), shouldStore: expect.any(Function) },
 			ipcMode: 0,
 			defaultIntegrations: [],
 			maxBreadcrumbs: 0,

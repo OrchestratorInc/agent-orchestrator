@@ -50,7 +50,7 @@ const makeOptions = {
 // What Forge actually hands the maker: `dir` is the PACKAGE directory and the
 // bundle sits inside it. electron-builder's mac path treats buildForge's `dir`
 // as the .app itself, so this is the only correct value to pass through.
-const APP_PATH = "/tmp/app/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app";
+const APP_PATH = path.join(makeOptions.dir, "Agent Orchestrator.app");
 
 beforeEach(() => {
 	buildForge.mockClear();

@@ -61,6 +61,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/capability"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
@@ -395,7 +396,12 @@ func Run(buildVersion string) error {
 			}()
 		}
 	}
+	// Capability evidence is durable and shared: the chat service records what a live
+	// provider actually performed, and the M2 resolver reads it back after a restart.
+	// It is built here because the chat service is constructed before the M2 bundle.
+	capabilityRecorder := capability.NewRecorder(store)
 	chatSvc := chatsvc.New(chatsvc.Options{
+		CapabilityEvidence:  capabilityRecorder,
 		Store:               store,
 		Sessions:            store,
 		Renders:             attachmentstore.New(cfg.DataDir),
@@ -623,6 +629,25 @@ func Run(buildVersion string) error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	// M2 coordinators over the same store, now that every owner they compose exists:
+	// the Session Manager (spawn/resume), the Chat service (send/steer/interrupt), the
+	// store (session rows), and the agent service (capability readiness).
+	//
+	// The gateway is the production execution.LocalGateway. It starts no provider of its
+	// own — a Spawn is a Session Manager spawn and a Send is a Chat send — so this is
+	// where the offline fake stops being the daemon's execution path.
+	concreteSessMgr, _ := wiredSessMgr.(*sessionmanager.Manager)
+	m2 := newM2ServicesWith(m2GatewayDeps{
+		Store:       store,
+		Sessions:    concreteSessMgr,
+		Chats:       chatSvc,
+		ChatDrivers: chatDrivers,
+		Readiness:   agentSvc,
+		Recorder:    capabilityRecorder,
+		Log:         log,
+	})
+	logM2Wiring(log, m2)
+	startM2BindingRecovery(ctx, m2.Binder, store, log)
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
@@ -1094,21 +1119,39 @@ func Run(buildVersion string) error {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	// The operator proofs, built once: the token (the desktop app's credential, persisted) and the
+	// in-memory approval table (the human gesture, per boot). Both are needed by the workflow
+	// routes (either proof) and by the approval-confirm route (the token alone).
+	operatorAuth := newWorkflowOperatorAuth(cfg.DataDir, store, browserAuthority, log)
+	logWorkflowOperatorAuth(log, operatorAuth)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
-		Awake:              awakeSvc,
-		Projects:           projectSvc,
-		ArtifactVersions:   lcStack.ArtifactVersions,
-		HostID:             hostIdentity.HostID,
-		Endpoints:          bs,
-		Agents:             agentSvc,
-		CodexAccounts:      agentSvc,
-		AgentAccounts:      agentAccountSvc,
-		SystemChecks:       systemChecks,
-		Installer:          systemInstall,
-		ComputerUse:        computerUse,
-		Sessions:           sessionSvc,
-		Automations:        automationSvc,
-		Workflows:          workflowSvc,
+		Awake:                 awakeSvc,
+		Projects:              projectSvc,
+		ArtifactVersions:      lcStack.ArtifactVersions,
+		HostID:                hostIdentity.HostID,
+		Endpoints:             bs,
+		Agents:                agentSvc,
+		CodexAccounts:         agentSvc,
+		AgentAccounts:         agentAccountSvc,
+		SystemChecks:          systemChecks,
+		Installer:             systemInstall,
+		ComputerUse:           computerUse,
+		Sessions:              sessionSvc,
+		Automations:           automationSvc,
+		Workflows:             workflowSvc,
+		WorkflowCapabilities:  m2.Capabilities,
+		WorkflowBindings:      m2.Bindings,
+		WorkflowBinder:        m2.Binder,
+		WorkflowInterventions: m2.Interventions,
+		WorkflowCollaboration: m2.Collaboration,
+		WorkflowOwnership:     m2.Ownership,
+		WorkflowPrincipals:    operatorAuth.Principals,
+		OperatorConsent:       operatorAuth.Consent,
+		OperatorApprovals:     operatorAuth.Approvals,
+		// The audit trail is durable: every applied operator decision appends a row to
+		// workflow_audit_log, and a recorder that fails fails the request rather than
+		// reporting a decision nobody recorded.
+		WorkflowAudit:      store,
 		DesktopWorkspaces:  sessionSvc,
 		PRs:                prActions,
 		Reviews:            reviewSvc,

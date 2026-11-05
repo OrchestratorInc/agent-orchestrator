@@ -476,6 +476,18 @@ var (
 	// ErrWorkspaceBranchInvalid reports the requested branch name is not a valid
 	// git ref (rejected by `git check-ref-format`).
 	ErrWorkspaceBranchInvalid = errors.New("workspace: invalid branch name")
+	// ErrWorkspaceBaseSHAUnavailable reports that WorkspaceConfig.BaseSHA cannot
+	// seed a session branch in THIS repository: it is not a hexadecimal commit
+	// id, or that commit is unknown (or unreachable) from the repository the
+	// worktree would be created in. It is deliberately distinct from
+	// ErrWorkspaceBranchNotFetched so a caller can tell "the pinned commit this
+	// spawn planned from is gone" from "the branch has not been fetched".
+	ErrWorkspaceBaseSHAUnavailable = errors.New("workspace: pinned base commit is unavailable")
+	// ErrWorkspaceBaseSHAMismatch reports that a pinned base commit was valid,
+	// but the branch or worktree a Create would reuse is not at it. Accepting
+	// that state would hand the session a worktree built from a different
+	// commit than the caller planned from, so it is refused instead.
+	ErrWorkspaceBaseSHAMismatch = errors.New("workspace: existing branch or worktree is not at the pinned base commit")
 	// ErrWorkspaceDirty reports Destroy refused to remove a workspace because
 	// it holds uncommitted changes or untracked files. Teardown is never
 	// forced; callers treat the workspace as intentionally preserved.
@@ -578,6 +590,18 @@ type WorkspaceConfig struct {
 	// BaseRef is the exact canonical ref selected before any best-effort fetch.
 	// Restore carries it forward without re-resolving repository defaults.
 	BaseRef string
+	// BaseSHA pins the exact commit a NEW session branch is seeded from: the
+	// adapter validates it against this repository (`git -C <repo> rev-parse
+	// --verify --end-of-options <sha>^{commit}`), seeds the branch with
+	// `git worktree add -b <branch> <path> <sha>`, and never resolves the
+	// repository default. A caller that planned from a base commit therefore
+	// gets that commit even when the default branch advanced in between.
+	//
+	// Empty keeps the default-branch behaviour byte-for-byte: the adapter
+	// resolves the seed ref it would have resolved before this field existed.
+	// A non-empty value must be a full hexadecimal commit id; anything else is
+	// refused as unavailable rather than resolved as a ref expression.
+	BaseSHA string
 	// RepoPath optionally overrides ProjectID-based repo resolution.
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.

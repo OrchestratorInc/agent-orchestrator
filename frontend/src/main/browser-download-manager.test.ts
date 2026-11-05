@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +9,47 @@ import { createBrowserDownloadManager } from "./browser-download-manager";
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+	vi.restoreAllMocks();
+	syncBuiltinESMExports();
 	for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function setup() {
+/** Windows 在源码使用的同步 I/O 边界模拟文件链接和悬空目标，注入后重载工厂；POSIX 创建真实文件链接。 */
+async function fileLinkFixture() {
+	const targets = new Map<string, string>();
+	let createManager = createBrowserDownloadManager;
+	if (process.platform === "win32") {
+		const originalLstat = fs.lstatSync;
+		vi.spyOn(fs, "lstatSync").mockImplementation(((file, options) => {
+			const metadata = originalLstat(file, options);
+			if (targets.has(String(file))) {
+				if (!metadata) throw new Error("文件链接夹具已不存在");
+				metadata.isFile = () => false;
+				metadata.isSymbolicLink = () => true;
+			}
+			return metadata;
+		}) as typeof fs.lstatSync);
+		const originalExists = fs.existsSync;
+		vi.spyOn(fs, "existsSync").mockImplementation((file) => originalExists(targets.get(String(file)) ?? file));
+		syncBuiltinESMExports();
+		vi.resetModules();
+		createManager = (await import("./browser-download-manager")).createBrowserDownloadManager;
+	}
+	return {
+		createManager,
+		/** 真实占位文件让误删仍可被断言发现，existsSync 按链接目标是否存在返回结果。 */
+		createLink(target: string, link: string): void {
+			if (process.platform !== "win32") {
+				symlinkSync(target, link, "file");
+				return;
+			}
+			writeFileSync(link, "file-link fixture");
+			targets.set(link, path.resolve(path.dirname(link), target));
+		},
+	};
+}
+
+function setup(createManager = createBrowserDownloadManager) {
 	const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-downloads-"));
 	temporaryDirectories.push(root);
 	const downloadsDirectory = path.join(root, "Downloads");
@@ -23,7 +61,7 @@ function setup() {
 		rmSync(filePath);
 	});
 	let nextId = 0;
-	const manager = createBrowserDownloadManager({
+	const manager = createManager({
 		downloadsDirectory,
 		historyPath,
 		shell: { openPath, showItemInFolder, trashItem },
@@ -258,7 +296,8 @@ describe("browser download manager", () => {
 	});
 
 	it("retains the completed-file directory and symlink security checks", async () => {
-		const test = setup();
+		const links = await fileLinkFixture();
+		const test = setup(links.createManager);
 		const item = new FakeDownloadItem();
 		test.start(item);
 		item.emit("done", {}, "completed");
@@ -270,7 +309,7 @@ describe("browser download manager", () => {
 		rmSync(savePath, { recursive: true });
 		const target = path.join(test.downloadsDirectory, "target.txt");
 		writeFileSync(target, "must survive");
-		symlinkSync(target, savePath);
+		links.createLink(target, savePath);
 		await test.manager.action({ id: "download-1", action: "remove" });
 		expect(test.trashItem).toHaveBeenCalledExactlyOnceWith(savePath);
 		expect(readFileSync(target, "utf8")).toBe("must survive");
@@ -333,15 +372,16 @@ describe("browser download manager", () => {
 	});
 
 	it.each(["cancelled", "interrupted"])("only removes %s history when its path has been manually reused", async (status) => {
+		const links = await fileLinkFixture();
 		for (const replacement of ["file", "directory", "symlink", "missing"] as const) {
-			const test = setup();
+			const test = setup(links.createManager);
 			const item = new FakeDownloadItem();
 			test.start(item);
 			item.emit("done", {}, status);
 			const savePath = path.join(test.downloadsDirectory, "report.txt");
 			if (replacement === "file") writeFileSync(savePath, "replacement");
 			if (replacement === "directory") mkdirSync(savePath);
-			if (replacement === "symlink") symlinkSync("missing-target", savePath);
+			if (replacement === "symlink") links.createLink("missing-target", savePath);
 			test.trashItem.mockRejectedValue(new Error("Must not trash a reused path"));
 
 			await test.manager.action({ id: "download-1", action: "remove" });
@@ -351,7 +391,7 @@ describe("browser download manager", () => {
 			expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toEqual([]);
 			if (replacement === "file") expect(readFileSync(savePath, "utf8")).toBe("replacement");
 			if (replacement === "directory") expect(lstatSync(savePath).isDirectory()).toBe(true);
-			if (replacement === "symlink") expect(lstatSync(savePath).isSymbolicLink()).toBe(true);
+			if (replacement === "symlink") expect(fs.lstatSync(savePath).isSymbolicLink()).toBe(true);
 		}
 	});
 

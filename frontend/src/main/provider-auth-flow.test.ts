@@ -29,8 +29,8 @@ describe("firstExecutable", () => {
 
 	it("finds an executable binary in a searched directory", async () => {
 		const dir = await tempDir();
-		const bin = path.join(dir, "claude");
-		await writeFile(bin, "#!/bin/sh\n");
+		const bin = path.join(dir, process.platform === "win32" ? "claude.cmd" : "claude");
+		await writeFile(bin, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\n");
 		await chmod(bin, 0o755);
 		expect(await firstExecutable("claude", [dir])).toBe(bin);
 	});
@@ -51,12 +51,24 @@ describe("firstExecutable", () => {
 	it("returns the first match and tolerates empty/duplicate dirs", async () => {
 		const first = await tempDir();
 		const second = await tempDir();
+		const name = process.platform === "win32" ? "codex.bat" : "codex";
 		for (const dir of [first, second]) {
-			const bin = path.join(dir, "codex");
-			await writeFile(bin, "#!/bin/sh\n");
+			const bin = path.join(dir, name);
+			await writeFile(bin, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\n");
 			await chmod(bin, 0o755);
 		}
-		expect(await firstExecutable("codex", ["", first, first, second])).toBe(path.join(first, "codex"));
+		expect(await firstExecutable("codex", ["", first, first, second])).toBe(path.join(first, name));
+	});
+
+	it("ignores a directory and continues to a later executable", async () => {
+		const first = await tempDir();
+		const second = await tempDir();
+		const name = process.platform === "win32" ? "claude.cmd" : "claude";
+		await mkdir(path.join(first, name));
+		const executable = path.join(second, name);
+		await writeFile(executable, process.platform === "win32" ? "@exit /b 0\r\n" : "#!/bin/sh\n");
+		await chmod(executable, 0o755);
+		expect(await firstExecutable("claude", [first, second])).toBe(executable);
 	});
 });
 

@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createServer, request } from "node:http";
-import { closeSync, copyFileSync, fstatSync, openSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, fstatSync, openSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+import { promisify } from "node:util";
 import { writeBlockmap } from "./blockmap.mjs";
 
 const require = createRequire(import.meta.url);
@@ -14,7 +15,7 @@ const { MacUpdater } = require("electron-updater/out/MacUpdater.js");
 const { DownloadedUpdateHelper } = require("electron-updater/out/DownloadedUpdateHelper.js");
 const { ElectronHttpExecutor } = require("electron-updater/out/electronHttpExecutor.js");
 const { HttpExecutor, CancellationToken } = require("builder-util-runtime");
-const { zipSync } = require("cross-zip");
+const zip = promisify(require("cross-zip").zip);
 const temporaryDirectories = [];
 const sha512 = bytes => createHash("sha512").update(bytes).digest("base64");
 
@@ -44,14 +45,17 @@ function fixtureBytes(seed, size = 512_000) {
 	return bytes;
 }
 
-function zipBytes(payload) {
+/** 异步 ZIP 避免删除新归档；Windows 使用独占源目录，防止内部时间戳目录撞名。 */
+async function zipBytes(payload) {
 	const dir = mkdtempSync(join(tmpdir(), "ao-zip-fixture-"));
 	temporaryDirectories.push(dir);
-	const source = join(dir, "fixture.bin");
+	const sourceDir = join(dir, "source");
+	mkdirSync(sourceDir);
+	const source = join(sourceDir, "fixture.bin");
 	const archive = join(dir, "fixture.zip");
 	writeFileSync(source, payload);
 	utimesSync(source, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
-	zipSync(source, archive);
+	await zip(process.platform === "win32" ? sourceDir : source, archive);
 	return readFileSync(archive);
 }
 
@@ -64,7 +68,7 @@ async function runDownload(arch, failure = "none", disabled = false, cycle = {})
 	const oldPayload = fixtureBytes(arch);
 	const newPayload = Buffer.from(oldPayload);
 	fixtureBytes(`${arch}:${version}:patch`, 48_000).copy(newPayload, 180_000);
-	const oldBytes = cycle.dir ? readFileSync(oldFile) : zipBytes(oldPayload);
+	const oldBytes = cycle.dir ? readFileSync(oldFile) : await zipBytes(oldPayload);
 	const target = await zipBytes(newPayload);
 	writeFileSync(oldFile, oldBytes);
 	writeFileSync(newFile, target);

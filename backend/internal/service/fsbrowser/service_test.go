@@ -2,12 +2,10 @@ package fsbrowser
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,15 +13,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-func symlink(t *testing.T, target, path string) {
-	t.Helper()
-	err := os.Symlink(target, path)
-	if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EOPNOTSUPP) || (runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission)) {
-		t.Skipf("symlink creation unsupported: %v", err)
-	}
-	require.NoError(t, err)
-}
-
+// TestListDirectorySymlinks 保留目录链、外部目录、文件目标、悬空与循环
+// 链接的过滤边界；Windows 使用真实 junction，目标内容必须保持不变。
 func TestListDirectorySymlinks(t *testing.T) {
 	root := t.TempDir()
 	external := t.TempDir()
@@ -31,7 +22,8 @@ func TestListDirectorySymlinks(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(external, ".git"), 0o755))
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".worktree"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".worktree", ".git"), nil, 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "file"), nil, 0o600))
+	const fileContent = "file target stays unchanged"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file"), []byte(fileContent), 0o600))
 	symlink(t, "normal", filepath.Join(root, "alias"))
 	symlink(t, "alias", filepath.Join(root, "chain"))
 	symlink(t, external, filepath.Join(root, "external"))
@@ -65,11 +57,18 @@ func TestListDirectorySymlinks(t *testing.T) {
 			}, got)
 		})
 	}
+	data, err := os.ReadFile(filepath.Join(root, "file"))
+	require.NoError(t, err)
+	require.Equal(t, fileContent, string(data))
 }
 
+// TestListSymlinkEntryLimit 验证隐藏、悬空及文件链接不占目录条数，只有第
+// 501 个有效目录触发截断；重复浏览不能改写链接目标中的内容。
 func TestListSymlinkEntryLimit(t *testing.T) {
 	root := t.TempDir()
 	target := t.TempDir()
+	const targetContent = "directory target stays unchanged"
+	require.NoError(t, os.WriteFile(filepath.Join(target, "keep.txt"), []byte(targetContent), 0o600))
 	for i := range maxEntries {
 		symlink(t, target, filepath.Join(root, fmt.Sprintf("dir-%04d", i)))
 	}
@@ -90,6 +89,9 @@ func TestListSymlinkEntryLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, truncated.Truncated)
 	require.Equal(t, listing.Entries, truncated.Entries)
+	data, err := os.ReadFile(filepath.Join(target, "keep.txt"))
+	require.NoError(t, err)
+	require.Equal(t, targetContent, string(data))
 }
 
 func TestListSymlinkPermissionDenied(t *testing.T) {
@@ -118,4 +120,33 @@ func TestListSymlinkPermissionDenied(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	require.Equal(t, apierr.KindForbidden, apiErr.Kind)
 	require.Equal(t, "FS_FORBIDDEN", apiErr.Code)
+}
+
+// TestListDistinguishesMissingDirectoriesFromNonDirectoryPaths 验证不存在的
+// 目录返回 404，而普通文件及以文件为父组件的路径返回非目录错误。
+func TestListDistinguishesMissingDirectoriesFromNonDirectoryPaths(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+
+	for _, test := range []struct {
+		name string
+		path string
+		kind apierr.Kind
+		code string
+	}{
+		{name: "missing directory", path: filepath.Join(root, "missing"), kind: apierr.KindNotFound, code: "FS_NOT_FOUND"},
+		{name: "missing parent", path: filepath.Join(root, "missing", "child"), kind: apierr.KindNotFound, code: "FS_NOT_FOUND"},
+		{name: "file", path: file, kind: apierr.KindInvalid, code: "FS_NOT_A_DIRECTORY"},
+		{name: "file parent", path: filepath.Join(file, "child"), kind: apierr.KindInvalid, code: "FS_NOT_A_DIRECTORY"},
+		{name: "file ancestor", path: filepath.Join(file, "missing", "child"), kind: apierr.KindInvalid, code: "FS_NOT_A_DIRECTORY"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New().List(context.Background(), test.path)
+			var apiErr *apierr.Error
+			require.ErrorAs(t, err, &apiErr)
+			require.Equal(t, test.kind, apiErr.Kind)
+			require.Equal(t, test.code, apiErr.Code)
+		})
+	}
 }

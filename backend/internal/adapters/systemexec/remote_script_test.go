@@ -1,6 +1,7 @@
 package systemexec
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -23,7 +24,7 @@ import (
 
 func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	t.Parallel()
-	const body = "#!/bin/sh\nprintf 'vendor-script-ran'"
+	body, interpreter := installerScriptFixture("#!/bin/sh\nprintf 'vendor-script-ran'", "[Console]::Write('vendor-script-ran')")
 	server := httptest.NewTLSServer(httpHandler(body))
 	t.Cleanup(server.Close)
 	dataDir := t.TempDir()
@@ -31,7 +32,7 @@ func TestRunInstallScriptDownloadsExecutesAndCleansUp(t *testing.T) {
 	var output bytes.Buffer
 
 	result, err := adapter.RunInstallScript(context.Background(), ports.InstallScriptCommand{
-		URL: server.URL, Interpreter: []string{"sh"}, Env: []string{"CI=1"},
+		URL: server.URL, Interpreter: interpreter, Env: []string{"CI=1"},
 	}, &output, &output)
 	if err != nil {
 		t.Fatal(err)
@@ -124,17 +125,21 @@ func TestRunInstallScriptPowerShellLoadsHashModule(t *testing.T) {
 	}
 }
 
+// TestRunInstallScriptCleansUpAfterExecutionFailure 用启动标记和退出码确认真实执行失败后的清理。
 func TestRunInstallScriptCleansUpAfterExecutionFailure(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nexit 7"))
+	body, interpreter := installerScriptFixture("#!/bin/sh\nprintf 'installer-started'\nexit 7", "[Console]::Write('installer-started'); exit 7")
+	server := httptest.NewTLSServer(httpHandler(body))
 	t.Cleanup(server.Close)
 	dataDir := t.TempDir()
+	var output bytes.Buffer
 
 	_, err := newAdapter(dataDir, server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
-		URL: server.URL, Interpreter: []string{"sh"},
-	}, io.Discard, io.Discard)
-	if err == nil {
-		t.Fatal("expected execution failure")
+		URL: server.URL, Interpreter: interpreter,
+	}, &output, &output)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 || output.String() != "installer-started" {
+		t.Fatalf("installer error = %v, output = %q; want startup and exit 7", err, output.String())
 	}
 	entries, readErr := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
 	if readErr != nil || len(entries) != 0 {
@@ -142,19 +147,35 @@ func TestRunInstallScriptCleansUpAfterExecutionFailure(t *testing.T) {
 	}
 }
 
+// TestRunInstallScriptCancellationCleansUp 等待脚本启动后再取消，覆盖运行中的子进程和临时目录清理。
 func TestRunInstallScriptCancellationCleansUp(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\nsleep 5"))
+	body, interpreter := installerScriptFixture("#!/bin/sh\nprintf 'installer-started\\n'\nsleep 30", "[Console]::WriteLine('installer-started'); Start-Sleep -Seconds 30")
+	server := httptest.NewTLSServer(httpHandler(body))
 	t.Cleanup(server.Close)
 	dataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	_, err := newAdapter(dataDir, server.Client()).RunInstallScript(ctx, ports.InstallScriptCommand{
-		URL: server.URL, Interpreter: []string{"sh"},
-	}, io.Discard, io.Discard)
-	if err == nil {
-		t.Fatal("expected cancellation")
+	started, output := io.Pipe()
+	t.Cleanup(func() { _ = started.Close() })
+	done := make(chan error, 1)
+	go func() {
+		_, err := newAdapter(dataDir, server.Client()).RunInstallScript(ctx, ports.InstallScriptCommand{
+			URL: server.URL, Interpreter: interpreter,
+		}, output, output)
+		done <- err
+		_ = output.Close()
+	}()
+	line, startErr := bufio.NewReader(started).ReadString('\n')
+	select {
+	case err := <-done:
+		t.Fatalf("installer exited before cancellation: %v; startup = %q, %v", err, line, startErr)
+	default:
+	}
+	cancel()
+	if err := <-done; err == nil || startErr != nil || strings.TrimSpace(line) != "installer-started" {
+		t.Fatalf("canceled installer error = %v; startup = %q, %v", err, line, startErr)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(dataDir, "installers", "tmp"))
 	if (readErr != nil && !errors.Is(readErr, os.ErrNotExist)) || len(entries) != 0 {
@@ -164,19 +185,20 @@ func TestRunInstallScriptCancellationCleansUp(t *testing.T) {
 
 func TestRunInstallScriptAllowsFiveHTTPSRedirects(t *testing.T) {
 	t.Parallel()
+	body, interpreter := installerScriptFixture("#!/bin/sh\nprintf 'redirected'", "[Console]::Write('redirected')")
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		step, _ := strconv.Atoi(r.URL.Query().Get("step"))
 		if step < 5 {
 			http.Redirect(w, r, "/?step="+strconv.Itoa(step+1), http.StatusFound)
 			return
 		}
-		_, _ = io.WriteString(w, "#!/bin/sh\nprintf redirected")
+		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(server.Close)
 	var output bytes.Buffer
 
 	_, err := newAdapter(t.TempDir(), server.Client()).RunInstallScript(context.Background(), ports.InstallScriptCommand{
-		URL: server.URL + "/?step=0", Interpreter: []string{"sh"},
+		URL: server.URL + "/?step=0", Interpreter: interpreter,
 	}, &output, &output)
 	if err != nil {
 		t.Fatal(err)

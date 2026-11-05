@@ -76,6 +76,7 @@ const defaultDiscoveryDependencies: DiscoveryDependencies = {
 	readMetadata: readBundleMetadata,
 };
 
+/** 仅检查 macOS 下载与桌面目录中的旧版 AO 应用包，忽略身份或版本不明的对象。 */
 export async function findStaleAppCopies(
 	input: { runningVersion: string; homeDir: string },
 	dependencyOverrides: Partial<DiscoveryDependencies> = {},
@@ -85,8 +86,8 @@ export async function findStaleAppCopies(
 
 	const dependencies = { ...defaultDiscoveryDependencies, ...dependencyOverrides };
 	const candidates = [
-		path.join(input.homeDir, "Downloads", "Agent Orchestrator.app"),
-		path.join(input.homeDir, "Desktop", "Agent Orchestrator.app"),
+		path.posix.join(input.homeDir, "Downloads", "Agent Orchestrator.app"),
+		path.posix.join(input.homeDir, "Desktop", "Agent Orchestrator.app"),
 	];
 	const copies: StaleAppCopy[] = [];
 	for (const candidate of candidates) {
@@ -200,9 +201,10 @@ export async function retireStaleAppCopies(dependencies: RetirementDependencies)
 	if (failures.length > 0) await dependencies.reportFailures(failures);
 }
 
+/** 仅由维护中的 macOS 安装包发起清理，并在确认后复核对象身份再移至废纸篓。 */
 export async function retireStaleMacAppCopies(options: MacRetirementOptions): Promise<void> {
 	if (options.platform !== "darwin" || !options.isPackaged) return;
-	if (path.resolve(options.runningPath) !== MAINTAINED_MAC_APP_PATH) return;
+	if (path.posix.resolve(options.runningPath) !== MAINTAINED_MAC_APP_PATH) return;
 	if (semver.valid(options.runningVersion) === null) return;
 
 	await retireStaleAppCopies({

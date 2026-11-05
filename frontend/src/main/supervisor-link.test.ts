@@ -22,8 +22,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 	});
 }
 
+/** Windows 使用命名管道，其余平台使用 Unix socket，覆盖真实生产传输。 */
 function tmpSocketPath(): string {
-	return path.join(os.tmpdir(), `ao-svlink-test-${process.pid}-${Date.now()}.sock`);
+	const name = `ao-svlink-test-${process.pid}-${Date.now()}`;
+	return process.platform === "win32" ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), `${name}.sock`);
 }
 
 // Promisify: resolves the next time server.on("connection") fires.

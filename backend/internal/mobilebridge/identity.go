@@ -1,6 +1,7 @@
 package mobilebridge
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -89,7 +90,11 @@ func EnsureIdentityFor(path string, ifaces []net.Interface) (Identity, error) {
 	if b, err := os.ReadFile(path); err == nil {
 		var existing Identity
 		if json.Unmarshal(b, &existing) == nil && existing.HostID != "" {
-			if !equalStrings(existing.Fingerprints, current) || existing.Fingerprint != aggregate {
+			repair, err := identityNeedsPrivacyRepair(context.Background(), path)
+			if err != nil {
+				return Identity{}, fmt.Errorf("read mobile identity permissions: %w", err)
+			}
+			if repair || !equalStrings(existing.Fingerprints, current) || existing.Fingerprint != aggregate {
 				existing.Fingerprints = current
 				existing.Fingerprint = aggregate
 				if err := writeIdentity(path, existing); err != nil {
@@ -125,6 +130,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+// writeIdentity 保留身份内容，并通过平台私有文件创建原语持久化。
 func writeIdentity(path string, id Identity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir mobile dir: %w", err)
@@ -133,7 +139,7 @@ func writeIdentity(path string, id Identity) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := writePrivateIdentityFile(context.Background(), path, append(b, '\n')); err != nil {
 		return fmt.Errorf("write mobile identity: %w", err)
 	}
 	return nil

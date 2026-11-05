@@ -286,10 +286,15 @@ func TestProjectsAPI_AddValidationAndConflicts(t *testing.T) {
 
 }
 
+// TestProjectsAPI_Clone 验证本机仓库通过合法 file URI 克隆并保留远端地址。
 func TestProjectsAPI_Clone(t *testing.T) {
 	srv := newTestServer(t)
 	source := gitRepo(t, "clone-source")
-	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	fileURLPath := filepath.ToSlash(source)
+	if filepath.VolumeName(source) != "" {
+		fileURLPath = "/" + fileURLPath
+	}
+	remoteURL := (&url.URL{Scheme: "file", Path: fileURLPath}).String()
 	destinationParent := t.TempDir()
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/projects/clone", `{"remoteUrl":`+quote(remoteURL)+`,"destinationParent":`+quote(destinationParent)+`}`)

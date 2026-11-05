@@ -2897,10 +2897,11 @@ export async function setMacDifferentialUpdates(
 // equal-or-newer install rather than running from a stale location at all
 // (see main/relocation.ts); this catches what is left, such as a first launch
 // with nothing yet installed in /Applications.
+/** 仅按 macOS 应用包路径预检安装位置，确认包或父目录不可写时阻止安装。 */
 export function getMacInstallBlocker(): string | undefined {
   if (process.platform !== "darwin") return undefined;
   // .../Agent Orchestrator.app/Contents/MacOS/<binary> -> the .app bundle root
-  const bundle = path.resolve(process.execPath, "..", "..", "..");
+  const bundle = path.posix.resolve(process.execPath, "..", "..", "..");
   // Everything below assumes that shape. Under `npm start`, and in tests,
   // execPath is a bare node/electron binary and this resolves to some unrelated
   // ancestor directory whose permissions say nothing about installability, so
@@ -2918,13 +2919,13 @@ export function getMacInstallBlocker(): string | undefined {
   try {
     accessSync(bundle, fsConstants.W_OK);
     // ShipIt writes into the enclosing directory, not just the bundle.
-    accessSync(path.dirname(bundle), fsConstants.W_OK);
+    accessSync(path.posix.dirname(bundle), fsConstants.W_OK);
   } catch {
     // Deliberately does NOT say "move it to /Applications": the app may already
     // be there, and telling someone to do what they have done reads as a bug.
     return (
       "The update can't be installed because Orchestrator's location isn't " +
-      `writable: ${path.dirname(bundle)}. Fix that folder's permissions, or move ` +
+      `writable: ${path.posix.dirname(bundle)}. Fix that folder's permissions, or move ` +
       "Orchestrator somewhere you can write to, reopen it, and then " +
       "restart to update."
     );
@@ -2960,6 +2961,7 @@ export function setUpdateRestartFailureHandler(handler: () => void): void { rest
 
 export function isUpdateRestartRequested(): boolean { return macRestartRequested; }
 
+/** 保留版本确认与平台安装门禁，macOS 原生准备成功后才允许重启交接。 */
 export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<UpdateInstallResult> {
   recordUpdateDiagnostic("install-requested", { confirmedVersion });
   if (confirmedVersion !== undefined && (typeof confirmedVersion !== "string" || !confirmedVersion.trim())) {
@@ -3045,7 +3047,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       progress = await startMacUpdateProgress({
         stateDir: escalationStateDir,
         resourcesPath: process.resourcesPath,
-        appPath: path.resolve(process.execPath, "..", "..", ".."),
+        appPath: path.posix.resolve(process.execPath, "..", "..", ".."),
         version,
       });
       assertInstallActive();

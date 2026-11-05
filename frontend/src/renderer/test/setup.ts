@@ -21,6 +21,33 @@ expect.extend(jestDomMatchers);
 // routes setupFiles here, so only install the DOM stubs when a DOM exists.
 // ponytail: single guard; node env has no DOM to stub.
 if (typeof window !== "undefined") {
+	// 英文组件用例固定宿主地区和时区；显式指定的语言仍交给真实 Intl，产品默认值不受影响。
+	process.env.TZ = "UTC";
+	for (const name of ["DateTimeFormat", "NumberFormat", "RelativeTimeFormat"] as const) {
+		Object.defineProperty(Intl, name, {
+			value: new Proxy(Intl[name], {
+				apply(target, receiver, args) {
+					if (args[0] === undefined) args[0] = "en-US";
+					return Reflect.apply(target, receiver, args);
+				},
+				construct(target, args, newTarget) {
+					if (args[0] === undefined) args[0] = "en-US";
+					return Reflect.construct(target, args, newTarget);
+				},
+			}),
+		});
+	}
+	// Date 的本地化方法走引擎内建 Intl，也需要相同的宿主地区夹具。
+	for (const name of ["toLocaleDateString", "toLocaleTimeString", "toLocaleString"] as const) {
+		const original = Date.prototype[name];
+		Object.defineProperty(Date.prototype, name, {
+			value: function (this: Date, ...args: Parameters<typeof original>) {
+				if (args[0] === undefined) args[0] = "en-US";
+				return Reflect.apply(original, this, args);
+			},
+		});
+	}
+
 	const emptyRect = () => ({
 		bottom: 0,
 		height: 0,
@@ -128,6 +155,11 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		operator: {
+			runVerb: async () => {
+				throw new Error("Operator actions require the desktop app.");
+			},
+		},
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,

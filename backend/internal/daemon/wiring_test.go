@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -106,6 +107,27 @@ type cachedBinaryAgents map[domain.AgentHarness]ports.Agent
 func (a cachedBinaryAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
 	agent, ok := a[harness]
 	return agent, ok
+}
+
+// wiringScratchAgent 隔离 scratch 工作区测试的外部认证与启动边界，
+// 基础 adapter 方法仍由实际插件提供，但不会探测宿主凭证或执行真实 Provider。
+type wiringScratchAgent struct {
+	ports.Agent
+	binary         string
+	authChecks     int
+	authWorkingDir string
+}
+
+// ValidateLaunchAuth 给出测试定义的授权结果，并记录生产启动门禁传入的工作区。
+func (a *wiringScratchAgent) ValidateLaunchAuth(_ context.Context, workingDir string, _ map[string]string) (ports.AgentAuthStatus, error) {
+	a.authChecks++
+	a.authWorkingDir = workingDir
+	return ports.AgentAuthStatusAuthorized, nil
+}
+
+// GetLaunchCommand 固定到临时夹具，避免真实插件的二进制查找回退到宿主安装。
+func (a *wiringScratchAgent) GetLaunchCommand(context.Context, ports.LaunchConfig) ([]string, error) {
+	return []string{a.binary}, nil
 }
 
 type installationInvalidations struct {
@@ -387,6 +409,8 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	}
 }
 
+// TestWiring_StartSessionSpawnsScratchWithoutGitRepo 验证已授权的本地 agent
+// 经过真实 session wiring 启动 scratch 工作区，无需 Git 仓库或外部认证服务。
 func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlitetest.Open(t.TempDir())
@@ -433,6 +457,12 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
+	claude, ok := agents.Agent(domain.HarnessClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter missing from test resolver")
+	}
+	agent := &wiringScratchAgent{Agent: claude, binary: filepath.Join(binDir, "claude.cmd")}
+	agents = cachedBinaryAgents{domain.HarnessClaudeCode: agent}
 	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
@@ -452,6 +482,9 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	}
 	if runtime.lastCfg.WorkspacePath != physicalWorkspace {
 		t.Fatalf("runtime workspace = %q, want %q", runtime.lastCfg.WorkspacePath, physicalWorkspace)
+	}
+	if agent.authChecks != 1 || agent.authWorkingDir != physicalWorkspace {
+		t.Fatalf("launch auth checks=%d cwd=%q, want one check in %q", agent.authChecks, agent.authWorkingDir, physicalWorkspace)
 	}
 	if _, err := os.Stat(wantWorkspace); err != nil {
 		t.Fatalf("scratch workspace not created at %q: %v", wantWorkspace, err)
@@ -1164,9 +1197,14 @@ func TestWiring_NewMultiTracker_ReturnsNonNilWhenGitHubHasToken(t *testing.T) {
 	}
 }
 
+// writeFakeExecutable 生成与平台匹配的临时启动夹具，Windows cmd 使用 batch 语法。
 func writeFakeExecutable(t *testing.T, path string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	script := "#!/bin/sh\nexit 0\n"
+	if runtime.GOOS == "windows" && strings.EqualFold(filepath.Ext(path), ".cmd") {
+		script = "@echo off\r\nexit /b 0\r\n"
+	}
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake executable %s: %v", path, err)
 	}
 }

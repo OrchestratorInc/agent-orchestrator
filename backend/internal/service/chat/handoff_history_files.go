@@ -41,7 +41,9 @@ func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domai
 	}{
 		{domain.HarnessKimi, kimiSessionWires(filepath.Join(s.dataDir, "kimi"), workspace),
 			"JSON lines: the messages are the `agent.message.appended` lines, with `message.message.role` user or assistant."},
-		{domain.HarnessDroid, newestFiles(filepath.Join(home, ".factory", "sessions", strings.ReplaceAll(workspace, string(filepath.Separator), "-"), "*.jsonl")),
+		{domain.HarnessDroid, newestFiles(
+			filepath.Join(home, ".factory", "sessions", strings.ReplaceAll(workspace, string(filepath.Separator), "-"), "*.jsonl"),
+			filepath.Join(home, ".factory", "sessions", droidWorkspaceFolder(workspace), "*.jsonl")),
 			"JSON lines: the messages are the `\"type\":\"message\"` lines, with `message.role` user or assistant."},
 		{domain.HarnessCursor, newestFiles(filepath.Join(home, ".cursor", "chats", hex.EncodeToString(cursorKey[:]), "*", "store.db")),
 			"SQLite: `sqlite3 <file> \"select data from blobs where json_valid(data) and json_extract(data, '$.role') in ('user', 'assistant') order by rowid\"`."},
@@ -62,6 +64,17 @@ func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domai
 		}
 	}
 	return files
+}
+
+// droidWorkspaceFolder 增加已知解析器采用的目录兼容编码，处理 Windows 盘符
+// 和路径中的非字母数字字符；调用方同时保留旧编码，只读取实际存在的历史文件。
+func droidWorkspaceFolder(workspace string) string {
+	return strings.Map(func(char rune) rune {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' {
+			return char
+		}
+		return '-'
+	}, workspace)
 }
 
 // kimiSessionWires reads Kimi Code's session index, which maps each working
@@ -120,15 +133,20 @@ func agyConversation(home string, record domain.SessionRecord) []string {
 	return nil
 }
 
-// newestFiles returns the newest files matching pattern, up to the limit.
-func newestFiles(pattern string) []string {
-	matches, _ := filepath.Glob(pattern)
+// newestFiles 合并实际存在的目录候选，去重后仍只返回最新的限定数量文件。
+func newestFiles(patterns ...string) []string {
 	modified := map[string]int64{}
 	var paths []string
-	for _, path := range matches {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			modified[path] = info.ModTime().UnixNano()
-			paths = append(paths, path)
+	for _, pattern := range patterns {
+		matches, _ := filepath.Glob(pattern)
+		for _, path := range matches {
+			if _, found := modified[path]; found {
+				continue
+			}
+			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+				modified[path] = info.ModTime().UnixNano()
+				paths = append(paths, path)
+			}
 		}
 	}
 	sort.Slice(paths, func(i, j int) bool { return modified[paths[i]] > modified[paths[j]] })

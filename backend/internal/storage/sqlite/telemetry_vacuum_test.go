@@ -94,8 +94,13 @@ func TestTelemetryIncrementalVacuumUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := pages()
-	if reclaimed := before - after; reclaimed <= 0 || reclaimed > 256 {
-		t.Fatalf("reclaimed %d pages, want 1..256", reclaimed)
+	// PRAGMA incremental_vacuum(N) reclaims up to N freelist pages, and SQLite's final
+	// truncation step can release one additional page, so the observable bound is N+1
+	// rather than N. The property under test is "bounded reclaim, not a full VACUUM", which
+	// N+1 still expresses; asserting exactly N fails for schema sizes where the truncation
+	// step lands.
+	if reclaimed := before - after; reclaimed <= 0 || reclaimed > 257 {
+		t.Fatalf("reclaimed %d pages, want 1..257 (the requested 256 plus at most one truncation page)", reclaimed)
 	}
 	bytesAfter := fileSize()
 	if bytesAfter >= bytesBefore {

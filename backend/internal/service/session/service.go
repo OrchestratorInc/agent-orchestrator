@@ -351,6 +351,33 @@ func (s *Service) SetUsageArchiveFlush(flush func(context.Context)) {
 	s.usageArchiveFlush = flush
 }
 
+// SpawnedSessionByClientRequest answers "was this request already spawned" without
+// spawning, mutating, or committing anything.
+//
+// It is the read the Workflow execution coordinator needs before it decides whether a
+// retry is a replay or a new spawn. Reusing the unexported replayClientRequest would
+// have meant either duplicating its conflict rules or exporting a function whose name
+// implies a mutation, so this wrapper is deliberately narrow: it returns the record,
+// whether one exists, and only the conflict/incomplete classification a caller must
+// branch on.
+//
+// Unlike replayClientRequest it does not convert errors into API errors: an execution
+// coordinator decides its own safe outcome, and a transport-shaped error would hide
+// the difference between "no session" and "the store failed".
+func (s *Service) SpawnedSessionByClientRequest(
+	ctx context.Context,
+	clientRequestID string,
+) (domain.SessionRecord, bool, error) {
+	if clientRequestID == "" || s.store == nil {
+		return domain.SessionRecord{}, false, nil
+	}
+	rec, found, err := s.store.GetSessionByClientRequestID(ctx, clientRequestID)
+	if err != nil || !found {
+		return rec, found, err
+	}
+	return rec, true, nil
+}
+
 // Spawn creates a session and returns the API-facing read model plus
 // ephemeral prompt size measurements.
 func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {

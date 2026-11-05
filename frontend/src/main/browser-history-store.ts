@@ -98,16 +98,23 @@ function compact(entries: BrowserHistoryEntry[]): BrowserHistoryEntry[] {
 	);
 }
 
+/** 按序列化大小二分最长前缀，保留最近记录，避免逐项截断的平方级开销。 */
 function fittedHistory(entries: BrowserHistoryEntry[]): { entries: BrowserHistoryEntry[]; serialized: string } {
-	const retained = [...entries];
-	while (retained.length > 0) {
-		const serialized = `${JSON.stringify({ version: HISTORY_VERSION, entries: retained }, null, 2)}\n`;
-		if (Buffer.byteLength(serialized) <= HISTORY_MAX_FILE_BYTES) return { entries: retained, serialized };
-		retained.pop();
+	const complete = `${JSON.stringify({ version: HISTORY_VERSION, entries }, null, 2)}\n`;
+	if (Buffer.byteLength(complete) <= HISTORY_MAX_FILE_BYTES) return { entries, serialized: complete };
+	let lower = 0;
+	let upper = entries.length - 1;
+	while (lower < upper) {
+		const count = Math.ceil((lower + upper) / 2);
+		const serialized = `${JSON.stringify({ version: HISTORY_VERSION, entries: entries.slice(0, count) }, null, 2)}\n`;
+		if (Buffer.byteLength(serialized) <= HISTORY_MAX_FILE_BYTES) lower = count;
+		else upper = count - 1;
 	}
-	return { entries: [], serialized: `${JSON.stringify({ version: HISTORY_VERSION, entries: [] }, null, 2)}\n` };
+	const retained = entries.slice(0, lower);
+	return { entries: retained, serialized: `${JSON.stringify({ version: HISTORY_VERSION, entries: retained }, null, 2)}\n` };
 }
 
+/** 按档案串行落盘，并以实际保留记录更新缓存，保证并发写入与容量裁剪一致。 */
 export class BrowserHistoryStore {
 	private readonly directory: string;
 	private readonly now: () => Date;

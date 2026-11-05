@@ -181,6 +181,7 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { registerOperatorIpc, type OperatorDeps } from "./main/operator-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -713,6 +714,29 @@ app.once("will-quit", () => {
 	if (sideStateTimer) clearInterval(sideStateTimer);
 	sideStateTimer = undefined;
 });
+
+/** Main 提供可信 shell 和原生确认；最终的人机验证由 daemon 调用 Windows Hello。 */
+const operatorIpcDeps: OperatorDeps = {
+	ipcMain,
+	baseURL: () => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
+	trustedWebContents: () => mainWindow && !mainWindow.isDestroyed() ? getShellWebContents() : null,
+	rendererURL: rendererUrl,
+	/** 展示 Main 已校验的目标和原文；取消时不创建审批。 */
+	confirmOperation: async ({ verb, operationPath, body }) => {
+		if (!mainWindow || mainWindow.isDestroyed()) return false;
+		const result = await dialog.showMessageBox(mainWindow, {
+			type: "warning",
+			title: "工作流操作确认",
+			message: `确认执行 ${verb}？`,
+			detail: `POST ${operationPath}\n\n请求正文：\n${body || "（空正文）"}\n\n继续后需要 Windows Hello 验证。`,
+			buttons: ["取消", "继续验证"],
+			defaultId: 0,
+			cancelId: 0,
+			noLink: true,
+		});
+		return result.response === 1;
+	},
+};
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
@@ -3198,6 +3222,7 @@ registerCloudArtifactIpc({
 });
 // Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
 void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
+registerOperatorIpc(operatorIpcDeps);
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

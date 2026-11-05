@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
 import { chatImageFileName, fetchChatImage, MAX_CHAT_IMAGE_BYTES, registerChatImageIpc } from "./chat-image-ipc";
 
 function session(response: Response) {
@@ -40,6 +42,7 @@ describe("chatImageFileName", () => {
 });
 
 describe("registerChatImageIpc", () => {
+	const downloadsDirectory = path.join(os.tmpdir(), "ao-chat-image", "Downloads");
 	function setup(saveResult: { canceled: boolean; filePath?: string }, empty = false) {
 		const { registered, ipcMain } = handlers();
 		const clipboard = { writeImage: vi.fn() };
@@ -52,7 +55,7 @@ describe("registerChatImageIpc", () => {
 			clipboard,
 			createImage: () => image as never,
 			dialog: dialog as never,
-			downloadsDirectory: () => "/Users/me/Downloads",
+			downloadsDirectory: () => downloadsDirectory,
 			write,
 			appName: "Orchestrator",
 			markDownloaded,
@@ -79,7 +82,7 @@ describe("registerChatImageIpc", () => {
 		const bytes = new Uint8Array([9]);
 		const saved = setup({ canceled: false, filePath: "/tmp/shot.png" });
 		await expect(saved.registered.get("chatImage:save")?.({}, { name: "../shot.png", bytes })).resolves.toBe(true);
-		expect(saved.dialog.showSaveDialog).toHaveBeenCalledWith({ defaultPath: "/Users/me/Downloads/shot.png" });
+		expect(saved.dialog.showSaveDialog).toHaveBeenCalledWith({ defaultPath: path.join(downloadsDirectory, "shot.png") });
 		expect(saved.write).toHaveBeenCalledExactlyOnceWith("/tmp/shot.png", bytes);
 		const canceled = setup({ canceled: true });
 		await expect(canceled.registered.get("chatImage:save")?.({}, { name: "shot.png", bytes })).resolves.toBe(false);

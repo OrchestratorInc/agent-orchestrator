@@ -6,18 +6,20 @@ import (
 	"testing"
 )
 
+// TestStabilizeWorkingDirectoryChdirsToDataDir 验证工作目录切换，并在临时目录删除前恢复 cwd。
 func TestStabilizeWorkingDirectoryChdirsToDataDir(t *testing.T) {
 	oldCWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Cleanup 按后注册先执行；恢复 cwd 必须先于 Windows 删除临时目录。
+	dataDir := filepath.Join(t.TempDir(), "ao-data")
 	t.Cleanup(func() {
 		if err := os.Chdir(oldCWD); err != nil {
 			t.Fatalf("restore cwd: %v", err)
 		}
 	})
 
-	dataDir := filepath.Join(t.TempDir(), "ao-data")
 	if err := stabilizeWorkingDirectory(dataDir); err != nil {
 		t.Fatalf("stabilizeWorkingDirectory: %v", err)
 	}

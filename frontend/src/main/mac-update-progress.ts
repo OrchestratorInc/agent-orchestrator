@@ -17,7 +17,7 @@ async function atomicJSON(file: string, value: unknown): Promise<void> {
 	await rename(temporary, file);
 }
 
-/** The helper is copied outside the .app so Squirrel never counts it as AO. */
+/** 将签名辅助进程复制到应用包外，等待就绪后才交给 Squirrel 更新。 */
 export async function startMacUpdateProgress(options: {
 	stateDir: string;
 	resourcesPath: string;
@@ -29,7 +29,7 @@ export async function startMacUpdateProgress(options: {
 	const attempt = await mkdtemp(path.join(root, "attempt-"));
 	const request: RestartRequest = {
 		version: options.version,
-		appPath: path.resolve(options.appPath),
+		appPath: path.posix.resolve(options.appPath),
 		parentPID: process.pid,
 		startedAt: Date.now(),
 	};
@@ -90,7 +90,7 @@ export async function startMacUpdateProgress(options: {
 	return { assertAlive, fail: (message) => atomicJSON(path.join(attempt, "error.json"), { message }) };
 }
 
-/** Only the replacement process, after loading its shell, can finish this attempt. */
+/** 用 PID、版本与 macOS 应用包路径确认新进程，避免旧进程或其他应用误确认。 */
 export async function acknowledgeMacUpdateRestart(options: {
 	stateDir: string;
 	appPath: string;
@@ -108,7 +108,7 @@ export async function acknowledgeMacUpdateRestart(options: {
 		const age = (options.now ?? Date.now()) - request.startedAt;
 		if (!Number.isInteger(request.parentPID) || request.parentPID <= 0 || !Number.isInteger(pid) || pid <= 0 || !Number.isFinite(age) || age < 0 || age > REQUEST_LIFETIME_MS ||
 			request.parentPID === pid || request.version !== options.version ||
-			request.appPath !== path.resolve(options.appPath)) return false;
+			request.appPath !== path.posix.resolve(options.appPath)) return false;
 		await atomicJSON(path.join(attempt, "complete.json"), { ...request, pid });
 		return true;
 	} catch {

@@ -432,9 +432,7 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	if want := renderpage.Document([]byte("<!doctype html><p>chart</p>")); string(saved) != string(want) {
 		t.Fatalf("saved = %.200q, want the served document", saved)
 	}
-	if info, _ := os.Stat(file); info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
-	}
+	assertRenderArtifactPrivate(t, file)
 	if !reflect.DeepEqual(h.reconciled, []domain.SessionID{testSession}) {
 		t.Fatalf("reconciled = %v, want the session once", h.reconciled)
 	}

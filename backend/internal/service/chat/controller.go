@@ -206,7 +206,7 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 	return controllerHandoffInterfaceInterrupt
 }
 
-// Controller drives one Chat session.
+// Controller 驱动一个 Chat 会话，通过 sendMu 串行化工作区核验、队列 claim 和 Provider 派发。
 type Controller struct {
 	sessionID    domain.SessionID
 	reviewID     string
@@ -224,6 +224,7 @@ type Controller struct {
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	validateWorkspace      func(context.Context) error
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -393,6 +394,7 @@ func newController(
 	recheckAccount func(domain.SessionID, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
+	validateWorkspace func(context.Context) error,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -410,6 +412,7 @@ func newController(
 		onAccountChanged:       onAccountChanged,
 		recheckAccount:         recheckAccount,
 		onCodexCapacityChanged: onCodexCapacityChanged,
+		validateWorkspace:      validateWorkspace,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
@@ -1471,6 +1474,56 @@ func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domai
 	return c.sendLocked(ctx, msg, true, nil, nil)
 }
 
+// SendPinned records and dispatches a message only when this controller is still
+// the generation the caller observed.
+//
+// Why the check sits under sendMu: sendMu is the lock that serialises dispatch, so
+// no other command can slip a turn in between the fence check and this send. And why
+// that is airtight rather than merely narrow: a controller's generation is fixed at
+// construction and never reassigned, and a replacement controller is a different
+// object. A caller holding this *Controller therefore either holds the generation it
+// named or holds a controller that was already retired — there is no intermediate
+// state in which c.generation changes underneath the lock.
+//
+// An empty expected generation is refused with ErrStaleControllerGeneration rather
+// than read as "no fence": a caller that cannot name the controller it observed
+// cannot prove which controller the message belongs to, and the point of this entry
+// point is that every message is attributable to one.
+func (c *Controller) SendPinned(
+	ctx context.Context,
+	expectedGeneration string,
+	msg ports.ChatUserMessage,
+) (domain.ConversationTurn, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if err := c.checkPinnedGeneration(expectedGeneration); err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	return c.sendLocked(ctx, msg, true, nil, nil)
+}
+
+// checkPinnedGeneration refuses a pinned command whose expected generation is not
+// this controller's.
+//
+// The comparison needs no lock: a Controller's generation is assigned once at
+// construction and never mutated, and a replaced controller is a different object, so
+// the value read here cannot change for the lifetime of this value. Re-confirming the
+// controller identity is the caller's job (the service resolves it from its registry,
+// and the send path additionally holds sendMu across the check and the dispatch).
+func (c *Controller) checkPinnedGeneration(expected string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return fmt.Errorf("%w: a pinned command must name the controller generation",
+			ErrStaleControllerGeneration)
+	}
+	if expected != c.generation {
+		return fmt.Errorf("%w: caller expected %q, live controller is %q",
+			ErrStaleControllerGeneration, expected, c.generation)
+	}
+	return nil
+}
+
+// sendLocked 在 sendMu 内决定接受或排队；新派发请求必须在写入前完成工作区核验。
 func (c *Controller) sendLocked(
 	ctx context.Context,
 	msg ports.ChatUserMessage,
@@ -1548,6 +1601,22 @@ func (c *Controller) sendLocked(
 		InteractionAt:       msg.InteractionAt,
 	}
 
+	if !shouldQueue {
+		if workspaceErr := c.checkWorkspace(ctx); workspaceErr != nil {
+			if msg.ClientMessageID == "" {
+				return domain.ConversationTurn{}, workspaceErr
+			}
+			// 已接受的 client ID 继续由 Append 校验冲突，避免把旧成功重放改为工作区拒绝。
+			_, found, lookupErr := c.store.ConversationMessageByClientID(ctx, c.conversation.ID, msg.ClientMessageID)
+			if lookupErr != nil {
+				return domain.ConversationTurn{}, errors.Join(workspaceErr, lookupErr)
+			}
+			if !found {
+				return domain.ConversationTurn{}, workspaceErr
+			}
+		}
+	}
+
 	var created bool
 	if c.reviewID == "" {
 		created, err = c.store.AppendUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
@@ -1582,7 +1651,8 @@ func (c *Controller) sendLocked(
 			RequestedAt:        now,
 		}
 		if queuedAhead && !c.busy() {
-			if err := c.drainLocked(ctx, true); err != nil {
+			// 消息已明确接受入队；工作区门禁仅阻止派发，不能再把本次接受报告为拒绝。
+			if err := c.drainLocked(ctx, true); err != nil && !errors.Is(err, ErrWorkspaceInvalid) {
 				return queuedTurn, err
 			}
 		}
@@ -1617,6 +1687,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	return c.retryTurnLocked(ctx, turnID, false)
 }
 
+// retryTurnLocked 在 sendMu 内重放已有 retry 或核验后接受新 retry，拒绝时不消耗重试关系。
 func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
@@ -1677,6 +1748,9 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	}
 	if prompt.ProviderInputText != "" {
 		prompt.Text = prompt.ProviderInputText
+	}
+	if err := c.checkWorkspace(ctx); err != nil {
+		return domain.ConversationTurn{}, err
 	}
 
 	now := c.now()
@@ -1880,7 +1954,19 @@ func (c *Controller) busy() bool {
 	return c.pendingTurnID != "" || c.compactionPending
 }
 
-// dispatch hands a recorded turn to the provider. Callers must hold sendMu.
+// checkWorkspace 重验当前工作区；未注入 callback 的旧会话沿用原行为。
+func (c *Controller) checkWorkspace(ctx context.Context) error {
+	if c.validateWorkspace == nil {
+		return nil
+	}
+	if err := c.validateWorkspace(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrWorkspaceInvalid, err)
+	}
+	return nil
+}
+
+// dispatch 将已接受 turn 交给 Provider；调用者必须在同一 sendMu 临界区核验工作区并接受或 claim。
+// claimed=true 仅允许 drain 在同一 sendMu 临界区内核验工作区后 claim 的 turn，其他路径不得绕过核验。
 func (c *Controller) dispatch(
 	ctx context.Context,
 	turnID string,
@@ -2114,6 +2200,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 	return c.drainLockedWithLimit(ctx, allowDispatch, 0)
 }
 
+// drainLockedWithLimit 在 sendMu 内先核验工作区，再处理内容与 claim，拒绝时保留原队列。
 func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch bool, limit int) error {
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
@@ -2149,6 +2236,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 			return nil
 		}
 		if err != nil {
+			return err
+		}
+		if err := c.checkWorkspace(ctx); err != nil {
+			c.log.Error("queued chat workspace validation failed", "session", c.sessionID, "error", err)
 			return err
 		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {

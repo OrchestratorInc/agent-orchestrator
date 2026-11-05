@@ -1441,8 +1441,10 @@ func TestChatSpawnPersistsBrowserCapabilityBeforeControllerStart(t *testing.T) {
 func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
-	mgr.executable = func() (string, error) { return "/opt/ao/bin/ao", nil }
-	mgr.runFilePath = "/ao-test/running.json"
+	daemonExe := filepath.Join(t.TempDir(), "ao")
+	runFile := filepath.Join(t.TempDir(), "running.json")
+	mgr.executable = func() (string, error) { return daemonExe, nil }
+	mgr.runFilePath = runFile
 	mgr.browserCapabilities = &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{
 		{token: "spawn-token", verifier: "spawn-verifier"}, {token: "restore-token", verifier: "restore-verifier"},
 	}}
@@ -1465,8 +1467,8 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 	}
 
 	want := []ports.ChatMCPServerConfig{{
-		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
-		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: mgr.dataDir},
+		Name: "ao", Type: "stdio", Command: daemonExe, Args: []string{"mcp"},
+		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: runFile, EnvDataDir: mgr.dataDir},
 	}}
 	if mgr.dataDir == "" {
 		t.Fatal("test manager has no data dir")
@@ -1480,7 +1482,7 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
 		}
 	}
-	if got := mgr.aoMCPServers(context.Background(), domain.HarnessUnreal, launcher.started[0].Env); got != nil {
+	if got := mgr.aoMCPServers(context.Background(), domain.HarnessUnreal, launcher.started[0].Env, nil); got != nil {
 		t.Fatalf("unreal agent got tool servers %+v; its driver refuses them", got)
 	}
 }

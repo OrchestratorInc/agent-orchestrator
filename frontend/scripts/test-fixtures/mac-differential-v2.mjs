@@ -3,10 +3,12 @@ import { createRequire } from "node:module";
 import { mkdtempSync, readFileSync, writeFileSync, utimesSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { generateMacV2Assets } from "../mac-differential-v2.mjs";
 const require = createRequire(import.meta.url);
-const { zipSync } = require("cross-zip");
+const archiveZip = promisify(require("cross-zip").zip);
 
+/** 生成真实的新旧 ZIP，供发布校验和更新重建测试共用。 */
 export async function macV2Fixture(arches = ["arm64", "x64"]) {
   const dir = mkdtempSync(join(tmpdir(), "ao-v2-fixture-"));
   const source = join(dir, "source");
@@ -15,11 +17,12 @@ export async function macV2Fixture(arches = ["arm64", "x64"]) {
   const candidate = { version: "2.0.0", tag: "v2.0.0", commit: "a".repeat(40) };
   const baseline = { version: "1.0.0", tag: "v1.0.0", commit: "b".repeat(40) };
   const inputs = [];
-  const zip = (bytes, destination) => {
+  /** 异步 ZIP 避免删除新归档；Windows 使用独占源目录，防止内部时间戳目录撞名。 */
+  const zip = async (bytes, destination) => {
     const payload = join(source, "fixture.bin");
     writeFileSync(payload, bytes);
     utimesSync(payload, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
-    zipSync(payload, destination);
+    await archiveZip(process.platform === "win32" ? source : payload, destination);
   };
   for (const arch of arches) {
     const previous = Buffer.alloc(512_000);
@@ -28,7 +31,7 @@ export async function macV2Fixture(arches = ["arm64", "x64"]) {
     for (let offset = 180_000; offset < 228_000; offset += 64) createHash("sha512").update(`patch:${offset}`).digest().copy(target, offset);
     const oldPath = join(old, `Agent.Orchestrator-darwin-${arch}-1.0.0.zip`);
     const zipPath = join(dir, `Agent.Orchestrator-darwin-${arch}-2.0.0.zip`);
-    zip(previous, oldPath); zip(target, zipPath);
+    await zip(previous, oldPath); await zip(target, zipPath);
     inputs.push({ arch, zipPath, baseline: { identity: baseline, zipPath: oldPath } });
   }
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");

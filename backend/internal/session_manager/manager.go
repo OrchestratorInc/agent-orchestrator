@@ -1340,7 +1340,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
-		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
+		if len(cfg.Repos) > 0 {
+			var repoInfos []ports.WorkspaceRepoInfo
+			ws, repoInfos, err = m.createMultiRepoSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
+			if err == nil {
+				// The root repo is the session workspace; the rest are additional
+				// roots the agent must also be able to reach.
+				workspaceProject = &ports.WorkspaceProjectInfo{Root: ws, Worktrees: repoInfos}
+			}
+		} else {
+			ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
+		}
 	}
 	if err != nil {
 		if ws.Path != "" {
@@ -3554,6 +3564,7 @@ func (m *Manager) relaunchSessionWithPolicy(
 	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, "", historyPolicy, nil)
 }
 
+// relaunchSessionWithPolicyAndGeneration 保持恢复与 generation fencing，并在 TUI 启动前重新核验显式 Repo。
 func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
@@ -3567,6 +3578,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return m.resumeChatController(
 			ctx, operation, rec, project, ws, requireNativeHistory, false, reservedGeneration, historyPolicy,
 		)
+	}
+	if _, err := m.observeSessionWorktrees(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: workspace verification: %w", operation, rec.ID, err)
 	}
 
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -4022,6 +4036,10 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		return nil
 	}
+	// 存活 runtime 只能证明进程存在；采用或重启前仍须核验 M2 工作区。
+	if _, err := m.observeSessionWorktrees(ctx, rec); err != nil {
+		return fmt.Errorf("reconcile %s: workspace verification: %w", rec.ID, err)
+	}
 	projectKind := projectKindForSession(project, rec.ProjectID)
 	if rec.Metadata.WorkspacePath == "" || (rec.Metadata.Branch == "" && projectKind != domain.ProjectKindScratch) {
 		// The previous daemon died before Spawn committed a workspace (e.g. the
@@ -4419,9 +4437,7 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 	return nil
 }
 
-// restoreAllSession restores one terminated session marked for restore at
-// shutdown, acquiring the project workspace gate so cleanup does not tear down
-// its workspace while restore is in progress.
+// restoreAllSession 在项目 gate 内恢复关闭标记；显式 M2 必须先核验全部 Repo，绝不重建失效工作树。
 func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecord) {
 	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
 	defer releaseWorkspaceGate()
@@ -4430,6 +4446,11 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	rows, err := m.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
 		m.logger.Error("restore-all: list worktrees failed", "sessionID", rec.ID, "error", err)
+		return
+	}
+	multiRows, multi, err := m.multiRepoSessionRows(ctx, rec)
+	if err != nil {
+		m.logger.Error("restore-all: repository verification failed", "sessionID", rec.ID, "error", err)
 		return
 	}
 	if len(rows) == 0 {
@@ -4462,9 +4483,17 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		return
 	}
 	var ws ports.WorkspaceInfo
-	restoredWorkspaceProject := project.Kind.WithDefault() == domain.ProjectKindWorkspace
+	restoredWorkspaceProject := project.Kind.WithDefault() == domain.ProjectKindWorkspace || multi
 	var projectRows []ports.WorkspaceRepoInfo
-	if restoredWorkspaceProject {
+	if multi {
+		projectRows = multiRows
+		var restoreErr error
+		ws, restoreErr = m.restoreMultiRepoSessionWorkspace(ctx, rec, projectRows)
+		if restoreErr != nil {
+			m.logger.Error("restore-all: explicit repository restore failed", "sessionID", rec.ID, "error", restoreErr)
+			return
+		}
+	} else if restoredWorkspaceProject {
 		var rowErr error
 		projectRows, rowErr = m.workspaceProjectRestoreRowsFromMarkers(ctx, project, rec, rows)
 		if rowErr != nil {
@@ -4593,7 +4622,13 @@ func (m *Manager) markSessionWorktreesActive(ctx context.Context, rows []domain.
 	return nil
 }
 
+// restoreSessionWorkspace 先按持久化身份区分显式 M2，Legacy 保留原工作区恢复行为。
 func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord) (ports.WorkspaceInfo, error) {
+	if rows, explicit, err := m.multiRepoSessionRows(ctx, rec); err != nil {
+		return ports.WorkspaceInfo{}, err
+	} else if explicit {
+		return m.restoreMultiRepoSessionWorkspace(ctx, rec, rows)
+	}
 	if projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
 		recreated, err := workspacePathMissing(rec.Metadata.WorkspacePath)
 		if err != nil {
@@ -4735,7 +4770,15 @@ func (m *Manager) workspaceProjectRows(ctx context.Context, rec domain.SessionRe
 		return nil, false, err
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
-		return nil, false, nil
+		// A multi-repo workflow session records one row per repository even though
+		// its project is an ordinary one. Reporting those rows here is what makes
+		// teardown, cleanup, and save-and-teardown treat every worktree, instead
+		// of destroying only the root and orphaning the others.
+		infos := m.multiRepoRows(ctx, rec, rows)
+		if len(infos) == 0 {
+			return nil, false, nil
+		}
+		return infos, true, nil
 	}
 	infos, err := m.sessionWorktreeRowsToRepoInfos(ctx, project, rec, rows)
 	if err != nil {
@@ -4866,10 +4909,13 @@ func (m *Manager) destroyWorkspaceProjectRows(ctx context.Context, rows []ports.
 	return aggregate, firstErr
 }
 
+// upsertWorkspaceProjectRowState 更新生命周期状态时保留创建时的仓库身份。
 func (m *Manager) upsertWorkspaceProjectRowState(ctx context.Context, row ports.WorkspaceRepoInfo, state string) error {
 	return m.store.UpsertSessionWorktree(ctx, domain.SessionWorktreeRecord{
 		SessionID:    row.SessionID,
 		RepoName:     row.RepoName,
+		ProjectID:    row.ProjectID,
+		RepoPath:     row.RepoPath,
 		Branch:       row.Branch,
 		BaseSHA:      row.BaseSHA,
 		BaseRef:      row.BaseRef,
@@ -5337,9 +5383,8 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-// confirmActive fences each retry's input timestamp check through its Enter
-// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
-// the operator's new draft while trying to confirm its own prompt.
+// confirmActive 在每次重发 Enter 时持有输入栅栏，核对输入时间后再写入。
+// 发送同时或之后收到的人类输入都停止重发，避免确认提示时提交操作员的新草稿。
 func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
 	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		accepted := false
@@ -5349,7 +5394,8 @@ func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, 
 				lastInputAt = m.lastTerminalInputAt(rec)
 			}
 			accepted = evidence.accepted(rec)
-			return lastInputAt.After(inputBaseline), release
+			// 粗粒度时钟可能让先后两次事件时间戳相等；此时无法证明输入早于发送。
+			return !lastInputAt.IsZero() && !lastInputAt.Before(inputBaseline), release
 		}, nil)
 		if err == nil && outcome == sessionguard.SuppressedComposerBusy {
 			if accepted {

@@ -27,6 +27,8 @@ func (s *Store) UpsertSessionWorktree(ctx context.Context, row domain.SessionWor
 	return s.qw.UpsertSessionWorktree(ctx, gen.UpsertSessionWorktreeParams{
 		SessionID:    row.SessionID,
 		RepoName:     row.RepoName,
+		ProjectID:    string(row.ProjectID),
+		RepoPath:     row.RepoPath,
 		Branch:       row.Branch,
 		BaseSha:      row.BaseSHA,
 		BaseRef:      row.BaseRef,
@@ -73,6 +75,8 @@ func sessionWorktreeFromGen(row gen.SessionWorktree) domain.SessionWorktreeRecor
 	return domain.SessionWorktreeRecord{
 		SessionID:    row.SessionID,
 		RepoName:     row.RepoName,
+		ProjectID:    domain.ProjectID(row.ProjectID),
+		RepoPath:     row.RepoPath,
 		Branch:       row.Branch,
 		BaseSHA:      row.BaseSha,
 		BaseRef:      row.BaseRef,

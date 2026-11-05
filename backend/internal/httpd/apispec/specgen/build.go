@@ -72,6 +72,8 @@ func Build() ([]byte, error) {
 			"Recurring daemon-owned session schedules and durable run history"),
 		*(&openapi31.Tag{Name: "workflows"}).WithDescription(
 			"Durable multi-repository workflow DAGs, their tasks, and worker claim leases"),
+		*(&openapi31.Tag{Name: "operator"}).WithDescription(
+			"Human approval for operator-only workflow actions: request, confirm, poll, and list"),
 		*(&openapi31.Tag{Name: "prs"}).WithDescription(
 			"Pull-request actions (SCM lane)"),
 		*(&openapi31.Tag{Name: "reviews"}).WithDescription(
@@ -336,6 +338,36 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkflowEdgeResponse":                      "WorkflowEdgeResponse",
 	"ControllersWorkflowTaskRepositoryResponse":            "WorkflowTaskRepositoryResponse",
 	"ControllersWorkflowAttemptResponse":                   "WorkflowAttemptResponse",
+	"ControllersWorkflowCapabilityResponse":                "WorkflowCapabilityResponse",
+	"ControllersWorkflowCapabilityModelResponse":           "WorkflowCapabilityModelResponse",
+	"ControllersGetWorkflowCapabilitiesResponse":           "GetWorkflowCapabilitiesResponse",
+	"ControllersWorkflowAttemptBindingResponse":            "WorkflowAttemptBindingResponse",
+	"ControllersWorkflowAttemptRepoBindingResponse":        "WorkflowAttemptRepoBindingResponse",
+	"ControllersWorkflowBindingEnvelope":                   "WorkflowBindingEnvelope",
+	"ControllersBindWorkflowAttemptRequest":                "BindWorkflowAttemptRequest",
+	"ControllersBindWorkflowAttemptResponse":               "BindWorkflowAttemptResponse",
+	"ControllersWorkflowSessionObservationResponse":        "WorkflowSessionObservationResponse",
+	"ControllersObserveWorkflowAttemptResponse":            "ObserveWorkflowAttemptResponse",
+	"ControllersReconcileWorkflowAttemptResponse":          "ReconcileWorkflowAttemptResponse",
+	"ControllersWorkflowTaskRequestSummary":                "WorkflowTaskRequestSummary",
+	"ControllersWorkflowTaskRequestDetailResponse":         "WorkflowTaskRequestDetailResponse",
+	"ControllersWorkflowTaskRequestDetailEnvelope":         "WorkflowTaskRequestDetailEnvelope",
+	"ControllersWorkflowInterventionRequest":               "WorkflowInterventionRequest",
+	"ControllersWorkflowInterventionResponse":              "WorkflowInterventionResponse",
+	"ControllersWorkflowInterventionEnvelope":              "WorkflowInterventionEnvelope",
+	"ControllersWorkflowReplanResponse":                    "WorkflowReplanResponse",
+	"ControllersCreateWorkflowMessageRequest":              "CreateWorkflowMessageRequest",
+	"ControllersWorkflowMessageResponse":                   "WorkflowMessageResponse",
+	"ControllersListWorkflowMessagesResponse":              "ListWorkflowMessagesResponse",
+	"ControllersCreateWorkflowMessageResponse":             "CreateWorkflowMessageResponse",
+	"ControllersCreateWorkflowTaskRequestRequest":          "CreateWorkflowTaskRequestRequest",
+	"ControllersWorkflowTaskRequestResponse":               "WorkflowTaskRequestResponse",
+	"ControllersListWorkflowTaskRequestsResponse":          "ListWorkflowTaskRequestsResponse",
+	"ControllersCreateWorkflowTaskRequestResponse":         "CreateWorkflowTaskRequestResponse",
+	"ControllersDecideWorkflowTaskRequestRequest":          "DecideWorkflowTaskRequestRequest",
+	"ControllersDecideWorkflowTaskRequestResponse":         "DecideWorkflowTaskRequestResponse",
+	"ControllersResolveWorkflowAttemptRequest":             "ResolveWorkflowAttemptRequest",
+	"ControllersWorkflowTaskRequestIDParam":                "WorkflowTaskRequestIDParam",
 	"ControllersWorkflowDefinitionResponse":                "WorkflowDefinitionResponse",
 	"ControllersWorkflowEnvelope":                          "WorkflowEnvelope",
 	"ControllersWorkflowTaskEnvelope":                      "WorkflowTaskEnvelope",
@@ -806,7 +838,58 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, operatorOperations()...)
 	return ops
+}
+
+// operatorOperations declares the human-approval surface that authorises the operator-only
+// workflow routes.
+//
+// These routes are the CLIENT half of the operator gate, and none of them is an authorization
+// decision: create/status/list are loopback-only and unauthenticated (creating an approval grants
+// nothing), and confirm is the ONE point where authority is decided — by native OS user
+// verification, never by a token. There is no credential-adoption route: the daemon mints no
+// operator token, so there is nothing to adopt. They are declared here rather than under
+// "workflows" because they describe a caller, not a workflow.
+func operatorOperations() []operation {
+	approvalParam := []any{controllers.OperatorApprovalIDParam{}}
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusForbidden, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodPost, path: "/api/v1/operator/approvals", id: "createOperatorApproval",
+			tag:     "operator",
+			summary: "Request an approval for one exact operator operation and payload digest; creating one grants nothing",
+			reqBody: controllers.CreateOperatorApprovalRequest{},
+			resps: append([]respUnit{
+				{http.StatusCreated, controllers.OperatorApprovalEnvelope{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/operator/approvals/{approvalId}/confirm",
+			id: "confirmOperatorApproval", tag: "operator",
+			summary:    "Confirm one approval after native OS user verification of the exact operation and payload",
+			pathParams: approvalParam,
+			reqBody:    controllers.ConfirmOperatorApprovalRequest{},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.OperatorApprovalEnvelope{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/operator/approvals/{approvalId}/status",
+			id: "getOperatorApprovalStatus", tag: "operator",
+			summary:    "Poll one approval's state with its id and code; returns no credential and grants no authority",
+			pathParams: approvalParam,
+			reqBody:    controllers.OperatorApprovalStatusRequest{},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.OperatorApprovalEnvelope{}},
+			}, commonErrors...),
+		},
+	}
 }
 
 func automationOperations() []operation {
@@ -927,6 +1010,110 @@ func workflowOperations() []operation {
 			pathParams: taskID,
 			reqBody:    controllers.RetryWorkflowTaskRequest{},
 			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowTaskEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/resolve", id: "resolveWorkflowAttempt", tag: "workflows",
+			summary:    "Record an operator's decided outcome for an attempt whose lease expired; the only exit from UNKNOWN",
+			pathParams: attemptID,
+			reqBody:    controllers.ResolveWorkflowAttemptRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowAttemptEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/capabilities", id: "getWorkflowCapabilities", tag: "workflows",
+			summary: "Report graded capability evidence per launch harness, with its source and expiry",
+			resps:   append([]respUnit{{http.StatusOK, controllers.GetWorkflowCapabilitiesResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/binding", id: "getWorkflowAttemptBinding", tag: "workflows",
+			summary:    "Read one attempt's session binding state; never returns a lease token",
+			pathParams: attemptID,
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowBindingEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/bind", id: "bindWorkflowAttempt", tag: "workflows",
+			summary:    "Create or resume one attempt's session binding intent; a frozen outcome is a 409, never a success",
+			pathParams: attemptID,
+			reqBody:    controllers.BindWorkflowAttemptRequest{},
+			resps:      append([]respUnit{{http.StatusOK, controllers.BindWorkflowAttemptResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/observe", id: "observeWorkflowAttempt", tag: "workflows",
+			summary:    "Read one attempt's session facts and binding state; live/reasonCode appear only when this daemon can check liveness",
+			pathParams: attemptID,
+			resps:      append([]respUnit{{http.StatusOK, controllers.ObserveWorkflowAttemptResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/reconcile", id: "reconcileWorkflowAttempt", tag: "workflows",
+			summary:    "Gather evidence for an unknown spawn; never spawns again, and a still-uncertain binding is a 409",
+			pathParams: attemptID,
+			// The sweep-style call takes no input; an empty body is a meaningful request.
+			optionalReqBody: true,
+			resps:           append([]respUnit{{http.StatusOK, controllers.ReconcileWorkflowAttemptResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/resume", id: "resumeWorkflowAttempt", tag: "workflows",
+			summary:         "Re-attach a bound attempt to its existing session after a restart; 501 when this daemon cannot resume",
+			pathParams:      attemptID,
+			optionalReqBody: true,
+			resps:           append([]respUnit{{http.StatusOK, controllers.ReconcileWorkflowAttemptResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions", id: "createWorkflowIntervention", tag: "workflows",
+			summary:    "Steer into a running turn, queue a message, or stop and request a replan",
+			pathParams: attemptID,
+			reqBody:    controllers.WorkflowInterventionRequest{},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.WorkflowInterventionEnvelope{}},
+				{http.StatusAccepted, controllers.WorkflowInterventionEnvelope{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/messages", id: "listWorkflowMessages", tag: "workflows",
+			summary:    "List a workflow's peer collaboration messages",
+			pathParams: []any{controllers.WorkflowIDParam{}, controllers.ListWorkflowsQuery{}},
+			resps:      append([]respUnit{{http.StatusOK, controllers.ListWorkflowMessagesResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/messages", id: "createWorkflowMessage", tag: "workflows",
+			summary:    "Store one peer collaboration message; the sender is derived from the caller's attempt, never supplied",
+			pathParams: workflowID,
+			reqBody:    controllers.CreateWorkflowMessageRequest{},
+			resps: append([]respUnit{
+				{http.StatusCreated, controllers.CreateWorkflowMessageResponse{}},
+				{http.StatusOK, controllers.CreateWorkflowMessageResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/task-requests", id: "createWorkflowTaskRequest", tag: "workflows",
+			summary:    "Store a task or resource request that only an owner may decide",
+			pathParams: workflowID,
+			reqBody:    controllers.CreateWorkflowTaskRequestRequest{},
+			resps: append([]respUnit{
+				{http.StatusCreated, controllers.CreateWorkflowTaskRequestResponse{}},
+				{http.StatusOK, controllers.CreateWorkflowTaskRequestResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/task-requests", id: "listWorkflowTaskRequests", tag: "workflows",
+			summary:    "List a workflow's task requests with their redacted summaries; the stored payload is never returned",
+			pathParams: []any{controllers.WorkflowIDParam{}, controllers.ListWorkflowsQuery{}},
+			resps:      append([]respUnit{{http.StatusOK, controllers.ListWorkflowTaskRequestsResponse{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}", id: "getWorkflowTaskRequest", tag: "workflows",
+			summary:    "Read one task request and its redacted summary; a request from another workflow is not found",
+			pathParams: []any{controllers.WorkflowTaskRequestIDParam{}},
+			resps:      append([]respUnit{{http.StatusOK, controllers.WorkflowTaskRequestDetailEnvelope{}}}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}/decide", id: "decideWorkflowTaskRequest", tag: "workflows",
+			summary:    "Record an owner decision; a rejection answers 200, an approval that created no task answers 202 with materialization=pending, and only a materialized approval answers 200",
+			pathParams: []any{controllers.WorkflowTaskRequestIDParam{}},
+			reqBody:    controllers.DecideWorkflowTaskRequestRequest{},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.DecideWorkflowTaskRequestResponse{}},
+				{http.StatusAccepted, controllers.DecideWorkflowTaskRequestResponse{}},
+			}, commonErrors...),
 		},
 	}
 }

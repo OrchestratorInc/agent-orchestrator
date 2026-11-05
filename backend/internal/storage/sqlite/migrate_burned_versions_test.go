@@ -244,6 +244,13 @@ var shippedMigrations = map[int64]string{
 	20261103044048260: "20261103044048260_workflow_core.sql",
 	20261103050931629: "20261103050931629_workflow_idempotency.sql",
 	20261103073516664: "20261103073516664_workflow_cdc.sql",
+	20261103143320688: "20261103143320688_workflow_attempt_bindings.sql",
+	20261103160303854: "20261103160303854_workflow_interventions.sql",
+	20261103163208174: "20261103163208174_workflow_collaboration.sql",
+	20261103170009848: "20261103170009848_workflow_message_loss_and_ref.sql",
+	20261104020830811: "20261104020830811_harness_capability_snapshots.sql",
+	20261104094706356: "20261104094706356_workflow_audit_log.sql",
+	20261104170421478: "20261104170421478_session_worktree_repo_identity.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

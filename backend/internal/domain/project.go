@@ -75,8 +75,11 @@ type WorkspaceRepoRecord struct {
 // SessionWorktreeRecord tracks one repo worktree in a session. Workspace
 // projects create one root row plus one child row per WorkspaceRepoRecord.
 type SessionWorktreeRecord struct {
-	SessionID    SessionID
-	RepoName     string
+	SessionID SessionID
+	RepoName  string
+	// ProjectID/RepoPath 保存创建时的授权归属，恢复不得从可替换的目录反推身份。
+	ProjectID    ProjectID
+	RepoPath     string
 	Branch       string
 	BaseSHA      string
 	BaseRef      string

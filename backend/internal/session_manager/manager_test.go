@@ -2983,7 +2983,8 @@ func TestSpawn_SelectsNativeModelBeforeTask(t *testing.T) {
 
 func TestSpawn_UnconfirmedNativeModelPreventsTask(t *testing.T) {
 	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	// 模型确认预算不包含假工作区的真实 Git 探测，仍保留 150ms 截止时间和投递断言。
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
 	msg := &fakeMessenger{}
 	agent := selectingAfterStartAgent{afterStartAgent{recordingAgent: &recordingAgent{}}}
 	m := New(Deps{Runtime: &fakeRuntime{outputs: []string{"starting"}}, Agents: singleAgent{agent: agent},
@@ -3324,7 +3325,8 @@ func TestSpawn_AfterStartPromptFallsBackWhenReadinessTimesOut(t *testing.T) {
 
 func TestSpawn_AfterStartPromptReservesCallerDeadlineForFallbackDelivery(t *testing.T) {
 	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	// 本用例只验证启动提示的时间预算；Scratch 避免假工作区触发真实 Git 探测。
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Kind: domain.ProjectKindScratch, Config: testRoleAgents()}
 	rt := &fakeRuntime{outputs: []string{"still booting"}}
 	msg := &fakeMessenger{}
 	agent := &recordingAgent{}
@@ -5890,6 +5892,7 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	m, st, _, _ := newManager()
 	m.dataDir = filepath.Join(home, ".ao", "dev", "data")
 
@@ -8174,24 +8177,40 @@ func TestSpawn_ProjectPATHIsPinBase(t *testing.T) {
 	}
 }
 
+// TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH 验证两条启动路径
+// 都保留 daemon 目录优先级，并让各平台实际使用的 Node 启动器目录进入 PATH。
 func TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH(t *testing.T) {
 	daemonExe := filepath.Join(t.TempDir(), "ao")
 	home := t.TempDir()
 	binDir := filepath.Join(home, ".npm-global", "bin")
 	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.23.1", "bin")
 	agentBin := filepath.Join(binDir, "kimi")
-	for _, path := range []string{
+	fixturePaths := []string{
 		agentBin,
 		filepath.Join(home, ".nvm", "versions", "node", "v18.20.0", "bin", "node"),
 		filepath.Join(nodeDir, "node"),
 		filepath.Join(home, ".volta", "bin", "node"),
-	} {
+	}
+	wantDirs := []string{filepath.Dir(daemonExe), binDir, nodeDir, "/usr/bin"}
+	if runtime.GOOS == "windows" {
+		// Windows npm 的 .cmd 启动器使用同目录 node.exe，不经过 Unix shebang/NVM 发现。
+		agentBin = filepath.Join(binDir, "kimi.cmd")
+		fixturePaths = []string{agentBin, filepath.Join(binDir, "node.exe")}
+		wantDirs = []string{filepath.Dir(daemonExe), binDir, "/usr/bin"}
+	}
+	for _, path := range fixturePaths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		contents := "#!/bin/sh\n"
+		contents := "test executable"
+		if runtime.GOOS != "windows" {
+			contents = "#!/bin/sh\n"
+		}
 		if path == agentBin {
 			contents = "#!/usr/bin/env node\n"
+			if runtime.GOOS == "windows" {
+				contents = "@echo off\r\n\"%~dp0node.exe\" \"%~dp0node_modules\\kimi\\cli.js\" %*\r\n"
+			}
 		}
 		if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 			t.Fatal(err)
@@ -8200,11 +8219,12 @@ func TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH(t *testi
 	// The daemon-dir pin stays at the HEAD: the agent binary is launched by
 	// absolute path and does not need its directory first, but a bare `ao` in
 	// the session must resolve to this daemon (see restorePinnedDir).
-	want := strings.Join([]string{filepath.Dir(daemonExe), binDir, nodeDir, "/usr/bin"}, string(os.PathListSeparator))
+	want := strings.Join(wantDirs, string(os.PathListSeparator))
 
 	for _, operation := range []string{"spawn", "restore"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			t.Setenv("PATH", "/usr/bin")
 			t.Setenv("VOLTA_HOME", filepath.Join(home, ".volta"))
 			t.Setenv("FNM_DIR", filepath.Join(home, ".fnm"))
@@ -8272,6 +8292,7 @@ func TestSpawn_LaunchBinaryDirDoesNotShadowDaemonAO(t *testing.T) {
 
 func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
+	daemonExe := filepath.Join(t.TempDir(), "ao")
 	home := t.TempDir()
 	binDir := filepath.Join(home, "native", "bin")
 	agentBin := filepath.Join(binDir, "agent")
@@ -8294,7 +8315,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 			}
 			return agentBin, nil
 		},
-		Executable: func() (string, error) { return "/ao/bin/ao", nil },
+		Executable: func() (string, error) { return daemonExe, nil },
 	})
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -8302,7 +8323,7 @@ func TestSpawn_DoesNotAddNodeRuntimeForNativeBinary(t *testing.T) {
 	if nodeLookups != 0 {
 		t.Fatalf("node LookPath calls = %d, want 0 for native binary", nodeLookups)
 	}
-	want := strings.Join([]string{"/ao/bin", binDir, "/usr/bin"}, string(os.PathListSeparator))
+	want := strings.Join([]string{filepath.Dir(daemonExe), binDir, "/usr/bin"}, string(os.PathListSeparator))
 	if got := rt.lastCfg.Env["PATH"]; got != want {
 		t.Fatalf("runtime env PATH = %q, want %q", got, want)
 	}

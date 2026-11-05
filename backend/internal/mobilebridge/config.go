@@ -74,7 +74,7 @@ func Path(dataDir string) string { return filepath.Join(dataDir, "mobile", "conf
 // Load reads the Connect Mobile config from path. A missing file is not an
 // error: it yields the zero State (bridge disabled).
 func Load(path string) (State, error) {
-	b, err := os.ReadFile(path)
+	b, err := readConfigFile(path)
 	if os.IsNotExist(err) {
 		return State{}, nil
 	}
@@ -128,7 +128,7 @@ func writeFileAtomic(path string, b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceAtomicFile(tmpName, path); err != nil {
 		return err
 	}
 	// The rename on disk too, so a power loss cannot bring back the old file

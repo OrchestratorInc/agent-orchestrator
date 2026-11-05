@@ -2,7 +2,6 @@ package mobilebridge
 
 import (
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,13 +112,7 @@ func TestEnsureIdentityWritesOwnerOnly(t *testing.T) {
 	if _, err := EnsureIdentityFor(path, []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")}); err != nil {
 		t.Fatalf("EnsureIdentity: %v", err)
 	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("identity file mode %o, want 600", perm)
-	}
+	assertIdentityFilePrivate(t, path)
 }
 
 // Identity belongs to the AO installation. Hardware fingerprints remain useful

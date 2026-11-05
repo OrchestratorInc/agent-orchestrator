@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"unicode/utf8"
 
@@ -37,9 +38,20 @@ func newMCPCommand(ctx *commandContext) *cobra.Command {
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return ctx.serveMCP(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+			return ServeMCP(cmd.Context(), ctx.deps, cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
+}
+
+// ServeMCP runs the `ao mcp` stdio server over the supplied streams.
+//
+// It is the one entry point both the command and an in-process test drive, so the
+// tests exercise the shipped server rather than a second implementation of it. deps
+// supplies the HTTP client and the daemon liveness probe `ao mcp` needs to reach the
+// loopback daemon.
+func ServeMCP(ctx context.Context, deps Deps, in io.Reader, out io.Writer) error {
+	commandCtx := &commandContext{deps: deps.withDefaults()}
+	return commandCtx.serveMCP(ctx, in, out)
 }
 
 type mcpRequest struct {
@@ -118,7 +130,8 @@ func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), c.cuaTools(ctx, state)...)
+		tools := append(append([]map[string]any{}, mcpTools...), workflowMCPTools(os.Getenv)...)
+		tools = append(tools, c.cuaTools(ctx, state)...)
 		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
@@ -132,6 +145,10 @@ func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []
 		case "html_render":
 			resp.Result = c.callHTMLRender(ctx, p.Arguments)
 		default:
+			if isWorkflowMCPTool(p.Name) {
+				resp.Result = c.callWorkflowTool(ctx, p.Name, p.Arguments)
+				break
+			}
 			if c.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
 				resp.Result = c.callCua(ctx, p.Name, p.Arguments)
 				break

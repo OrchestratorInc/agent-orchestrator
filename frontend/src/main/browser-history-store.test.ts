@@ -52,6 +52,9 @@ describe("BrowserHistoryStore", () => {
 		expect(parsed.entries.length).toBe(outcome.imported);
 		expect(parsed.entries.length).toBeLessThanOrEqual(5_000);
 		expect(outcome.truncated).toBe(entries.length - outcome.imported);
+		expect(parsed.entries).toEqual(entries.slice(0, outcome.imported));
+		expect(Buffer.byteLength(`${JSON.stringify({ version: 1, entries: entries.slice(0, outcome.imported + 1) }, null, 2)}\n`))
+			.toBeGreaterThan(4 * 1024 * 1024);
 		expect(await store.suggest(profileId, "entry 5099")).toEqual([]);
 	});
 

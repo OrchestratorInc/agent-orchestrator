@@ -86,11 +86,14 @@ function createAutoUpdaterMock(): AutoUpdaterMock {
 // retries rather than failing the run on ENOTEMPTY.
 let stateDir = "";
 const hostPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const macFixtureWritable = new Map<string, boolean>();
 beforeEach(() => {
+  macFixtureWritable.clear();
   Object.defineProperty(process, "platform", { value: "linux" });
   stateDir = mkdtempSync(nodePath.join(os.tmpdir(), "ao-updater-state-"));
 });
 afterEach(() => {
+  vi.doUnmock("node:fs");
   Object.defineProperty(process, "platform", hostPlatform);
   rmSync(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 });
@@ -314,6 +317,7 @@ describe("macOS differential update policy", () => {
   });
 });
 
+/** 组装隔离更新模块，保留原生状态 I/O，仅为 Windows 注入 Mac 安装路径权限。 */
 async function importAutoUpdater(
   settings: UpdateSettings | UpdateSettingsReader = {
     enabled: true,
@@ -324,6 +328,25 @@ async function importAutoUpdater(
   options: ImportOptions = {},
 ) {
   vi.resetModules();
+  if (hostPlatform.value === "win32") {
+    // 仅虚拟 Mac 安装路径模拟 POSIX 写权限，状态文件与未知路径仍使用原生 I/O。
+    vi.doMock("node:fs", async () => {
+      const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...fs,
+        /** 不可写的夹具路径仍然存在，不能绕过安装位置预检。 */
+        existsSync: (file: import("node:fs").PathLike) => macFixtureWritable.has(String(file)) || fs.existsSync(file),
+        /** 只注入已登记路径的 W_OK，其他访问检查继续执行原生实现。 */
+        accessSync: (file: import("node:fs").PathLike, mode?: number) => {
+          if (mode === fs.constants.W_OK && macFixtureWritable.has(String(file))) {
+            if (!macFixtureWritable.get(String(file))) throw Object.assign(new Error("Mac fixture is not writable"), { code: "EACCES" });
+            return;
+          }
+          fs.accessSync(file, mode);
+        },
+      };
+    });
+  }
   const updaterEvents = new Map<string, UpdaterEventHandler>();
   const autoUpdater = createAutoUpdaterMock();
   const powerMonitor = new EventEmitter();
@@ -3564,17 +3587,30 @@ function stubProcess(platform: NodeJS.Platform, execPath: string): () => void {
   };
 }
 
-// Builds a real bundle-shaped tree so the writability checks run against the
-// filesystem rather than a stub. Returns the exec path inside it.
-function makeBundle(): { root: string; bundle: string; execPath: string } {
+/** Unix 保留真实应用包权限检查；Windows 使用同样的 Mac 路径和显式权限边界。 */
+function makeBundle(): { root: string; parent: string; bundle: string; execPath: string } {
   const root = mkdtempSync(nodePath.join(os.tmpdir(), "ao-updater-perm-"));
-  const bundle = nodePath.join(root, "Agent Orchestrator.app");
+  let bundle = nodePath.join(root, "Agent Orchestrator.app");
   mkdirSync(nodePath.join(bundle, "Contents", "MacOS"), { recursive: true });
+  let parent = root;
+  if (hostPlatform.value === "win32") {
+    parent = nodePath.posix.join("/Applications", nodePath.basename(root));
+    bundle = nodePath.posix.join(parent, "Agent Orchestrator.app");
+    macFixtureWritable.set(parent, true);
+    macFixtureWritable.set(bundle, true);
+  }
   return {
     root,
+    parent,
     bundle,
-    execPath: nodePath.join(bundle, "Contents", "MacOS", "agent-orchestrator"),
+    execPath: nodePath.posix.join(bundle, "Contents", "MacOS", "agent-orchestrator"),
   };
+}
+
+/** Windows 不以 chmod 冒充 POSIX 写权限，Unix 只改变本用例的临时目录。 */
+function setMacFixtureWritable(candidate: string, writable: boolean): void {
+  if (hostPlatform.value === "win32") macFixtureWritable.set(candidate, writable);
+  else chmodSync(candidate, writable ? 0o755 : 0o555);
 }
 
 const TRANSLOCATED_EXEC_PATH =
@@ -3709,15 +3745,16 @@ describe("quitAndInstallUpdate", () => {
   });
 
   it.each(["bundle", "parent"])("rejects an unwritable %s without quitting", async (location) => {
-    const { root, bundle, execPath } = makeBundle();
-    chmodSync(location === "bundle" ? bundle : root, 0o555);
+    const { root, parent, bundle, execPath } = makeBundle();
+    const blockedPath = location === "bundle" ? bundle : parent;
+    setMacFixtureWritable(blockedPath, false);
     const restore = stubProcess("darwin", execPath);
     try {
       const { module, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
       await expect(module.quitAndInstallUpdate()).rejects.toThrow(/writ/);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     } finally {
-      restore(); chmodSync(root, 0o755); chmodSync(bundle, 0o755);
+      restore(); setMacFixtureWritable(blockedPath, true);
       rmSync(root, { recursive: true, force: true });
     }
   });

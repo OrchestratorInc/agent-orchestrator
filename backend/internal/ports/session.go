@@ -96,6 +96,30 @@ type SpawnConfig struct {
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired
 	// token falls back to ordinary workspace creation.
 	TaskPreparation domain.TaskPreparationToken
+
+	// Repos lists every repository a workflow attempt expects a worktree for.
+	// An EMPTY slice keeps the pre-M2 single-project behaviour byte-for-byte:
+	// one worktree for ProjectID, no extra rows. A non-empty slice makes the
+	// spawn create one worktree per entry, in the shared session branch, and
+	// report the first by repo key as the session root.
+	Repos []SpawnRepo
+	// WorkflowSpawn identifies the workflow attempt this session belongs to. It
+	// is nil for every ordinary session, and its lease token is delivered only to
+	// the agent's own MCP subprocess, never to the prompt.
+	WorkflowSpawn *WorkflowSpawnContext
+}
+
+// SpawnRepo is one repository a workflow attempt expects a worktree for.
+type SpawnRepo struct {
+	RepoKey   string // workflow repo key, stable and unique per workflow
+	ProjectID domain.ProjectID
+	// BaseSHA is the commit this repository's session branch must be seeded
+	// from. It is passed to the workspace adapter as WorkspaceConfig.BaseSHA,
+	// which validates it against THIS repository and seeds the new branch with
+	// it, so a workflow that planned from a historical commit still gets that
+	// commit after the default branch advances. Empty means the repository
+	// default, exactly as before.
+	BaseSHA string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

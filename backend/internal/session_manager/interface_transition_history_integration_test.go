@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Exercise production launch selection, lifecycle, Chat and SQLite together.
-// Only external runtime and provider I/O are controlled.
+// TestInterfaceTransitionNativeHistoryOwnership 通过真实启动选择、生命周期、Chat
+// 和 SQLite 验证历史归属；只隔离外部 Runtime 与 Provider I/O。
 func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessQwen} {
 		t.Run(string(harness), func(t *testing.T) {
@@ -46,7 +47,11 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("test executable"), 0700); err != nil {
+					binaryName := "claude"
+					if runtime.GOOS == "windows" {
+						binaryName += ".cmd"
+					}
+					if err := os.WriteFile(filepath.Join(binDir, binaryName), []byte("test executable"), 0700); err != nil {
 						t.Fatal(err)
 					}
 					t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -60,7 +65,7 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 					}
 					original := "bb786e64-3b86-44cb-8d34-eafae933d8e4"
 					freshID := claudeagent.SessionUUID
-					var agent ports.Agent = claudeagent.New()
+					var agent ports.Agent = nativeOwnershipClaudeAgent{Plugin: claudeagent.New()}
 					if harness != domain.HarnessClaudeCode {
 						original = "opaque-native-original"
 						freshID = func(id string) string { return "opaque-native-" + id }

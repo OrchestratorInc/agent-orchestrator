@@ -164,6 +164,27 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	headers map[string]string,
 	timeout time.Duration,
 ) error {
+	var payload []byte
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = encoded
+	}
+	return c.doRawJSONWithHeadersAndTimeout(ctx, method, path, payload, out, headers, timeout)
+}
+
+// doRawJSONWithHeadersAndTimeout sends payload EXACTLY as given, so a caller that must prove a
+// digest of the bytes it sends (the operator approval) digests and transmits the same slice.
+func (c *commandContext) doRawJSONWithHeadersAndTimeout(
+	ctx context.Context,
+	method, path string,
+	payload []byte,
+	out any,
+	headers map[string]string,
+	timeout time.Duration,
+) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -180,11 +201,8 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 
 	var reader io.Reader = http.NoBody
-	if body != nil {
-		payload, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
+	body := payload != nil
+	if body {
 		reader = bytes.NewReader(payload)
 	}
 	url := fmt.Sprintf("http://%s:%d%s", config.LoopbackHost, info.Port, path)
@@ -192,7 +210,7 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if err != nil {
 		return err
 	}
-	if body != nil {
+	if body {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for name, value := range headers {

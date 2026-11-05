@@ -1,7 +1,8 @@
-import { access, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import fs, { access, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
 	bootstrapDistinctId,
 	buildTelemetryBootstrap,
@@ -18,6 +19,8 @@ const tempDirs: string[] = [];
 const enabledPolicy = { eventsEnabled: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true };
 
 afterEach(async () => {
+	vi.restoreAllMocks();
+	syncBuiltinESMExports();
 	await Promise.all(
 		tempDirs
 			.splice(0)
@@ -152,12 +155,16 @@ test("buildTelemetryBootstrap withholds the install id when the bound-user marke
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 	tempDirs.push(dir);
 	const installId = await loadOrCreateTelemetryInstallId(dir);
-	// A self-referencing symlink fails with ELOOP, not ENOENT.
-	await symlink("telemetry_bound_user", path.join(dir, "telemetry_bound_user"));
+	// 在真实 bootstrap 的 access 边界注入 ELOOP，避免 Windows 文件链接权限使拒绝规则无法执行。
+	const access = vi.spyOn(fs, "access").mockRejectedValueOnce(Object.assign(new Error("symbolic link loop"), { code: "ELOOP" }));
+	syncBuiltinESMExports();
+	vi.resetModules();
+	const { buildTelemetryBootstrap } = await import("./telemetry");
 
 	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
 	expect(bootstrap?.distinctId).toMatch(/^anon_/);
 	expect(bootstrap?.distinctId).not.toBe(installId);
+	expect(access).toHaveBeenCalledWith(path.join(dir, "telemetry_bound_user"));
 });
 
 // The daemon retires an ID by writing the replacement, then removing the marker.

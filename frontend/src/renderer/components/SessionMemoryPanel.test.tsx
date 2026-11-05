@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { toKanbanColumn } from "@aoagents/product-ui";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import type { SessionMemoryReading } from "../hooks/useSessionMemory";
@@ -596,6 +596,9 @@ describe("AppMemoryIndicator", () => {
 	});
 
 	it("copies the whole window as a report worth pasting into a bug", async () => {
+		// 固定业务时钟，保留真实 UI 事件，避免机器负载把预期的 38 秒推进成 39 秒。
+		const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+		onTestFinished(() => clock.mockRestore());
 		const workspace: WorkspaceSummary = {
 			id: "p1",
 			name: "radic",

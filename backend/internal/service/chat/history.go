@@ -436,7 +436,7 @@ func (s *Service) EditMessage(
 	}
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
 	); err != nil {
@@ -961,7 +961,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -1004,13 +1004,22 @@ func (s *Service) branchLaunchConfig(
 	return cloneStartConfig(cfg), driver, nil
 }
 
+// prepareBranchControllerEnv 在凭据准备完成后重验同源工作区，阻止分支启动或恢复越过失效边界。
 func (s *Service) prepareBranchControllerEnv(ctx context.Context, cfg StartConfig) (map[string]string, error) {
+	var env map[string]string
 	if cfg.PrepareControllerEnv == nil {
-		return cloneStartConfig(cfg).Env, nil
+		env = cloneStartConfig(cfg).Env
+	} else {
+		var err error
+		env, err = cfg.PrepareControllerEnv(ctx, cfg.ExpectedControllerOwner)
+		if err != nil {
+			return nil, fmt.Errorf("prepare replacement controller environment: %w", err)
+		}
 	}
-	env, err := cfg.PrepareControllerEnv(ctx, cfg.ExpectedControllerOwner)
-	if err != nil {
-		return nil, fmt.Errorf("prepare replacement controller environment: %w", err)
+	if cfg.ValidateWorkspace != nil {
+		if err := cfg.ValidateWorkspace(ctx); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrWorkspaceInvalid, err)
+		}
 	}
 	return env, nil
 }
@@ -1077,7 +1086,7 @@ func (s *Service) restoreClosedSourceController(
 	generation := s.newID()
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
-		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader)
+		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()

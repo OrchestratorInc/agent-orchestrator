@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import fs, { mkdtemp, rm, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -8,7 +9,6 @@ import path from "node:path";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 import { WebSocket, WebSocketServer } from "ws";
 import { previewCertificate } from "./preview-certificate";
-
 const token = vi.hoisted(() => ({ value: "cloud-token" as string | null }));
 // Listens to fail before the real one runs.
 const listenFailures = vi.hoisted(() => ({ left: 0 }));
@@ -42,6 +42,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	vi.restoreAllMocks();
+	syncBuiltinESMExports();
 	await proxy?.close();
 	cp?.closeAllConnections();
 	await new Promise<void>((resolve) => (cp ? cp.close(() => resolve()) : resolve()));
@@ -49,7 +50,6 @@ afterEach(async () => {
 	cp = undefined;
 	proxy = undefined;
 });
-
 // A fake control plane on loopback: answers every request with the handler's
 // status and records what reached it.
 async function startCp(
@@ -104,6 +104,12 @@ function upgrade(agent: URL, origin?: string, host = agent.host): Promise<string
 describe("cloud agent proxy", () => {
 	it("serves a cloud session's agent browser on its own origin once the control plane says it has one", async () => {
 		const { baseUrl, seen } = await startCp();
+		const writeFile = vi.spyOn(fs, "writeFile");
+		const chmod = vi.spyOn(fs, "chmod");
+		syncBuiltinESMExports();
+		// Vitest 缓存内置函数快照，注入后重载源码才能观察真实密钥写入。
+		vi.resetModules();
+		const { createCloudAgentProxy } = await import("./cloud-agent-proxy");
 		proxy = createCloudAgentProxy(() => dataDir);
 		const agent = new URL(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1"));
 		expect(agent.hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
@@ -112,7 +118,11 @@ describe("cloud agent proxy", () => {
 		expect(proxy.isAgentBrowserUrl(agent.href)).toBe(true);
 		expect(proxy.isAgentBrowserUrl(`${agent.origin}/download/x`)).toBe(false);
 		expect(proxy.isAgentBrowserUrl(agent.href.replace(agent.hostname, `ao-preview-${"0".repeat(32)}.localhost`))).toBe(false);
-		expect((await stat(path.join(dataDir, "cloud-agent-browser.key"))).mode & 0o777).toBe(0o600);
+		const keyPath = path.join(dataDir, "cloud-agent-browser.key");
+		// Windows 不提供 POSIX 权限位，仍必须验证真实写入调用申请并维持 0600。
+		expect(writeFile).toHaveBeenCalledWith(keyPath, expect.any(Buffer), { mode: 0o600 });
+		expect(chmod).toHaveBeenCalledWith(keyPath, 0o600);
+		if (process.platform !== "win32") expect((await stat(keyPath)).mode & 0o777).toBe(0o600);
 	});
 
 	it("gives no agent browser when the sandbox has none, the control plane is unreachable, or no one is signed in", async () => {

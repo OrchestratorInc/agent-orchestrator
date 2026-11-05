@@ -4220,3 +4220,412 @@ type ListWorkflowTasksResponse struct {
 type RecoverExpiredWorkflowsResponse struct {
 	Recovered int64 `json:"recovered"`
 }
+
+// --- M2 capability, binding, intervention, and collaboration contracts ----------
+//
+// Two rules shape every type below.
+//
+//  1. Nothing here exposes a workflow lease token. The lease is returned exactly once, by
+//     the claim response's own field, and a binding/intervention read must not become a
+//     second way to obtain it.
+//  2. No response may imply more than the service proved. BindOutcome, InterventionOutcome
+//     and the task-request decision each carry an explicit reason code and an explicit
+//     "did this actually happen" flag, so a client never has to read a 200 as success.
+
+// WorkflowCapabilityModelResponse is one advertised model and its effort choices.
+type WorkflowCapabilityModelResponse struct {
+	Model         string   `json:"model"`
+	Effort        []string `json:"effort,omitempty"`
+	DefaultEffort string   `json:"defaultEffort,omitempty"`
+}
+
+// WorkflowCapabilityResponse is the graded evidence AO holds for one harness.
+//
+// Source grades the evidence: static and local_probe are display-only and cannot enable a
+// control, which is why expired and reasonCode are always present.
+type WorkflowCapabilityResponse struct {
+	Harness           string                            `json:"harness"`
+	Source            string                            `json:"source" enum:"static,local_probe,provider_handshake,confirmed_runtime"`
+	AuthState         string                            `json:"authState" enum:"authorized,configured,unauthorized,unknown,not_applicable"`
+	Readiness         string                            `json:"readiness" enum:"ready,blocked_auth,blocked_binary,unknown"`
+	Surfaces          string                            `json:"surfaces" enum:"chat,tui,both,unknown"`
+	Streaming         string                            `json:"streaming" enum:"supported,unsupported,unknown"`
+	Tools             string                            `json:"tools" enum:"supported,unsupported,unknown"`
+	Interrupt         string                            `json:"interrupt" enum:"supported,unsupported,unknown"`
+	Steer             string                            `json:"steer" enum:"supported,unsupported,unknown"`
+	Queue             string                            `json:"queue" enum:"supported,unsupported,unknown"`
+	Resume            string                            `json:"resume" enum:"load_with_history,resume_no_history,none,unknown"`
+	Approval          string                            `json:"approval" enum:"enforced,advertised_only,unknown"`
+	ApplyAt           string                            `json:"applyAt" enum:"launch,turn,request,unknown"`
+	Usage             string                            `json:"usage" enum:"exact,estimated,unknown"`
+	Models            []WorkflowCapabilityModelResponse `json:"models,omitempty"`
+	ObservedSessionID string                            `json:"observedSessionId,omitempty"`
+	Generation        string                            `json:"generation,omitempty"`
+	ObservedAt        time.Time                         `json:"observedAt" format:"date-time"`
+	ExpiresAt         time.Time                         `json:"expiresAt" format:"date-time"`
+	// Expired reports whether the evidence is past its TTL. An expired snapshot cannot gate
+	// a control even when its feature fields still say supported.
+	Expired bool `json:"expired"`
+	// ReasonCode explains unknown values and refusals; it is never omitted when the answer
+	// is unknown.
+	ReasonCode string `json:"reasonCode,omitempty"`
+}
+
+// GetWorkflowCapabilitiesResponse is the capability evidence matrix.
+type GetWorkflowCapabilitiesResponse struct {
+	Capabilities []WorkflowCapabilityResponse `json:"capabilities"`
+}
+
+// WorkflowAttemptRepoBindingResponse is one repository's binding facts for an attempt.
+type WorkflowAttemptRepoBindingResponse struct {
+	RepoKey            string `json:"repoKey"`
+	ProjectID          string `json:"projectId"`
+	ExpectedBaseSHA    string `json:"expectedBaseSha,omitempty"`
+	SessionWorktreeRef string `json:"sessionWorktreeRef,omitempty"`
+	ObservedHeadSHA    string `json:"observedHeadSha,omitempty"`
+	State              string `json:"state" enum:"pending,verified,mismatch,missing,unknown"`
+	Revision           int64  `json:"revision"`
+}
+
+// WorkflowAttemptBindingResponse is the read-only binding state of one attempt.
+//
+// It deliberately has no lease field: the workflow lease is a capability the claim response
+// returns once, and a binding read must not become a second issuance path.
+type WorkflowAttemptBindingResponse struct {
+	AttemptID            string                               `json:"attemptId"`
+	WorkflowID           string                               `json:"workflowId"`
+	TaskID               string                               `json:"taskId"`
+	SpawnRequestID       string                               `json:"spawnRequestId"`
+	State                string                               `json:"state" enum:"unbound,intent_persisted,spawn_requested,session_provisioning,bound_ready,running,spawn_unknown,reconcile_required,failed_confirmed,stop_requested,stop_confirmed,stop_unknown,recovery_uncertain"`
+	SessionID            string                               `json:"sessionId,omitempty"`
+	ControllerGeneration string                               `json:"controllerGeneration,omitempty"`
+	BoundAt              *time.Time                           `json:"boundAt,omitempty"`
+	FailureCode          string                               `json:"failureCode,omitempty"`
+	Revision             int64                                `json:"revision"`
+	CreatedAt            time.Time                            `json:"createdAt" format:"date-time"`
+	UpdatedAt            time.Time                            `json:"updatedAt" format:"date-time"`
+	Repositories         []WorkflowAttemptRepoBindingResponse `json:"repositories"`
+}
+
+// WorkflowBindingEnvelope wraps one binding read.
+type WorkflowBindingEnvelope struct {
+	Binding WorkflowAttemptBindingResponse `json:"binding"`
+}
+
+// BindWorkflowAttemptRequest asks to create or resume the attempt's binding intent.
+//
+// Nothing here identifies the task or the project: those are durable facts resolved from the
+// URL's workflow and attempt. A caller that could name its own project could bind an attempt to
+// a repository it was never scoped to.
+type BindWorkflowAttemptRequest struct {
+	Harness domain.AgentHarness `json:"harness,omitempty" enum:"codex,claude-code,omp,deepseek-harness"`
+	Mode    domain.SessionMode  `json:"mode,omitempty" enum:"chat,tui"`
+	Prompt  string              `json:"prompt,omitempty" maxLength:"65536"`
+	// RepoKeys narrows the bind to a subset of the task's owned repositories. Omitted means
+	// every repository the task owns. A key the task does not own is a 409, never a silent
+	// widening: the task's repo scope is the authority, and this field can only shrink it.
+	RepoKeys []string `json:"repoKeys,omitempty" maxLength:"32"`
+	// IdempotencyKey names the bind request. Replaying it must not spawn again.
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// BindWorkflowAttemptResponse reports what the bind decided.
+//
+// Spawned and Frozen are separate booleans on purpose: a frozen outcome is not a spawn, and
+// a replay is neither. ReasonCode always explains which case the caller is looking at.
+type BindWorkflowAttemptResponse struct {
+	Binding    WorkflowAttemptBindingResponse `json:"binding"`
+	Spawned    bool                           `json:"spawned"`
+	Frozen     bool                           `json:"frozen"`
+	ReasonCode string                         `json:"reasonCode,omitempty"`
+}
+
+// WorkflowSessionObservationResponse is what AO durably knows about the attempt's session.
+//
+// It carries no lease token, no credential, and no provider-protocol detail — the same
+// boundary ports.SessionObservation draws, projected so the wire shape is stable.
+type WorkflowSessionObservationResponse struct {
+	SessionID              string    `json:"sessionId"`
+	ProjectID              string    `json:"projectId,omitempty"`
+	Kind                   string    `json:"kind,omitempty"`
+	Harness                string    `json:"harness,omitempty"`
+	Mode                   string    `json:"mode,omitempty"`
+	Readiness              string    `json:"readiness" enum:"unknown,provisioning,ready,exited,failed"`
+	ControllerGeneration   string    `json:"controllerGeneration,omitempty"`
+	ProviderConversationID string    `json:"providerConversationId,omitempty"`
+	ClientRequestID        string    `json:"clientRequestId,omitempty"`
+	ClientRequestCommitted bool      `json:"clientRequestCommitted"`
+	Terminated             bool      `json:"terminated"`
+	ObservedAt             time.Time `json:"observedAt" format:"date-time"`
+}
+
+// ObserveWorkflowAttemptResponse reports the attempt's session facts and binding state.
+//
+// Live and ReasonCode are present only when the wired binder can perform the coordinator's own
+// liveness check. Absent means "this deployment cannot answer that", which is deliberately
+// different from live=false: a client must not read a missing check as a dead session.
+type ObserveWorkflowAttemptResponse struct {
+	Observation  *WorkflowSessionObservationResponse `json:"observation,omitempty"`
+	BindingState string                              `json:"bindingState"`
+	// Live reports whether a provider turn can be addressed right now. Absent when unavailable.
+	Live *bool `json:"live,omitempty"`
+	// ReasonCode explains a false Live. Absent when no liveness check ran.
+	ReasonCode string `json:"reasonCode,omitempty"`
+}
+
+// ReconcileWorkflowAttemptResponse reports one reconcile or resume outcome.
+//
+// It is a BindWorkflowAttemptResponse by construction: both operations answer the same question
+// (what does the binding look like now, and did this call change it), so a client that handles a
+// bind handles a reconcile without a second shape. Neither ever reports Spawned.
+type ReconcileWorkflowAttemptResponse = BindWorkflowAttemptResponse
+
+// WorkflowInterventionRequest asks for Steer, Queue, or Stop.
+type WorkflowInterventionRequest struct {
+	Mode string `json:"mode" enum:"steer,queue,stop"`
+	// Text is the guidance or queued message. Ignored for stop.
+	Text string `json:"text,omitempty" maxLength:"65536"`
+	// TargetProviderTurnID is required for steer: the turn the guidance joins.
+	TargetProviderTurnID string `json:"targetProviderTurnId,omitempty" maxLength:"200"`
+	ClientMessageID      string `json:"clientMessageId" minLength:"1" maxLength:"200"`
+	// Harness is the owning task's harness; the capability gate needs it to find evidence.
+	Harness domain.AgentHarness `json:"harness,omitempty"`
+	// ControllerGeneration is the generation the caller observed. Omitted means "use the
+	// binding's"; a value that disagrees with the binding is refused as a stale generation
+	// rather than silently replaced, because the caller was looking at a different controller.
+	// Without this field the fencing the coordinator implements is unreachable over HTTP.
+	ControllerGeneration string `json:"controllerGeneration,omitempty" maxLength:"200"`
+}
+
+// WorkflowInterventionResponse is one intervention receipt.
+//
+// State is the durable receipt state. A queued receipt is never rendered as sent, and an
+// applied receipt is unreachable without chat evidence naming both turns.
+type WorkflowInterventionResponse struct {
+	ID                   string     `json:"id"`
+	WorkflowID           string     `json:"workflowId"`
+	TaskID               string     `json:"taskId"`
+	AttemptID            string     `json:"attemptId,omitempty"`
+	Mode                 string     `json:"mode" enum:"steer,queue,stop"`
+	State                string     `json:"state" enum:"requested,queued,delivered,applied,rejected,cancelled,unknown,stop_requested,stop_confirmed,stop_unknown"`
+	SessionID            string     `json:"sessionId,omitempty"`
+	ControllerGeneration string     `json:"controllerGeneration"`
+	ClientMessageID      string     `json:"clientMessageId"`
+	TargetProviderTurnID string     `json:"targetProviderTurnId,omitempty"`
+	ChatTurnID           string     `json:"chatTurnId,omitempty"`
+	ProviderTurnID       string     `json:"providerTurnId,omitempty"`
+	ReasonCode           string     `json:"reasonCode,omitempty"`
+	Revision             int64      `json:"revision"`
+	CreatedAt            time.Time  `json:"createdAt" format:"date-time"`
+	UpdatedAt            time.Time  `json:"updatedAt" format:"date-time"`
+	SettledAt            *time.Time `json:"settledAt,omitempty"`
+}
+
+// WorkflowInterventionEnvelope reports one intervention outcome.
+type WorkflowInterventionEnvelope struct {
+	Intervention WorkflowInterventionResponse `json:"intervention"`
+	// Performed reports whether this call actually reached the session. A replay never does.
+	Performed bool `json:"performed"`
+	// Frozen means the intervention is uncertain and nothing further may be attempted.
+	Frozen bool `json:"frozen"`
+	// QueueAvailable accompanies a refused steer: queueing is an honest alternative where
+	// steering was not proven.
+	QueueAvailable bool   `json:"queueAvailable"`
+	ReasonCode     string `json:"reasonCode,omitempty"`
+	// Replan is present only for a confirmed stop. It carries no plan: producing a new DAG
+	// is a later milestone's job.
+	Replan *WorkflowReplanResponse `json:"replan,omitempty"`
+}
+
+// WorkflowReplanResponse is the replan request a confirmed stop produces.
+type WorkflowReplanResponse struct {
+	InterventionID     string    `json:"interventionId"`
+	WorkflowID         string    `json:"workflowId"`
+	TaskID             string    `json:"taskId"`
+	ReasonCode         string    `json:"reasonCode,omitempty"`
+	PreservedWorktrees []string  `json:"preservedWorktrees,omitempty"`
+	RequestedAt        time.Time `json:"requestedAt" format:"date-time"`
+}
+
+// CreateWorkflowMessageRequest is the body of a collaboration message.
+//
+// It has NO sender field and no attempt field. The sender is derived from the caller's proven
+// identity, so a forged sender cannot be expressed by this contract at all: on a route without
+// an attempt segment the caller proves its attempt through the X-AO-Attempt-Id +
+// X-AO-Attempt-Lease headers, which are transport facts a body cannot supply.
+type CreateWorkflowMessageRequest struct {
+	// ToTaskID is optional. Omitted means a broadcast to the workflow.
+	ToTaskID string `json:"toTaskId,omitempty"`
+	Kind     string `json:"kind" enum:"progress,question,result,handoff,reference"`
+	Body     string `json:"body,omitempty" maxLength:"4096"`
+	// PayloadRef is an opaque artifact id, never a filesystem path.
+	PayloadRef      string `json:"payloadRef,omitempty" maxLength:"512"`
+	ClientMessageID string `json:"clientMessageId" minLength:"1" maxLength:"200"`
+}
+
+// WorkflowMessageResponse is one collaboration message.
+type WorkflowMessageResponse struct {
+	ID              string    `json:"id"`
+	WorkflowID      string    `json:"workflowId"`
+	FromTaskID      string    `json:"fromTaskId"`
+	ToTaskID        string    `json:"toTaskId,omitempty"`
+	SenderKind      string    `json:"senderKind" enum:"agent,human,daemon"`
+	Kind            string    `json:"kind" enum:"progress,question,result,handoff,reference"`
+	DeliveryState   string    `json:"deliveryState" enum:"persisted,forwarded,rejected,unknown"`
+	Body            string    `json:"body,omitempty"`
+	PayloadRef      string    `json:"payloadRef,omitempty"`
+	ClientMessageID string    `json:"clientMessageId"`
+	Revision        int64     `json:"revision"`
+	CreatedAt       time.Time `json:"createdAt" format:"date-time"`
+	UpdatedAt       time.Time `json:"updatedAt" format:"date-time"`
+}
+
+// ListWorkflowMessagesResponse is one page of messages.
+type ListWorkflowMessagesResponse struct {
+	Messages   []WorkflowMessageResponse `json:"messages"`
+	NextCursor string                    `json:"nextCursor,omitempty"`
+}
+
+// CreateWorkflowMessageResponse wraps one stored message with its created flag, so a replay
+// is distinguishable from a fresh write.
+type CreateWorkflowMessageResponse struct {
+	Message WorkflowMessageResponse `json:"message"`
+	Created bool                    `json:"created"`
+}
+
+// CreateWorkflowTaskRequestRequest is a task asking for work or resources.
+//
+// It carries NO attempt id. The requester is the caller's proven identity: on this route
+// (which has no attempt segment) that proof is the X-AO-Attempt-Id + X-AO-Attempt-Lease header
+// pair, so a caller cannot raise a request in another task's name by writing one into a body.
+type CreateWorkflowTaskRequestRequest struct {
+	RequestID   string `json:"requestId" minLength:"1" maxLength:"200"`
+	RequestKind string `json:"requestKind" enum:"create_task,add_dependency,expand_repos,increase_concurrency,increase_budget"`
+	// Payload is opaque JSON. It is stored and only the decide path interprets it.
+	Payload json.RawMessage `json:"payload"`
+}
+
+// WorkflowTaskRequestResponse is one request awaiting or carrying a decision.
+//
+// It carries no payload field of any kind, not even a redacted one: this is the shape returned
+// by the write paths and by a list of many requests, where a per-request summary would be a
+// disclosure surface with no reader. A caller that wants the summary reads the single-request
+// detail route, which returns WorkflowTaskRequestDetailResponse.
+type WorkflowTaskRequestResponse struct {
+	ID              string `json:"id"`
+	WorkflowID      string `json:"workflowId"`
+	RequesterTaskID string `json:"requesterTaskId"`
+	RequestKind     string `json:"requestKind" enum:"create_task,add_dependency,expand_repos,increase_concurrency,increase_budget"`
+	// RequestSHA is the 64-character fingerprint. It identifies the request content without
+	// disclosing it, so a decider can confirm they are deciding about the request they saw.
+	// The raw request_json is deliberately NOT exposed: it can name repo scopes and file paths,
+	// and only the decide path is meant to interpret it.
+	RequestSHA       string     `json:"requestSha"`
+	State            string     `json:"state" enum:"pending,approved,rejected,expired"`
+	DecidedByKind    string     `json:"decidedByKind,omitempty" enum:"human,daemon"`
+	DecidedByRef     string     `json:"decidedByRef,omitempty"`
+	DecidedAt        *time.Time `json:"decidedAt,omitempty"`
+	Reason           string     `json:"reason,omitempty"`
+	WorkflowRevision int64      `json:"workflowRevision"`
+	Revision         int64      `json:"revision"`
+	CreatedAt        time.Time  `json:"createdAt" format:"date-time"`
+	UpdatedAt        time.Time  `json:"updatedAt" format:"date-time"`
+}
+
+// WorkflowTaskRequestSummary is the redacted projection of a request's payload.
+//
+// Every member is a bounded integer, a truncated display string, or a closed-character-class
+// identifier, so it can be shown to an owner without disclosing repo scopes, paths, prompts,
+// tokens, or environment values.
+type WorkflowTaskRequestSummary struct {
+	TaskCount        int      `json:"taskCount"`
+	TitleHints       []string `json:"titleHints"`
+	Repos            []string `json:"repos"`
+	BudgetDelta      *int64   `json:"budgetDelta,omitempty"`
+	ConcurrencyDelta *int64   `json:"concurrencyDelta,omitempty"`
+	NotesRef         string   `json:"notesRef,omitempty"`
+}
+
+// WorkflowTaskRequestDetailResponse is one request plus its redacted summary.
+//
+// This is the only shape that describes request content, and what it describes is the summary,
+// never the stored JSON.
+type WorkflowTaskRequestDetailResponse struct {
+	WorkflowTaskRequestResponse
+	Summary WorkflowTaskRequestSummary `json:"summary"`
+}
+
+// WorkflowTaskRequestDetailEnvelope wraps one redacted request detail.
+type WorkflowTaskRequestDetailEnvelope struct {
+	Request WorkflowTaskRequestDetailResponse `json:"request"`
+}
+
+// ListWorkflowTaskRequestsResponse is one page of requests.
+//
+// The items are WORKFLOW TASK REQUEST DETAILS — identity plus the redacted summary — because
+// listing is how an owner finds the request they want to decide, and a list that hid the summary
+// would force one detail read per row to answer "which of these is the one I meant".
+type ListWorkflowTaskRequestsResponse struct {
+	Requests   []WorkflowTaskRequestDetailResponse `json:"requests"`
+	NextCursor string                              `json:"nextCursor,omitempty"`
+}
+
+// CreateWorkflowTaskRequestResponse wraps one stored request with its created flag.
+type CreateWorkflowTaskRequestResponse struct {
+	Request WorkflowTaskRequestResponse `json:"request"`
+	Created bool                        `json:"created"`
+}
+
+// DecideWorkflowTaskRequestRequest is an owner's decision.
+//
+// decidedByKind is NOT a body field: the daemon decides whether the answer came from a
+// human or itself, and an agent cannot decide at all.
+//
+// decidedByRef is NOT a body field either. It is derived server-side from the caller's proven
+// identity, so a caller cannot record a decision as anyone but itself.
+type DecideWorkflowTaskRequestRequest struct {
+	Approve          bool   `json:"approve"`
+	Reason           string `json:"reason,omitempty" maxLength:"1024"`
+	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
+}
+
+// DecideWorkflowTaskRequestResponse reports a decision.
+//
+// Materialization is the explicit tri-state and the field clients should branch on:
+//
+//	not_applicable — rejected (200 OK)
+//	pending        — approved, no task created yet (202 Accepted)
+//	materialized   — approved and a task exists (200 OK; unreachable in M2)
+//
+// Materialized is the derived boolean kept for wire compatibility; it is computed from
+// Materialization so the two cannot disagree.
+type DecideWorkflowTaskRequestResponse struct {
+	Request         WorkflowTaskRequestResponse `json:"request"`
+	Materialization string                      `json:"materialization"`
+	Materialized    bool                        `json:"materialized"`
+	ReasonCode      string                      `json:"reasonCode,omitempty"`
+	// Message states in plain language what happened, so a UI that only renders one string
+	// cannot imply scheduling. It is empty for a plain rejection.
+	Message string `json:"message,omitempty"`
+}
+
+// ResolveWorkflowAttemptRequest is an operator's decided outcome for an expired attempt.
+//
+// This is the only exit from an UNKNOWN attempt, and it never re-dispatches work.
+type ResolveWorkflowAttemptRequest struct {
+	Outcome              string `json:"outcome" enum:"succeeded,failed"`
+	ErrorCode            string `json:"errorCode,omitempty" maxLength:"256"`
+	ExpectedTaskRevision int64  `json:"expectedTaskRevision" minimum:"1"`
+	IdempotencyKey       string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+}
+
+// OperatorApprovalIDParam identifies one operator approval.
+type OperatorApprovalIDParam struct {
+	ApprovalID string `path:"approvalId" description:"Approval identifier returned when the approval was requested."`
+}
+
+// WorkflowTaskRequestIDParam identifies one task request inside a workflow.
+type WorkflowTaskRequestIDParam struct {
+	WorkflowID string `path:"workflowId" description:"Workflow identifier."`
+	RequestID  string `path:"requestId" description:"Task request identifier, unique inside its workflow."`
+}

@@ -733,13 +733,9 @@ func (m *Manager) nativeConversationID(
 	return id, handoff, nil
 }
 
-// nativeConversationNotStarted is the only evidence that may turn a missing
-// provider history into an intentional fresh handoff. A missing file or a
-// reserved native id is not enough: both are also observable when persistence
-// is lagging or broken after real work. Chat requires durable emptiness — an
-// empty root conversation, or no conversation at all; TUI requires an
-// untouched initial composer. AO must have no hook-derived conversation facts
-// that contradict either proof.
+// nativeConversationNotStarted 只在明确证明会话尚未开始时允许 fresh handoff。
+// Chat 必须有持久化的空会话证据，TUI 必须仍处于未操作的初始输入界面；
+// Hook 记录的真实会话活动不能被缺失转录覆盖，路径缺失还须核验已有父目录。
 func (m *Manager) nativeConversationNotStarted(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -772,6 +768,23 @@ func (m *Manager) nativeConversationNotStarted(
 		}
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			return false
+		}
+		// Windows 会把父组件为文件的查询失败也归为不存在；只有已有父目录
+		// 能容纳新转录时，缺失才是可信的 fresh handoff 证据。
+		for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+			info, err := os.Lstat(parent)
+			if err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					info, err = os.Stat(parent)
+				}
+				if err != nil || !info.IsDir() {
+					return false
+				}
+				break
+			}
+			if !errors.Is(err, os.ErrNotExist) || filepath.Dir(parent) == parent {
+				return false
+			}
 		}
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
