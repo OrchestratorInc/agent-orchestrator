@@ -86,7 +86,7 @@ describe("the iOS settings form", () => {
 	});
 
 	it("swaps a loading value for the system spinner", () => {
-		const root = render(<SettingsValueRow icon="account" label="Orchestrator Cloud" value="me@example.com" loading />);
+		const root = render(<SettingsValueRow icon="account" label="Signed in as" value="me@example.com" loading />);
 		expect(root.findAllByType("ProgressView" as never)).toHaveLength(1);
 		expect(root.findByType("LabeledContent" as never).findAllByType("Text" as never)).toHaveLength(0);
 	});

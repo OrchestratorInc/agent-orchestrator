@@ -7,6 +7,7 @@ import * as Updates from "expo-updates";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
 import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
+import { AccountAvatar, accountName } from "../../lib/AccountAvatar";
 import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
@@ -26,6 +27,7 @@ import { openGitHub } from "../../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
 import { describePushToggle, describeRegisterFailure, type PushStatus } from "../../lib/pushStatus";
 import {
+	SettingsAccountRow,
 	SettingsButtonRow,
 	SettingsForm,
 	SettingsLinkRow,
@@ -58,6 +60,9 @@ import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../l
 import { useToast } from "../../lib/useToast";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
+
+/** The account's photo, the size of a two-line row's leading image. */
+const ACCOUNT_AVATAR_SIZE = 36;
 
 // Light / Dark / System, in the desktop app's order and wording.
 const APPEARANCE_OPTIONS: readonly SettingsOption<ThemePreference>[] = (["light", "dark", "system"] as const).map((value) => ({ value, label: preferenceLabel(value) }));
@@ -161,6 +166,25 @@ export default function SettingsScreen() {
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]} collapsable={false}>
 			<StackRootBack />
 			<SettingsForm testID="settings-form">
+				{/* First: signed out, it is how this phone gets its machines; signed
+				    in, who it is, as the desktop's account row shows them. */}
+				<SettingsSection title="Account">
+					{account ? (
+						<SettingsAccountRow
+							name={accountName(account)}
+							email={account.name ? account.email : undefined}
+							avatar={<AccountAvatar account={account} size={ACCOUNT_AVATAR_SIZE} />}
+							loading={accountBusy}
+							testID="settings-account"
+						/>
+					) : (
+						<SettingsButtonRow icon="account" label="Sign in to Orchestrator" loading={accountLoading || accountBusy} onPress={signIn} testID="settings-sign-in" />
+					)}
+					{account ? (
+						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(signOut)} testID="settings-sign-out" />
+					) : null}
+				</SettingsSection>
+
 				{/* Each machine once, as the row that opens its page: testing it,
 				    making it the default, reconnecting, editing and forgetting are
 				    all there. */}
@@ -209,17 +233,6 @@ export default function SettingsScreen() {
 					<SettingsButtonRow icon="addMachine" label="Add a machine" onPress={() => router.navigate("/pair")} testID="settings-add-machine" />
 				</SettingsSection>
 
-				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
-					{account ? (
-						<SettingsValueRow icon="account" label="Orchestrator Cloud" value={account.email} loading={accountBusy} testID="settings-account" />
-					) : (
-						<SettingsButtonRow icon="account" label="Sign in to Orchestrator Cloud" loading={accountLoading || accountBusy} onPress={signIn} testID="settings-sign-in" />
-					)}
-					{account ? (
-						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(signOut)} testID="settings-sign-out" />
-					) : null}
-				</SettingsSection>
-
 				<SettingsSection title="Preferences">
 					<AppearanceRow />
 					<ColorThemeRow />
@@ -262,7 +275,7 @@ export default function SettingsScreen() {
  */
 function confirmSignOut(signOut: () => void) {
 	Alert.alert(
-		"Sign out of Orchestrator Cloud?",
+		"Sign out?",
 		"Machines synced from your account will be removed from this phone.",
 		[
 			{ text: "Cancel", style: "cancel" },

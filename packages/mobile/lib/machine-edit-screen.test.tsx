@@ -255,7 +255,7 @@ describe("an account machine", () => {
 		expect(renderer!.root.findAll((node) => node.props.testID === "environment-host-a")).toHaveLength(0);
 		expect(renderer!.root.findAll((node) => node.props.testID === "environment-password-a")).toHaveLength(0);
 		expect(field("environment-account-managed-a").props.label).toBe("Address");
-		expect(connectionSection().props.footer.props.children).toMatch(/Orchestrator Cloud account/);
+		expect(connectionSection().props.footer.props.children).toMatch(/come from your account/);
 		await type("environment-name-a", "Studio");
 		await act(async () => save().props.onPress());
 		expect(fixtures.save).toHaveBeenCalledWith(expect.objectContaining({ accountUserId: "user-a" }), expect.objectContaining({

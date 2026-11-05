@@ -1,5 +1,5 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, RNHostView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import {
 	accessibilityAddTraits,
 	accessibilityHidden,
@@ -24,6 +24,7 @@ import {
 	settingsIcons,
 	settingsStatusDotColor,
 	settingsToneColor,
+	type SettingsAccountRowProps,
 	type SettingsButtonRowProps,
 	type SettingsChoiceSectionProps,
 	type SettingsFormProps,
@@ -190,6 +191,22 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 				{loading ? <ProgressView /> : value ? <ValueText value={value} color={settingsToneColor(t, tone)} /> : null}
 			</HStack>
 		</Button>
+	);
+}
+
+/** The signed-in account: photo or initials, the name, and the email under it. */
+export function SettingsAccountRow({ name, email, avatar, loading = false, testID }: SettingsAccountRowProps) {
+	const t = useTheme();
+	return (
+		<ListItem
+			testID={testID}
+			modifiers={rowModifiers(t)}
+			leading={<RNHostView matchContents>{avatar}</RNHostView>}
+			supportingText={email ? <Text modifiers={[appFont("subheadline"), foregroundStyle(t.textSecondary), lineLimit(1)]}>{email}</Text> : undefined}
+			trailing={loading ? <ProgressView /> : undefined}
+		>
+			<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{name}</Text>
+		</ListItem>
 	);
 }
 

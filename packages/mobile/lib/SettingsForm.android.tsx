@@ -50,6 +50,7 @@ import {
 	type SettingsStatusRowProps,
 	type SettingsToggleRowProps,
 	type SettingsValueRowProps,
+	type SettingsAccountRowProps,
 } from "./SettingsForm.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -184,6 +185,7 @@ function RowSpinner() {
  */
 function Row({
 	icon,
+	leading,
 	label,
 	ink,
 	supporting,
@@ -192,7 +194,9 @@ function Row({
 	disabled = false,
 	testID,
 }: {
-	icon: SettingsIconName;
+	icon?: SettingsIconName;
+	/** In place of the glyph: the account's photo. */
+	leading?: ReactNode;
 	label: string;
 	/** The label's and the glyph's colour, when the row is an action. */
 	ink?: string;
@@ -227,10 +231,24 @@ function Row({
 			</ListItem.HeadlineContent>
 			{supporting != null ? <ListItem.SupportingContent>{supporting}</ListItem.SupportingContent> : null}
 			<ListItem.LeadingContent>
-				<RowIcon icon={icon} color={ink ?? t.textSecondary} />
+				{leading ?? (icon ? <RowIcon icon={icon} color={ink ?? t.textSecondary} /> : null)}
 			</ListItem.LeadingContent>
 			{trailing != null ? <ListItem.TrailingContent>{trailing}</ListItem.TrailingContent> : null}
 		</ListItem>
+	);
+}
+
+/** The signed-in account: photo or initials, the name, and the email under it. */
+export function SettingsAccountRow({ name, email, avatar, loading = false, testID }: SettingsAccountRowProps) {
+	const t = useTheme();
+	return (
+		<Row
+			leading={<RNHostView matchContents>{avatar}</RNHostView>}
+			label={name}
+			supporting={email ? <Supporting color={t.textSecondary}>{email}</Supporting> : undefined}
+			trailing={loading ? <RowSpinner /> : undefined}
+			testID={testID}
+		/>
 	);
 }
 

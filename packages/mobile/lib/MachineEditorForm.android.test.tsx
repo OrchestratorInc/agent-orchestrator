@@ -93,6 +93,6 @@ describe("the Android machine editor", () => {
 	it("leaves an account machine's route to the account", () => {
 		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor({ accountManaged: true })} />); });
 		expect(renderer!.root.findAllByType("OutlinedTextField" as never)).toHaveLength(1);
-		expect(renderer!.root.findByProps({ testID: "environment-account-managed-a" }).props.children).toMatch(/Orchestrator Cloud account/);
+		expect(renderer!.root.findByProps({ testID: "environment-account-managed-a" }).props.children).toMatch(/come from your account/);
 	});
 });

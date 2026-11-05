@@ -69,7 +69,7 @@ export const FORGET_MACHINE_MESSAGE = "Remove this machine's saved connection fr
  * the route and credential from AO Cloud, so an edit here would silently
  * revert. Its name and icon stay phone-local.
  */
-export const ACCOUNT_MANAGED_NOTE = "This machine's address and password come from your Orchestrator Cloud account and update automatically. To connect another way, use Reconnect to scan a new code.";
+export const ACCOUNT_MANAGED_NOTE = "This machine's address and password come from your account and update automatically. To connect another way, use Reconnect to scan a new code.";
 
 export function environmentPlatformLabel(platform: string): string {
 	const normalized = platform.toLowerCase();

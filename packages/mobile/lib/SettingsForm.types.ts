@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { symbols, type IOSSymbol } from "./symbols";
 import type { Theme } from "./theme";
 import type { MaterialDrawableName } from "./toolbarIcon.types";
@@ -95,6 +95,19 @@ export type SettingsButtonRowProps = RowBase & {
  * a dot in the tone's colour, so a healthy row never shouts. iOS adds the
  * disclosure chevron; Material lists don't.
  */
+/**
+ * The signed-in account, as the desktop's account row shows it: the person's
+ * photo (or initials), their name, and the email under it when the name is not
+ * already the email.
+ */
+export type SettingsAccountRowProps = {
+	name: string;
+	email?: string;
+	avatar: ReactElement;
+	loading?: boolean;
+	testID?: string;
+};
+
 export type SettingsStatusRowProps = RowBase & {
 	status: string;
 	tone?: SettingsTone;

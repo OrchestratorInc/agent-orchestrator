@@ -57,7 +57,7 @@ export default function OnboardingScreen() {
 			}
 			Alert.alert(
 				"No machines yet",
-				`${account.email} has no machines in Orchestrator Cloud. Pair one to get started.`,
+				`No machines are linked to ${account.email} yet. Pair one to get started.`,
 				[{ text: "Pair a machine", onPress: () => router.push("/pair?from=onboarding") }],
 			);
 		})().catch((error: unknown) => {

@@ -11,7 +11,7 @@ const fixtures = vi.hoisted(() => ({
 	checkStore: vi.fn(async () => null as unknown),
 	setPreference: vi.fn(),
 	select: vi.fn(),
-	account: null as { email: string } | null,
+	account: null as { email: string; name?: string; avatarUrl?: string } | null,
 	signOut: vi.fn(async () => {}),
 	clearAccountHosts: vi.fn(async () => {}),
 	reloadConfig: vi.fn(async (): Promise<unknown> => null),
@@ -53,6 +53,11 @@ vi.mock("./SettingsForm", () => ({
 	SettingsToggleRow: "SettingsToggleRow",
 	SettingsPickerRow: "SettingsPickerRow",
 	SettingsStatusRow: "SettingsStatusRow",
+	SettingsAccountRow: "SettingsAccountRow",
+}));
+vi.mock("./AccountAvatar", () => ({
+	AccountAvatar: "AccountAvatar",
+	accountName: (account: { name?: string; email: string }) => account.name || account.email,
 }));
 vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./emulatedMachines", () => ({
@@ -148,7 +153,7 @@ function row(root: ReactTestInstance, label: string) {
 describe("Settings", () => {
 	it("has no Developer section in a release build", async () => {
 		const root = await renderSettings();
-		expect(root.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Account", "Preferences", "Updates", "Support"]);
+		expect(root.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Account", "Machines", "Preferences", "Updates", "Support"]);
 	});
 
 	// Last, and saying plainly that it is only in development builds.
@@ -298,18 +303,43 @@ describe("Settings", () => {
 		expect(fixtures.openOrStartUpdate).toHaveBeenCalledWith({ updateAvailable: true, storeVersion: "9.9.9" });
 	});
 
+	// First on the page, a plain Sign in row, and no footer explaining it.
+	it("leads with the account, asking a signed-out phone to sign in", async () => {
+		fixtures.account = null;
+		const root = await renderSettings();
+		const account = root.findAllByType("SettingsSection" as never)[0];
+		expect(account.props.title).toBe("Account");
+		expect(account.props.footer).toBeUndefined();
+		expect(row(root, "Sign in to Orchestrator")).toBeTruthy();
+	});
+
+	// As the desktop's account row: the photo, the person's name, the email under
+	// it, and Sign out below.
+	it("shows the signed-in person with their photo, and Sign out below", async () => {
+		fixtures.account = { email: "me@example.com", name: "Prasad Ware", avatarUrl: "https://example.com/me.png" };
+		const root = await renderSettings();
+		const account = root.findAllByType("SettingsSection" as never)[0];
+		expect(account.props.footer).toBeUndefined();
+		const person = account.findByType("SettingsAccountRow" as never);
+		expect(person.props).toMatchObject({ name: "Prasad Ware", email: "me@example.com" });
+		expect(person.props.avatar.props.account).toMatchObject({ avatarUrl: "https://example.com/me.png" });
+		const rows = account.findAll((node) => ["SettingsAccountRow", "SettingsButtonRow"].includes(node.type as unknown as string));
+		expect(rows.map((node) => node.props.label ?? node.props.name)).toEqual(["Prasad Ware", "Sign out"]);
+	});
+
 	// Signing out forgets every machine the account synced here, so it asks first.
 	it("confirms before signing out and removing synced machines", async () => {
 		fixtures.account = { email: "me@example.com" };
 		const root = await renderSettings();
-		expect(row(root, "Orchestrator Cloud").props).toMatchObject({ value: "me@example.com" });
+		// No name from the provider: the email is the name, not repeated under it.
+		expect(root.findByType("SettingsAccountRow" as never).props).toMatchObject({ name: "me@example.com", email: undefined });
 		const signOut = row(root, "Sign out");
 		expect(signOut.props.destructive).toBe(true);
 
 		act(() => signOut.props.onPress());
 		expect(fixtures.signOut).not.toHaveBeenCalled();
 		const [title, , buttons] = fixtures.alert.mock.calls.at(-1)!;
-		expect(title).toBe("Sign out of Orchestrator Cloud?");
+		expect(title).toBe("Sign out?");
 		expect(buttons.map((button: { text: string; style?: string }) => [button.text, button.style])).toEqual([["Cancel", "cancel"], ["Sign out", "destructive"]]);
 
 		await act(async () => { buttons[1].onPress(); });
