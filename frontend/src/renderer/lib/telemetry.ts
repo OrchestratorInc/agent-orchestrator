@@ -24,14 +24,45 @@ const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
+// session_management_summary keeps its shipped exported name; every other
+// event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
-	"ao.app.active": "ao.v2.app.active",
-	"ao.renderer.route_viewed": "ao.v2.renderer.route_viewed",
-	"ao.renderer.loaded": "ao.v2.renderer.loaded",
-	"ao.renderer.api_error": "ao.v2.renderer.api_error",
-	"ao.renderer.daemon_failure": "ao.v2.renderer.daemon_failure",
 	"ao.renderer.session_management_summary": "ao.v2.renderer.session_management_summary",
 };
+// Names a renderer event was exported under before the
+// {product}.{object}.{past_tense_verb} rename. Only the kill switch reads these,
+// so a deny entry written against an old name still silences the renamed stream.
+export const LEGACY_EVENT_NAMES: Record<string, string[]> = {
+	"ao.app.active": ["ao.v2.app.active"],
+	"ao.app.loaded": ["ao.renderer.loaded", "ao.v2.renderer.loaded"],
+	"ao.routes.viewed": ["ao.renderer.route_viewed", "ao.v2.renderer.route_viewed"],
+	"ao.requests.failed": ["ao.renderer.api_error", "ao.v2.renderer.api_error"],
+	"ao.daemon.failed": ["ao.renderer.daemon_failure", "ao.v2.renderer.daemon_failure"],
+	"ao.sessions.killed": ["ao.renderer.session_kill_succeeded"],
+	"ao.sessions.kill_failed": ["ao.renderer.session_kill_failed"],
+	"ao.orchestrators.spawned": ["ao.renderer.orchestrator_spawn_succeeded"],
+	"ao.orchestrators.spawn_failed": ["ao.renderer.orchestrator_spawn_failed"],
+	"ao.projects.added": ["ao.renderer.project_add_succeeded"],
+	"ao.projects.add_failed": ["ao.renderer.project_add_failed"],
+	"ao.projects.clone_failed": ["ao.renderer.project_clone_failed"],
+	"ao.projects.removed": ["ao.renderer.project_removed"],
+	"ao.tasks.created": ["ao.renderer.task_create_succeeded"],
+	"ao.tasks.create_failed": ["ao.renderer.task_create_failed"],
+	"ao.settings.saved": ["ao.renderer.settings_save_succeeded"],
+	"ao.notifications.read": ["ao.renderer.notification_mark_read_succeeded"],
+	"ao.notifications.opened": ["ao.renderer.notification_opened"],
+	"ao.editor.opened": ["ao.renderer.open_in_editor_succeeded"],
+	"ao.automations.create_opened": ["ao.renderer.automation_create_opened"],
+	"ao.terminals.attach_failed": ["ao.renderer.terminal_attach_failed"],
+	"ao.support.opened": ["ao.renderer.support_opened"],
+	"ao.updates.failed": ["ao.renderer.update_failed"],
+	"ao.usage.update_failures_daily": ["ao.renderer.update_failures_daily"],
+	"ao.updates.downloaded": ["ao.renderer.update_downloaded"],
+	"ao.mobile.connect_opened": ["ao.renderer.mobile_connect_opened"],
+	"ao.mobile.bridge_toggled": ["ao.renderer.mobile_bridge_toggled"],
+};
+// Removed from PostHog by the rename; written to the renderer log instead.
+const LOG_ONLY_EVENTS = new Set(["ao.renderer.agents_available", "ao.renderer.cloud_offering_resolved"]);
 
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
@@ -214,7 +245,6 @@ export type DailyActiveHeartbeatOptions = {
 	storage?: DailyActiveStorage;
 	now?: () => Date;
 	capture: () => boolean | void | Promise<boolean | void>;
-	onNewDay?: (now: Date) => void;
 	window: DailyActiveEventTarget;
 	document: DailyActiveEventTarget & Pick<Document, "visibilityState">;
 };
@@ -522,12 +552,12 @@ let disabledEventMatchers: string[] = [];
  * Whether a stream is silenced.
  *
  * Mirrors the daemon's DenylistSink: case-insensitive, `*` matches by prefix,
- * and both the internal name and the exported alias are checked so an operator
- * can type whichever one they see.
+ * and the current, exported and pre-rename names are all checked, so a deny
+ * entry written before the rename keeps working.
  */
 export function isDeniedEvent(event: string, denied: string[] = disabledEventMatchers): boolean {
 	if (denied.length === 0) return false;
-	const candidates = [event.trim().toLowerCase(), postHogEventName(event).trim().toLowerCase()];
+	const candidates = [event, postHogEventName(event), ...(LEGACY_EVENT_NAMES[event] ?? [])].map((name) => name.trim().toLowerCase());
 	return denied.some((raw) => {
 		const rule = raw.trim().toLowerCase();
 		if (rule === "" || rule === "*") return false;
@@ -640,33 +670,16 @@ function claimOnboardingMilestone(storage: DailyActiveStorage | undefined, miles
 	}
 }
 
-function hadEarlierActiveDay(storage: DailyActiveStorage | undefined, now = new Date()): boolean {
-	try {
-		const value = JSON.parse(storage?.getItem(ACTIVE_STORAGE_KEY) ?? "{}") as { date?: unknown };
-		return typeof value.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.date) && value.date < now.toISOString().slice(0, 10);
-	} catch {
-		return false;
-	}
-}
-
-function isNextInstallUtcDay(now: Date): boolean {
-	if (installTimestampMs === undefined) return false;
-	return Math.floor(now.getTime() / DAY_MS) - Math.floor(installTimestampMs / DAY_MS) === 1;
-}
-
 export function startDailyActiveHeartbeat({
 	storage,
 	now = () => new Date(),
 	capture,
-	onNewDay,
 	window,
 	document,
 }: DailyActiveHeartbeatOptions): () => void {
 	const maybeCapture = () => {
 		const captureTime = now();
-		const returning = hadEarlierActiveDay(storage, captureTime);
 		if (!reserveDailyActiveCapture(storage, captureTime)) return;
-		if (returning) onNewDay?.(captureTime);
 
 		let result: boolean | void | Promise<boolean | void>;
 		try {
@@ -954,7 +967,7 @@ export async function sanitizeRendererProperties(
 		case "ao.app.active":
 			if (properties?.channel === "renderer") safe.channel = "renderer";
 			break;
-		case "ao.renderer.route_viewed":
+		case "ao.routes.viewed":
 			if (typeof properties?.surface === "string" && properties.surface.trim() !== "") {
 				safe.surface = properties.surface;
 			}
@@ -964,7 +977,7 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
-		case "ao.renderer.loaded":
+		case "ao.app.loaded":
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -978,17 +991,17 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.first_run_prompt_action":
 			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "dismissed") safe.action = properties.action;
 			break;
-		case "ao.renderer.project_add_succeeded":
-		case "ao.renderer.project_removed":
-		case "ao.renderer.task_create_succeeded":
-		case "ao.renderer.task_create_failed":
-		case "ao.renderer.session_kill_succeeded":
-		case "ao.renderer.session_kill_failed":
-		case "ao.renderer.settings_save_succeeded":
+		case "ao.projects.added":
+		case "ao.projects.removed":
+		case "ao.tasks.created":
+		case "ao.tasks.create_failed":
+		case "ao.sessions.killed":
+		case "ao.sessions.kill_failed":
+		case "ao.settings.saved":
 		case "ao.renderer.settings_save_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if ((event === "ao.renderer.task_create_failed" || event === "ao.renderer.task_create_succeeded") && properties?.scope === "standalone") {
+			if ((event === "ao.tasks.create_failed" || event === "ao.tasks.created") && properties?.scope === "standalone") {
 				safe.scope = "standalone";
 			}
 			break;
@@ -1011,18 +1024,18 @@ export async function sanitizeRendererProperties(
 			// separates "checking on a worker" from "reviewing its output".
 			if (typeof properties?.has_pr === "boolean") safe.has_pr = properties.has_pr;
 			break;
-		case "ao.renderer.orchestrator_spawn_succeeded":
-		case "ao.renderer.orchestrator_spawn_failed": {
+		case "ao.orchestrators.spawned":
+		case "ao.orchestrators.spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) safe.source = properties.source;
-			if (event === "ao.renderer.orchestrator_spawn_failed") {
+			if (event === "ao.orchestrators.spawn_failed") {
 				if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
 				if (typeof properties?.http_status === "number" && Number.isInteger(properties.http_status) && properties.http_status >= 400 && properties.http_status <= 599) safe.http_status = properties.http_status;
 			}
 			break;
 		}
-		case "ao.renderer.automation_create_opened":
+		case "ao.automations.create_opened":
 			break;
 		case "ao.renderer.automation_create_succeeded":
 		case "ao.renderer.automation_create_failed": {
@@ -1043,29 +1056,29 @@ export async function sanitizeRendererProperties(
 			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
 			break;
-		case "ao.renderer.notification_opened":
+		case "ao.notifications.opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
 		case "ao.renderer.topbar_action_clicked":
 			if (typeof properties?.action === "string" && TOPBAR_ACTION_SET.has(properties.action)) safe.action = properties.action;
 			if (typeof properties?.view === "string" && TOPBAR_VIEW_SET.has(properties.view)) safe.view = properties.view;
 			break;
-		case "ao.renderer.notification_mark_read_succeeded":
+		case "ao.notifications.read":
 		case "ao.renderer.notification_mark_read_failed":
 			if (properties?.scope === "single" || properties?.scope === "all") safe.scope = properties.scope;
 			break;
-		case "ao.renderer.daemon_failure":
+		case "ao.daemon.failed":
 			if (typeof properties?.daemon_state === "string") safe.daemon_state = properties.daemon_state;
 			if (typeof properties?.code === "string") safe.code = properties.code;
 			if (typeof properties?.exit_code === "number") safe.exit_code = properties.exit_code;
 			if (typeof properties?.signal === "string") safe.signal = properties.signal;
 			break;
-		case "ao.renderer.api_error":
+		case "ao.requests.failed":
 			if (typeof properties?.operation === "string") safe.operation = properties.operation;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (typeof properties?.status === "number") safe.status = properties.status;
 			break;
-		case "ao.renderer.terminal_attach_failed":
+		case "ao.terminals.attach_failed":
 			if (properties?.reason === "open_timeout" || properties?.reason === "pane_error") {
 				safe.reason = properties.reason;
 			}
@@ -1078,7 +1091,7 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.authorized_agents === "string") safe.authorized_agents = properties.authorized_agents;
 			break;
 		}
-		case "ao.renderer.open_in_editor_succeeded": {
+		case "ao.editor.opened": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.editor_id === "string" && EDITOR_ID_SET.has(properties.editor_id)) {
@@ -1098,20 +1111,20 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
-		case "ao.renderer.project_add_failed":
-		case "ao.renderer.project_clone_failed":
+		case "ao.projects.add_failed":
+		case "ao.projects.clone_failed":
 			if (typeof properties?.error_code === "string" && (/^[A-Z0-9_]+$/.test(properties.error_code) || properties.error_code === "unknown")) {
 				safe.error_code = properties.error_code;
 			}
 			break;
-		case "ao.renderer.update_failures_daily":
+		case "ao.usage.update_failures_daily":
 			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
 			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
 				safe.failure_count = properties.failure_count;
 			}
 			break;
-		case "ao.renderer.update_failed":
-		case "ao.renderer.update_downloaded":
+		case "ao.updates.failed":
+		case "ao.updates.downloaded":
 		case "ao.renderer.update_unsupported":
 			// Version strings are release identifiers, not user data. The updater's
 			// raw error message is deliberately absent: it can carry feed URLs and
@@ -1136,7 +1149,7 @@ export async function sanitizeRendererProperties(
 				if (typeof value === "number" && Number.isFinite(value) && value >= 0) safe[key] = value;
 			}
 			break;
-		case "ao.renderer.mobile_connect_opened":
+		case "ao.mobile.connect_opened":
 			// Whether the bridge was already on when the modal opened separates
 			// "came to set this up" from "came back to re-scan the QR".
 			if (typeof properties?.bridge_enabled === "boolean") safe.bridge_enabled = properties.bridge_enabled;
@@ -1151,7 +1164,7 @@ export async function sanitizeRendererProperties(
 				}
 			}
 			break;
-		case "ao.renderer.support_opened":
+		case "ao.support.opened":
 			break;
 		case "ao.renderer.support_submitted":
 			// The report's summary, details, and diagnostics block are the user's own
@@ -1167,7 +1180,7 @@ export async function sanitizeRendererProperties(
 			// whether anyone reaches for it decides if it stays a separate control.
 			if (typeof properties?.enabled === "boolean") safe.enabled = properties.enabled;
 			break;
-		case "ao.renderer.mobile_bridge_toggled":
+		case "ao.mobile.bridge_toggled":
 			// The host, port, and connection password in the QR never leave the
 			// machine: only the direction of the switch and whether it worked.
 			if (typeof properties?.enabled === "boolean") safe.enabled = properties.enabled;
@@ -1334,11 +1347,6 @@ export async function initTelemetry(): Promise<boolean> {
 			storage,
 			window,
 			document,
-			onNewDay: (now) => {
-				if (isNextInstallUtcDay(now) && !isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
-					posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
-				}
-			},
 			// Ride the batched request queue like every other renderer event
 			// (loaded, route_viewed). An earlier `send_instantly: true` here
 			// fired an immediate, un-retried send during init that never
@@ -1354,10 +1362,10 @@ export async function initTelemetry(): Promise<boolean> {
 					),
 				),
 		});
-		if (!isDeniedEvent("ao.renderer.loaded")) {
+		if (!isDeniedEvent("ao.app.loaded")) {
 			posthog.capture(
-				postHogEventName("ao.renderer.loaded"),
-				withTelemetryContext(await sanitizeRendererProperties("ao.renderer.loaded")),
+				postHogEventName("ao.app.loaded"),
+				withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded")),
 			);
 		}
 		return true;
@@ -1395,16 +1403,20 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	// the denylist sits outermost.
 	if (isDeniedEvent(event)) return false;
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
-	if (event === "ao.renderer.route_viewed") {
+	if (LOG_ONLY_EVENTS.has(event)) {
+		console.info(`[telemetry] ${event}`, sanitizedProperties);
+		return true;
+	}
+	if (event === "ao.routes.viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
 		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
-	} else if (event !== "ao.renderer.update_failed" && !reserveCapture(event)) {
+	} else if (event !== "ao.updates.failed" && !reserveCapture(event)) {
 		return false;
 	}
 	if (!(await initTelemetry()) || analyticsOptedOut) return false;
 	const storage = telemetryStorage();
 	let releaseUpdateFailureClaim: (() => void) | undefined;
-	if (event === "ao.renderer.update_failed") {
+	if (event === "ao.updates.failed") {
 		if (!reserveCapture(event)) return false;
 		if (storage) {
 			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
@@ -1413,7 +1425,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 			releaseUpdateFailureClaim = () => {
 				if (!analyticsOptedOut) decision.rollback();
 			};
-			const dailyName = "ao.renderer.update_failures_daily";
+			const dailyName = "ao.usage.update_failures_daily";
 			for (const daily of decision.dailies ?? []) {
 				if (isDeniedEvent(dailyName)) continue;
 				if (!reserveCapture(dailyName)) {
@@ -1435,7 +1447,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 			if (!decision.streak) return true;
 		}
 	}
-	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
+	if (storage && event === "ao.updates.downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
 	let captured = false;
 	try {

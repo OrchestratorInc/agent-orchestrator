@@ -388,7 +388,7 @@ describe("api error telemetry", () => {
 
 		await apiClient.GET("/api/v1/agents");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "http_5xx",
 			status: 500,
@@ -415,8 +415,8 @@ describe("api error telemetry", () => {
 		await apiClient.GET("/api/v1/projects");
 		await apiClient.GET("/api/v1/sessions");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
 	});
 
 	it("drops expected Codex and closed-shell outcomes and still reports GitHub auth and other 401 and 404 responses", async () => {
@@ -435,14 +435,14 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
 		captureMock.mockClear();
 		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "conflict" }), {
 			status: 409,
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents/{agent}/models", { params: { path: { agent: "codex" } } });
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({
 			operation: "GET /api/v1/agents/:id/models",
 			status: 409,
 			error_category: "http_4xx",
@@ -459,7 +459,7 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
 	});
 
 	it("reports http_4xx with ids stripped from the operation", async () => {
@@ -470,7 +470,7 @@ describe("api error telemetry", () => {
 			params: { path: { sessionId: "ao-raw-id" } },
 		});
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "POST /api/v1/sessions/:id/kill",
 			error_category: "http_4xx",
 			status: 404,
@@ -483,7 +483,7 @@ describe("api error telemetry", () => {
 
 		await expect(apiClient.GET("/api/v1/agents")).rejects.toThrow("Failed to fetch");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "network_error",
 			status: undefined,
@@ -504,7 +504,7 @@ describe("api error telemetry", () => {
 
 		await apiClient.GET("/api/v1/agents");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "daemon_unavailable",
 			status: 503,
