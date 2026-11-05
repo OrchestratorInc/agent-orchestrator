@@ -3839,6 +3839,29 @@ func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
 	}
 }
 
+// A spawn timeout keeps the best-effort step failures that preceded it, so the
+// user can tell an unreachable origin from a broken daemon without the log.
+func TestSpawnTimeoutReportsBestEffortStepFailures(t *testing.T) {
+	cause := fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrWorkspaceCreate, context.DeadlineExceeded)
+	mapped := toSpawnAPIError(&sessionmanager.SpawnTimeoutError{
+		Cause: cause,
+		Details: []string{
+			"default branch resolution: context deadline exceeded",
+			"base ref refresh: git fetch origin main: SSL_ERROR_SYSCALL",
+		},
+	})
+	var e *apierr.Error
+	if !errors.As(mapped, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("mapped = %v, want SPAWN_TIMEOUT", mapped)
+	}
+	want := "Session spawn timed out before the agent could start: " +
+		"default branch resolution: context deadline exceeded; " +
+		"base ref refresh: git fetch origin main: SSL_ERROR_SYSCALL"
+	if e.Message != want {
+		t.Fatalf("message = %q, want %q", e.Message, want)
+	}
+}
+
 // TestSpawnOrchestratorUnknownProjectReturns404 is the orchestrator-side guard
 // for Bug 1: same pre-validation, same typed envelope.
 func TestSpawnOrchestratorUnknownProjectReturns404(t *testing.T) {
