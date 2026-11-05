@@ -2,6 +2,7 @@ import { type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
+import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { OrchestratorIcon } from "./icons";
@@ -16,6 +17,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	style?: CSSProperties;
 }) {
 	const { t } = useTranslation();
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const { orchestrator, isSpawning, isProjectRestarting, isProvisioning, spawnError, canCreateAsTui,
 		openNewTask, openOrchestrator } = actions;
 	const header = placement === "header";
@@ -38,9 +40,11 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 							if (header) captureTopbarAction("open_orchestrator", "board");
 							openOrchestrator();
 						}}
-						// Every top bar shows Orchestrator the same way: quiet, labeled, first.
-						// The empty board's body keeps it as the call to action.
-						variant={header ? "action" : quiet ? "secondary" : "primary"}
+						// The simplified bar shows Orchestrator quiet, labeled, first; the previous
+						// header never demotes it. The empty board's body keeps it as the call to action.
+						variant={simplifiedTopbar
+							? (header ? "action" : quiet ? "secondary" : "primary")
+							: (header || !quiet ? "primary" : "secondary")}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
@@ -63,8 +67,9 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 							if (header) captureTopbarAction("new_task", "board");
 							openNewTask();
 						}}
-						// New task is the top bar's one filled action, as on the orchestrator page.
-						variant={header ? "primary" : quiet || cloud ? "secondary" : "accent"}
+						// The simplified bar's one filled action is New task; the previous header
+						// keeps it a utility control (one filled primary per region).
+						variant={header ? (simplifiedTopbar ? "primary" : "action") : quiet || cloud ? "secondary" : "accent"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{t(header ? "newTask.task" : "shell.newTask")}</span>
@@ -82,7 +87,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant="primary">{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
-	return header ? <>{feedback}{orchestratorButton}{newTaskButton}</> : <>
+	return header ? (simplifiedTopbar ? <>{feedback}{orchestratorButton}{newTaskButton}</> : <>{feedback}{newTaskButton}{orchestratorButton}</>) : <>
 		<div className="mt-5 flex items-center gap-2">{orchestratorButton}{newTaskButton}</div>
 		{feedback}
 	</>;

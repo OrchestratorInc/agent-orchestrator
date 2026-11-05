@@ -6,6 +6,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
+import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -2392,6 +2393,7 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
@@ -2407,7 +2409,7 @@ function ChatHeader({
 			tabs={
 					<div
 						aria-label="Chat tabs"
-						className="flex h-full min-w-0 items-stretch"
+						className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						ref={tabListRef}
 						role="tablist"

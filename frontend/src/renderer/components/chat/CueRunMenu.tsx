@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
+import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
@@ -68,6 +69,9 @@ function CueRunMenuTrigger({
 	onRun?: () => void;
 }) {
 	const { t } = useTranslation();
+	// The hover-highlight and focus handling below belong to the simplified top
+	// bar; the previous one keeps the menu exactly as it was.
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const queryClient = useQueryClient();
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
@@ -241,11 +245,11 @@ function CueRunMenuTrigger({
 						ref={buttonRef}
 						type="button"
 						aria-label={t("cues.run")}
-						className="aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground"
+						className={simplifiedTopbar ? "aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground" : undefined}
 						data-priority="secondary"
 						// The menu opens on hover, so "open" just means "hovered": keep
 						// the same hover highlight as the other top bar icons.
-						highlightActive={false}
+						highlightActive={simplifiedTopbar ? false : undefined}
 						disabled={disabled || spinner}
 						variant="icon"
 						onPointerEnter={handlePointerEnter}
@@ -283,7 +287,7 @@ function CueRunMenuTrigger({
 							escapeRequested.current = true;
 						}}
 						onCloseAutoFocus={(event) => {
-							if (openedByPointer.current) event.preventDefault();
+							if (simplifiedTopbar && openedByPointer.current) event.preventDefault();
 						}}
 					/>
 				) : null}

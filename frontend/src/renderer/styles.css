@@ -615,6 +615,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	top: 1px;
 }
 
+.center-panel-shell--floating-topbar .workspace-topbar-actions .topbar-control {
+	font-size: var(--font-size-md);
+}
+
 /* One gap everywhere on the floating bar: the 4px between tabs. The tabs
  * carry it as their end margin, so New terminal adds none of its own; the
  * action region starts one gap after it; and the reserve for the panel's
@@ -652,7 +656,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	--floating-panel-radius: var(--radius-center-panel);
 	position: relative;
 	isolation: isolate;
-	border: 0;
+	/* Width only: the `border` shorthand would reset the color to currentcolor,
+	 * and the next page's border would fade in from bright text color. */
+	border-width: 0;
 	border-radius: 0;
 	/* The frame's faint top line reads as part of the gap below the controls,
 	 * so the bar's contents sit 1px low to look evenly spaced. */
@@ -704,6 +710,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
+/* The rail's line is drawn by the session column, one pixel left of the rail,
+ * so the rail's own edge pixel is empty. The resize handle's hover line (which
+ * the rail clips to its own box) steps onto that pixel, so it continues the
+ * divider instead of floating 1px off it. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] [data-resize-line] {
+	transform: translateX(-1px);
+}
+
 /* Page roots (board, session, automations, …) fill the whole surface, band
  * included; the panel fill comes from the surface's ::before instead. */
 .center-panel-shell--floating-topbar > .center-panel-surface > .bg-background,
@@ -717,11 +731,8 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * the selected tab is the same pill, filled more strongly and outlined with
  * the panel frame's line, so it reads as current at a glance (translucent
  * windows included, where fills are faint). */
-[data-terminal-tab-frame] {
-	font-size: var(--font-size-md);
-}
-
 .center-panel-shell--floating-topbar [data-terminal-tab-frame] {
+	font-size: var(--font-size-md);
 	/* A stacking context so the pill can sit behind the label. */
 	z-index: 0;
 	height: var(--size-topbar-control);
@@ -808,6 +819,33 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 /* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
 .center-panel-surface .new-chat-topbar .session-topbar-surface {
 	border-bottom: none;
+}
+
+/* A page with no top bar on macOS: the panel claims the band above it. The
+ * new chat page's placeholder bar goes, and its empty composer needs no
+ * offset to look centered in the window. */
+.center-panel-shell--bare {
+	--size-inspector-tabs: 0px;
+	--spacing-inspector-tabs: 0px;
+}
+
+.center-panel-shell--bare .new-chat-topbar {
+	display: none;
+}
+
+/* Its drag region went with it, so the page's invisible drag strip takes over. */
+.bare-topbar-drag-strip {
+	display: none;
+}
+
+.center-panel-shell--bare .bare-topbar-drag-strip {
+	display: block;
+}
+
+/* Arriving from a floating page the surface is square; the corners snap to
+ * the frame instead of morphing while its edge is visible. */
+.center-panel-shell--bare > .center-panel-surface {
+	transition: border-color 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* The tab bar's header is 1px taller than the band; unfilled, it leaves the
@@ -3616,6 +3654,17 @@ html.sidebar-reordering * {
 	padding-right: var(--gap-topbar-control);
 }
 
+/* Opening or closing the rail swaps that end padding (and the divider below).
+ * Instant, the action buttons would jump by the trailing controls' width before
+ * the column even starts to resize, so both ride the rail's own spring. Only a
+ * toggle inside the current session animates (data-motion="animated" on the
+ * rail's gap), so switching sessions and drag-resizing stay immediate. Only the
+ * simplified bar renders the divider, so the previous bar is left as it was. */
+.session-split:has([data-slot="inspector-gap"][data-motion="animated"]) .session-topbar-actions:has(.topbar-divider):not([data-fullscreen]) {
+	transition: padding-right var(--session-inspector-motion-duration, 300ms)
+		var(--session-inspector-motion-easing, ease-out);
+}
+
 .topbar-control > [data-nav-row-highlight],
 .topbar-control-group > [data-nav-row-highlight] {
 	z-index: -1;
@@ -3629,7 +3678,7 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	justify-content: center;
 	border-radius: var(--radius-topbar-control);
-	font-size: var(--font-size-md);
+	font-size: var(--font-size-sm-md);
 	transition:
 		transform var(--duration-fast) ease-out,
 		background-color var(--duration-fast) ease,
@@ -3646,14 +3695,22 @@ html.sidebar-reordering * {
 }
 
 /* Ends the session's own actions where the inspector rail begins; shown only
- * while the rail is open. */
+ * while the rail is open. Collapsed it takes no room: the negative start margin
+ * cancels the row's flex gap, so it can grow in instead of popping in. */
 .workspace-topbar-actions .topbar-divider {
-	display: none;
-	width: 1px;
+	width: 0;
 	height: var(--space-5);
 	flex: 0 0 auto;
-	margin-inline: var(--space-1);
+	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
+	opacity: 0;
 	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+
+.session-split:has([data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
+	transition:
+		width var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		margin-inline var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		opacity var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out);
 }
 
 /* With the inspector open, the session column draws the line between it and
@@ -3684,16 +3741,9 @@ html.sidebar-reordering * {
 }
 
 .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
-	display: block;
-}
-
-/* The editor control's menu chevron belongs to its labeled button: narrow,
-   tucked against the label rather than a second full-width control. */
-.workspace-topbar-actions .topbar-control--chevron {
-	width: var(--space-6);
-	min-width: var(--space-6);
-	margin-inline-start: calc(-1 * var(--space-2));
-	padding-inline-end: var(--space-1_5);
+	width: 1px;
+	margin-inline: var(--space-1);
+	opacity: 1;
 }
 
 .workspace-topbar-actions .topbar-control--labeled {

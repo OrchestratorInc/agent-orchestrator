@@ -253,7 +253,8 @@ beforeEach(() => {
 	postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
-	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+	// The simplified top bar is a Developer Mode preview; this suite covers it.
+	useUiStore.setState({ developerMode: true, inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
 describe("optimistic orchestrator topbar", () => {
@@ -336,6 +337,28 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.getByTestId("workspace-topbar-actions")).toHaveAttribute("data-compact-actions", "true");
 	});
 
+});
+
+describe("SessionTopbarActions without Developer Mode", () => {
+	beforeEach(() => useUiStore.setState({ developerMode: false }));
+
+	it("keeps the previous orchestrator row: New task and a labeled Open Kanban", () => {
+		renderTopbar(orchestrator);
+
+		const buttons = within(screen.getByTestId("workspace-topbar-actions")).getAllByRole("button");
+		const newTask = screen.getByRole("button", { name: "New task" });
+		const kanban = screen.getByRole("button", { name: "Open Kanban" });
+		expect(kanban).toHaveTextContent("Open Kanban");
+		expect(screen.queryByRole("button", { name: "Board" })).not.toBeInTheDocument();
+		expect(buttons.indexOf(newTask)).toBeLessThan(buttons.indexOf(kanban));
+		expect(screen.queryByTestId("session-actions-divider")).not.toBeInTheDocument();
+	});
+
+	it("keeps the Archive button on a worker", () => {
+		renderTopbarSessions([worker, orchestrator], worker.id);
+
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
+	});
 });
 
 describe("SessionTopbarActions orchestrator actions", () => {

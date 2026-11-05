@@ -81,6 +81,7 @@ import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset"
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { pageHasTopbar } from "../lib/shell-topbar";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppShortcut } from "../hooks/useAppShortcut";
@@ -255,6 +256,7 @@ const macTrafficLightBand = hidesShellTopbar();
 const ShellCenter = memo(function ShellCenter({
 	isSessionRoute,
 	isHomeRoute,
+	isNewChatRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
@@ -263,6 +265,7 @@ const ShellCenter = memo(function ShellCenter({
 }: {
 	isSessionRoute: boolean;
 	isHomeRoute: boolean;
+	isNewChatRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
@@ -280,7 +283,12 @@ const ShellCenter = memo(function ShellCenter({
 	// so every page carries the bell except the welcome start page.
 	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} notifications={!isHomeRoute || startingOrchestrator}>
+		<CenterPanelShell
+			className={panelClassName}
+			notifications={!isHomeRoute || startingOrchestrator}
+			// The home and new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -1546,6 +1554,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							<ShellCenter
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
 								isHomeRoute={isHomeRoute}
+								isNewChatRoute={isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
