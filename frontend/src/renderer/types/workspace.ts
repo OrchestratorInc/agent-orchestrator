@@ -406,6 +406,17 @@ export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSes
 	);
 }
 
+/**
+ * Whether the session's local worktree exists yet. An asynchronous start
+ * publishes it when the worktree step finishes; until then, and after a failed
+ * start, every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND.
+ */
+export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "provisionState" | "provisionSteps">): boolean {
+	if (session.provisionState === "failed") return false;
+	if (session.provisionState !== "provisioning") return true;
+	return session.provisionSteps?.some((step) => step.id === "worktree" && step.status === "done") ?? false;
+}
+
 export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
 }

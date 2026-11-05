@@ -1090,6 +1090,9 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.operation === "string") safe.operation = properties.operation;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (typeof properties?.status === "number") safe.status = properties.status;
+			// The daemon's stable error code, so expected states and real bugs at
+			// the same status can be told apart. Never a message.
+			if (typeof properties?.error_code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(properties.error_code)) safe.error_code = properties.error_code;
 			break;
 		case "ao.terminals.attach_failed":
 			if (properties?.reason === "open_timeout" || properties?.reason === "pane_error") {

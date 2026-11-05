@@ -725,6 +725,13 @@ describe("telemetry sanitizers", () => {
 		expect(Object.keys(props)).toEqual(["project_id_hash"]);
 	});
 
+	it("keeps only a stable error code on request failures", async () => {
+		expect(await sanitizeRendererProperties("ao.requests.failed", { operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND", message: "Session workspace not found" })).toEqual({
+			operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND",
+		});
+		expect(await sanitizeRendererProperties("ao.requests.failed", { error_code: "/Users/someone/repo" })).toEqual({});
+	});
+
 	it("whitelists coarse daemon failure fields and drops messages", async () => {
 		const props = await sanitizeRendererProperties("ao.daemon.failed", {
 			daemon_state: "error",

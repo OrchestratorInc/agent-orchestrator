@@ -75,6 +75,7 @@ import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
 	sessionArtifacts,
+	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -223,7 +224,7 @@ export const SessionInspector = memo(function SessionInspector({
 	);
 	const inspectorQueryClient = useQueryClient();
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		onlyBrowser || session?.cloud || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -1109,7 +1110,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
 		staleTime: Infinity,
 		placeholderData: (previous) => previous,
-		enabled: !session.cloud && session.kind !== "orchestrator",
+		enabled: !session.cloud && session.kind !== "orchestrator" && sessionWorkspaceReady(session),
 	});
 	// A Cloud session's commits come from its worker's workspace review, the
 	// same read (and cache entry) the inspector polls for its Files count.

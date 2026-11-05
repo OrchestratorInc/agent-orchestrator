@@ -265,6 +265,13 @@ describe("normalizeApiOperation", () => {
         expect(normalizeApiOperation("POST", "/api/v1/awake/sessions/private-source/end")).toBe("POST /api/v1/awake/sessions/:id/end");
         expect(normalizeApiOperation("GET", "/api/v1/awake")).toBe("GET /api/v1/awake");
     });
+	it("never leaks identifiers from routes missing a template", () => {
+		expect(normalizeApiOperation("PUT", "/api/v1/sessions/ao-7/conversation/side-chats/24109bad-e350-4680-9ddd-76caf539d12a/draft")).toBe(
+			"PUT /api/v1/sessions/:id/conversation/side-chats/:id/draft",
+		);
+		expect(normalizeApiOperation("DELETE", "/api/v1/shell-terminals/shellterm-60e83cc6a8c245d9")).toBe("DELETE /api/v1/shell-terminals/:id");
+		expect(normalizeApiOperation("GET", "/api/v1/health")).toBe("GET /api/v1/health");
+	});
 	it("replaces identifier segments after resource collections", () => {
 		expect(normalizeApiOperation("get", "/api/v1/projects/my project id")).toBe("GET /api/v1/projects/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/kill")).toBe("POST /api/v1/sessions/:id/kill");
@@ -406,7 +413,7 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents");
-		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 401, error_category: "http_4xx", error_code: "GITHUB_AUTH_INVALID" }));
 		captureMock.mockClear();
 		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "conflict" }), {
 			status: 409,
