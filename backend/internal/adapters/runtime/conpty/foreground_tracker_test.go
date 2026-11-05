@@ -78,3 +78,20 @@ func TestNilForegroundTrackerIsInert(t *testing.T) {
 		t.Fatal("nil tracker reported a state")
 	}
 }
+
+type fakeForegroundPTY struct {
+	ptyConn
+	fakeForegroundReader
+}
+
+func TestDeferredPTYForwardsForeground(t *testing.T) {
+	var _ foregroundReader = (*deferredPTY)(nil)
+	d := newDeferredPTY(nil)
+	if _, ok := d.ForegroundPGID(); ok {
+		t.Fatal("unstarted PTY reported a foreground")
+	}
+	d.conn = &fakeForegroundPTY{fakeForegroundReader: fakeForegroundReader{pgid: 31}}
+	if pgid, ok := d.ForegroundPGID(); !ok || pgid != 31 {
+		t.Fatalf("ForegroundPGID() = %d, %v; want 31, true", pgid, ok)
+	}
+}
