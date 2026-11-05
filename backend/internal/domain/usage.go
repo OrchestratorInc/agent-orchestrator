@@ -265,9 +265,24 @@ type ModelUsageEvent struct {
 	SourceEventKey        string
 }
 
-// UsageCostCandidate is one still-total-null event selected for an exact
-// provider catalog attempt. Source facts remain immutable and are carried back
-// to storage as compare-and-swap guards.
+// UsagePriceOverride is the user's own price for one stored model ID: either
+// their own rates in USD per million tokens, or the rates of a catalog model to
+// price as. It covers every row AO prices itself; a cost an agent reported
+// stays the agent's.
+type UsagePriceOverride struct {
+	ModelID string
+	// Input and Output are set together. CacheRead defaults to Input; without
+	// CacheWrite, cache writes bill at Input, as for a provider that does not
+	// bill them apart.
+	Input, Output, CacheRead, CacheWrite string
+	// PriceAs names a catalog row: "provider/model", or a model one of the
+	// required providers lists.
+	PriceAs string
+}
+
+// UsageCostCandidate is one event selected for a catalog or override pricing
+// attempt. Source facts remain immutable and are carried back to storage as
+// compare-and-swap guards.
 type UsageCostCandidate struct {
 	ID                int64
 	BindingID         int64

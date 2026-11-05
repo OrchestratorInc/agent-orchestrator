@@ -15,6 +15,7 @@ type costBackfillStore interface {
 	ListUsageCostCandidates(context.Context, string, string, int64) ([]domain.UsageCostCandidate, error)
 	ListUsagePricedVersions(context.Context, string) ([]string, error)
 	ListUsageRepriceCandidates(context.Context, string, int64) ([]domain.UsageCostCandidate, error)
+	ListUsageModelCostCandidates(context.Context, string, int64) ([]domain.UsageCostCandidate, error)
 	ApplyUsageCostUpdates(context.Context, []domain.UsageCostUpdate, time.Time) (int, error)
 }
 
@@ -44,9 +45,20 @@ type CostBackfiller struct {
 
 type costBackfillJob struct {
 	providerID string
+	// modelID marks a pass over one model's events after its price override
+	// changed, in place of a provider's catalog pass.
+	modelID    string
 	version    string
 	sequence   uint64
 	retryDelay time.Duration
+}
+
+// key names the job's slot: a newer job for the same key supersedes it.
+func (j costBackfillJob) key() string {
+	if j.modelID != "" {
+		return "model:" + j.modelID
+	}
+	return j.providerID
 }
 
 const (
@@ -127,7 +139,7 @@ func (b *CostBackfiller) enqueue(
 	if snapshot == nil {
 		return errors.New("usage cost backfill snapshot is nil")
 	}
-	added := false
+	jobs := make([]costBackfillJob, 0, len(activations))
 	b.mu.Lock()
 	for _, activation := range activations {
 		providerID := pricing.CanonicalProviderID(activation.ProviderID)
@@ -137,25 +149,44 @@ func (b *CostBackfiller) enqueue(
 		if !force && b.latestVersion[providerID] == activation.Version {
 			continue
 		}
-		b.nextSequence++
-		job := costBackfillJob{
-			providerID: providerID,
-			version:    activation.Version,
-			sequence:   b.nextSequence,
-		}
 		b.latestVersion[providerID] = activation.Version
-		b.latestSequence[providerID] = job.sequence
-		b.pending[providerID] = job
-		added = true
+		jobs = append(jobs, costBackfillJob{providerID: providerID, version: activation.Version})
 	}
 	b.mu.Unlock()
-	if added {
-		select {
-		case b.wake <- struct{}{}:
-		default:
-		}
-	}
+	b.queue(jobs)
 	return nil
+}
+
+// RepriceModels queues a pass over each model's events after its price
+// override changed: rows AO priced, or could not, take the new price.
+func (b *CostBackfiller) RepriceModels(ctx context.Context, modelIDs []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	jobs := make([]costBackfillJob, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		jobs = append(jobs, costBackfillJob{modelID: modelID})
+	}
+	b.queue(jobs)
+	return nil
+}
+
+func (b *CostBackfiller) queue(jobs []costBackfillJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	for _, job := range jobs {
+		b.nextSequence++
+		job.sequence = b.nextSequence
+		b.latestSequence[job.key()] = job.sequence
+		b.pending[job.key()] = job
+	}
+	b.mu.Unlock()
+	select {
+	case b.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Wait joins the worker after its context is canceled.
@@ -201,11 +232,11 @@ func (b *CostBackfiller) scheduleRetry(ctx context.Context, job costBackfillJob)
 			return
 		}
 		b.mu.Lock()
-		if b.latestSequence[job.providerID] != job.sequence {
+		if b.latestSequence[job.key()] != job.sequence {
 			b.mu.Unlock()
 			return
 		}
-		b.pending[job.providerID] = job
+		b.pending[job.key()] = job
 		b.mu.Unlock()
 		select {
 		case b.wake <- struct{}{}:
@@ -226,7 +257,7 @@ func (b *CostBackfiller) nextJob() (costBackfillJob, bool) {
 		}
 	}
 	if found {
-		delete(b.pending, next.providerID)
+		delete(b.pending, next.key())
 	}
 	return next, found
 }
@@ -234,10 +265,15 @@ func (b *CostBackfiller) nextJob() (costBackfillJob, bool) {
 func (b *CostBackfiller) superseded(job costBackfillJob) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.latestSequence[job.providerID] != job.sequence
+	return b.latestSequence[job.key()] != job.sequence
 }
 
 func (b *CostBackfiller) process(ctx context.Context, job costBackfillJob) error {
+	if job.modelID != "" {
+		return b.pricePages(ctx, job, func(afterID int64) ([]domain.UsageCostCandidate, error) {
+			return b.store.ListUsageModelCostCandidates(ctx, job.modelID, afterID)
+		})
+	}
 	if err := b.pricePages(ctx, job, func(afterID int64) ([]domain.UsageCostCandidate, error) {
 		return b.store.ListUsageCostCandidates(ctx, job.providerID, job.version, afterID)
 	}); err != nil {
@@ -268,7 +304,7 @@ func (b *CostBackfiller) process(ctx context.Context, job costBackfillJob) error
 	return nil
 }
 
-// pricePages prices every page list returns, while the job's provider version
+// pricePages prices every page list returns, while a provider job's version
 // stays active.
 func (b *CostBackfiller) pricePages(
 	ctx context.Context,
@@ -282,7 +318,7 @@ func (b *CostBackfiller) pricePages(
 		}
 		complete := false
 		err := b.config.Manager.WithSnapshot(ctx, func(active *pricing.Snapshot) error {
-			if active.ProviderVersion(job.providerID) != job.version {
+			if job.modelID == "" && active.ProviderVersion(job.providerID) != job.version {
 				complete = true
 				return nil
 			}
@@ -296,7 +332,7 @@ func (b *CostBackfiller) pricePages(
 			}
 			updates := make([]domain.UsageCostUpdate, 0, len(candidates))
 			for _, candidate := range candidates {
-				if update, ok := b.costUpdate(active, candidate, job.version); ok {
+				if update, ok := b.costUpdate(active, candidate, job); ok {
 					updates = append(updates, update)
 				}
 			}
@@ -316,9 +352,10 @@ func (b *CostBackfiller) pricePages(
 	}
 }
 
-// costUpdate prices one candidate. A row that already has a cost keeps it when
-// the snapshot cannot price it any more, rather than losing a known number.
-func (b *CostBackfiller) costUpdate(snapshot *pricing.Snapshot, candidate domain.UsageCostCandidate, version string) (domain.UsageCostUpdate, bool) {
+// costUpdate prices one candidate. On a catalog pass a row that already has a
+// cost keeps it when the snapshot cannot price it any more, rather than losing
+// a known number. An override pass clears it: that number was the override's.
+func (b *CostBackfiller) costUpdate(snapshot *pricing.Snapshot, candidate domain.UsageCostCandidate, job costBackfillJob) (domain.UsageCostUpdate, bool) {
 	estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
 		ProviderID:        candidate.ProviderID,
 		BillingProviderID: candidate.BillingProviderID,
@@ -332,10 +369,10 @@ func (b *CostBackfiller) costUpdate(snapshot *pricing.Snapshot, candidate domain
 	if err != nil {
 		b.config.OnError(err)
 	}
-	if candidate.EstimatedCostNanos != nil && (err != nil || estimate.TotalNanos == nil) {
+	if job.modelID == "" && candidate.EstimatedCostNanos != nil && (err != nil || estimate.TotalNanos == nil) {
 		return domain.UsageCostUpdate{}, false
 	}
-	update := domain.UsageCostUpdate{Candidate: candidate, Costs: domain.UsageEventCosts{PricingVersion: version}}
+	update := domain.UsageCostUpdate{Candidate: candidate, Costs: domain.UsageEventCosts{PricingVersion: job.version}}
 	if err != nil {
 		return update, true
 	}

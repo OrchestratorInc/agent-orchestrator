@@ -4415,6 +4415,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the user's model prices and the catalog models a model can price as */
+        get: operations["getUsagePrices"];
+        /** Replace the user's model prices and reprice the usage they change */
+        put: operations["setUsagePrices"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/report": {
         parameters: {
             query?: never;
@@ -7986,6 +8004,28 @@ export interface components {
         UsageModelResponse: {
             modelId: string;
             totals: components["schemas"]["UsageTotalsResponse"];
+        };
+        UsagePriceOverride: {
+            /** @description Decimal USD per million cache-read tokens. Defaults to the input price. */
+            cacheReadUsdPerMillion?: string;
+            /** @description Decimal USD per million cache-write tokens. Defaults to the input price. */
+            cacheWriteUsdPerMillion?: string;
+            /** @description Decimal USD per million uncached input tokens. Set with output. */
+            inputUsdPerMillion?: string;
+            /** @description Model ID as usage rows store it. */
+            modelId: string;
+            /** @description Decimal USD per million output tokens. Set with input. */
+            outputUsdPerMillion?: string;
+            /** @description Catalog model to price as, provider/model, in place of rates. */
+            priceAs?: string;
+        };
+        UsagePricesRequest: {
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsagePricesResponse: {
+            /** @description Catalog models a model can price as, provider/model. */
+            models: string[];
+            overrides: components["schemas"]["UsagePriceOverride"][];
         };
         UsageReportResponse: {
             days: number;
@@ -24498,6 +24538,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsagePricesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

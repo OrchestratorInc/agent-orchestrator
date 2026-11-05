@@ -829,6 +829,45 @@ func (s *Store) CompleteUsageTierRepair(ctx context.Context, sourceID, bindingID
 	return filled, nil
 }
 
+// ListUsagePriceOverrides returns the user's model prices, by model ID.
+func (s *Store) ListUsagePriceOverrides(ctx context.Context) ([]domain.UsagePriceOverride, error) {
+	rows, err := s.qr.ListUsagePriceOverrides(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list usage price overrides: %w", err)
+	}
+	out := make([]domain.UsagePriceOverride, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.UsagePriceOverride{
+			ModelID: row.ModelID, Input: row.InputUsdPerMtok.String, Output: row.OutputUsdPerMtok.String,
+			CacheRead: row.CacheReadUsdPerMtok.String, CacheWrite: row.CacheWriteUsdPerMtok.String, PriceAs: row.PriceAs.String,
+		})
+	}
+	return out, nil
+}
+
+// ReplaceUsagePriceOverrides makes overrides the whole set of model prices.
+func (s *Store) ReplaceUsagePriceOverrides(ctx context.Context, overrides []domain.UsagePriceOverride, now time.Time) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "replace usage price overrides", func(q *gen.Queries) error {
+		if err := q.DeleteUsagePriceOverrides(ctx); err != nil {
+			return err
+		}
+		for _, override := range overrides {
+			if err := q.InsertUsagePriceOverride(ctx, gen.InsertUsagePriceOverrideParams{
+				ModelID: override.ModelID, InputUsdPerMtok: stringOrNull(override.Input), OutputUsdPerMtok: stringOrNull(override.Output),
+				CacheReadUsdPerMtok: stringOrNull(override.CacheRead), CacheWriteUsdPerMtok: stringOrNull(override.CacheWrite),
+				PriceAs: stringOrNull(override.PriceAs), UpdatedAt: now.UTC(),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ListLegacyUsageEvents returns the immutable generic facts that transcript
 // attribution must match before provider and split repair is eligible.
 func (s *Store) ListLegacyUsageEvents(ctx context.Context, sourceID int64) ([]domain.LegacyUsageEvent, error) {

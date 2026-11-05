@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
@@ -25,6 +26,7 @@ type usagePricingRuntime struct {
 	manager    *pricing.Manager
 	backfiller *usagesvc.CostBackfiller
 	repairer   *usagepipeline.LegacyRepairer
+	overrides  *usagesvc.PriceOverrides
 	refresher  *pricing.Refresher
 	logger     *slog.Logger
 	started    atomic.Bool
@@ -56,7 +58,10 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 			}
 		},
 	})
-	runtime := &usagePricingRuntime{manager: manager, backfiller: backfiller, repairer: repairer, logger: logger}
+	runtime := &usagePricingRuntime{
+		manager: manager, backfiller: backfiller, repairer: repairer, logger: logger,
+		overrides: usagesvc.NewPriceOverrides(config.Store, manager, backfiller),
+	}
 	refresher, err := pricing.NewRefresher(pricing.RefreshConfig{
 		Cache:      pricing.NewCache(config.DataDir),
 		Fetcher:    fetcher,
@@ -110,6 +115,10 @@ func (r *usagePricingRuntime) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return errors.New("usage pricing runtime already started")
 	}
+	// The user's prices are live before anything is priced.
+	if err := r.overrides.Load(ctx); err != nil {
+		r.logger.Warn("load usage price overrides", "err", err)
+	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	if err := r.backfiller.Start(runtimeCtx); err != nil {
@@ -137,6 +146,15 @@ func (r *usagePricingRuntime) Wait() {
 	r.refresher.Wait()
 	r.repairer.Wait()
 	r.backfiller.Wait()
+}
+
+// usagePrices is the user's model prices, or a nil interface without a
+// pricing runtime so the routes answer 501.
+func usagePrices(runtime *usagePricingRuntime) controllers.UsagePriceService {
+	if runtime == nil || runtime.overrides == nil {
+		return nil
+	}
+	return runtime.overrides
 }
 
 // usageReportReader builds the usage page's report reader. It reads prices from

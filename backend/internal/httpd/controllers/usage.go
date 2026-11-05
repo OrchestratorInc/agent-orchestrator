@@ -38,6 +38,12 @@ type UsageLimitHistorySetting interface {
 	SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error
 }
 
+// UsagePriceService keeps the user's model prices.
+type UsagePriceService interface {
+	List(ctx context.Context) ([]domain.UsagePriceOverride, []string, error)
+	Replace(ctx context.Context, overrides []domain.UsagePriceOverride) error
+}
+
 // SessionMemoryService samples resident memory per live session.
 type SessionMemoryService interface {
 	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
@@ -75,6 +81,8 @@ type UsageController struct {
 	LimitHistory UsageLimitHistoryService
 	// LimitHistorySetting is optional: without it the limit history route is 501.
 	LimitHistorySetting UsageLimitHistorySetting
+	// Prices is optional: without it the prices routes are 501.
+	Prices UsagePriceService
 }
 
 // Register mounts usage routes on the supplied router.
@@ -82,6 +90,8 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/report", c.getReport)
 	r.Get("/usage/limit-windows", c.getLimitWindows)
 	r.Put("/usage/limit-history", c.setLimitHistory)
+	r.Get("/usage/prices", c.getPrices)
+	r.Put("/usage/prices", c.setPrices)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
@@ -106,6 +116,57 @@ func (c *UsageController) setLimitHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, UsageLimitHistoryResponse{Enabled: *req.Enabled})
+}
+
+func (c *UsageController) getPrices(w http.ResponseWriter, r *http.Request) {
+	if c.Prices == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/prices")
+		return
+	}
+	c.writePrices(w, r)
+}
+
+func (c *UsageController) setPrices(w http.ResponseWriter, r *http.Request) {
+	if c.Prices == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/usage/prices")
+		return
+	}
+	var req UsagePricesRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	overrides := make([]domain.UsagePriceOverride, 0, len(req.Overrides))
+	for _, override := range req.Overrides {
+		overrides = append(overrides, domain.UsagePriceOverride{
+			ModelID: override.ModelID, Input: override.Input, Output: override.Output,
+			CacheRead: override.CacheRead, CacheWrite: override.CacheWrite, PriceAs: override.PriceAs,
+		})
+	}
+	if err := c.Prices.Replace(r.Context(), overrides); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	c.writePrices(w, r)
+}
+
+func (c *UsageController) writePrices(w http.ResponseWriter, r *http.Request) {
+	overrides, models, err := c.Prices.List(r.Context())
+	if err != nil {
+		c.Log.WarnContext(r.Context(), "failed to read usage prices", "error", err)
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := UsagePricesResponse{Overrides: make([]UsagePriceOverride, 0, len(overrides)), Models: models}
+	if out.Models == nil {
+		out.Models = []string{}
+	}
+	for _, override := range overrides {
+		out.Overrides = append(out.Overrides, UsagePriceOverride{
+			ModelID: override.ModelID, Input: override.Input, Output: override.Output,
+			CacheRead: override.CacheRead, CacheWrite: override.CacheWrite, PriceAs: override.PriceAs,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *UsageController) getLimitWindows(w http.ResponseWriter, r *http.Request) {

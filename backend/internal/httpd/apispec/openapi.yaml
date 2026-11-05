@@ -13146,6 +13146,68 @@ paths:
       summary: Read the machine's memory-pressure verdict without sampling any process
       tags:
       - usage
+  /api/v1/usage/prices:
+    get:
+      operationId: getUsagePrices
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsagePricesResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the user's model prices and the catalog models a model can price
+        as
+      tags:
+      - usage
+    put:
+      operationId: setUsagePrices
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsagePricesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsagePricesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the user's model prices and reprice the usage they change
+      tags:
+      - usage
   /api/v1/usage/report:
     get:
       operationId: getUsageReport
@@ -22452,6 +22514,57 @@ components:
       required:
       - modelId
       - totals
+      type: object
+    UsagePriceOverride:
+      properties:
+        cacheReadUsdPerMillion:
+          description: Decimal USD per million cache-read tokens. Defaults to the
+            input price.
+          type: string
+        cacheWriteUsdPerMillion:
+          description: Decimal USD per million cache-write tokens. Defaults to the
+            input price.
+          type: string
+        inputUsdPerMillion:
+          description: Decimal USD per million uncached input tokens. Set with output.
+          type: string
+        modelId:
+          description: Model ID as usage rows store it.
+          maxLength: 256
+          type: string
+        outputUsdPerMillion:
+          description: Decimal USD per million output tokens. Set with input.
+          type: string
+        priceAs:
+          description: Catalog model to price as, provider/model, in place of rates.
+          maxLength: 256
+          type: string
+      required:
+      - modelId
+      type: object
+    UsagePricesRequest:
+      properties:
+        overrides:
+          items:
+            $ref: '#/components/schemas/UsagePriceOverride'
+          type: array
+      required:
+      - overrides
+      type: object
+    UsagePricesResponse:
+      properties:
+        models:
+          description: Catalog models a model can price as, provider/model.
+          items:
+            type: string
+          type: array
+        overrides:
+          items:
+            $ref: '#/components/schemas/UsagePriceOverride'
+          type: array
+      required:
+      - overrides
+      - models
       type: object
     UsageReportResponse:
       properties:

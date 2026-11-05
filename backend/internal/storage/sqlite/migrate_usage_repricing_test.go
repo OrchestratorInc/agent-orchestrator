@@ -53,13 +53,13 @@ func TestMigrationUsageRepricingQueuesUntieredSources(t *testing.T) {
 	countObjects := func() int {
 		t.Helper()
 		var count int
-		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('usage_tier_repairs', 'idx_model_usage_events_model', 'idx_model_usage_events_priced_version')`).Scan(&count); err != nil {
+		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('usage_tier_repairs', 'usage_price_overrides', 'idx_model_usage_events_model', 'idx_model_usage_events_priced_version')`).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		return count
 	}
-	if got := countObjects(); got != 3 {
-		t.Fatalf("migration created %d of 3 repricing objects", got)
+	if got := countObjects(); got != 4 {
+		t.Fatalf("migration created %d of 4 repricing objects", got)
 	}
 	var queued string
 	if err := db.QueryRow(`SELECT coalesce(group_concat(usage_source_id, ','), '') FROM (SELECT usage_source_id FROM usage_tier_repairs ORDER BY usage_source_id)`).Scan(&queued); err != nil {

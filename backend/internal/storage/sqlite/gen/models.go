@@ -964,6 +964,16 @@ type UsagePRMeasurement struct {
 	MergedVia          string
 }
 
+type UsagePriceOverride struct {
+	ModelID              string
+	InputUsdPerMtok      sql.NullString
+	OutputUsdPerMtok     sql.NullString
+	CacheReadUsdPerMtok  sql.NullString
+	CacheWriteUsdPerMtok sql.NullString
+	PriceAs              sql.NullString
+	UpdatedAt            time.Time
+}
+
 type UsageProjectIdentity struct {
 	ProjectID   string
 	InstallID   string

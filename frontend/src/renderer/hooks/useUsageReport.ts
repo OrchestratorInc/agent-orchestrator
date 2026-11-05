@@ -1,4 +1,5 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import type { UsageReport } from "../lib/usage-report";
 import type { UsageLimitWindows } from "../lib/usage-limits";
@@ -42,4 +43,33 @@ export function useUsageLimitWindows(days: number, enabled: boolean) {
 		enabled,
 		refetchInterval: 60_000,
 	});
+}
+
+export type UsagePriceOverride = components["schemas"]["UsagePriceOverride"];
+export type UsagePrices = components["schemas"]["UsagePricesResponse"];
+const usagePricesQueryKey = ["usage", "prices"] as const;
+
+/** The user's model prices, and the catalog models a model can price as. */
+export function useUsagePrices() {
+	return useQuery({
+		queryKey: usagePricesQueryKey,
+		queryFn: async (): Promise<UsagePrices> => {
+			const { data, error } = await apiClient.GET("/api/v1/usage/prices");
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+	});
+}
+
+/** Saves the whole set of model prices; the daemon reprices their usage. */
+export function useSaveUsagePrices() {
+	const queryClient = useQueryClient();
+	return async (overrides: UsagePriceOverride[]) => {
+		const { data, error } = await apiClient.PUT("/api/v1/usage/prices", { body: { overrides } });
+		if (error) throw new Error(apiErrorMessage(error));
+		queryClient.setQueryData(usagePricesQueryKey, data);
+		// Repricing runs in the background; look again once it has had a moment.
+		await queryClient.invalidateQueries({ queryKey: usageReportQueryKey });
+		window.setTimeout(() => void queryClient.invalidateQueries({ queryKey: usageReportQueryKey }), 2_000);
+	};
 }

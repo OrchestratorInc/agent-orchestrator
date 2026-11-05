@@ -5,6 +5,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { agentTone } from "../../lib/agent-tone";
 import { formatPeriod, formatShare, formatTokens, formatUsd, formatUsdCompact } from "../../lib/usage-format";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
+import { useUsagePrices } from "../../hooks/useUsageReport";
 import {
 	partsTotal,
 	totalsOf,
@@ -21,8 +22,10 @@ import {
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { seriesTone, UsageBarChart } from "./UsageChart";
+import { UsagePricesDialog } from "./UsagePrices";
 
 type Breakdown = "model" | "day" | "project" | "session";
 
@@ -253,6 +256,10 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 		setShowAll(false);
 	};
 	const navigateToSession = useNavigateToSession();
+	// The model the prices dialog opened for, or "" for the whole list; null is closed.
+	const [pricesFor, setPricesFor] = useState<string | null>(null);
+	const customPrices = new Set((useUsagePrices().data?.overrides ?? []).map((override) => override.modelId));
+	const seenModels = useMemo(() => [...new Set(report.rows.map((row) => row.model))].sort(), [report.rows]);
 	const fraction = (cost: number, tokens: number) => (total > 0 ? (unit === "cost" ? cost : tokens) / total : 0);
 	// A bar in the agent's colour where the row belongs to one agent, neutral where it mixes them.
 	const share = (cost: number, tokens: number, harness?: string) => (
@@ -275,6 +282,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 		<section aria-labelledby="usage-breakdown" className="flex flex-col gap-3">
 			<div className="flex items-center justify-between gap-3">
 				<h2 id="usage-breakdown" className="text-control font-medium text-foreground">{t("usage.breakdown")}</h2>
+				<span className="flex-1" />
+				<Button type="button" variant="quiet" size="sm" onClick={() => setPricesFor("")}>{t("usage.prices.title")}</Button>
 				<SettingsOptionMenu
 					aria-label={t("usage.groupBy")}
 					value={breakdown}
@@ -317,11 +326,20 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 								<span className="flex min-w-0 items-center gap-2">
 									<AgentAvatar provider={model.harness} decorative className="size-4 shrink-0" />
 									<span className="truncate font-mono text-xs text-foreground">{model.model}</span>
+									{customPrices.has(model.model) ? <span className="shrink-0 text-xs text-muted-foreground">{t("usage.prices.custom")}</span> : null}
 								</span>
 							</td>
 							<td className="py-2.5 text-end text-muted-foreground">{formatShare(model.cacheHitRate, locale)}</td>
 							<td className="py-2.5 text-end text-muted-foreground">{model.costPerMillionNanos === null ? "—" : formatUsd(model.costPerMillionNanos, locale)}</td>
-							<td className="py-2.5 text-end text-foreground">{model.pricedEvents === 0 ? <span className="text-muted-foreground">{t("usage.notPriced")}</span> : formatUsd(model.costNanos, locale)}</td>
+							<td className="py-2.5 text-end text-foreground">
+									{model.pricedEvents === 0 ? (
+										<span className="text-muted-foreground">
+											<Button type="button" variant="link" title={t("usage.prices.setFor", { model: model.model })} aria-label={t("usage.prices.setFor", { model: model.model })} onClick={() => setPricesFor(model.model)}>
+												{t("usage.notPriced")}
+											</Button>
+										</span>
+									) : formatUsd(model.costNanos, locale)}
+								</td>
 							<td className="py-2.5 ps-6 text-muted-foreground">{share(model.costNanos, model.tokens, model.harness)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(model.tokens, locale)}</td>
 						</tr>
@@ -378,6 +396,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 					{t(showAll ? "shell.showLess" : "shell.showMore")}
 				</button>
 			) : null}
+			<UsagePricesDialog open={pricesFor !== null} onOpenChange={(open) => !open && setPricesFor(null)} model={pricesFor || undefined} seenModels={seenModels} />
 		</section>
 	);
 }

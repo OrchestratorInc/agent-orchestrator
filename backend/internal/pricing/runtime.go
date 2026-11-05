@@ -88,6 +88,9 @@ type providerSnapshot struct {
 // and exact rational rates are never exposed or mutated after construction.
 type Snapshot struct {
 	providers map[string]providerSnapshot
+	// overrides are the user's prices, by stored model ID. They survive a
+	// catalog activation.
+	overrides map[string]modelOverride
 }
 
 type decodedCatalog struct {
@@ -397,13 +400,24 @@ type cacheWriteSplit struct {
 func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	providerID := CanonicalProviderID(event.BillingProviderID)
 	modelID := CanonicalModelID(providerID, event.ModelID)
+	var override modelOverride
+	if s != nil {
+		override = s.overrides[event.ModelID]
+	}
+	if override.priceAs != "" {
+		// An unresolvable target, after a catalog drops it, leaves the row unpriced.
+		providerID, modelID, _ = s.priceAsRow(override.priceAs)
+	}
 	tier, knownTier := catalogServiceTier(event.ProviderID, event.ServiceTier)
 	if tier != "" {
 		modelID = TierModelID(modelID, tier)
 	}
 	var rates exactRates
 	version := ""
-	if s != nil {
+	if override.rates != nil {
+		// The user's own rate is one rate: no tier or long-context rows.
+		rates, version = *override.rates, override.version
+	} else if s != nil {
 		if provider, ok := s.providers[providerID]; ok {
 			version = provider.version
 			modelID = provider.longContextRow(modelID, event.Tokens.InputTokens)
@@ -835,7 +849,9 @@ func (m *Manager) Activate(ctx context.Context, candidate *Snapshot) ([]Provider
 	defer release()
 	previous := m.current.Load()
 	activations := changedProviders(previous, candidate)
-	m.current.Store(candidate)
+	next := *candidate
+	next.overrides = previous.overrides
+	m.current.Store(&next)
 	return activations, nil
 }
 

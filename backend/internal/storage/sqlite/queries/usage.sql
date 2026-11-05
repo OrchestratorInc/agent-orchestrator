@@ -584,6 +584,18 @@ WHERE binding_id = sqlc.arg(binding_id)
        OR pricing_version LIKE 'ao-catalog:%'
        OR pricing_version LIKE 'ao-override:%');
 
+-- name: ListUsagePriceOverrides :many
+SELECT * FROM usage_price_overrides ORDER BY model_id;
+
+-- name: DeleteUsagePriceOverrides :exec
+DELETE FROM usage_price_overrides;
+
+-- name: InsertUsagePriceOverride :exec
+INSERT INTO usage_price_overrides (
+    model_id, input_usd_per_mtok, output_usd_per_mtok,
+    cache_read_usd_per_mtok, cache_write_usd_per_mtok, price_as, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+
 -- name: ListLegacyUsageSourceIDs :many
 -- Open attribution: never attributed, or attributed only by inference and so
 -- still replaceable by an observation. This is exactly what the partial index

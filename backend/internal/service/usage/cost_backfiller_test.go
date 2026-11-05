@@ -310,14 +310,79 @@ func TestCostBackfillerKeepsACostTheCatalogCanNoLongerPrice(t *testing.T) {
 	candidate := newFakeBackfillStore(1).candidates[0]
 	candidate.ModelID = "gpt-dropped"
 	candidate.EstimatedCostNanos = &stored
-	if _, ok := backfiller.costUpdate(backfillTestSnapshot(t, "0.000002"), candidate, "v2"); ok {
+	if _, ok := backfiller.costUpdate(backfillTestSnapshot(t, "0.000002"), candidate, costBackfillJob{providerID: "openai", version: "v2"}); ok {
 		t.Fatal("an unpriceable row with a stored cost was rewritten")
+	}
+	// An override pass clears it instead: the cost was the removed override's.
+	if update, ok := backfiller.costUpdate(backfillTestSnapshot(t, "0.000002"), candidate, costBackfillJob{modelID: "gpt-dropped"}); !ok || update.Costs.EstimatedCostNanos != nil {
+		t.Fatalf("override pass update = %+v, %v; want the stored cost cleared", update, ok)
 	}
 	candidate.EstimatedCostNanos = nil
 	snapshot := backfillTestSnapshot(t, "0.000002")
-	update, ok := backfiller.costUpdate(snapshot, candidate, snapshot.ProviderVersion("openai"))
+	update, ok := backfiller.costUpdate(snapshot, candidate, costBackfillJob{providerID: "openai", version: snapshot.ProviderVersion("openai")})
 	if !ok || update.Costs.PricingVersion != snapshot.ProviderVersion("openai") || update.Costs.EstimatedCostNanos != nil {
 		t.Fatalf("unpriced row update = %+v, %v; want the attempt recorded at the active version", update, ok)
+	}
+}
+
+// Break caught: setting or removing a model's price override left its stored
+// rows at the old price.
+func TestCostBackfillerRepricesAModelWhenItsOverrideChanges(t *testing.T) {
+	snapshot := backfillTestSnapshot(t, "0.000001")
+	manager := pricing.NewManager(snapshot)
+	store := newFakeBackfillStore(2)
+	reportedCost := int64(5)
+	store.candidates[1].PricingVersion = "pi:reported"
+	store.candidates[1].EstimatedCostNanos = &reportedCost
+	store.totalKnown[2] = true
+	backfiller := NewCostBackfiller(store, CostBackfillerConfig{Manager: manager})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := backfiller.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	setOverrides := func(overrides []domain.UsagePriceOverride) string {
+		t.Helper()
+		changed, err := manager.SetPriceOverrides(ctx, overrides)
+		if err != nil || len(changed) != 1 || changed[0] != "gpt-test" {
+			t.Fatalf("SetPriceOverrides = %v, %v", changed, err)
+		}
+		if err := backfiller.RepriceModels(ctx, changed); err != nil {
+			t.Fatalf("RepriceModels: %v", err)
+		}
+		return <-store.applied
+	}
+	cost := func() (string, int64) {
+		t.Helper()
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		row := store.candidates[0]
+		if row.EstimatedCostNanos == nil {
+			t.Fatalf("row %+v is unpriced", row)
+		}
+		return row.PricingVersion, *row.EstimatedCostNanos
+	}
+
+	// $1000 per million input tokens: the row's one token costs $0.001.
+	if version := setOverrides([]domain.UsagePriceOverride{{ModelID: "gpt-test", Input: "1000", Output: "1000"}}); !strings.HasPrefix(version, pricing.PriceOverrideVersionPrefix) {
+		t.Fatalf("override pass version = %q", version)
+	}
+	if _, got := cost(); got != 1_000_000 {
+		t.Fatalf("overridden cost = %d nanos, want 1000000", got)
+	}
+	// Removed, the row is back at the catalog's $0.000001 a token.
+	if version := setOverrides(nil); version != snapshot.ProviderVersion("openai") {
+		t.Fatalf("removal pass version = %q, want the catalog's", version)
+	}
+	if version, got := cost(); got != 1000 || version != snapshot.ProviderVersion("openai") {
+		t.Fatalf("restored row = %q %d nanos, want the catalog's 1000", version, got)
+	}
+	cancel()
+	backfiller.Wait()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if reported := store.candidates[1]; reported.PricingVersion != "pi:reported" || *reported.EstimatedCostNanos != 5 {
+		t.Fatalf("reported row = %q %d, want it untouched", reported.PricingVersion, *reported.EstimatedCostNanos)
 	}
 }
 
@@ -514,6 +579,19 @@ func (s *fakeBackfillStore) ListUsageRepriceCandidates(_ context.Context, versio
 	batch := make([]domain.UsageCostCandidate, 0, 256)
 	for _, candidate := range s.candidates {
 		if candidate.ID > afterID && s.totalKnown[candidate.ID] && candidate.PricingVersion == version && len(batch) < 256 {
+			batch = append(batch, candidate)
+		}
+	}
+	return batch, nil
+}
+
+func (s *fakeBackfillStore) ListUsageModelCostCandidates(_ context.Context, modelID string, afterID int64) ([]domain.UsageCostCandidate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch := make([]domain.UsageCostCandidate, 0, 256)
+	for _, candidate := range s.candidates {
+		aoPriced := !s.totalKnown[candidate.ID] || strings.HasPrefix(candidate.PricingVersion, "ao-catalog:") || strings.HasPrefix(candidate.PricingVersion, pricing.PriceOverrideVersionPrefix)
+		if candidate.ID > afterID && candidate.ModelID == modelID && aoPriced && len(batch) < 256 {
 			batch = append(batch, candidate)
 		}
 	}

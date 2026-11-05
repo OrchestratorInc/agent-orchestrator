@@ -201,6 +201,15 @@ func (q *Queries) CompleteUsageBindingIfSettled(ctx context.Context, arg Complet
 	return result.RowsAffected()
 }
 
+const deleteUsagePriceOverrides = `-- name: DeleteUsagePriceOverrides :exec
+DELETE FROM usage_price_overrides
+`
+
+func (q *Queries) DeleteUsagePriceOverrides(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteUsagePriceOverrides)
+	return err
+}
+
 const deleteUsageTierRepair = `-- name: DeleteUsageTierRepair :exec
 DELETE FROM usage_tier_repairs WHERE usage_source_id = ?
 `
@@ -647,6 +656,36 @@ func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsag
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertUsagePriceOverride = `-- name: InsertUsagePriceOverride :exec
+INSERT INTO usage_price_overrides (
+    model_id, input_usd_per_mtok, output_usd_per_mtok,
+    cache_read_usd_per_mtok, cache_write_usd_per_mtok, price_as, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertUsagePriceOverrideParams struct {
+	ModelID              string
+	InputUsdPerMtok      sql.NullString
+	OutputUsdPerMtok     sql.NullString
+	CacheReadUsdPerMtok  sql.NullString
+	CacheWriteUsdPerMtok sql.NullString
+	PriceAs              sql.NullString
+	UpdatedAt            time.Time
+}
+
+func (q *Queries) InsertUsagePriceOverride(ctx context.Context, arg InsertUsagePriceOverrideParams) error {
+	_, err := q.db.ExecContext(ctx, insertUsagePriceOverride,
+		arg.ModelID,
+		arg.InputUsdPerMtok,
+		arg.OutputUsdPerMtok,
+		arg.CacheReadUsdPerMtok,
+		arg.CacheWriteUsdPerMtok,
+		arg.PriceAs,
+		arg.UpdatedAt,
+	)
+	return err
 }
 
 const insertUsageSource = `-- name: InsertUsageSource :one
@@ -1356,6 +1395,41 @@ func (q *Queries) ListUsageModelCostCandidates(ctx context.Context, arg ListUsag
 			&i.ModelUsageEvent.BillingProviderSource,
 			&i.ModelUsageEvent.ServiceTier,
 			&i.ModelUsageEvent.ProviderMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsagePriceOverrides = `-- name: ListUsagePriceOverrides :many
+SELECT model_id, input_usd_per_mtok, output_usd_per_mtok, cache_read_usd_per_mtok, cache_write_usd_per_mtok, price_as, updated_at FROM usage_price_overrides ORDER BY model_id
+`
+
+func (q *Queries) ListUsagePriceOverrides(ctx context.Context) ([]UsagePriceOverride, error) {
+	rows, err := q.db.QueryContext(ctx, listUsagePriceOverrides)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UsagePriceOverride{}
+	for rows.Next() {
+		var i UsagePriceOverride
+		if err := rows.Scan(
+			&i.ModelID,
+			&i.InputUsdPerMtok,
+			&i.OutputUsdPerMtok,
+			&i.CacheReadUsdPerMtok,
+			&i.CacheWriteUsdPerMtok,
+			&i.PriceAs,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
