@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
+	sessionWorkspaceReady,
 	attentionZone,
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
@@ -423,5 +424,16 @@ describe("attentionZone", () => {
 	it("prioritizes merge as the highest-ROI zone", () => {
 		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
+	});
+});
+
+describe("sessionWorkspaceReady", () => {
+	it("waits for the worktree step of an asynchronous start", () => {
+		expect(sessionWorkspaceReady({})).toBe(true);
+		expect(sessionWorkspaceReady({ provisionState: "ready" })).toBe(true);
+		expect(sessionWorkspaceReady({ provisionState: "failed" })).toBe(false);
+		expect(sessionWorkspaceReady({ provisionState: "provisioning" })).toBe(false);
+		expect(sessionWorkspaceReady({ provisionState: "provisioning", provisionSteps: [{ id: "fetch", status: "done" }, { id: "worktree", status: "running" }] })).toBe(false);
+		expect(sessionWorkspaceReady({ provisionState: "provisioning", provisionSteps: [{ id: "worktree", status: "done" }, { id: "agent", status: "running" }] })).toBe(true);
 	});
 });
