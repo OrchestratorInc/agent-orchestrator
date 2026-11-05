@@ -511,6 +511,9 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 	checks := scmChecksFromGraphQL(pr)
 	failed := failedSCMChecks(checks)
 	ci := string(ciSummaryFromRollupState(pr))
+	if ci == string(domain.CIFailing) && len(failed) == 0 && len(checks) > 0 && !scmContextsPaginated(pr) {
+		ci = string(ciSummaryFromChecks(checks))
+	}
 	prURL := firstNonEmpty(str(pr["url"]), ref.URL)
 	review := string(reviewDecisionFromGraphQL(pr))
 	providerMergeable := str(pr["mergeable"])
@@ -588,9 +591,9 @@ func scmContextsPaginated(pr map[string]any) bool {
 func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
-	out := make([]ports.SCMCheckObservation, 0, len(rawNodes))
-	for _, n := range rawNodes {
+	deduped := dedupeContextNodes(nodes(contexts["nodes"]))
+	out := make([]ports.SCMCheckObservation, 0, len(deduped))
+	for _, n := range deduped {
 		typ := str(n["__typename"])
 		var ch ports.SCMCheckObservation
 		switch typ {
@@ -616,6 +619,28 @@ func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 		out = append(out, ch)
 	}
 	return out
+}
+
+func ciSummaryFromChecks(checks []ports.SCMCheckObservation) domain.CIState {
+	pending, passing := false, false
+	for _, ch := range checks {
+		switch domain.PRCheckStatus(ch.Status) {
+		case domain.PRCheckFailed, domain.PRCheckCancelled:
+			return domain.CIFailing
+		case domain.PRCheckQueued, domain.PRCheckInProgress:
+			pending = true
+		case domain.PRCheckPassed, domain.PRCheckSkipped:
+			passing = true
+		}
+	}
+	switch {
+	case pending:
+		return domain.CIPending
+	case passing:
+		return domain.CIPassing
+	default:
+		return domain.CIUnknown
+	}
 }
 
 func failedSCMChecks(checks []ports.SCMCheckObservation) []ports.SCMCheckObservation {
