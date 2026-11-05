@@ -109,8 +109,16 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 }
 
 func classifyProgram(arg string) domain.AgentHarness {
-	if harness, ok := executableHarness[baseName(arg)]; ok {
+	name := baseName(arg)
+	if harness, ok := executableHarness[name]; ok {
 		return harness
+	}
+	// Some launchers exec a versioned binary beside themselves: Muse's `muse`
+	// script runs `muse-bin-1.4.14-R7309.1`.
+	if prefix, _, ok := strings.Cut(name, "-bin-"); ok {
+		if harness, ok := executableHarness[prefix]; ok {
+			return harness
+		}
 	}
 	for _, segment := range strings.Split(filepathSlash(arg), "/") {
 		if harness, ok := packageDirHarness[strings.ToLower(segment)]; ok {

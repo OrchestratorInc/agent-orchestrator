@@ -18,6 +18,8 @@ func TestClassifyArgv(t *testing.T) {
 		{"gemini under versioned node", []string{"/usr/local/bin/node22", "--no-warnings", "/usr/local/lib/node_modules/@google/gemini-cli/dist/index.js"}, domain.HarnessGemini},
 		{"cursor agent launcher", []string{"/Users/me/.local/share/cursor-agent/versions/2025.1/node", "--use-system-ca", "/Users/me/.local/share/cursor-agent/versions/2025.1/index.js"}, domain.HarnessCursor},
 		{"opencode binary", []string{"opencode"}, domain.HarnessOpenCode},
+		{"muse versioned binary", []string{"/Users/me/.local/bin/muse-bin-1.4.14-R7309.1"}, domain.HarnessMuse},
+		{"versioned binary of an unknown tool", []string{"/usr/local/bin/tool-bin-2.0"}, ""},
 		{"aider under python", []string{"python3.12", "/Users/me/.local/bin/aider"}, domain.HarnessAider},
 		{"windows exe", []string{`C:\Users\me\AppData\Roaming\npm\codex.cmd`}, domain.HarnessCodex},
 		{"login shell", []string{"-zsh"}, ""},
