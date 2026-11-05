@@ -3151,8 +3151,49 @@ describe("Sidebar", () => {
 
 		// The pointer never leaves the row: the confirm itself must close the card.
 		await user.click(within(row).getByLabelText("Archive session"));
-		await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
 		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		// Closing hands focus back to Archive: past the first-open delay, no card.
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(within(row).getByLabelText("Archive session")).toHaveFocus());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("keeps the preview closed through the archive confirm opened from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+
+		fireEvent.contextMenu(row);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive session" }));
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		// The confirm is a React child of the row: its focus must not count as the row's.
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole("button", { name: "No" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("previews a row when focus moves to it from another control", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		act(() => {
+			screen.getByRole("button", { name: "Search" }).focus();
+			screen.getByLabelText("Open fix login").focus();
+		});
+
+		await screen.findByTestId("board-session-card");
 	});
 
 	it("lists sessions that need input above the rest", () => {
