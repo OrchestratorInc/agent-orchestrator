@@ -3094,6 +3094,41 @@ html.sidebar-reordering * {
 	}
 }
 
+/* A long user message folded to about ten lines (CollapsibleHumanBody). The text
+   fades out at the fold so it reads as continuing; the fade length is registered
+   so it eases with the height instead of snapping. A mask, not an overlay, so the
+   fade works on every bubble fill, including a queued one's transparent body. */
+@property --chat-human-fade {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.chat-human-fold[data-folded] {
+	--chat-human-fade: 40px;
+}
+
+/* Open and settled, the message carries no mask or clip at all. Clip, not hidden:
+   a hidden box still scrolls when focus or find-in-page reaches the folded text,
+   which would leave the fold showing a slice from the middle. */
+.chat-human-fold[data-folded],
+.chat-human-fold[data-animating] {
+	overflow: clip;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - var(--chat-human-fade)), transparent);
+}
+
+.chat-human-fold[data-animating] {
+	transition:
+		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
+		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
+   on the toggle below it and a reader scrolled into the message keeps their place. */
+.chat-human-fold[data-collapsing] {
+	overflow-anchor: none;
+}
+
 .cursor-chat-origin-message,
 .cursor-chat-activity-panel {
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
@@ -3156,9 +3191,27 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	/* `--color-bg-secondary` equals the canvas in light themes; with no border
-	   the composer needs the tertiary step to separate (see human message). */
-	--composer-bg: var(--color-bg-tertiary);
+	/* Light composer is the popover surface (white) held up by a hairline and a
+	   soft shadow, not a gray fill: the canvas is near-white, so a darker well
+	   reads as disabled. Sent messages still use the tertiary fill below. */
+	--composer-bg: var(--color-bg-elevated);
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+		0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+		0 8px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+/* The tray hung under the composer is a near-white surface with a hairline, not
+   a gray well: the composer's shadow falls on it, and a gray tint turns dirty. */
+:root[data-theme="light"] .chat-composer-tray {
+	background: var(--color-bg-elevated);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* With a tray under it, keep only the hairline so the drop shadow does not
+   gray the tray's top edge. */
+:root[data-theme="light"] [data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 /* Light needs the tertiary fill to lift a sent message off the canvas; like
@@ -3307,6 +3360,10 @@ html.sidebar-reordering * {
 
 	.chat-human-message-enter {
 		animation: none;
+	}
+
+	.chat-human-fold[data-animating] {
+		transition: none;
 	}
 
 	.chat-welcome-leaving {
@@ -6147,13 +6204,21 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	50% { opacity: 1; }
 }
 
-/* Sidebar hover preview: lift the card off the sidebar. It resolves to the same
- * surface as the sidebar, so mix in some foreground and add a hairline + shadow. */
-[data-session-preview-card] [data-testid="board-session-card"] {
+/* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to
+ * the same surface as the sidebar, so mix in some foreground and add a hairline
+ * + shadow. */
+:root:not([data-theme="light"]) [data-session-preview-card] [data-testid="board-session-card"] {
 	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
 	box-shadow:
 		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
 		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* In light, darkening reads as dirty gray. Use the menu surface and its faint
+ * edge instead; the hover card wrapper already adds the popover shadow. */
+:root[data-theme="light"] [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: var(--color-bg-elevated) !important;
+	box-shadow: 0 0 0 1px var(--color-border-overlay);
 }
 
 /* Keep the session row lit while its hover preview card is open (pointer on the card). */

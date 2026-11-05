@@ -4951,9 +4951,32 @@ const TurnGroup = memo(function TurnGroup({
 	// mounts it without the animation. The wrapper's own gutter keeps the summary's
 	// hover wash, which overhangs by 4px, inside the clip.
 	const disclosureKey = `${group.key}:worked`;
+	const showsWorked = Boolean(outcome && foldedRuns.length > 0 && !quietReply);
+	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
+	// "Worked for" fills that row; without it, an empty row of the same height keeps
+	// them off the reply. A branch navigator already reserves the row in the flow.
+	const promptBubble = group.items.some(
+		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
+	);
+	const reservesActionRow = promptBubble && !quietReply && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
-			{outcome && foldedRuns.length > 0 && !quietReply ? (
+			{!showsWorked && reservesActionRow ? (
+				// Same height and timing as "Worked for", so one handing over to the other
+				// as a turn settles leaves the reply where it was. Leaving, it also gives
+				// back the turn's 10px row gap (gap-2.5) so the two never count it twice.
+				<motion.div
+					key="turn-worked-gap"
+					aria-hidden="true"
+					initial={false}
+					animate={{ height: 28, marginTop: 0 }}
+					exit={{ height: 0, marginTop: -10 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="h-7 shrink-0"
+					data-turn-worked-gap=""
+				/>
+			) : null}
+			{outcome && showsWorked ? (
 				<motion.div
 					key="turn-worked-summary"
 					initial={{ height: 0, opacity: 0 }}
