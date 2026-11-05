@@ -619,10 +619,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	font-size: var(--font-size-md);
 }
 
-/* One gap everywhere on the floating bar: the 4px between tabs. The tabs
- * carry it as their end margin, so New terminal adds none of its own; the
- * action region starts one gap after it; and the reserve for the panel's
- * trailing controls drops the surface's 1px edge padding. */
+/* The floating bar's tabs are pills with no end margin, so New terminal brings
+ * its own space after the last tab's separator; the action region starts one
+ * gap after it; and the reserve for the panel's trailing controls drops the
+ * surface's 1px edge padding. */
 /* Tab-strip scroll fades blend into the window chrome the bar floats on. */
 .center-panel-shell--floating-topbar .session-tab-scroll-fade {
 	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
@@ -633,7 +633,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
-	padding-inline-start: 0;
+	padding-inline-start: var(--space-2);
 }
 
 .center-panel-shell--floating-topbar .session-topbar-actions {
