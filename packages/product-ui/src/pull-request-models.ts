@@ -44,8 +44,10 @@ export type PRCardPresentation = {
 	supporting: PRCardStatus[];
 	/** Compact, priority-ordered rows used by pull-request cards. */
 	statusRows?: PRCardStatus[];
-	/** The facts behind `readiness`, shown when the readiness line is opened. */
+	/** The facts that decide the merge: conflicts, checks and review. */
 	readinessRows?: PRCardStatus[];
+	/** The rows already say what `readiness` would, so its verdict can stay out of the way. */
+	readinessExplained?: boolean;
 	readiness?: {
 		label: string;
 		detail: string;

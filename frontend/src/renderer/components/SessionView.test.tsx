@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { activatePRTab, deactivatePRTab, openPRTab, resetPRTabs } from "../lib/pr-tabs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -1045,6 +1046,29 @@ describe("SessionView", () => {
 			}
 			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
 		});
+	});
+
+	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+
+			act(() => deactivatePRTab("sess-1"));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).toHaveClass("invisible");
+
+			act(() => activatePRTab("sess-1", url));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
 	});
 
 	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {

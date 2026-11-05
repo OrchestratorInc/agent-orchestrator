@@ -2,16 +2,20 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
+import { prSummaryBlockReason, type PRBlockReason } from "../lib/pr-display";
+import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
 import type { SessionGitActionKind } from "../stores/session-git-action-store";
 import type { BranchGitStep } from "./SessionBranchSummary";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { prStateIcon } from "./PRPills";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -56,13 +60,51 @@ function useRefreshPR(sessionId: string, hostId?: string) {
 }
 
 /**
- * The PR card's one action button, at its foot, as in other agent apps: it
- * does the next step, the branch's work first (commit and push, update from
- * main), then what the PR is waiting for (Ready for review on a draft; Reopen
- * when closed; merge with the chosen method), and its menu holds everything
- * else: the other branch steps, the merge method and Close. Converting to a
- * draft sits under it as small text. Merge stays visible while the PR isn't
- * ready, greyed out with the reason.
+ * Changes a PR's state on the provider. The UI shows the confirmed state at once;
+ * the refetch reconciles the rest (the workspace refetch alone can take several
+ * seconds) without holding the control.
+ */
+function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: string, onChanged?: () => void) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const refresh = useRefreshPR(sessionId, hostId);
+	const showState = (state: SessionPRSummary["state"], changedAt: string) => {
+		queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: unknown[] }>(
+			sessionScmSummaryQueryKey(sessionId, hostId),
+			(current) => current ? {
+				...current,
+				prs: current.prs.map((cached) => cached.url === pr.url ? { ...cached, state, stateChangedAt: changedAt, updatedAt: changedAt } : cached),
+			} : current,
+		);
+	};
+	const change = useMutation({
+		mutationFn: async (action: PRStateAction) => {
+			if (usePreviewData) return undefined;
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/state", {
+				params: { path: { id: String(pr.number) } },
+				body: { prUrl: pr.url, action },
+			});
+			if (error) throw new Error(apiErrorMessage(error, t(`pr.state.failed.${action}`, { number: pr.number })));
+			return data;
+		},
+		onSuccess: (result) => {
+			onChanged?.();
+			if (result?.state) showState(result.state, result.stateChangedAt);
+			void refresh();
+		},
+	});
+	return { change, refresh, showState };
+}
+
+/**
+ * A PR's one action button, as in other agent apps: it does the next step,
+ * the branch's work first (commit and push, update from main), then what the
+ * PR is waiting for (Ready for review on a draft; Reopen when closed; merge
+ * with the chosen method; or, on a stacked PR, the layers up to it together,
+ * since merging one alone would land it on its parent's branch), and its menu
+ * holds everything else: the other
+ * branch steps, the merge method and Close. Merge stays visible while the PR
+ * isn't ready, greyed out with the reason.
  */
 export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	/** Readiness allows merging, fenced to the head commit the card shows. */
@@ -78,7 +120,11 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	const repoKey = pr.repo || pr.url;
 	const [method, setMethod] = useState<PRMergeMethod>(() => chosenMethod.get(repoKey) ?? "squash");
 	const [confirmClose, setConfirmClose] = useState(false);
-	const refresh = useRefreshPR(sessionId, hostId);
+	const [confirmStack, setConfirmStack] = useState(false);
+	const { change, refresh, showState } = usePRStateChange(pr, sessionId, hostId, () => setConfirmClose(false));
+	const stackQuery = usePRStack(pr, hostId, pr.state === "open" || pr.state === "draft");
+	const stack = stackQuery.data?.stack;
+	const landing = stackLayersToLand(stack, pr.number);
 
 	const merge = useMutation({
 		mutationFn: async () => {
@@ -93,38 +139,46 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		onSuccess: async (result) => {
 			// The card turns merged at once; the next sync confirms it.
 			if (result?.state === "merged") {
-				queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: unknown[] }>(
-					sessionScmSummaryQueryKey(sessionId, hostId),
-					(current) => current ? {
-						...current,
-						prs: current.prs.map((cached) => cached.url === pr.url ? { ...cached, state: result.state, stateChangedAt: result.stateChangedAt, updatedAt: result.stateChangedAt } : cached),
-					} : current,
-				);
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				showState(result.state, result.stateChangedAt);
+				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				return;
 			}
 			await refresh();
 		},
 	});
-	const change = useMutation({
-		mutationFn: async (action: PRStateAction) => {
-			if (usePreviewData) return;
-			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/state", {
+	const mergeStack = useMutation({
+		mutationFn: async () => {
+			if (usePreviewData) return undefined;
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/stack/merge", {
 				params: { path: { id: String(pr.number) } },
-				body: { prUrl: pr.url, action },
+				body: { prUrl: pr.url, method, expectedHeads: (landing ?? []).map(({ headSha, number }) => ({ headSha, number })) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t(`pr.state.failed.${action}`, { number: pr.number })));
+			if (error) throw new Error(apiErrorMessage(error, t("pr.stack.mergeFailed")));
+			return data;
 		},
-		onSuccess: async () => {
-			setConfirmClose(false);
+		onSuccess: async (result) => {
+			setConfirmStack(false);
+			if (result?.status === "merged") showState("merged", result.stateChangedAt);
+			void queryClient.invalidateQueries({ queryKey: prStackQueryKey(pr.url, hostId) });
 			await refresh();
 		},
 	});
 	if (pr.state === "merged" || !pr.url) return null;
-	const busy = merge.isPending || change.isPending;
+	const busy = merge.isPending || mergeStack.isPending || change.isPending;
 	const open = pr.state === "open" || pr.state === "draft";
-	const blocker = canMerge ? undefined : t(mergeBlocker(pr));
+	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
+	const blocker = lowerBlock
+		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) })
+		: canMerge ? undefined : t(blockedSentence[prSummaryBlockReason(pr) ?? "provider"]);
+	// Until the stack is known, a merge can't say what it would land. A failed read
+	// doesn't hold it up: the daemon re-checks before merging.
+	const mergeAllowed = canMerge && !lowerBlock && !stackQuery.isLoading;
+	const severalLayers = landing && landing.length > 1 ? landing : undefined;
+	const mergeNow = severalLayers ? () => setConfirmStack(true) : landing ? () => mergeStack.mutate() : () => merge.mutate();
+	const merging = merge.isPending || mergeStack.isPending;
+	const mergeNotice = mergeStack.data?.status === "enqueued" ? t("pr.stack.queued") : mergeStack.data?.status === "pending" ? t("pr.stack.pending") : null;
 	const methodLabel = t(`pr.merge.method.${method}`);
+	const mergeLabel = severalLayers ? t("pr.stack.mergeThrough", { layers: severalLayers.length, number: pr.number }) : methodLabel;
 	const choose = (next: string) => {
 		const value = next as PRMergeMethod;
 		chosenMethod.set(repoKey, value);
@@ -141,15 +195,12 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		? { label: t("pr.state.action.ready"), aria: t("pr.state.action.ready"), icon: GitPullRequest, run: () => change.mutate("ready"), disabled: busy, tone: "secondary" as const }
 		: pr.state === "closed"
 			? { label: t("pr.state.action.reopen"), aria: t("pr.state.action.reopen"), icon: GitPullRequest, run: () => change.mutate("reopen"), disabled: busy, tone: "secondary" as const }
-			: { label: merge.isPending ? t("pr.merge.merging") : methodLabel, aria: t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: () => merge.mutate(), disabled: busy || !canMerge, tone: canMerge ? "go" as const : "secondary" as const };
+			: { label: merging ? t("pr.merge.merging") : mergeLabel, aria: severalLayers ? mergeLabel : t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
 	const gitMenu = (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
-	// Small text under the button: draft ⇄ ready when the button isn't already doing it.
-	const quiet = [
-		...(pr.state === "open" ? [{ key: "draft", label: t("pr.actions.toDraft"), icon: GitPullRequestDraft, run: () => change.mutate("draft") }] : []),
-		...(pr.state === "draft" && gitPrimary ? [{ key: "ready", label: t("pr.state.action.ready"), icon: GitPullRequest, run: () => change.mutate("ready") }] : []),
-	];
-	const errorText = [merge.error, change.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
+	// Ready for review, when branch work holds the button on a draft.
+	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
+	const errorText = [merge.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
 
 	return (
 		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-action-button">
@@ -168,7 +219,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
 				>
-					{primary.spinning || (!gitPrimary && busy && (merge.isPending || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
+					{primary.spinning || (!gitPrimary && busy && (merging || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
 					<span className="truncate">{primary.label}</span>
 				</Button>
 				<DropdownMenu>
@@ -209,12 +260,18 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 								</DropdownMenuRadioGroup>
 								{/* With branch work on the button, merging is still one pick away. */}
 								{gitPrimary && pr.state === "open" ? (
-									<DropdownMenuItem disabled={!canMerge || busy} onSelect={() => merge.mutate()} title={blocker}>
+									<DropdownMenuItem disabled={!mergeAllowed || busy} onSelect={mergeNow} title={blocker}>
 										<GitMerge aria-hidden="true" />
-										{methodLabel}
+										{mergeLabel}
 									</DropdownMenuItem>
 								) : null}
 								<DropdownMenuSeparator />
+								{stateSteps.map((step) => (
+									<DropdownMenuItem disabled={busy} key={step.key} onSelect={() => change.mutate(step.key)}>
+										<step.icon aria-hidden="true" />
+										{step.label}
+									</DropdownMenuItem>
+								))}
 								<DropdownMenuItem className="text-error focus:text-error" onSelect={() => setConfirmClose(true)}>
 									<GitPullRequestClosed aria-hidden="true" />
 									{t("pr.actions.close")}
@@ -229,21 +286,8 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-			{quiet.length > 0 ? (
-				// The less common steps sit under the button as small text on the right, not in its menu.
-				<div className="mt-1 flex min-w-0 flex-wrap items-center justify-end gap-x-1.5 text-micro text-muted-foreground" data-testid="pr-quiet-actions">
-					{quiet.map((action, index) => (
-						<span className="inline-flex items-center gap-1.5" key={action.key}>
-							{index > 0 ? <span aria-hidden="true" className="text-passive">·</span> : null}
-							<button className="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" disabled={busy} onClick={action.run} type="button">
-								<action.icon aria-hidden="true" className="size-icon-2xs" />
-								{action.label}
-							</button>
-						</span>
-					))}
-				</div>
-			) : null}
 			{errorText ? <p className="m-0 text-xs leading-normal text-error" role="status">{errorText}</p> : null}
+			{mergeNotice ? <p className="m-0 text-xs leading-normal text-muted-foreground" role="status">{mergeNotice}</p> : null}
 			<ConfirmDialog
 				busy={change.isPending}
 				confirmLabel={t("pr.actions.close")}
@@ -255,18 +299,122 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 				open={confirmClose}
 				title={t("pr.state.confirmCloseTitle", { number: pr.number })}
 			/>
+			{severalLayers ? (
+				<ConfirmDialog
+					busy={mergeStack.isPending}
+					confirmLabel={t("pr.stack.confirmAction")}
+					description={t("pr.stack.confirmDescription", {
+						branch: stack?.baseBranch ?? pr.targetBranch,
+						method: methodLabel,
+						numbers: severalLayers.map(({ number }) => `#${number}`).join(", "),
+					})}
+					error={mergeStack.error instanceof Error ? mergeStack.error.message : null}
+					onConfirm={() => mergeStack.mutate()}
+					onOpenChange={(next) => { setConfirmStack(next); if (!next) mergeStack.reset(); }}
+					open={confirmStack}
+					title={t("pr.stack.confirmTitle", { layers: severalLayers.length })}
+				/>
+			) : null}
 		</div>
 	);
 }
 
-/** Why Merge is greyed out, as the key of one plain line. */
-function mergeBlocker(pr: SessionPRSummary) {
-	if (pr.state === "draft") return "pr.actions.blockedDraft" as const;
-	if (pr.mergeability.state === "conflicting") return "pr.actions.blockedConflict" as const;
-	if (pr.ci.state === "failing") return "pr.actions.blockedChecks" as const;
-	if (pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown") return "pr.actions.blockedChecking" as const;
-	if (pr.review.decision === "changes_requested") return "pr.actions.blockedChanges" as const;
-	if (pr.review.decision === "review_required") return "pr.actions.blockedReview" as const;
-	if (pr.review.hasUnresolvedHumanComments) return "pr.actions.blockedThreads" as const;
-	return "pr.actions.blockedProvider" as const;
+/** The tint behind each state's pill; its text takes the state's own colour. */
+const stateTint: Record<SessionPRSummary["state"], string> = {
+	draft: "bg-muted",
+	open: "bg-success/15",
+	merged: "bg-status-merged/15",
+	closed: "bg-error/15",
+};
+
+const stateLabel = {
+	draft: "pr.tab.state.draft",
+	open: "pr.tab.state.open",
+	merged: "pr.tab.state.merged",
+	closed: "pr.tab.state.closed",
+} as const;
+
+/**
+ * The state pill at the top of a PR's tab, and the place to change it: Draft,
+ * Open or Closed. Closing asks first, as it does on the card. A merged PR is
+ * done, so its pill is only a label; a closed one can only be reopened.
+ */
+export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: SessionPRSummary; sessionId: string }) {
+	const { t } = useTranslation();
+	const [confirmClose, setConfirmClose] = useState(false);
+	const { change } = usePRStateChange(pr, sessionId, hostId, () => setConfirmClose(false));
+	const { icon: Icon, className } = prStateIcon[pr.state];
+	const pill = cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-control font-medium", stateTint[pr.state], className);
+	const label = t(stateLabel[pr.state]);
+	if (pr.state === "merged" || !pr.url) {
+		return <span className={pill} data-testid="pr-state"><Icon aria-hidden="true" className="size-icon-sm" />{label}</span>;
+	}
+	const choose = (next: string) => {
+		if (next === pr.state) return;
+		if (next === "closed") setConfirmClose(true);
+		else if (next === "draft") change.mutate("draft");
+		else change.mutate(pr.state === "closed" ? "reopen" : "ready");
+	};
+	const error = change.error instanceof Error && !confirmClose ? change.error.message : null;
+	return (
+		<>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<button
+						aria-label={t("pr.tab.state.menu", { number: pr.number, state: label })}
+						className={cn(pill, "transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60")}
+						data-testid="pr-state"
+						disabled={change.isPending}
+						type="button"
+					>
+						{change.isPending ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <Icon aria-hidden="true" className="size-icon-sm" />}
+						{label}
+						<ChevronDown aria-hidden="true" className="size-icon-xs" />
+					</button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="start" className="min-w-40">
+					<DropdownMenuRadioGroup onValueChange={choose} value={pr.state}>
+						{(pr.state === "closed" ? (["open", "closed"] as const) : (["draft", "open", "closed"] as const)).map((value) => (
+							<DropdownMenuRadioItem key={value} value={value}>{t(stateLabel[value])}</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			{error ? <p className="m-0 basis-full text-xs text-error" role="status">{error}</p> : null}
+			<ConfirmDialog
+				busy={change.isPending}
+				confirmLabel={t("pr.actions.close")}
+				description={t("pr.state.confirmCloseDescription", { number: pr.number })}
+				destructive
+				error={change.error instanceof Error && confirmClose ? change.error.message : null}
+				onConfirm={() => change.mutate("close")}
+				onOpenChange={(next) => { setConfirmClose(next); if (!next) change.reset(); }}
+				open={confirmClose}
+				title={t("pr.state.confirmCloseTitle", { number: pr.number })}
+			/>
+		</>
+	);
 }
+
+/** Why Merge is greyed out, as one plain line. */
+const blockedSentence = {
+	draft: "pr.actions.blockedDraft",
+	conflict: "pr.actions.blockedConflict",
+	checks: "pr.actions.blockedChecks",
+	checking: "pr.actions.blockedChecking",
+	changes: "pr.actions.blockedChanges",
+	review: "pr.actions.blockedReview",
+	threads: "pr.actions.blockedThreads",
+	provider: "pr.actions.blockedProvider",
+} as const;
+
+/** The same reasons as a label, short enough for a row. */
+export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.blocker.conflict" | "pr.blocker.checks" | "pr.blocker.checking" | "pr.blocker.changes" | "pr.blocker.review" | "pr.blocker.threads"> = {
+	draft: "pr.blocker.draft",
+	conflict: "pr.blocker.conflict",
+	checks: "pr.blocker.checks",
+	checking: "pr.blocker.checking",
+	changes: "pr.blocker.changes",
+	review: "pr.blocker.review",
+	threads: "pr.blocker.threads",
+};

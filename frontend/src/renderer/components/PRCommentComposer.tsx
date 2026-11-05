@@ -1,5 +1,5 @@
 import { Loader2, Paperclip } from "lucide-react";
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -44,15 +44,19 @@ export type PRAttachmentUpload = (file: { name: string; contentType: string; dat
  * repository while a placeholder holds their place). ⌘B, ⌘I, ⌘K and ⌘E
  * format the selection; ⌘↵ posts and Escape cancels.
  */
-export function PRCommentComposer({ autoFocus, busy, error, initial = "", onCancel, onSubmit, placeholder, submitLabel, upload }: {
+export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = "", onCancel, onSubmit, placeholder, roomy, submitLabel, upload }: {
 	/** Takes focus as it opens, with the caret after any text it starts with. */
 	autoFocus?: boolean;
+	/** Who is writing, beside the text. */
+	avatar?: ReactNode;
 	busy: boolean;
 	error?: string | null;
 	initial?: string;
 	onCancel?: () => void;
 	onSubmit: (body: string) => Promise<unknown>;
 	placeholder: string;
+	/** Reading size, for the PR's tab; the sidebar stays compact. */
+	roomy?: boolean;
 	submitLabel: string;
 	/** Uploads a file and returns its markdown; without it there is no Attach. */
 	upload?: PRAttachmentUpload;
@@ -173,7 +177,7 @@ export function PRCommentComposer({ autoFocus, busy, error, initial = "", onCanc
 	const clear = () => { setValue(""); setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
 	return (
 		<div
-			className="flex min-w-0 flex-col gap-1.5 text-xs"
+			className={cn("flex min-w-0 flex-col gap-1.5", roomy ? "text-sm" : "text-xs")}
 			data-testid="pr-comment-composer"
 			onDragLeave={() => setDragging(false)}
 			onDragOver={(event) => { if (upload && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
@@ -181,36 +185,39 @@ export function PRCommentComposer({ autoFocus, busy, error, initial = "", onCanc
 		>
 			<div
 				className={cn(
-					"flex min-w-0 flex-col rounded-xl border border-border bg-background shadow-xs transition-[border-color,box-shadow]",
+					"flex min-w-0 items-start gap-2.5 rounded-xl border border-border bg-background transition-[border-color,box-shadow]",
+					roomy ? "px-4 py-3" : "px-3 py-2.5",
 					"focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25",
 					dragging && "border-ring ring-3 ring-ring/25",
 				)}
 			>
-				<textarea
-					aria-label={placeholder}
-					// Grows with what is written, up to a cap, then scrolls.
-					className="max-h-64 min-h-20 min-w-0 resize-none border-0 bg-transparent px-3 py-2.5 text-xs leading-relaxed text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
-					disabled={busy}
-					onChange={(event) => setValue(event.target.value)}
-					onKeyDown={onKeyDown}
-					onPaste={onPaste}
-					placeholder={placeholder}
-					ref={textareaRef}
-					value={value}
-				/>
-				<div className="flex min-w-0 items-center gap-1.5 border-t border-border/60 px-2 py-1.5">
-					{upload ? (
-						<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
-							{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
-							{t("pr.comments.attach.short")}
-						</button>
-					) : null}
-					<span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{upload ? t("pr.comments.simpleHint") : null}</span>
-					<Button className="h-7 px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button>
-					<Button className="h-7 gap-1 rounded-lg px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
-						{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-						{submitLabel}
-					</Button>
+				{avatar}
+				<div className="flex min-w-0 flex-1 flex-col gap-2">
+					<textarea
+						aria-label={placeholder}
+						// Grows with what is written, up to a cap, then scrolls.
+						className="max-h-64 min-h-6 min-w-0 resize-none border-0 bg-transparent p-0 leading-6 text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
+						disabled={busy}
+						onChange={(event) => setValue(event.target.value)}
+						onKeyDown={onKeyDown}
+						onPaste={onPaste}
+						placeholder={placeholder}
+						ref={textareaRef}
+						value={value}
+					/>
+					<div className="flex min-w-0 items-center gap-1.5 text-xs">
+						<Button className="h-7 gap-1 rounded-full px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
+							{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+							{submitLabel}
+						</Button>
+						{upload ? (
+							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} title={t("pr.comments.simpleHint")} type="button">
+								{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
+								{t("pr.comments.attach.short")}
+							</button>
+						) : null}
+						{onCancel || value ? <Button className="h-7 rounded-full px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button> : null}
+					</div>
 				</div>
 			</div>
 			{fileInput}

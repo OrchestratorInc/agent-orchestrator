@@ -24,7 +24,7 @@ const checkOrder: Record<Check["status"], number> = {
 	skipped: 6,
 };
 
-const checkTone: Record<Check["status"], { className: string; key: "failed" | "running" | "passed" | "skipped"; breathe?: boolean }> = {
+export const checkTone: Record<Check["status"], { className: string; key: "failed" | "running" | "passed" | "skipped"; breathe?: boolean }> = {
 	failed: { className: "text-error", key: "failed" },
 	cancelled: { className: "text-passive", key: "skipped" },
 	in_progress: { className: "text-muted-foreground", key: "running", breathe: true },
@@ -34,7 +34,12 @@ const checkTone: Record<Check["status"], { className: string; key: "failed" | "r
 	skipped: { className: "text-passive", key: "skipped" },
 };
 
-function sortedChecks(checks: Check[]): Check[] {
+/** The checks worth listing under the Checks row. */
+export function prChecksNeedingLook(pr: SessionPRSummary): Check[] {
+	return (pr.ci.checks ?? []).filter((check) => needsAttention.has(check.status));
+}
+
+export function sortedChecks(checks: Check[]): Check[] {
 	return [...checks].sort((a, b) => checkOrder[a.status] - checkOrder[b.status] || a.name.localeCompare(b.name));
 }
 
@@ -79,7 +84,7 @@ export function PRLabelsAndReviewers({ pr }: { pr: SessionPRSummary }) {
  */
 export function PRChecksList({ pr }: { pr: SessionPRSummary }) {
 	const { t } = useTranslation();
-	const checks = sortedChecks((pr.ci.checks ?? []).filter((check) => needsAttention.has(check.status)));
+	const checks = sortedChecks(prChecksNeedingLook(pr));
 	if (checks.length === 0) return null;
 	const hidden = checks.length - PR_CHECKS_SHOWN;
 	const checksUrl = prChecksUrl(pr);

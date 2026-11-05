@@ -39,8 +39,8 @@ import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
-import { PRDescriptionPane } from "./PRDescriptionPane";
-import { closePRDescription, usePRDescriptionPane } from "../lib/pr-description-pane";
+import { PRTabChip, PRTabPane } from "./PRTabPane";
+import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs } from "../lib/pr-tabs";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
@@ -553,11 +553,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [artifactRequestsBySession, setArtifactRequestsBySession] = useState<Record<string, ArtifactOpenRequest>>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
-	// A PR's full description, opened from its card, sits over the chat and file tabs.
-	const prDescription = usePRDescriptionPane(uiSessionId);
-	// A PR that left the session (closed out, moved to another session) takes its description with it.
-	const prDescriptionGone = Boolean(prDescription && session && !session.prs.some((facts) => facts.url === prDescription.url));
-	useEffect(() => { if (prDescriptionGone) closePRDescription(uiSessionId); }, [prDescriptionGone, uiSessionId]);
+	// PRs opened from the inspector's card, as tabs beside the chat and file tabs.
+	const prTabs = usePRTabs(uiSessionId);
+	const activePRUrl = prTabs.active ?? undefined;
+	// A PR that left the session (moved to another session) takes its tab with it.
+	const sessionPRUrls = session?.prs.map((facts) => facts.url).join("\n");
+	useEffect(() => {
+		if (sessionPRUrls === undefined) return;
+		const urls = new Set(sessionPRUrls.split("\n"));
+		for (const url of prTabs.open) if (!urls.has(url)) closePRTab(uiSessionId, url);
+	}, [prTabs.open, sessionPRUrls, uiSessionId]);
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const [centerFileRequestsBySession, setCenterFileRequestsBySession] = useState<
@@ -824,6 +829,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const available = [
 			...(reviewerTerminal ? [`reviewer:${reviewerTerminal.handleId}`] : []),
 			...(!reviewerTerminal && reviewerChat ? [`reviewer-chat:${reviewerChat.reviewId}`] : []),
+			...prTabs.open.map(prTabKey),
 			...openFileKeys,
 			...openShellKeys,
 		];
@@ -836,7 +842,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (!resolved.includes(key)) resolved.push(key);
 		}
 		return resolved;
-	}, [auxiliaryTabOrder, fileTabs.openPaths, reviewerChat, reviewerTerminal, shellTerminals]);
+	}, [auxiliaryTabOrder, fileTabs.openPaths, prTabs.open, reviewerChat, reviewerTerminal, shellTerminals]);
 	useEffect(() => {
 		setAuxiliaryTabOrderBySession((current) => {
 			const storedOrder = current[uiSessionId] ?? [];
@@ -890,6 +896,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const activateAuxiliaryTab = useCallback(
 		(key?: string) => {
+			const prUrl = prTabUrl(key);
+			if (prUrl) {
+				setReviewerChatId(null);
+				setFileTabsBySession((current) => ({
+					...current,
+					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
+				}));
+				activatePRTab(uiSessionId, prUrl);
+				return;
+			}
+			deactivatePRTab(uiSessionId);
 			if (key?.startsWith("file:")) {
 				const path = key.slice("file:".length);
 				setActiveShellTerminal(null);
@@ -962,7 +979,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(handleId: string) => {
 			const shell = shellTerminals.find((s) => s.handleId === handleId);
 			if (!shell) return;
-			closePRDescription(uiSessionId);
+			deactivatePRTab(uiSessionId);
 			setReviewerChatId(null);
 			setActiveShellTerminal(shell.handleId);
 			setFileTabsBySession((current) => ({
@@ -1010,7 +1027,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// above does not immediately pull the view back to that shell.
 	const selectSessionTerminal = useCallback(() => {
 		// Bringing any tab forward puts an open PR description away.
-		closePRDescription(uiSessionId);
+		deactivatePRTab(uiSessionId);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
 		setReviewerChatId(null);
@@ -1022,7 +1039,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// "Ask in chat" from a file tab brings the session's Chat surface forward.
 	useEffect(() => subscribeChatReveal(uiSessionId, selectSessionTerminal), [selectSessionTerminal, uiSessionId]);
 	const selectReviewerTerminal = useCallback((target: ReviewerTerminalTarget) => {
-		closePRDescription(uiSessionId);
+		deactivatePRTab(uiSessionId);
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "reviewer", handleId: target.handleId, harness: target.harness, sessionId });
@@ -1032,7 +1049,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}));
 	}, [sessionId, setActiveShellTerminal, uiSessionId]);
 	const selectReviewerChat = useCallback((reviewId: string) => {
-		closePRDescription(uiSessionId);
+		deactivatePRTab(uiSessionId);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
 		setReviewerChatId(reviewId);
@@ -1055,7 +1072,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const filePath = path;
 			// Live paths retain their existing identities; snapshots coexist with them.
 			path = sessionFileTabKey(path, options?.source);
-			closePRDescription(uiSessionId);
+			deactivatePRTab(uiSessionId);
 			setReviewerChatId(null);
 			setActiveShellTerminal(null);
 			setTerminalTarget({ kind: "worker" });
@@ -1110,7 +1127,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		});
 	}, [uiSessionId]);
 	const activateCenterFile = useCallback((path: string) => {
-		closePRDescription(uiSessionId);
+		deactivatePRTab(uiSessionId);
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
@@ -1357,7 +1374,42 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[activateCenterFile, closeCenterFile, dirtyFiles, fileTabs.activePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
 	);
 
-	const activeWorkspaceTabKey = fileTabs.activePath ? `file:${fileTabs.activePath}` : undefined;
+	const closeCenterPR = useCallback((url: string) => {
+		if (activePRUrl === url) activateAuxiliaryTab(adjacentAuxiliaryTab(prTabKey(url)));
+		closePRTab(uiSessionId, url);
+		removeAuxiliaryTab(prTabKey(url));
+	}, [activateAuxiliaryTab, activePRUrl, adjacentAuxiliaryTab, removeAuxiliaryTab, uiSessionId]);
+	const workspaceTabs = useMemo(
+		() => [
+			...prTabs.open.map((url) => ({
+				key: prTabKey(url),
+				content: (
+					<PRTabChip
+						active={activePRUrl === url}
+						hostId={hostId}
+						onActivate={() => activateAuxiliaryTab(prTabKey(url))}
+						onClose={() => closeCenterPR(url)}
+						session={session}
+						url={url}
+					/>
+				),
+				onSelect: () => activateAuxiliaryTab(prTabKey(url)),
+				onClose: () => closeCenterPR(url),
+			})),
+			...centerFileTabs,
+		],
+		[activateAuxiliaryTab, activePRUrl, centerFileTabs, closeCenterPR, hostId, prTabs.open, session],
+	);
+	// Opening a PR's tab from the card puts the file tab in front away.
+	useEffect(() => {
+		if (!activePRUrl) return;
+		setReviewerChatId(null);
+		setFileTabsBySession((current) => {
+			const tabs = current[uiSessionId];
+			return tabs?.activePath ? { ...current, [uiSessionId]: activateSessionFile(tabs, null) } : current;
+		});
+	}, [activePRUrl, uiSessionId]);
+	const activeWorkspaceTabKey = activePRUrl ? prTabKey(activePRUrl) : fileTabs.activePath ? `file:${fileTabs.activePath}` : undefined;
 	const previewUrl = session?.previewUrl?.trim() || undefined;
 	const previewRevision = session?.previewRevision;
 	const browserSlotVisible = Boolean(
@@ -1450,7 +1502,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			(shellTerminalsQuery.data !== undefined &&
 				!shellTerminals.some((shell) => shell.handleId === activeShellTerminalHandleId))) &&
 		!reviewerChatId &&
-		!fileTabs.activePath;
+		!fileTabs.activePath &&
+		!activePRUrl;
 	useEffect(() => {
 		if (!chatViewActive) return;
 		const viewId = crypto.randomUUID();
@@ -1974,8 +2027,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
 							<div
-								className={cn("h-full min-h-0", (fileTabs.activePath || prDescription) && "invisible pointer-events-none")}
-								inert={fileTabs.activePath || prDescription ? true : undefined}
+								className={cn("h-full min-h-0", (fileTabs.activePath || activePRUrl) && "invisible pointer-events-none")}
+								inert={fileTabs.activePath || activePRUrl ? true : undefined}
 							>
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
 							    asks this machine's daemon, which has never heard of a Cloud
@@ -2035,7 +2088,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
-									workspaceTabs={centerFileTabs}
+									workspaceTabs={workspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
@@ -2100,7 +2153,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									sessionTabAction={sessionTabActions}
 									sessionTabActionWide={sessionTabActionWide}
 									tabStripAction={newShellTerminalAction}
-									workspaceTabs={centerFileTabs}
+									workspaceTabs={workspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
@@ -2161,11 +2214,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{prDescription ? (
-								<div className="absolute inset-0 z-10">
-									<PRDescriptionPane key={prDescription.url} onClose={() => closePRDescription(uiSessionId)} pr={prDescription} />
+							{/* Like a file tab, a PR's tab stays mounted behind the others: coming back finds the same section, scroll and half-written comment. */}
+							{session && !session.cloud ? prTabs.open.map((url) => (
+								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
+									<PRTabPane
+										hostId={hostId}
+										onViewInDiff={handleOpenReviewFile}
+										request={prTabs.request?.url === url ? prTabs.request : undefined}
+										session={session}
+										url={url}
+									/>
 								</div>
-							) : null}
+							)) : null}
 							{interfaceUi.notice}
 						</div>
 					</div>

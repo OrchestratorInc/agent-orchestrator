@@ -29,6 +29,8 @@ type ConfirmDialogProps = {
 	destructive?: boolean;
 	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
+	/** Starts here rather than on a button, for a dialog with a field to fill. */
+	initialFocusRef?: React.RefObject<HTMLElement | null>;
 	busy?: boolean;
 	confirmDisabled?: boolean;
 	error?: string | null;
@@ -49,6 +51,7 @@ export function ConfirmDialog({
 	cancelLabel,
 	destructive,
 	children,
+	initialFocusRef,
 	busy,
 	confirmDisabled,
 	error,
@@ -80,7 +83,7 @@ export function ConfirmDialog({
 				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
 					// Destructive confirms start on the safe choice, not the close X.
-					const target = destructive ? cancelRef.current : confirmRef.current;
+					const target = initialFocusRef?.current ?? (destructive ? cancelRef.current : confirmRef.current);
 					if (!target) return;
 					event.preventDefault();
 					target.focus();

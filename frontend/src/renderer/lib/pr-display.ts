@@ -1,5 +1,5 @@
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { sortedPRs, type PRState, type PullRequestFacts, type WorkspaceSession } from "../types/workspace";
+import { sortedPRs, type PRState, type PullRequestFacts, type SessionBranchState, type WorkspaceSession } from "../types/workspace";
 import { appI18n, type PluralMessageKey } from "../i18n";
 import type {
 	PRCardPresentation,
@@ -57,6 +57,22 @@ export function comparePRDisplaySummaries(a: SessionPRSummary, b: SessionPRSumma
 
 export function prBrowserUrl(pr: SessionPRSummary): string {
 	return prBaseUrl(pr) ?? pr.htmlUrl ?? pr.url;
+}
+
+/**
+ * Whether a session's worktree holds this PR's branch, so its own diff shows
+ * what a review comment is on. Not yet observed counts as holding it. The
+ * session's branch name can't answer this: it keeps the name the session
+ * started with after the agent moves to another branch.
+ */
+export function prCheckedOut(pr: SessionPRSummary, branch: SessionBranchState | undefined): boolean {
+	if (!branch) return true;
+	return branch.head === pr.headSha || Boolean(pr.sourceBranch && branch.remoteBranch?.endsWith(`/${pr.sourceBranch}`));
+}
+
+/** A review comment on the provider's diff, where GitHub's own link lands on the conversation. */
+export function prThreadDiffUrl(url: string): string {
+	return url.replace(/#discussion_r(\d+)$/, "/files#r$1");
 }
 
 export function prChecksUrl(pr: SessionPRSummary): string | undefined {
@@ -279,7 +295,11 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			} };
 		}
 		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
-		return { primary, supporting, statusRows, readinessRows, readiness: {
+		// A failing check or a conflict says it can't merge, and a green Merge button says it can.
+		const readinessExplained = checkingReadiness
+			? readinessRows.some((row) => row.tone !== "passive")
+			: mergeable || readinessRows.some((row) => row.tone === "error" || row.tone === "warning" || row.tone === "review");
+		return { primary, supporting, statusRows, readinessRows, readinessExplained, readiness: {
 			label: appI18n.t(checkingReadiness ? "pr.merge.checkingReadiness" : mergeable ? "pr.merge.mergeable" : "pr.merge.notMergeableYet"),
 			detail: checkingReadiness ? appI18n.t("pr.merge.checkingDetail") : mergeReadinessDetail(pr),
 			tone: checkingReadiness ? "neutral" : mergeable ? "success" : "error",
@@ -393,6 +413,51 @@ function cardStatus(
 ): PRCardStatus {
 	return { key, label: appI18n.t(labelKey), detail, href, breathe, links, tone };
 }
+
+export type PRReviewer = { login: string; bot?: boolean; status: "pending" | "approved" | "changes_requested" | "commented" };
+
+/**
+ * Who a PR's review rests with, as a PR page's sidebar lists them: the people
+ * asked (waiting on them, even if they reviewed before being asked again), then
+ * those who reviewed, each by their latest verdict. A plain comment doesn't
+ * replace a verdict, and the author's own comments aren't a review.
+ */
+export function prReviewers(pr: SessionPRSummary): PRReviewer[] {
+	const reviewers = new Map<string, PRReviewer>();
+	const author = pr.author.replace(/^@/, "").toLowerCase();
+	const reviews = [...(pr.review.reviews ?? [])].sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
+	for (const review of reviews) {
+		if (review.reviewerId.toLowerCase() === author) continue;
+		const verdict = review.verdict === "approved" || review.verdict === "changes_requested" ? review.verdict : undefined;
+		const status = verdict ?? reviewers.get(review.reviewerId)?.status ?? "commented";
+		reviewers.set(review.reviewerId, { login: review.reviewerId, bot: review.isBot, status });
+	}
+	for (const { login } of pr.requestedReviewers ?? []) reviewers.set(login, { login, status: "pending" });
+	return [...reviewers.values()].sort((a, b) => Number(a.status === "pending") - Number(b.status === "pending"));
+}
+
+/** Why a PR can't merge, most fundamental first. */
+export type PRBlockReason = "draft" | "conflict" | "checks" | "checking" | "changes" | "review" | "threads";
+
+/** The first thing stopping these facts merging; undefined when none is known. */
+export function prBlockReason(facts: { state: string; ci: string; mergeability: string; review: string; threads?: boolean }): PRBlockReason | undefined {
+	if (facts.state === "draft") return "draft";
+	if (facts.mergeability === "conflicting") return "conflict";
+	if (facts.ci === "failing") return "checks";
+	if (facts.ci === "pending" || facts.ci === "unknown" || facts.mergeability === "unknown") return "checking";
+	if (facts.review === "changes_requested") return "changes";
+	if (facts.review === "review_required") return "review";
+	if (facts.threads) return "threads";
+	return undefined;
+}
+
+export const prSummaryBlockReason = (pr: SessionPRSummary) => prBlockReason({
+	state: pr.state,
+	ci: pr.ci.state,
+	mergeability: pr.mergeability.state,
+	review: pr.review.decision,
+	threads: pr.review.hasUnresolvedHumanComments,
+});
 
 export function prCanMerge(pr: SessionPRSummary): boolean {
 	return (

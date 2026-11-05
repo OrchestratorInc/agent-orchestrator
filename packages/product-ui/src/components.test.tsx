@@ -172,58 +172,107 @@ describe("portable leaf components", () => {
 		expect(detail.closest(".grid")).toHaveClass("grid-cols-1");
 	});
 
-	it("folds the readiness rows behind a collapsible readiness line", async () => {
+	it("leads with what's in the way and opens everything else in one click", async () => {
 		const presentation: PRCardPresentation = {
-			primary: { key: "lifecycle", label: "Checking merge readiness", tone: "neutral", links: [] },
+			primary: { key: "lifecycle", label: "Not mergeable yet", tone: "error", links: [] },
 			supporting: [],
-			statusRows: [{ key: "lifecycle", label: "Checking merge readiness", tone: "neutral", links: [] }],
+			statusRows: [{ key: "lifecycle", label: "Not mergeable yet", tone: "error", links: [] }],
 			readinessRows: [
 				{ key: "merge", label: "No conflicts", tone: "success", links: [] },
-				{ key: "ci", label: "Checks unknown", href: "https://example.com/checks", tone: "passive", links: [] },
+				{ key: "ci", label: "Checks failing", href: "https://example.com/checks", tone: "error", links: [] },
+				{ key: "review", label: "No reviews yet", tone: "passive", links: [] },
 			],
-			readiness: { label: "Checking merge readiness", detail: "Waiting for the latest checks and review state.", tone: "neutral" },
+			readinessExplained: true,
+			readiness: { label: "Not mergeable yet", detail: "Failing checks block this PR.", tone: "error" },
 		};
 		render(
 			<PRCardStatusSummary
 				action={<button type="button">Merge</button>}
-				collapsibleReadiness
+				compactReadiness
 				externalLink={ExternalLink}
 				presentation={presentation}
+				readinessDetails={{ ci: <p>format</p> }}
 			/>,
 		);
 
-		const toggle = screen.getByRole("button", { name: "Checking merge readiness" });
+		const toggle = screen.getByRole("button", { name: "Checks failing" });
 		expect(toggle).toHaveAttribute("aria-expanded", "false");
-		expect(toggle).toHaveAttribute("title", "Waiting for the latest checks and review state.");
+		expect(screen.getByRole("link", { name: "Checks failing" })).toHaveAttribute("href", "https://example.com/checks");
 		expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
+		expect(screen.queryByText("format")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+		expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
+		expect(screen.queryByText("Not mergeable yet")).not.toBeInTheDocument();
 
 		fireEvent.click(toggle);
 
 		expect(toggle).toHaveAttribute("aria-expanded", "true");
-		expect(await screen.findByText("No conflicts")).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: /Checks unknown/ })).toHaveAttribute("href", "https://example.com/checks");
-		expect(screen.getByText("Waiting for the latest checks and review state.")).toBeInTheDocument();
-		// The card's own status rows stay out of the dropdown.
-		expect(screen.getAllByText("Checking merge readiness")).toHaveLength(1);
+		expect(await screen.findByText("format")).toBeInTheDocument();
+		expect(screen.getByText("No conflicts")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "No conflicts" })).not.toBeInTheDocument();
 	});
 
-	it("shows a plain readiness line with its detail when nothing sits behind it", () => {
+	it("still lists the failed checks when a conflict leads", async () => {
 		render(
 			<PRCardStatusSummary
-				collapsibleReadiness
+				compactReadiness
 				externalLink={ExternalLink}
 				presentation={{
-					primary: { key: "lifecycle", label: "Ready to merge", tone: "success", links: [] },
+					primary: { key: "merge", label: "Merge conflict", tone: "error", links: [] },
 					supporting: [],
-					readinessRows: [],
-					readiness: { label: "Ready to merge", detail: "Checks pass and the review is approved.", tone: "success" },
+					readinessRows: [
+						{ key: "merge", label: "Merge conflict", tone: "error", links: [] },
+						{ key: "ci", label: "Checks failing", tone: "error", links: [] },
+					],
+					readinessExplained: true,
+					readiness: { label: "Not mergeable yet", detail: "Resolve the conflict.", tone: "error" },
+				}}
+				readinessDetails={{ ci: <p>format</p> }}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "Merge conflict" }));
+		expect(await screen.findByText("Checks failing")).toBeInTheDocument();
+		expect(screen.getByText("format")).toBeInTheDocument();
+	});
+
+	it("leads with the checks when nothing is in the way, and has no dropdown with nothing to open", () => {
+		const presentation: PRCardPresentation = {
+			primary: { key: "merge", label: "Ready to merge", tone: "success", links: [] },
+			supporting: [],
+			readinessRows: [
+				{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+				{ key: "ci", label: "Checks passing", href: "https://example.com/checks", tone: "success", links: [] },
+			],
+			readinessExplained: true,
+			readiness: { label: "Mergeable", detail: "Ready.", tone: "success" },
+		};
+		const { rerender } = render(<PRCardStatusSummary compactReadiness externalLink={ExternalLink} presentation={presentation} />);
+		expect(screen.getByRole("button", { name: "Checks passing" })).toBeInTheDocument();
+
+		rerender(<PRCardStatusSummary compactReadiness externalLink={ExternalLink} presentation={{ ...presentation, readinessRows: presentation.readinessRows?.slice(1) }} />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /Checks passing/ })).toHaveAttribute("href", "https://example.com/checks");
+	});
+
+	it("leads with the verdict when no fact explains it, with why in the dropdown", async () => {
+		render(
+			<PRCardStatusSummary
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "merge", label: "Merge blocked", tone: "warning", links: [] },
+					supporting: [],
+					readinessRows: [{ key: "merge", label: "No conflicts", tone: "success", links: [] }],
+					readinessExplained: false,
+					readiness: { label: "Not mergeable yet", detail: "GitHub reports this can't be merged.", tone: "error" },
 				}}
 			/>,
 		);
 
-		expect(screen.queryByRole("button")).not.toBeInTheDocument();
-		expect(screen.getByText("Checks pass and the review is approved.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Not mergeable yet" }));
+		expect(await screen.findByText("GitHub reports this can't be merged.")).toBeInTheDocument();
+		expect(screen.getByText("No conflicts")).toBeInTheDocument();
 	});
 
 	it("computes overflow against the requested link limit", () => {

@@ -35,13 +35,46 @@ export function InfoRow({ action, icon: Icon, iconClassName, label, title }: {
 	);
 }
 
+/**
+ * An inspector row that opens something in the app, such as a PR's tab.
+ * `action` sits beside it.
+ */
+export function InfoRowButton({ action, icon: Icon, iconClassName, label, onClick, title, trailing }: {
+	action?: ReactNode;
+	icon: LucideIcon;
+	iconClassName?: string;
+	label: ReactNode;
+	onClick: () => void;
+	title?: string;
+	/** Says what the row does, inside the same click target. */
+	trailing?: ReactNode;
+}) {
+	const button = (
+		<button className={cn(rowBaseClass, interactiveRowClass, "group relative w-full flex-1")} onClick={onClick} title={title} type="button">
+			<NavRowHighlight />
+			<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2">
+				<Icon aria-hidden="true" className={cn("size-icon-sm shrink-0", iconClassName ?? "text-muted-foreground")} />
+				<span className="min-w-0 flex-1 truncate">{label}</span>
+				{trailing}
+			</span>
+		</button>
+	);
+	if (!action) return <div className="-mx-1.5 flex min-w-0">{button}</div>;
+	return (
+		<div className="-mx-1.5 flex min-w-0 items-center gap-0.5">
+			{button}
+			{action}
+		</div>
+	);
+}
+
 /** A compact external link with the row hover, for a row's `action` slot. */
-export function InfoRowLink({ ariaLabel, href }: { ariaLabel: string; href: string }) {
+export function InfoRowLink({ ariaLabel, href, icon }: { ariaLabel: string; href: string; icon?: ReactNode }) {
 	return (
 		<ProductExternalLink ariaLabel={ariaLabel} className={cn("flex min-h-8 shrink-0 items-center rounded-md px-1.5", interactiveRowClass)} href={href}>
 			<NavRowHighlight />
 			<span className="relative z-[1] flex items-center">
-				<ArrowUpRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />
+				{icon ?? <ArrowUpRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />}
 			</span>
 		</ProductExternalLink>
 	);

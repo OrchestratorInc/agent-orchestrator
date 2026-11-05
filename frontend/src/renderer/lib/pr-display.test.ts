@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
+import type { PullRequestFacts, SessionBranchState, WorkspaceSession } from "../types/workspace";
 import {
 	noPRDetails,
 	prBrowserUrl,
 	prCardPresentation,
+	prCheckedOut,
 	prDiffSummary,
+	prThreadDiffUrl,
 	prStatusRows,
 	prSummaryParts,
 	sessionBranchPR,
@@ -337,6 +339,17 @@ describe("prCardPresentation", () => {
 		});
 	});
 
+	it("keeps the verdict only when no readiness row explains it", () => {
+		const explained = (overrides: Parameters<typeof summary>[0]) => prCardPresentation(summary(overrides)).readinessExplained;
+
+		expect(explained({})).toBe(true);
+		expect(explained({ ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [] } })).toBe(true);
+		expect(explained({ ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] } })).toBe(true);
+		expect(explained({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } })).toBe(true);
+		// GitHub blocks it for a reason no row names, such as a branch rule.
+		expect(explained({ mergeability: { state: "blocked", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } })).toBe(false);
+	});
+
 	it("shows checking merge readiness while provider state is pending", () => {
 		const presentation = prCardPresentation(
 			summary({
@@ -503,6 +516,33 @@ describe("merge readiness rows", () => {
 	it("shows a merge conflict in the conflicts row", () => {
 		const pr = summary({ mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } });
 		expect(prCardPresentation(pr).readinessRows?.[0]).toMatchObject({ label: "Merge conflict", tone: "error" });
+	});
+});
+
+describe("prCheckedOut", () => {
+	const pr = { headSha: "abc", sourceBranch: "lab/show" } as SessionPRSummary;
+	const branch = (over: Partial<SessionBranchState>) => ({ behind: 0, commits: 1, conflicts: false, unpushed: 0, ...over });
+
+	it("is true on the PR's commit or tracking its branch, even with newer local work", () => {
+		expect(prCheckedOut(pr, branch({ head: "abc" }))).toBe(true);
+		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/lab/show" }))).toBe(true);
+	});
+
+	it("is false on another branch, and true until the branch is observed", () => {
+		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/ao/task/root" }))).toBe(false);
+		expect(prCheckedOut(pr, branch({ head: "def" }))).toBe(false);
+		expect(prCheckedOut(pr, undefined)).toBe(true);
+	});
+});
+
+describe("prThreadDiffUrl", () => {
+	it("points a GitHub review comment at the PR's files", () => {
+		expect(prThreadDiffUrl("https://github.com/acme/app/pull/24#discussion_r42")).toBe("https://github.com/acme/app/pull/24/files#r42");
+	});
+
+	it("leaves any other link alone", () => {
+		const url = "https://gitlab.com/acme/app/-/merge_requests/9#note_1";
+		expect(prThreadDiffUrl(url)).toBe(url);
 	});
 });
 

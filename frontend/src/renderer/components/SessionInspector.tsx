@@ -1,4 +1,4 @@
-import { BrowserIcon } from "./icons";
+import { BrowserIcon, GitHubIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,16 +27,10 @@ import {
 } from "@aoagents/product-ui";
 import {
 	Archive,
-	ArrowDownUp,
 	ArrowUpRight,
+	PanelLeftOpen,
 	ChevronRight,
-	CircleAlert,
-	CircleCheck,
-	FolderPlus,
-	GitCommitHorizontal,
 	GitPullRequest,
-	GitPullRequestClosed,
-	GitPullRequestDraft,
 	GitMerge,
 	Info,
 	Play,
@@ -45,7 +39,7 @@ import {
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { InfoRow, InfoRowLink } from "./InspectorInfoRow";
+import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
@@ -61,18 +55,19 @@ import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { PullRequestDescription } from "./PullRequestDescription";
+import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
-import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
+import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { PRActionButton } from "./PRActions";
 import { prCommentCount, PRComments } from "./PRComments";
+import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
-import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
+import { PRChecksList, PRLabelsAndReviewers, prChecksNeedingLook } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -455,6 +450,9 @@ const SummaryView = memo(function SummaryView({
 		prFocus.set(focusStore, prFocusKey(pr));
 		setFocusChoice(prFocusKey(pr));
 	};
+	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
+	// Another PR of the session that conflicts: its card hands that to the agent.
+	const otherPRConflict = useOtherPRConflictStep(session, hostId, focusedIsBranchPR ? undefined : focusedPR);
 	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
 	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
@@ -485,6 +483,7 @@ const SummaryView = memo(function SummaryView({
 			branch={
 				<SessionBranchSummary
 					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
+					openPRConflicting={branchPR?.mergeability.state === "conflicting"}
 					hostId={hostId}
 					onOpenFile={onOpenReviewFile}
 					onOpenFiles={onOpenFiles}
@@ -494,15 +493,18 @@ const SummaryView = memo(function SummaryView({
 						<>
 							{focusedPR ? (
 								// One card, one PR; with several, pills over it pick which.
-								<div className="flex min-w-0 flex-col gap-2">
-								<PRPills
-									branchPR={branchPR}
-									focused={focusedPR}
-									onFocus={focusPR}
-									prs={prSummaries}
-									showRepository={prsSpanRepositories(prSummaries)}
-								/>
 								<div className="flex min-w-0 flex-col rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-1" data-testid="pr-card">
+									{prSummaries.length > 1 ? (
+										<div className="pt-2 pb-1">
+											<PRPills
+												branchPR={branchPR}
+												focused={focusedPR}
+												onFocus={focusPR}
+												prs={prSummaries}
+												showRepository={prsSpanRepositories(prSummaries)}
+											/>
+										</div>
+									) : null}
 									<PRSummaryCard
 										canOpenReviews={canOpenReviews}
 										cloudOrgId={session.cloud?.orgId}
@@ -518,9 +520,8 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										work={branchPR && prFocusKey(focusedPR) === prFocusKey(branchPR) ? work : undefined}
+										work={focusedIsBranchPR ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
 									/>
-								</div>
 								</div>
 							) : null}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
@@ -530,7 +531,15 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			}
-			comments={focusedPR && !session.cloud ? <PRComments hostId={hostId} onViewInDiff={onOpenReviewFile} pr={focusedPR} session={session} /> : undefined}
+			comments={focusedPR && !session.cloud ? (
+				<PRComments
+					hostId={hostId}
+					onViewInDiff={onOpenReviewFile}
+					pr={focusedPR}
+					preview={{ count: SUMMARY_COMMENTS_SHOWN, onViewAll: () => openPRTab(sessionUiKey(session.id, hostId), focusedPR.url, "comments") }}
+					session={session}
+				/>
+			) : undefined}
 			commentsTitle={focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
@@ -958,6 +967,9 @@ function updateSessionMergePolicy(
 	}));
 }
 
+/** Comments the summary shows; the PR's tab holds every one. */
+const SUMMARY_COMMENTS_SHOWN = 2;
+
 /** The PR each session's card shows, once the person picked one; outlives the card's unmount. */
 const prFocus = new Map<string, string>();
 
@@ -1049,11 +1061,12 @@ export function PRSummaryCard({
 			</button>
 		) : undefined,
 	};
+	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
 	const cardView = (
 		<InspectorPullRequestCardView
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
-			description={<PullRequestDescription cloud={Boolean(cloudOrgId)} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
+			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
@@ -1102,28 +1115,59 @@ export function PRSummaryCard({
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 			details={<PRLabelsAndReviewers pr={pr} />}
-			readinessDetails={{ ci: <PRChecksList pr={pr} /> }}
+			readinessDetails={prChecksNeedingLook(pr).length > 0 ? { ci: <PRChecksList pr={pr} /> } : undefined}
 		/>
 	);
 	if (layout === "card") return cardView;
 	const state = prStateIcon[pr.state];
+	// A local PR opens in its own tab, where its description, conversation and changes live.
+	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
+	const tabShowing = activeTabUrl === pr.url;
+	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
+	const titleLabel = (
+		<>
+			<span className="font-medium">{viewModel.repositoryLabel ? `${viewModel.repositoryLabel} ` : ""}PR #{pr.number}</span>
+			{pr.title ? <span> {pr.title}</span> : null}
+			{/* The icon carries the state; keep it for screen readers. */}
+			<span className="sr-only"> {viewModel.stateLabel}</span>
+		</>
+	);
+	// The logo says this one leaves for GitHub; the row itself stays in the app.
+	const providerLink = (
+		<InfoRowLink
+			ariaLabel={t("inspector.openPR", { number: pr.number })}
+			href={viewModel.href}
+			icon={pr.provider === "github" ? <GitHubIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive" /> : undefined}
+		/>
+	);
 	return (
 		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
-			<InfoRow
-				action={<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />}
-				icon={state.icon}
-				iconClassName={state.className}
-				label={
-					<>
-						<span className="font-medium">{viewModel.repositoryLabel ? `${viewModel.repositoryLabel} ` : ""}PR #{pr.number}</span>
-						{pr.title ? <span> {pr.title}</span> : null}
-						{/* The icon carries the state; keep it for screen readers. */}
-						<span className="sr-only"> {viewModel.stateLabel}</span>
-					</>
-				}
-				title={pr.title}
-			/>
+			{opensTab ? (
+				<InfoRowButton
+					action={providerLink}
+					icon={state.icon}
+					iconClassName={state.className}
+					label={titleLabel}
+					onClick={() => openTab()}
+					title={pr.title}
+					trailing={tabShowing ? undefined : (
+						<span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors group-hover:text-foreground">
+							<PanelLeftOpen aria-hidden="true" className="size-icon-2xs shrink-0" />
+							{t("pr.openTab")}
+						</span>
+					)}
+				/>
+			) : (
+				<InfoRow
+					action={providerLink}
+					icon={state.icon}
+					iconClassName={state.className}
+					label={titleLabel}
+					title={pr.title}
+				/>
+			)}
 			{cardView}
+
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
@@ -1226,7 +1270,6 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 const TIMELINE_COMMIT_LIMIT = 5;
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
-	const [newestFirst, setNewestFirst] = useState(true);
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
@@ -1246,33 +1289,21 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	pushEvent(
 		{
 			tone: "neutral",
-			icon: <FolderPlus />,
 			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
 	);
 
-	const commits = history.data?.commits ?? [];
-	for (const commit of commits.slice(0, TIMELINE_COMMIT_LIMIT)) {
-		const additions = commit.files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
-		const deletions = commit.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
+	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
 		pushEvent(
 			{
 				tone: "neutral",
-				icon: <GitCommitHorizontal />,
 				content: (
 					<>
-						<span className="sr-only">{appI18n.t("inspector.timeline.committed")} </span>
-						<span className="font-medium">{commit.subject}</span>
+						{appI18n.t("inspector.timeline.committed")} <span className="text-passive">{commit.subject}</span>
 					</>
 				),
-				detail: <span className="font-mono">{commit.sha.slice(0, 7)}</span>,
-				aside: commit.files.length > 0 ? (
-					<>
-						<span className="text-success">+{additions}</span> <span className="text-error">−{deletions}</span>
-					</>
-				) : undefined,
 				timestamp: formatTimeCompact(commit.timestamp),
 			},
 			commit.timestamp,
@@ -1283,7 +1314,6 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "neutral",
-				icon: <GitPullRequestDraft />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.draft")} />,
 				timestamp: prStateTime(pr),
 			},
@@ -1295,7 +1325,6 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "neutral",
-				icon: <GitPullRequest />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.opened")} />,
 				timestamp: prCreatedTime(pr),
 			},
@@ -1307,72 +1336,11 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "good",
-				icon: <GitMerge />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.merged")} />,
 				timestamp: prStateTime(pr),
 			},
 			pr.stateChangedAt,
 		);
-	}
-
-	for (const pr of prs.filter((pr) => pr.state === "closed")) {
-		pushEvent(
-			{
-				tone: "neutral",
-				icon: <GitPullRequestClosed />,
-				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.closed")} />,
-				timestamp: prStateTime(pr),
-			},
-			pr.stateChangedAt,
-		);
-	}
-
-	// Each review the provider reported, so the PR's conversation reads in order.
-	let reviewCount = 0;
-	for (const pr of prs) {
-		for (const review of pr.review.reviews ?? []) {
-			reviewCount += 1;
-			const approved = review.verdict === "approved";
-			const changes = review.verdict === "changes_requested";
-			pushEvent(
-				{
-					tone: approved ? "good" : changes ? "warn" : "neutral",
-					icon: approved ? <CircleCheck /> : changes ? <CircleAlert /> : <MessageSquare />,
-					content: approved
-						? appI18n.t("pr.review.approvedBy", { names: review.reviewerId })
-						: changes
-							? appI18n.t("pr.review.changesRequestedBy", { names: review.reviewerId })
-							: appI18n.t("inspector.timeline.reviewedBy", { name: review.reviewerId }),
-					detail: appI18n.t("inspector.timeline.onPR", { number: pr.number }),
-					timestamp: formatTimeCompact(review.submittedAt),
-				},
-				review.submittedAt,
-			);
-		}
-	}
-
-	// Comments and the first note of each review thread, so a conversation that
-	// happened on the provider still reads in order here.
-	let commentCount = 0;
-	for (const pr of prs) {
-		const notes = [
-			...(pr.conversation ?? []).map((comment) => ({ author: comment.author, at: comment.createdAt, where: undefined as string | undefined })),
-			...(pr.threads ?? []).flatMap((thread) => thread.comments[0] ? [{ author: thread.comments[0].author, at: thread.comments[0].createdAt, where: thread.path }] : []),
-		];
-		for (const note of notes) {
-			if (!note.at) continue;
-			commentCount += 1;
-			pushEvent(
-				{
-					tone: "neutral",
-					icon: <MessageSquare />,
-					content: appI18n.t("inspector.timeline.commentedBy", { name: note.author }),
-					detail: note.where ? `${note.where} · ${appI18n.t("inspector.timeline.onPR", { number: pr.number })}` : appI18n.t("inspector.timeline.onPR", { number: pr.number }),
-					timestamp: formatTimeCompact(note.at),
-				},
-				note.at,
-			);
-		}
 	}
 
 	if (session.status === "merged") {
@@ -1423,29 +1391,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		activityAt,
 	);
 
-	const sorted = [...events].sort((a, b) => (newestFirst ? b.sortTime - a.sortTime : a.sortTime - b.sortTime));
-	const counts = [
-		commits.length > 0 ? appI18n.t("inspector.git.commits", { count: Math.min(commits.length, TIMELINE_COMMIT_LIMIT) }) : undefined,
-		reviewCount > 0 ? appI18n.t("inspector.timeline.reviews", { count: reviewCount }) : undefined,
-		commentCount > 0 ? appI18n.t("inspector.timeline.comments", { count: commentCount }) : undefined,
-	].filter(Boolean);
-	return (
-		<>
-			<div className="mb-1 flex min-w-0 items-center justify-between gap-2 text-micro text-passive">
-				<span className="truncate">{counts.join(" · ")}</span>
-				<button
-					aria-pressed={!newestFirst}
-					className="inline-flex shrink-0 items-center gap-1 rounded-sm font-medium transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-					onClick={() => setNewestFirst((value) => !value)}
-					type="button"
-				>
-					<ArrowDownUp aria-hidden="true" className="size-icon-2xs" />
-					{newestFirst ? appI18n.t("inspector.timeline.newestFirst") : appI18n.t("inspector.timeline.oldestFirst")}
-				</button>
-			</div>
-			<InspectorActivityTimelineView events={sorted} />
-		</>
-	);
+	return <InspectorActivityTimelineView events={[...events].sort((a, b) => b.sortTime - a.sortTime)} />;
 }
 
 function PRTimelineLink({ pr, verb }: { pr: SessionPRSummary; verb: string }) {
