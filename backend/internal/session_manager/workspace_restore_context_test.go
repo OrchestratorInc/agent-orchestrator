@@ -29,11 +29,11 @@ func TestFreshWorkspaceHooksHaveNoNativeRestoreContext(t *testing.T) {
 	if err := m.prepareWorkspace(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.prepareRuntimeLaunch(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}); err != nil {
+	if err := m.prepareRuntimeLaunch(context.Background(), a, "fresh", t.TempDir(), "", "", ports.AgentConfig{}, map[string]string{}, workspaceRestoreContext{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, cfg := range append(a.hooks, a.runtimeHooks...) {
-		if cfg.NativeSessionID != "" || cfg.RestoreMode != ports.WorkspaceRestoreFresh || cfg.ImportConfigDir != "" {
+		if cfg.NativeSessionID != "" || cfg.ImportConfigDir != "" {
 			t.Fatalf("fresh launch received restore context: %#v", cfg)
 		}
 	}
@@ -55,10 +55,8 @@ func TestImportedWorkspaceHooksReceiveSelectedNativeIdentity(t *testing.T) {
 	if len(a.hooks) != 1 || len(a.runtimeHooks) != 1 {
 		t.Fatalf("hooks=%d runtime hooks=%d", len(a.hooks), len(a.runtimeHooks))
 	}
-	for _, cfg := range append(a.hooks, a.runtimeHooks...) {
-		if cfg.NativeSessionID != "selected-native" || cfg.RestoreMode != ports.WorkspaceRestoreImported || cfg.ImportConfigDir != rec.Metadata.ImportSource.ConfigDir {
-			t.Fatalf("imported restore lost selected identity: %#v", cfg)
-		}
+	if cfg := a.runtimeHooks[0]; cfg.NativeSessionID != "selected-native" || cfg.ImportConfigDir != rec.Metadata.ImportSource.ConfigDir {
+		t.Fatalf("imported restore lost selected identity: %#v", cfg)
 	}
 }
 
@@ -66,12 +64,7 @@ func TestWorkspaceRestoreContextUsesPreparedIdentityAndClearsForFresh(t *testing
 	rec := domain.SessionRecord{Metadata: domain.SessionMetadata{AgentSessionID: "copied-id", ImportSource: &domain.SessionImportSource{NativeID: "source-id", ConfigDir: "/source", ResumeNativeID: "copied-id", ResumeConfigDir: "/private"}}}
 	for _, adopted := range []bool{false, true} {
 		rec.Metadata.ImportSource.Adopted = adopted
-		got := restoredWorkspaceContext(rec, false)
-		want := ports.WorkspaceRestoreImported
-		if adopted {
-			want = ports.WorkspaceRestoreNative
-		}
-		if got.nativeID != "copied-id" || got.configDir != "/private" || got.mode != want {
+		if got := restoredWorkspaceContext(rec, false); got.nativeID != "copied-id" || got.configDir != "/private" {
 			t.Fatalf("prepared restore context = %#v", got)
 		}
 	}

@@ -98,7 +98,7 @@ func TestCopyKeepsSourceAndExistingNativeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := Copy(context.Background(), root, source, launch)
+	target, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestCopyKeepsSourceAndExistingNativeCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	if _, err := Copy(context.Background(), root, source, launch); err != nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, ""); err != nil {
 		t.Fatal(err)
 	}
 	db, err = sql.Open("sqlite", target)
@@ -145,7 +145,7 @@ func TestCopyUsesResolvedLaunchDirectory(t *testing.T) {
 	if err := os.Symlink(launch, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	target, err := Copy(context.Background(), root, source, link)
+	target, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, link, "")
 	want, pathErr := SessionPath(root, launch, testID)
 	if err != nil || pathErr != nil || target != want {
 		t.Fatalf("target = %q, %v; want %q, %v", target, err, want, pathErr)
@@ -159,7 +159,7 @@ func TestCopyResolvesProviderProfileAlias(t *testing.T) {
 	if err := os.Symlink(root, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	target, err := Copy(context.Background(), alias, source, launch)
+	target, err := CopySelectedIn(context.Background(), LayoutTerminal, alias, source, launch, "")
 	want, pathErr := SessionPath(root, launch, testID)
 	if err != nil || pathErr != nil || target != want {
 		t.Fatalf("profile alias target = %q, %v; want %q, %v", target, err, want, pathErr)
@@ -173,7 +173,7 @@ func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
 	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
 	source := fixture(t, root, cwd)
 	failure := errors.New("synthetic publication failure")
-	_, err := copyWithPublisher(context.Background(), root, source, launch, "", func(stage, target string) error {
+	_, err := copyIn(context.Background(), LayoutTerminal, root, source, launch, "", func(stage, target string) error {
 		// At this boundary the complete native directory is ready, but no
 		// target exists yet. An interruption cannot leave a partial target.
 		if _, err := Read(context.Background(), root, filepath.Join(stage, "store.db")); err == nil {
@@ -187,7 +187,7 @@ func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
 	if !errors.Is(err, failure) {
 		t.Fatalf("publication error = %v", err)
 	}
-	target, err := Copy(context.Background(), root, source, launch)
+	target, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestSelectedCopyRefusesChangedNativeInputs(t *testing.T) {
 	if err := os.Chtimes(sidecar, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, expected); err == nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, expected); err == nil {
 		t.Fatal("copied changed native source evidence")
 	}
 	target, err := SessionPath(root, launch, testID)
@@ -236,7 +236,7 @@ func TestSelectedCopyRefusesChangedNativeInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, fresh); err != nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, fresh); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -256,7 +256,7 @@ func TestSelectedCopyRefusesWALShiftBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = copyWithPublisher(context.Background(), root, source, launch, expected, func(_, _ string) error {
+	_, err = copyIn(context.Background(), LayoutTerminal, root, source, launch, expected, func(_, _ string) error {
 		_, err := db.Exec("INSERT INTO blobs (id,data) VALUES ('concurrent-turn',?)", []byte("changed during snapshot"))
 		return err
 	})
@@ -274,7 +274,7 @@ func TestSelectedCopyRefusesWALShiftBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, fresh); err != nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, fresh); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -286,7 +286,7 @@ func TestSelectedCopyRetryRequiresMatchingProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := CopySelected(context.Background(), root, source, launch, expected)
+	target, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, expected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSelectedCopyRetryRequiresMatchingProvenance(t *testing.T) {
 	if err := os.RemoveAll(filepath.Dir(source)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, expected); err != nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, expected); err != nil {
 		t.Fatalf("proven copy cannot be retried after source removal: %v", err)
 	}
 	db, err = sql.Open("sqlite", target)
@@ -313,13 +313,13 @@ func TestSelectedCopyRetryRequiresMatchingProvenance(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM blobs WHERE id='later-ao-turn'").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("later native state lost: %d, %v", count, err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, "different-selection"); err == nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, "different-selection"); err == nil {
 		t.Fatal("reused a copy from another selection")
 	}
 	if err := os.Remove(filepath.Join(filepath.Dir(target), preparationFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CopySelected(context.Background(), root, source, launch, expected); err == nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, expected); err == nil {
 		t.Fatal("reused an unproven native target")
 	}
 }
@@ -363,7 +363,7 @@ func TestCopyRefusesExistingIncompleteTarget(t *testing.T) {
 	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Copy(context.Background(), root, source, launch); err == nil {
+	if _, err := CopySelectedIn(context.Background(), LayoutTerminal, root, source, launch, ""); err == nil {
 		t.Fatal("overwrote an incomplete target")
 	}
 	body, err := os.ReadFile(target)

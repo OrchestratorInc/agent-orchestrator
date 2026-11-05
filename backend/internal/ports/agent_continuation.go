@@ -161,12 +161,3 @@ type AgentImportedSessionRelocator interface {
 type AgentImportedSessionPreparer interface {
 	PrepareImportedSession(context.Context, ImportedSessionRelocation) (NativeSessionRef, error)
 }
-
-// NativeRestoreIdentityTakeover opts an interactive first-open plan into a
-// provider-generated native fork. SourceNativeSessionID must match the exact
-// resume target supplied by AO. Restored must prove the fork's history and
-// worktree execution before TargetID returns its nonempty, observed new id.
-// Ordinary restores and plans without this capability cannot change identity.
-type NativeRestoreIdentityTakeover interface {
-	SourceNativeSessionID() string
-}

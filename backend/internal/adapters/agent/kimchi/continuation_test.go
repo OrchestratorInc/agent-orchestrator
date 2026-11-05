@@ -416,6 +416,12 @@ func TestRelocateKimchiRejectsExistingInvalidOrAmbiguousDestination(t *testing.T
 // readKimchiHeader returns the first session header record, or nil when the
 // file has none. It reads only the first non-empty line, which is always the
 // header in a Kimchi transcript.
+type kimchiSessionHeader struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	CWD  string `json:"cwd"`
+}
+
 func readKimchiHeader(path string) (*kimchiSessionHeader, error) {
 	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
 	if err != nil {

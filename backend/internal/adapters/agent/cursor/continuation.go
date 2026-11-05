@@ -94,10 +94,10 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if cfg.RestoreMode == ports.WorkspaceRestoreFresh || cfg.RestoreMode == ports.WorkspaceRestoreNative && cfg.ImportConfigDir == "" {
+	if cfg.ImportConfigDir == "" {
 		return nil
 	}
-	if cfg.NativeSessionID == "" || cfg.ImportConfigDir == "" {
+	if cfg.NativeSessionID == "" {
 		return errors.New("cursor imported restore is missing its exact native binding")
 	}
 	root, err := p.NativeSessionConfigDir(ctx, cfg.Env)

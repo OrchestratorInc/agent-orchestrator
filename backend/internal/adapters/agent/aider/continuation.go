@@ -3,7 +3,6 @@ package aider
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -14,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -26,10 +26,9 @@ const (
 var aiderHistoryID = regexp.MustCompile(`^aider_[0-9a-f]{64}$`)
 
 var (
-	_ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
-	_ ports.AgentImportedSessionPreparer  = (*Plugin)(nil)
-	_ ports.AgentNativeSessionProber      = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator        = (*Plugin)(nil)
+	_ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
+	_ ports.AgentNativeSessionProber     = (*Plugin)(nil)
+	_ ports.AgentTranscriptLocator       = (*Plugin)(nil)
 )
 
 // NativeHistoryID names Aider's one native history file per repository. Aider
@@ -102,35 +101,6 @@ func aiderHistory(ctx context.Context, root *os.Root) ([]byte, error) {
 	return nil, errors.New("aider native history has no user messages")
 }
 
-// writeAiderFile installs a whole private file without replacing an existing
-// destination, including one created by a concurrent first-open attempt.
-func writeAiderFile(ctx context.Context, root *os.Root, name string, data []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	temp := ".aider-import-" + rand.Text()
-	f, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Remove(temp) }()
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return root.Link(temp, name)
-}
-
 func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) error {
 	marker, err := readAiderFile(ctx, root, aiderHistoryMarker, 128)
 	if errors.Is(err, os.ErrNotExist) && NativeHistoryID(cwd) == id {
@@ -145,10 +115,10 @@ func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) erro
 	return nil
 }
 
-// RelocateImportedSession copies the selected native Markdown into the AO
+// relocateAiderHistory copies the selected native Markdown into the AO
 // worktree. Existing history is accepted only against the pinned import-time
 // snapshot. A marker preserves its file-based identity; no file is overwritten.
-func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
+func relocateAiderHistory(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if !aiderHistoryID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.LaunchCWD) || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
 		return errors.New("aider import identity or source path changed")
 	}
@@ -188,10 +158,10 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
-	} else if err := writeAiderFile(ctx, dst, aiderHistoryFile, data); err != nil {
+	} else if err := importcopy.WriteOnce(ctx, dst, aiderHistoryFile, data); err != nil {
 		return err
 	}
-	if err := writeAiderFile(ctx, dst, aiderHistoryMarker, []byte(r.NativeSessionID+"\n")); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := importcopy.WriteOnce(ctx, dst, aiderHistoryMarker, []byte(r.NativeSessionID+"\n")); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	if err := checkAiderIdentity(ctx, dst, r.LaunchCWD, r.NativeSessionID); err != nil {
@@ -210,7 +180,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 // PrepareImportedSession returns the native copy for AO's separate resume
 // checkpoint, preserving the original repository and history as provenance.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if err := p.RelocateImportedSession(ctx, r); err != nil {
+	if err := relocateAiderHistory(ctx, r); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.LaunchCWD, TranscriptPath: filepath.Join(r.LaunchCWD, aiderHistoryFile)}, nil

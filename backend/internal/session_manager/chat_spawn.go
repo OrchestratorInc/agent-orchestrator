@@ -533,34 +533,18 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
 	}
-	launchPath := ws.Path
-	if source := rec.Metadata.ImportSource; source != nil && source.ResumeCwd != "" {
-		pinned, pinErr := pinnedImportLaunchPath(ws.Path, source.ResumeCwd)
-		if pinErr != nil {
-			return RestoreResult{}, relaunchFailed("import launch directory", fmt.Errorf("%s %s: %w", operation, rec.ID, pinErr))
-		}
-		launchPath = pinned
-	} else if source != nil && source.WorkingSubdir != "" {
-		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
-	}
-	if requireNativeHistory && rec.NeedsImportResume() {
-		relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath, env)
-		if relocateErr != nil {
-			return RestoreResult{}, relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, relocateErr))
-		}
-		rec = relocated
-		if m.hasFingerprintImportPreparer(rec) {
-			if err := m.refreshImportArchive(ctx, rec); err != nil {
-				return RestoreResult{}, err
-			}
-		}
+	rec, launchPath, err := m.importLaunch(ctx, operation, rec, ws.Path, env, preparedImportEnv)
+	if err != nil {
+		return RestoreResult{}, err
 	}
 	if rec.Metadata.ImportSource != nil && !reconnectOnly {
-		// Imported Chat restores need the same exact-identity workspace guard
-		// as Terminal restores, before an ACP controller can migrate history.
+		// An imported chat runs in a folder the provider was never set up in:
+		// install its workspace hooks and pre-launch config before the ACP
+		// controller starts. Relocation can move the native home, so the config
+		// env is applied again first.
 		m.applyImportedConfigEnv(ctx, rec, env)
 		if agent, ok := m.agents.Agent(rec.Harness); ok {
-			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env, restoredWorkspaceContext(rec, false)); err != nil {
+			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env); err != nil {
 				return RestoreResult{}, relaunchFailed("import workspace preparation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 			}
 		}

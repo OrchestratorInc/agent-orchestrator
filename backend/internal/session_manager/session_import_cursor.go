@@ -7,11 +7,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func cursorImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
-	source := rec.Metadata.ImportSource
-	return source != nil && writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
-}
-
+// Before adoption Cursor uses the default open-elsewhere check on its
+// store.db; afterwards the writer holds the prepared copy instead.
 func cursorAdoptedImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil || source.ResumeCwd == "" {

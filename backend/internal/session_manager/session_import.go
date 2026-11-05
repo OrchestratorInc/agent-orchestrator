@@ -84,18 +84,6 @@ var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there
 // setting even the default path logs a keychain user out, and an AO account's
 // folder links the computer's history, so replacing it would run the chat
 // under another login than the session's account.
-//
-// Kimi Code stores every session strictly under its home (KIMI_CODE_HOME, else
-// ~/.kimi-code); KIMI_SHARE_DIR is only the legacy kimi-cli migration source and
-// there is no sessions-dir or session-path override, so an imported Kimi chat
-// has to launch in the source home to be found. This stays equivalent to a
-// managed Kimi chat: AO's managed Kimi home only mirrors that same login
-// (ShareCredentials symlinks the managed credentials to it and seeds its config
-// from it), and standing instructions reach the ACP session through the
-// workspace .kimi-code/AGENTS.md and the first-prompt preamble, both independent
-// of the home. The config.toml lifecycle hooks are a TUI-only mechanism the ACP
-// chat driver does not use, so pointing at the source home drops nothing a chat
-// relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil {
@@ -105,7 +93,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
 	hooks := importedHarnesses[rec.Harness]
 	if hooks.configEnvKey != "" {
 		key = hooks.configEnvKey
@@ -139,11 +127,6 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 		}
 	}
 	value := ref.ConfigDir
-	if rec.Harness == domain.HarnessDroid {
-		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
-		// not the state dir itself, so point it at the parent of the config dir.
-		value = filepath.Dir(ref.ConfigDir)
-	}
 	if hooks.configValue != nil {
 		value = hooks.configValue(ref.ConfigDir)
 	}
@@ -151,16 +134,18 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 }
 
 // relocateImportedSession lets a provider that finds a session by the directory
-// it runs in (OMP, Qwen, Kimchi) load the imported session from AO's launch
-// directory, before the first resume. Providers that find a session by id from
-// any directory do not implement the relocator and need nothing.
+// it runs in load the imported session from AO's launch directory, before the
+// first resume: a preparer (AgentImportedSessionPreparer) checkpoints its own
+// copy, otherwise a relocator (AgentImportedSessionRelocator) places one.
+// Providers that find a session by id from any directory implement neither and
+// need nothing.
 //
 // It records the launch directory as ResumeCwd, and every later launch of the
 // session is pinned to it (pinnedImportLaunchPath), so the provider keeps
 // finding the same copy, which then holds AO's turns. If the copy is still not
 // where the provider looks, the required first-open replay comes back without
 // messages and the import fails rather than continuing an empty chat.
-func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, launchEnv ...map[string]string) (domain.SessionRecord, error) {
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, env map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil || m.agents == nil {
 		return rec, nil
@@ -168,10 +153,6 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return rec, nil
-	}
-	var env map[string]string
-	if len(launchEnv) > 0 {
-		env = launchEnv[0]
 	}
 	if preparer, ok := agent.(ports.AgentImportedSessionPreparer); ok {
 		prepared, err := m.prepareImportedNativeSession(ctx, rec, launchPath, preparer, env)
@@ -211,6 +192,40 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	return rec, nil
 }
 
+// importLaunch returns the folder an imported session launches in: the pinned
+// folder of a relocated import, else the subfolder it ran in. With prepare, the
+// first resume also relocates the provider's copy there, and a fingerprinted
+// preparer refreshes the archive only once its copy is proven.
+func (m *Manager) importLaunch(ctx context.Context, operation string, rec domain.SessionRecord, workspace string, env map[string]string, prepare bool) (domain.SessionRecord, string, error) {
+	source := rec.Metadata.ImportSource
+	if source == nil {
+		return rec, workspace, nil
+	}
+	launchPath := workspace
+	if source.ResumeCwd != "" {
+		pinned, err := pinnedImportLaunchPath(workspace, source.ResumeCwd)
+		if err != nil {
+			return rec, "", relaunchFailed("import launch directory", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+		}
+		launchPath = pinned
+	} else if source.WorkingSubdir != "" {
+		launchPath = importLaunchPath(workspace, source.WorkingSubdir)
+	}
+	if !prepare {
+		return rec, launchPath, nil
+	}
+	rec, err := m.relocateImportedSession(ctx, rec, launchPath, env)
+	if err != nil {
+		return rec, "", relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+	}
+	if m.hasFingerprintImportPreparer(rec) {
+		if err := m.refreshImportArchive(ctx, rec); err != nil {
+			return rec, "", err
+		}
+	}
+	return rec, launchPath, nil
+}
+
 // pinnedImportLaunchPath is the launch directory of a relocated import: the one
 // its provider's copy was prepared for. It must stay inside the workspace, and
 // is recreated when something removed it, so the provider never looks for the
@@ -239,13 +254,9 @@ func sameDirectory(a, b string) bool {
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
 //
-// Pi has no such signal: it keeps no writer lock or live-session registry and
-// does not hold its session file open (see writableTranscriptOwner), and
-// pi-acp's session/load does not refuse a second writer. So a Pi conversation
-// still open in the Pi CLI/TUI is not detected, and importing it can interleave
-// turns with the other writer. This matches the documented posture for
-// lock-less providers; a reliable per-session Pi owner signal would be needed
-// to protect it.
+// Lock-less providers such as Pi and Kimchi have no such signal, so a
+// conversation still open in their CLI/TUI is not detected and importing it
+// can interleave turns with the other writer (see writableTranscriptOwner).
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil {
@@ -265,21 +276,13 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		}
 	case domain.HarnessQwen:
 		return qwenSessionLive(ctx, source.ConfigDir, source.NativeID, rec.Metadata.WorkspacePath)
-	case domain.HarnessKimi:
-		// Kimi publishes a per-session lock file holding the live writer's pid;
-		// its transcript is append-open-close so it is never held open for lsof.
-		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
 	case domain.HarnessOMP:
 		if ompSessionLocked(ctx, source.ConfigDir, source.NativeID) {
 			return true
 		}
 	case domain.HarnessKimchi:
-		// Kimchi is a Pi fork with the same lock-less posture: no writer lock or
-		// live-session registry, its transcript is append-open-close so lsof
-		// never sees a live writer, and kimchi-acp's session/load does not refuse
-		// a second writer. An imported Kimchi chat still open in the Kimchi
-		// CLI/TUI is therefore not detected; see the Pi note above. AO resumes
-		// from its own relocated copy of the transcript, not the original.
+		// Lock-less like Pi (see above); AO resumes from its own relocated copy
+		// of the transcript, not the original.
 		return false
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
@@ -311,8 +314,6 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
 	case domain.HarnessQwen:
 		return qwenSessionLive(ctx, source.ConfigDir, nativeID, rec.Metadata.WorkspacePath)
-	case domain.HarnessKimi:
-		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	case domain.HarnessCopilot:
 		// Copilot has no process-bound live-session registry. A writable log
 		// descriptor is positive evidence; idle clients cannot always be detected.
@@ -372,13 +373,10 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
 //
-// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
-// appendFileSync/writeFileSync, opening and closing the session file for each
-// entry rather than holding it open, so lsof reports a Pi writer only during
-// the instant of a write. Pi also keeps no writer lock or live-session
-// registry, and pi-acp's session/load does not refuse a second writer, so an
-// imported Pi conversation that is still open elsewhere is not detected. See
-// importOwnedElsewhere.
+// It cannot see a live Pi or Kimchi owner: they open and close the session
+// file for each entry rather than holding it open, keep no writer lock or
+// live-session registry, and their ACP session/load does not refuse a second
+// writer. See importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -427,6 +425,8 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
+	// Kimi and Droid have no safe resume of an import in AO's workspace yet:
+	// refuse before any probe or write, so a stored row keeps its history.
 	if rec.Harness == domain.HarnessKimi || rec.Harness == domain.HarnessDroid {
 		return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("this harness cannot yet resume an import safely in AO's workspace; the imported history is preserved"))
 	}
@@ -1148,9 +1148,6 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 			!slices.Equal(before.changed, after.changed) || !maps.Equal(before.facts, after.facts) {
 			return importNotice("source files changed while copying; retry")
 		}
-	}
-	if completionMarker == "" {
-		return nil
 	}
 	if _, err := os.Lstat(completionMarker); !errors.Is(err, os.ErrNotExist) {
 		return importNotice("source contains a reserved workspace transfer marker")

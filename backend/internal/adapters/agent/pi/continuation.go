@@ -2,10 +2,7 @@ package pi
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -40,17 +37,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 // state for pi-acp's session/load. Pi stores one <time>_<session-id>.jsonl
 // below a per-cwd directory in <config>/sessions.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if strings.TrimSpace(ref.ConfigDir) == "" {
-		return ports.NativeSessionAvailabilityUnknown, nil
-	}
-	_, ok, err := p.LocateTranscript(ctx, ref)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnknown, err
-	}
-	if ok {
-		return ports.NativeSessionAvailabilityAvailable, nil
-	}
-	return ports.NativeSessionAvailabilityUnavailable, nil
+	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
 // LocateTranscript finds Pi's provider-owned JSONL by native session id. pi-acp
@@ -68,37 +55,14 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	if configDir == "" {
 		return "", false, nil
 	}
-	sessionsDir := filepath.Join(configDir, "sessions")
 	suffix := "_" + sessionID + ".jsonl"
-	var found string
-	err = filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			// One unreadable folder elsewhere in the tree does not hide this
-			// conversation, as the importer skips it too.
-			if path != sessionsDir && errors.Is(walkErr, fs.ErrPermission) {
-				if entry != nil && entry.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.Type().IsRegular() && strings.HasSuffix(strings.ToLower(entry.Name()), suffix) {
-			found = path
-			return fs.SkipAll
-		}
-		return nil
+	path, found, err := nativeconfig.FindFile(ctx, filepath.Join(configDir, "sessions"), func(name string) bool {
+		return strings.HasSuffix(strings.ToLower(name), suffix)
 	})
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
 	if err != nil {
 		return "", false, fmt.Errorf("pi: scan transcripts: %w", err)
 	}
-	return found, found != "", nil
+	return path, found, nil
 }
 
 func canonicalPiNativeSessionID(value string) (string, error) {

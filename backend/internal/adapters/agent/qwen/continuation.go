@@ -67,17 +67,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 // ProbeNativeSession reports whether the imported conversation still has its
 // local transcript, the authoritative backing state for a resume.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if strings.TrimSpace(ref.ConfigDir) == "" {
-		return ports.NativeSessionAvailabilityUnknown, nil
-	}
-	_, ok, err := p.LocateTranscript(ctx, ref)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnknown, err
-	}
-	if ok {
-		return ports.NativeSessionAvailabilityAvailable, nil
-	}
-	return ports.NativeSessionAvailabilityUnavailable, nil
+	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
 // LocateTranscript finds a Qwen chat's JSONL without depending on the lossy
@@ -149,7 +139,7 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 		source = path
 	}
 	n := 0
-	_, err := importcopy.CopyOnce(source, qwenChatPath(r.ConfigDir, r.LaunchCWD, r.NativeSessionID), func(line []byte) ([]byte, error) {
+	err := importcopy.CopyOnce(source, qwenChatPath(r.ConfigDir, r.LaunchCWD, r.NativeSessionID), func(line []byte) ([]byte, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

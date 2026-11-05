@@ -98,7 +98,7 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(destination, ".setup", "tool"), []byte("from setup\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if err := copyImportedWorkspace(ctx, source, destination, nil, ""); err != nil {
+			if err := copyImportedWorkspace(ctx, source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 				t.Fatal(err)
 			}
 			if kept, err := os.ReadFile(filepath.Join(destination, ".setup", "tool")); err != nil || string(kept) != "from setup\n" {
@@ -233,7 +233,7 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	for _, rel := range []string{".", "child"} {
 		before[rel], _ = os.ReadFile(filepath.Join(destination, rel, ".git"))
 	}
-	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{".", "child"} {
@@ -253,7 +253,7 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A retry starts again from the source state, over whatever an earlier attempt left.
-	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, ""); err != nil {
+	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "child", "unregistered")); !errors.Is(err, os.ErrNotExist) {
@@ -262,7 +262,7 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	// A source that committed since the AO worktree was created is followed to
 	// its new commit; the files are never copied onto the old base.
 	git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "advance")
-	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{".", "child"} {
@@ -556,36 +556,6 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	}
 }
 
-type kimiHomeAgent struct{ fakeAgent }
-
-func (kimiHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
-	return nativeconfig.Resolve(env, "KIMI_CODE_HOME", ".kimi-code")
-}
-
-type kimiHomeAgents struct{}
-
-func (kimiHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return kimiHomeAgent{}, true }
-
-// Kimi stores sessions only under its home, so an imported Kimi chat must launch
-// in the source home that holds the conversation, overriding AO's managed home.
-func TestImportedConfigEnvPointsKimiAtSourceHome(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("KIMI_CODE_HOME", "")
-	m := &Manager{agents: kimiHomeAgents{}}
-	source := filepath.Join(home, ".kimi-code")
-	sessionID := "session_11111111-2222-3333-4444-555555555555"
-	transcript := filepath.Join(source, "sessions", "wd_repo_abc123", sessionID, "agents", "main", "wire.jsonl")
-	rec := domain.SessionRecord{Harness: domain.HarnessKimi}
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: sessionID, NativeTranscriptPath: transcript, ImportSource: &domain.SessionImportSource{NativeID: sessionID, ConfigDir: source}}
-	// The launch starts in AO's managed Kimi home, which does not hold this session.
-	env := map[string]string{"KIMI_CODE_HOME": filepath.Join(home, "managed-kimi")}
-	m.applyImportedConfigEnv(context.Background(), rec, env)
-	if env["KIMI_CODE_HOME"] != source {
-		t.Fatalf("KIMI_CODE_HOME = %q, want source home %q", env["KIMI_CODE_HOME"], source)
-	}
-}
-
 // Startup health treats a ready row without a workspace as an interrupted
 // spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
@@ -862,7 +832,7 @@ func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "notes"), []byte("draft\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(destination, "setup-output"), []byte("made by setup\n"), 0o600); err != nil {
@@ -871,7 +841,7 @@ func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 	if err := os.Remove(filepath.Join(source, "notes")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyImportedWorkspace(context.Background(), source, destination, nil, ""); err != nil {
+	if err := copyImportedWorkspace(context.Background(), source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "notes")); !errors.Is(err, os.ErrNotExist) {
@@ -879,50 +849,6 @@ func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "setup-output")); err != nil {
 		t.Fatalf("a file the earlier attempt did not copy was removed: %v", err)
-	}
-}
-
-type droidHomeAgent struct{ fakeAgent }
-
-// NativeSessionConfigDir mirrors Droid's own resolver: FACTORY_HOME_OVERRIDE (or
-// HOME) with ".factory" appended. The env value is a home override, not the
-// state directory itself.
-func (droidHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
-	home := strings.TrimSpace(env["FACTORY_HOME_OVERRIDE"])
-	if home == "" {
-		home = strings.TrimSpace(env["HOME"])
-	}
-	return filepath.Join(home, ".factory"), nil
-}
-
-type droidHomeAgents struct{}
-
-func (droidHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return droidHomeAgent{}, true }
-
-// Droid's config env is a home override, so AO points FACTORY_HOME_OVERRIDE at
-// the parent of the imported conversation's state directory (not the dir
-// itself), and leaves it unset when the default home already owns it.
-func TestImportedConfigEnvDroidHomeOverride(t *testing.T) {
-	home := t.TempDir()
-	m := &Manager{agents: droidHomeAgents{}}
-	rec := domain.SessionRecord{Harness: domain.HarnessDroid}
-
-	// Default home already holds the conversation: no override forced.
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: filepath.Join(home, ".factory")}}
-	env := map[string]string{"HOME": home}
-	m.applyImportedConfigEnv(context.Background(), rec, env)
-	if value, set := env["FACTORY_HOME_OVERRIDE"]; set {
-		t.Fatalf("default home forced an override: %q", value)
-	}
-
-	// A different, unreachable source home is selected by its parent directory.
-	other := filepath.Join(t.TempDir(), "elsewhere")
-	rec.Metadata.ImportSource.ConfigDir = filepath.Join(other, ".factory")
-	rec.Metadata.NativeTranscriptPath = filepath.Join(other, ".factory", "sessions", "-work", "native.jsonl")
-	env = map[string]string{"HOME": home}
-	m.applyImportedConfigEnv(context.Background(), rec, env)
-	if env["FACTORY_HOME_OVERRIDE"] != other {
-		t.Fatalf("FACTORY_HOME_OVERRIDE = %q, want %q", env["FACTORY_HOME_OVERRIDE"], other)
 	}
 }
 
@@ -956,7 +882,7 @@ func TestRelocateImportedSessionHandsTheProviderItsLaunchDirectoryAndPinsIt(t *t
 	var got []ports.ImportedSessionRelocation
 	st := newFakeStore()
 	m := &Manager{agents: relocatingAgents{relocatingAgent{got: &got}}, store: st, clock: time.Now}
-	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree/child")
+	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree/child", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -982,7 +908,7 @@ func TestRelocateImportedSessionFailureIsAUserNotice(t *testing.T) {
 	var got []ports.ImportedSessionRelocation
 	st := newFakeStore()
 	m := &Manager{agents: relocatingAgents{relocatingAgent{got: &got, err: errors.New("open /home/u/private: permission denied")}}, store: st, clock: time.Now}
-	_, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree")
+	_, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree", nil)
 	notice, ok := ImportFailureNotice(err)
 	if !ok || strings.Contains(notice, "/home/u") {
 		t.Fatalf("notice = %q, %v; want a fixed sentence without local paths", notice, ok)
@@ -996,7 +922,7 @@ func TestRelocateImportedSessionFailureIsAUserNotice(t *testing.T) {
 func TestRelocateImportedSessionSkipsProvidersThatFindSessionsByID(t *testing.T) {
 	st := newFakeStore()
 	m := &Manager{agents: fakeAgents{}, store: st, clock: time.Now}
-	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree")
+	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

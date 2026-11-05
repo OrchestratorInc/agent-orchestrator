@@ -336,24 +336,12 @@ func Find(ctx context.Context, root, id string) (string, bool, error) {
 	return found, found != "", nil
 }
 
-// Copy publishes a private native snapshot once, leaving the source unchanged.
-func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
-	return CopySelected(ctx, root, source, launchCWD, "")
-}
-
-// CopySelected additionally verifies the discovery evidence before snapshotting
-// and before publishing the completed copy. Empty evidence supports old imports.
-func CopySelected(ctx context.Context, root, source, launchCWD, expected string) (string, error) {
-	return CopySelectedIn(ctx, LayoutTerminal, root, source, launchCWD, expected)
-}
-
-// CopySelectedIn publishes the selected copy where layout's resume looks for it.
+// CopySelectedIn publishes a private native snapshot once, where layout's
+// resume looks for it, leaving the source unchanged. It verifies the discovery
+// evidence before snapshotting and before publishing the completed copy; empty
+// evidence supports old imports.
 func CopySelectedIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string) (string, error) {
 	return copyIn(ctx, layout, root, source, launchCWD, expected, nil)
-}
-
-func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
-	return copyIn(ctx, LayoutTerminal, root, source, launchCWD, expected, publish)
 }
 
 func copyIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {

@@ -32,7 +32,7 @@ func TestImportedCopilotUsesTheNativeHistoryHome(t *testing.T) {
 	if env["COPILOT_HOME"] != source || env["GITHUB_TOKEN"] != "synthetic-account-token" {
 		t.Fatal("resume did not select the source store while preserving account credentials")
 	}
-	relocated, err := manager.relocateImportedSession(context.Background(), rec, filepath.Join(t.TempDir(), "worktree"))
+	relocated, err := manager.relocateImportedSession(context.Background(), rec, filepath.Join(t.TempDir(), "worktree"), nil)
 	if err != nil || relocated.Metadata.ImportSource.ResumeCwd != "" {
 		t.Fatalf("ID-addressed Copilot import was unnecessarily relocated: %v", err)
 	}

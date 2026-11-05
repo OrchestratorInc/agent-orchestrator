@@ -1520,7 +1520,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnSupervisor, err)
 	}
-	if err := m.prepareRuntimeLaunch(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env); err != nil {
+	if err := m.prepareRuntimeLaunch(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env, workspaceRestoreContext{}); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
 	}
@@ -3655,46 +3655,27 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 
 	var env map[string]string
-	preparedImportEnv := false
-	launchPath := ws.Path
-	if source := rec.Metadata.ImportSource; source != nil {
-		if source.ResumeCwd != "" {
-			pinned, pinErr := pinnedImportLaunchPath(ws.Path, source.ResumeCwd)
-			if pinErr != nil {
-				return RestoreResult{}, relaunchFailed("import launch directory", pinErr)
-			}
-			launchPath = pinned
-		} else if source.WorkingSubdir != "" {
-			launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
+	preparedImportEnv := rec.Metadata.ImportSource != nil && rec.NeedsImportResume()
+	if preparedImportEnv {
+		if forceFresh {
+			return RestoreResult{}, ErrNotResumable
 		}
-		if rec.NeedsImportResume() {
-			if forceFresh {
-				return RestoreResult{}, ErrNotResumable
-			}
-			agent, ok := m.agents.Agent(rec.Harness)
-			if !ok {
-				return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
-			}
-			var prepareErr error
-			rec, env, prepareErr = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
-			if prepareErr != nil {
-				return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, prepareErr))
-			}
-			m.augmentAgentRuntimeEnv(agent, env)
-			m.applyImportedConfigEnv(ctx, rec, env)
-			pinRuntimePermissionEnv(env, restoredAgentConfig(rec, project.Config).Permissions)
-			preparedImportEnv = true
-			relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath, env)
-			if relocateErr != nil {
-				return RestoreResult{}, relaunchFailed("import relocation", relocateErr)
-			}
-			rec = relocated
-			if m.hasFingerprintImportPreparer(rec) {
-				if err := m.refreshImportArchive(ctx, rec); err != nil {
-					return RestoreResult{}, err
-				}
-			}
+		agent, ok := m.agents.Agent(rec.Harness)
+		if !ok {
+			return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
 		}
+		var prepareErr error
+		rec, env, prepareErr = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
+		if prepareErr != nil {
+			return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, prepareErr))
+		}
+		m.augmentAgentRuntimeEnv(agent, env)
+		m.applyImportedConfigEnv(ctx, rec, env)
+		pinRuntimePermissionEnv(env, restoredAgentConfig(rec, project.Config).Permissions)
+	}
+	rec, launchPath, err := m.importLaunch(ctx, operation, rec, ws.Path, env, preparedImportEnv)
+	if err != nil {
+		return RestoreResult{}, err
 	}
 
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -3753,7 +3734,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ports.ErrAgentAuthRequired)
 		}
 	}
-	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env, restoredWorkspaceContext(rec, forceFresh)); err != nil {
+	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh {
@@ -3783,10 +3764,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
 		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
-		preparedImport := pendingPreparedNativeImport(rec)
-		if identityUnverified && requireNativeHistory && !preparedImport {
+		if identityUnverified && requireNativeHistory {
 			err = ErrNotResumable
-		} else if identityUnverified && !preparedImport {
+		} else if identityUnverified {
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
@@ -6904,7 +6884,7 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // starts the agent: installing the workspace-local activity hooks (so early
 // startup hooks can update the already-created session row), then any optional
 // PreLaunch step. Shared by Spawn and Restore.
-func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore ...workspaceRestoreContext) error {
+func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
 	cfg := ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,
@@ -6913,9 +6893,6 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		SystemPrompt:     systemPrompt,
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
-	}
-	if len(restore) > 0 {
-		restore[0].apply(&cfg)
 	}
 	if err := agent.GetAgentHooks(ctx, cfg); err != nil {
 		m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
@@ -6937,7 +6914,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 	return nil
 }
 
-func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore ...workspaceRestoreContext) error {
+func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string, restore workspaceRestoreContext) error {
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil
@@ -6951,9 +6928,7 @@ func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, i
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 	}
-	if len(restore) > 0 {
-		restore[0].apply(&cfg)
-	}
+	restore.apply(&cfg)
 	return preparer.PrepareRuntimeLaunch(ctx, cfg)
 }
 

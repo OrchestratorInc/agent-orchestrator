@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -49,17 +51,7 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 
 // ProbeNativeSession checks for readable local history with the exact native id.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if strings.TrimSpace(ref.ConfigDir) == "" {
-		return ports.NativeSessionAvailabilityUnknown, nil
-	}
-	_, found, err := p.LocateTranscript(ctx, ref)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnknown, err
-	}
-	if found {
-		return ports.NativeSessionAvailabilityAvailable, nil
-	}
-	return ports.NativeSessionAvailabilityUnavailable, nil
+	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
 func geminiSessionHeader(ctx context.Context, root *os.Root, path string) (string, error) {
@@ -161,7 +153,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 			return errors.New("gemini destination belongs to another folder")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeGeminiImport(ctx, root, marker, []byte(cwd)); err != nil {
+		if err := importcopy.WriteOnce(ctx, root, marker, []byte(cwd)); err != nil {
 			return err
 		}
 	} else {
@@ -234,7 +226,10 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		}
 		copied.Write(encoded)
 	}
-	return writeGeminiImport(ctx, root, destination, copied.Bytes())
+	if err := importcopy.WriteOnce(ctx, root, destination, copied.Bytes()); err != nil {
+		return fmt.Errorf("write gemini copy: %w", err)
+	}
+	return nil
 }
 
 func geminiRegistryPath(path string, windows bool) string {
@@ -269,27 +264,4 @@ func geminiProjectDirectory(root *os.Root, cwd, hash string, windows bool) strin
 		}
 	}
 	return hash
-}
-
-func writeGeminiImport(ctx context.Context, root *os.Root, path string, body []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// First-open runs under the session input lease; the temporary name is
-	// private and never follows a pre-existing symlink or overwrites a source.
-	tmp := path + ".ao-import-tmp"
-	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Remove(tmp) }()
-	_, writeErr := f.Write(body)
-	err = errors.Join(writeErr, f.Close())
-	if err != nil {
-		return fmt.Errorf("write gemini copy: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return root.Rename(tmp, path)
 }

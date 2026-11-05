@@ -32,9 +32,8 @@ func TestCopyOnceRewritesRecordsAndLeavesSourceUntouched(t *testing.T) {
 	}
 	dst := filepath.Join(dir, "target", "nested", "chat.jsonl")
 
-	wrote, err := CopyOnce(src, dst, setCWD("/ao/worktree"), nil)
-	if err != nil || !wrote {
-		t.Fatalf("CopyOnce = %v, %v", wrote, err)
+	if err := CopyOnce(src, dst, setCWD("/ao/worktree"), nil); err != nil {
+		t.Fatalf("CopyOnce = %v", err)
 	}
 	got, err := os.ReadFile(dst)
 	if err != nil {
@@ -78,9 +77,8 @@ func TestCopyOnceKeepsAnExistingCopy(t *testing.T) {
 	if err := os.WriteFile(dst, []byte(later), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wrote, err := CopyOnce(src, dst, setCWD("/ao"), nil)
-	if err != nil || wrote {
-		t.Fatalf("CopyOnce = %v, %v; want kept copy", wrote, err)
+	if err := CopyOnce(src, dst, setCWD("/ao"), nil); err != nil {
+		t.Fatalf("CopyOnce = %v; want kept copy", err)
 	}
 	if got, _ := os.ReadFile(dst); string(got) != later {
 		t.Fatalf("existing copy replaced: %s", got)
@@ -94,7 +92,7 @@ func TestCopyOnceWritesNothingWhenARecordCannotBeRewritten(t *testing.T) {
 	if err := os.WriteFile(src, []byte("{\"type\":\"session\",\"cwd\":\"/work\"}\nnot json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := CopyOnce(src, dst, func(line []byte) ([]byte, error) { return SetStringField(line, "cwd", "/ao") }, nil)
+	err := CopyOnce(src, dst, func(line []byte) ([]byte, error) { return SetStringField(line, "cwd", "/ao") }, nil)
 	if err == nil {
 		t.Fatal("a torn record was copied")
 	}
@@ -109,7 +107,7 @@ func TestCopyOnceWritesNothingWhenARecordCannotBeRewritten(t *testing.T) {
 
 func TestCopyOnceMissingSource(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := CopyOnce(filepath.Join(dir, "missing.jsonl"), filepath.Join(dir, "copy.jsonl"), setCWD("/ao"), nil); !errors.Is(err, os.ErrNotExist) {
+	if err := CopyOnce(filepath.Join(dir, "missing.jsonl"), filepath.Join(dir, "copy.jsonl"), setCWD("/ao"), nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want not exist", err)
 	}
 }
@@ -156,7 +154,7 @@ func TestCopyOnceCheckRefusesTheCopy(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := CopyOnce(src, dst, rewrite, check); !errors.Is(err, missing) {
+	if err := CopyOnce(src, dst, rewrite, check); !errors.Is(err, missing) {
 		t.Fatalf("err = %v, want the check's error", err)
 	}
 	if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {

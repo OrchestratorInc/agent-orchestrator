@@ -89,15 +89,6 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	return rec, nil
 }
 
-// A failed interactive launch can have no published identity for its old
-// generation. A pinned pending import may retry its exact prepared target,
-// but must still complete native initialization for the new generation.
-func pendingPreparedNativeImport(rec domain.SessionRecord) bool {
-	source := rec.Metadata.ImportSource
-	return rec.NeedsImportResume() && source.Prepared && source.ResumeCwd != "" && source.ResumeNativeID != "" &&
-		rec.Metadata.AgentSessionID == source.ResumeNativeID && rec.Metadata.ProviderConversationID == source.ResumeNativeID
-}
-
 func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 	metadata := map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}
 	if source := rec.Metadata.ImportSource; source != nil && rec.Metadata.AgentSessionID == importedNativeRef(source).NativeSessionID {
@@ -112,8 +103,4 @@ func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 // preparer's new copy, so a conversation created for the first launch binds it.
 type preparedImportIdentityStore interface {
 	SetPreparedImportIdentity(context.Context, domain.SessionID, *domain.SessionImportSource, *domain.SessionImportSource, domain.SessionMetadata, time.Time) (bool, error)
-}
-
-type importedIdentityStore interface {
-	CommitImportedNativeSessionID(context.Context, domain.SessionID, *domain.SessionImportSource, string, string, string) (bool, error)
 }

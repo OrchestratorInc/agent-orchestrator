@@ -57,7 +57,7 @@ func TestCopyImportedWorkspaceFolderReplacedByFile(t *testing.T) {
 		t.Fatalf("facts = %v, want only the new file", facts)
 	}
 
-	if err := copyImportedWorkspace(ctx, source, destination, nil, ""); err != nil {
+	if err := copyImportedWorkspace(ctx, source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(destination, "dir")); err != nil || string(got) != "now a file\n" {

@@ -320,11 +320,6 @@ func claudeNestedMap(meta map[string]any, key string) map[string]any {
 	return value
 }
 
-// claudeACPLaunchEnv gives claude-agent-acp the same provider model IDs AO
-// exposes in its pre-launch picker. The adapter turns availableModels into its
-// authoritative ACP model choices, so a raw first-party ID selected in AO is
-// accepted by session/set_config_option instead of being rejected because the
-// adapter started with aliases only.
 // pinResumedModel keeps a resumed chat on the model AO resumes it with.
 // Loading a resumed session re-applies settings.json's model over the one AO
 // starts with, writing a /model switch into the transcript; ANTHROPIC_MODEL
@@ -339,6 +334,11 @@ func pinResumedModel(env, input map[string]string, selectedModel string) {
 	}
 }
 
+// claudeACPLaunchEnv gives claude-agent-acp the same provider model IDs AO
+// exposes in its pre-launch picker. The adapter turns availableModels into its
+// authoritative ACP model choices, so a raw first-party ID selected in AO is
+// accepted by session/set_config_option instead of being rejected because the
+// adapter started with aliases only.
 func claudeACPLaunchEnv(
 	input map[string]string,
 	binary string,
