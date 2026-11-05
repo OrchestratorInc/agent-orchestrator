@@ -3191,9 +3191,27 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	/* `--color-bg-secondary` equals the canvas in light themes; with no border
-	   the composer needs the tertiary step to separate (see human message). */
-	--composer-bg: var(--color-bg-tertiary);
+	/* Light composer is the popover surface (white) held up by a hairline and a
+	   soft shadow, not a gray fill: the canvas is near-white, so a darker well
+	   reads as disabled. Sent messages still use the tertiary fill below. */
+	--composer-bg: var(--color-bg-elevated);
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+		0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+		0 8px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+/* The tray hung under the composer is a near-white surface with a hairline, not
+   a gray well: the composer's shadow falls on it, and a gray tint turns dirty. */
+:root[data-theme="light"] .chat-composer-tray {
+	background: var(--color-bg-elevated);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* With a tray under it, keep only the hairline so the drop shadow does not
+   gray the tray's top edge. */
+:root[data-theme="light"] [data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 /* Light needs the tertiary fill to lift a sent message off the canvas; like
