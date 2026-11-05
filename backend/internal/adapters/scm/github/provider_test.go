@@ -1414,7 +1414,15 @@ func TestSCMObservationUsesRollupStateWhenContextsPaginated(t *testing.T) {
 func actionsCheckRun(workflow, name, conclusion string, id float64) map[string]any {
 	n := map[string]any{"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion, "databaseId": id}
 	if workflow != "" {
-		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{"event": "pull_request", "workflow": map[string]any{"name": workflow}}}
+		workflowID := 0
+		for _, r := range workflow {
+			workflowID = workflowID*31 + int(r)
+		}
+		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{
+			"runNumber":  id,
+			"runAttempt": 1,
+			"workflow":   map[string]any{"databaseId": float64(workflowID)},
+		}}
 	}
 	return n
 }
@@ -1467,8 +1475,8 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 				roll["state"] = "FAILURE"
 				roll["contexts"] = map[string]any{"nodes": tc.nodes, "pageInfo": map[string]any{"hasNextPage": false}}
 			})
-			if got := ciSummaryFromGraphQL(pr); got != tc.wantCI {
-				t.Fatalf("ciSummaryFromGraphQL = %q, want %q", got, tc.wantCI)
+			if got := githubCIProjectionFromGraphQL(pr).summary(); got != tc.wantCI {
+				t.Fatalf("projection summary = %q, want %q", got, tc.wantCI)
 			}
 			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
 			if obs.CI.Summary != string(tc.wantCI) {
@@ -1499,8 +1507,8 @@ func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
 	basePRFixture().prData(func(m map[string]any) { pr = m })
 	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "checkSuite{ workflowRun{ event workflow{ name } } }") {
-			t.Fatalf("batch query should request each check run's workflow, body=%s", body)
+		if !strings.Contains(string(body), "checkSuite{ workflowRun{ runNumber runAttempt workflow{ databaseId } } }") {
+			t.Fatalf("batch query should request each check run's workflow identity, body=%s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
