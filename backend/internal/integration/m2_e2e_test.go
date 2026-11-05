@@ -78,6 +78,7 @@ type fakeSessionSpawner struct {
 	failNext atomic.Bool
 }
 
+// Spawn 为旧 M2 离线驱动消费真实 Admission，只在首次接受的 Session 上启动 Controller。
 func (s *fakeSessionSpawner) Spawn(
 	ctx context.Context,
 	cfg ports.SpawnConfig,
@@ -90,7 +91,18 @@ func (s *fakeSessionSpawner) Spawn(
 	now := time.Now().UTC().Truncate(time.Second)
 	// A real spawner would create a worktree; this one names a directory that already
 	// exists, because the assertions here are about durable rows rather than about Git.
-	rec, err := s.store.CreateSession(ctx, domain.SessionRecord{
+	permit, ok := ports.ExecutionPermitFromContext(ctx)
+	if !ok {
+		return domain.SessionRecord{}, 0, 0, domain.ErrAdmissionRequired
+	}
+	admission, found, err := s.store.GetSchedulerAdmission(ctx, permit.AdmissionID)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, err
+	}
+	if !found {
+		return domain.SessionRecord{}, 0, 0, domain.ErrAdmissionRequired
+	}
+	rec, fresh, err := s.store.CreateAdmittedSession(ctx, domain.SessionRecord{
 		ProjectID:         cfg.ProjectID,
 		Kind:              cfg.Kind,
 		Harness:           cfg.Harness,
@@ -101,9 +113,12 @@ func (s *fakeSessionSpawner) Spawn(
 		ClientRequestHash: cfg.ClientRequestHash,
 		CreatedAt:         now,
 		UpdatedAt:         now,
-	})
+	}, admission, "", now)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, err
+	}
+	if !fresh {
+		return rec, 0, 0, nil
 	}
 	// A real spawn records one session_worktrees row per repository it materialised,
 	// and the observation those rows produce is what the coordinator's repo gate reads.
@@ -309,8 +324,10 @@ func newM2Env(t *testing.T, st *store.Store) *m2Env {
 		Log:          slog.New(slog.DiscardHandler),
 	})
 
+	executionFence := m2FixtureFence(t, st, clock)
 	binder := execution.New(execution.Deps{
 		Store: st, Gateway: gateway, Resolver: resolver, Clock: clock,
+		ExecutionFence: executionFence,
 	})
 	interventions := intervention.New(intervention.Deps{
 		Store: st, Bindings: st, BindingWriter: binder, Gateway: gateway,
@@ -323,8 +340,9 @@ func newM2Env(t *testing.T, st *store.Store) *m2Env {
 	// service refuses to run without them, which is why the production wiring sets them
 	// explicitly. These mirror internal/daemon/workflow_wiring.go.
 	workflows := workflow.New(workflow.Deps{
-		Store: st,
-		Clock: clock,
+		Store:     st,
+		Clock:     clock,
+		Admission: sqlitetest.NewAdmissionFixture(t, st, clock),
 		GraphLimits: domain.WorkflowGraphLimits{
 			MaxTasks: 50, MaxDepth: 12, MaxFanOut: 8,
 		},
@@ -341,20 +359,22 @@ func newM2Env(t *testing.T, st *store.Store) *m2Env {
 		st,
 		principal.CapabilityVerifier{Sessions: st, Authority: browser.NewAuthority()},
 		principal.ApprovalOperatorTrust{Approvals: approvals},
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: st, Clock: clock})
+	).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: st, Clock: clock})
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
-		Workflows:             workflows,
-		WorkflowCapabilities:  resolver,
-		WorkflowBindings:      st,
-		WorkflowBinder:        binder,
-		WorkflowInterventions: interventions,
-		WorkflowCollaboration: collab,
-		WorkflowOwnership:     fakeOwnership{store: st},
-		WorkflowPrincipals:    principals,
-		OperatorApprovals:     approvals,
-		OperatorConsent:       &m2Consent{},
+		Workflows:                workflows,
+		WorkflowExecutionPermits: st,
+		WorkflowExecutionFence:   executionFence,
+		WorkflowCapabilities:     resolver,
+		WorkflowBindings:         st,
+		WorkflowBinder:           binder,
+		WorkflowInterventions:    interventions,
+		WorkflowCollaboration:    collab,
+		WorkflowOwnership:        fakeOwnership{store: st},
+		WorkflowPrincipals:       principals,
+		OperatorApprovals:        approvals,
+		OperatorConsent:          &m2Consent{},
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
@@ -579,14 +599,14 @@ func (e *m2Env) claimAndStart(
 		t.Fatalf("claim %s: status=%d body=%s", taskID, claimed.Status, claimed.Raw)
 	}
 	attemptID := domain.WorkflowAttemptID(str(dig(claimed.Body, "attempt", "id")))
-	lease := str(dig(claimed.Body, "leaseToken"))
+	lease := m2StoredLease(t, e.store, attemptID)
 	if attemptID == "" || lease == "" {
 		t.Fatalf("claim returned no attempt/lease: %s", claimed.Raw)
 	}
 
 	started := e.do(t, http.MethodPost,
 		"/workflows/"+string(workflowID)+"/attempts/"+string(attemptID)+"/start",
-		fmt.Sprintf(`{"leaseToken":"%s","idempotencyKey":"%s-start"}`, lease, key))
+		fmt.Sprintf(`{"idempotencyKey":"%s-start"}`, key))
 	if started.Status != http.StatusOK {
 		t.Fatalf("start %s: status=%d body=%s", attemptID, started.Status, started.Raw)
 	}
@@ -1060,8 +1080,7 @@ func TestM2AgentCollaborationMessageAndCrossWorkflowRefusal(t *testing.T) {
 	agentHeaders := func(attempt domain.WorkflowAttemptID, leaseToken string) map[string]string {
 		return map[string]string{
 			principal.HeaderAgentCapability: token,
-			principal.HeaderAttemptID:       string(attempt),
-			principal.HeaderAttemptLease:    leaseToken,
+			principal.HeaderSessionID:       string(sessionID),
 			"Content-Type":                  "application/json",
 		}
 	}
@@ -1153,7 +1172,7 @@ func TestM2TaskRequestRaisedByAgentDecidedByOperator(t *testing.T) {
 	env := newM2Env(t, openM2Store(t))
 
 	workflowID, tasks := env.createWorkflow(t, "scenario-8")
-	attemptID, lease := env.claimAndStart(t, workflowID, tasks[m2SteerHarness], "scenario-8")
+	attemptID, _ := env.claimAndStart(t, workflowID, tasks[m2SteerHarness], "scenario-8")
 	bound := env.bindAttempt(t, workflowID, attemptID, m2SteerHarness, "scenario-8", "work")
 	if bound.Status != http.StatusOK {
 		t.Fatalf("bind: status=%d body=%s", bound.Status, bound.Raw)
@@ -1162,8 +1181,7 @@ func TestM2TaskRequestRaisedByAgentDecidedByOperator(t *testing.T) {
 	token, _ := m2IssueCapability(t, env, sessionID)
 	agentHeaders := map[string]string{
 		principal.HeaderAgentCapability: token,
-		principal.HeaderAttemptID:       string(attemptID),
-		principal.HeaderAttemptLease:    lease,
+		principal.HeaderSessionID:       string(sessionID),
 	}
 
 	raised := env.doWithHeaders(t, http.MethodPost,

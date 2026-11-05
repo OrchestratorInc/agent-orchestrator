@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -52,7 +53,23 @@ func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
 func (s *Store) ClaimLiveChatControllerGeneration(ctx context.Context, id domain.SessionID, generation string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, fmt.Sprintf("claim live chat controller generation for %s", id), func(q *gen.Queries) error {
+	permit, reattaching := ports.SessionReattachPermitFromContext(ctx)
+	transaction := s.inTx
+	if reattaching {
+		transaction = s.inSchedulerTx
+	}
+	return transaction(ctx, fmt.Sprintf("claim live chat controller generation for %s", id), func(q *gen.Queries) error {
+		if reattaching {
+			if permit.SessionID != id || generation == "" || generation == permit.Owner.ControllerGeneration {
+				return domain.ErrSchedulerAdmissionConflict
+			}
+			if err := validateSessionReattach(ctx, q, permit, "", ports.SessionReattachNow(ctx)); err != nil {
+				return err
+			}
+			if err := commitReattachedGeneration(ctx, q, permit, generation); err != nil {
+				return err
+			}
+		}
 		previous, err := q.GetChatControllerGeneration(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("chat session not found")

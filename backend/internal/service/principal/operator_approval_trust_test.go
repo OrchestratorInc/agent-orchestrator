@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 )
 
@@ -191,21 +190,13 @@ func TestAgentCallerStaysAnAgentWithAnApproval(t *testing.T) {
 	}
 	approveAndConfirm(t, f, approval.ID, approval.Code, digest)
 
-	const agentToken = "agent-capability"
-	const sessionID = domain.SessionID("session-1")
-	sessions := fakeSessions{sessions: map[domain.SessionID]domain.SessionRecord{
-		sessionID: sessionWithVerifier(sessionID, "project-1", agentToken),
-	}}
-	resolver := principal.NewResolver(
-		sessions,
-		principal.CapabilityVerifier{Sessions: sessions, Authority: testAuthority{}},
-		f.trust,
-	)
+	s := identityFixture()
+	resolver := principal.StoreResolverWithOperator(s, s, testAuthority{}, f.trust)
 
 	req := approvalRequest(approval.ID, http.MethodPost, approvalBindPath, "")
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	caller, err := resolver.Resolve(context.Background(), principal.RequestFacts{
-		Request: req, AgentSessionID: sessionID,
+		Request: req, AgentSessionID: s.session.ID,
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

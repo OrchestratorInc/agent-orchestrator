@@ -13,15 +13,15 @@ import (
 // ErrNoCachedCatalog indicates that no last-known-good manifest is installed.
 var ErrNoCachedCatalog = errors.New("no cached pricing catalog")
 
-// Cache stores the runtime last-known-good catalog below AO_DATA_DIR.
+// Cache 将最近可用价格目录保存在 AO_DATA_DIR 内；先发布 blob，最后替换清单。
 type Cache struct {
 	root   string
-	rename func(string, string) error
+	rename func(*os.Root, string, string) error
 }
 
 // NewCache returns a private v1 pricing cache rooted below dataDir.
 func NewCache(dataDir string) *Cache {
-	return &Cache{root: filepath.Join(dataDir, "pricing", "catalog", "v1"), rename: os.Rename}
+	return &Cache{root: filepath.Join(dataDir, "pricing", "catalog", "v1"), rename: (*os.Root).Rename}
 }
 
 // Root returns the resolved cache directory.
@@ -61,8 +61,7 @@ func (c *Cache) Load(ctx context.Context) (*Catalog, error) {
 	return ParseCatalog(manifestBytes, providers)
 }
 
-// Install commits a complete validated candidate with immutable blobs first
-// and an atomic manifest replacement last.
+// Install 校验完整候选目录后先写 blob，再原子替换清单；失败时保留原有可用清单。
 func (c *Cache) Install(ctx context.Context, catalog *Catalog) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -73,8 +72,11 @@ func (c *Cache) Install(ctx context.Context, catalog *Catalog) error {
 	if _, err := decodeCatalog(catalog.manifestBytes, catalog.providerBytes); err != nil {
 		return fmt.Errorf("validate pricing cache candidate: %w", err)
 	}
-	if err := ensurePrivateDir(c.root); err != nil {
-		return err
+	// 一并收紧旧版创建的中间目录，避免其他账户从可写父目录替换缓存根。
+	for _, directory := range []string{filepath.Dir(filepath.Dir(c.root)), filepath.Dir(c.root), c.root, filepath.Join(c.root, "providers")} {
+		if err := ensurePrivateDir(directory); err != nil {
+			return err
+		}
 	}
 	for _, ref := range catalog.manifest.Providers {
 		if err := ctx.Err(); err != nil {
@@ -99,43 +101,33 @@ func (c *Cache) Install(ctx context.Context, catalog *Catalog) error {
 	return nil
 }
 
-func ensurePrivateDir(directory string) error {
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create private pricing directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil { //nolint:gosec // Private directories require owner traversal.
-		return fmt.Errorf("protect pricing directory: %w", err)
-	}
-	return nil
-}
-
-// installImmutableFile writes one content-addressed provider blob.
-//
-// A path whose contents already match is left untouched. A mismatch can only
-// mean the local copy is corrupt: the path is the digest of the contents, so
-// two different byte strings cannot legitimately share one. Install has already
-// revalidated the candidate bytes against that digest, so overwriting is the
-// only way a corrupt blob recovers — refusing would wedge every future refresh
-// that references the same hash until the user deleted AO state by hand.
-func installImmutableFile(target string, contents []byte, rename func(string, string) error) error {
+// installImmutableFile 保留内容匹配的 blob 并修复其权限；内容不匹配说明本地损坏，
+// 使用已校验摘要的候选字节替换，避免同一摘要的后续刷新持续失败。
+func installImmutableFile(target string, contents []byte, rename func(*os.Root, string, string) error) error {
 	existing, err := os.ReadFile(target)
 	switch {
 	case err == nil && bytes.Equal(existing, contents):
-		return os.Chmod(target, 0o600)
+		return protectCacheFile(target)
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return err
 	}
 	return atomicReplaceFile(target, contents, rename)
 }
 
-func atomicReplaceFile(target string, contents []byte, rename func(string, string) error) (err error) {
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".pricing-*")
+// atomicReplaceFile 用同一固定目录句柄创建、清理和发布私有临时对象，避免父路径替换。
+func atomicReplaceFile(target string, contents []byte, rename func(*os.Root, string, string) error) (err error) {
+	root, err := os.OpenRoot(filepath.Dir(target))
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
+	defer func() { _ = root.Close() }()
+	temporary, err := createPrivateCacheTemp(root)
+	if err != nil {
+		return err
+	}
+	temporaryName := filepath.Base(temporary.Name())
 	closed := false
-	defer func() { _ = os.Remove(temporaryPath) }()
+	defer func() { _ = root.Remove(temporaryName) }()
 	defer func() {
 		if closed {
 			return
@@ -144,9 +136,6 @@ func atomicReplaceFile(target string, contents []byte, rename func(string, strin
 			err = closeErr
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
 	if _, err := temporary.Write(contents); err != nil {
 		return err
 	}
@@ -157,7 +146,7 @@ func atomicReplaceFile(target string, contents []byte, rename func(string, strin
 		return err
 	}
 	closed = true
-	if err := rename(temporaryPath, target); err != nil {
+	if err := rename(root, temporaryName, filepath.Base(target)); err != nil {
 		return err
 	}
 	return nil

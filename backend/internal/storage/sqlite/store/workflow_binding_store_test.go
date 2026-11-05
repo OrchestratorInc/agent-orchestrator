@@ -41,10 +41,25 @@ func seedClaimedAttempt(
 	now time.Time,
 ) domain.WorkflowAttempt {
 	t.Helper()
+	return seedClaimedHarnessAttempt(t, s, workflowID, taskID, projectID, domain.HarnessCodex, now)
+}
+
+// seedClaimedHarnessAttempt 在准入前固定 Harness，保证双适配器集成测试的占位身份与启动请求一致。
+func seedClaimedHarnessAttempt(
+	t *testing.T,
+	s *sqlite.Store,
+	workflowID domain.WorkflowID,
+	taskID domain.WorkflowTaskID,
+	projectID string,
+	harness domain.AgentHarness,
+	now time.Time,
+) domain.WorkflowAttempt {
+	t.Helper()
 	ctx := context.Background()
 	seedProject(t, s, projectID)
 
 	task := workflowStoreTask(taskID, workflowID, 2, now)
+	task.AgentHarness = harness
 	if _, _, err := s.CreateWorkflow(
 		ctx, workflowStoreRecord(workflowID, now),
 		[]domain.WorkflowRepository{bindingWorkflowRepo(workflowID, projectID)},
@@ -61,7 +76,7 @@ func seedClaimedAttempt(
 	if err != nil || !found {
 		t.Fatalf("GetWorkflowTask(%s): found=%v err=%v", taskID, found, err)
 	}
-	claimed, created, err := s.ClaimWorkflowTask(
+	claimed, created, err := claimWithAdmission(t, s,
 		ctx,
 		workflowStoreAttempt(domain.WorkflowAttemptID("attempt-"+string(workflowID)), workflowID, taskID,
 			"worker-1", "lease-secret-token", now.Add(2*time.Second), now.Add(time.Hour)),
@@ -113,7 +128,7 @@ func TestWorkflowBindingCreateIsIdempotentBySpawnRequest(t *testing.T) {
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "bind-project", now)
 	binding, repos := bindingIntent(attempt, "bind-project")
 
-	first, created, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	first, created, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil || !created {
 		t.Fatalf("first create = created:%v err:%v", created, err)
 	}
@@ -125,7 +140,7 @@ func TestWorkflowBindingCreateIsIdempotentBySpawnRequest(t *testing.T) {
 	}
 
 	// Replaying the identical request must return the original and create nothing.
-	second, created, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(4*time.Second))
+	second, created, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(4*time.Second)), binding, repos, now.Add(4*time.Second))
 	if err != nil {
 		t.Fatalf("replay err = %v", err)
 	}
@@ -167,7 +182,7 @@ func TestWorkflowBindingIdempotentAcrossRestart(t *testing.T) {
 	first := sqlitetestOpenAt(t, dir)
 	attempt := seedClaimedAttempt(t, first, workflowID, "task-a", "restart-project", now)
 	binding, repos := bindingIntent(attempt, "restart-project")
-	if _, created, err := first.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second)); err != nil || !created {
+	if _, created, err := first.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, first, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second)); err != nil || !created {
 		t.Fatalf("first create: created=%v err=%v", created, err)
 	}
 	if err := first.Close(); err != nil {
@@ -175,7 +190,7 @@ func TestWorkflowBindingIdempotentAcrossRestart(t *testing.T) {
 	}
 
 	second := sqlitetestReopen(t, dir)
-	replayed, created, err := second.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(time.Minute))
+	replayed, created, err := second.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, second, binding.AttemptID, now.Add(4*time.Second)), binding, repos, now.Add(4*time.Second))
 	if err != nil {
 		t.Fatalf("replay after restart err = %v", err)
 	}
@@ -205,13 +220,13 @@ func TestWorkflowBindingDifferentHashConflicts(t *testing.T) {
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "hash-project", now)
 	binding, repos := bindingIntent(attempt, "hash-project")
 
-	if _, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second)); err != nil {
+	if _, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second)); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
 
 	conflicting := binding
 	conflicting.SpawnHash = strings.Repeat("f", 64)
-	_, created, err := s.CreateWorkflowAttemptBinding(ctx, conflicting, repos, now.Add(4*time.Second))
+	_, created, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, conflicting.AttemptID, now.Add(4*time.Second)), conflicting, repos, now.Add(4*time.Second))
 	if !errors.Is(err, domain.ErrWorkflowBindingSpawningRequestConflict) {
 		t.Fatalf("conflicting hash err = %v, want ErrWorkflowBindingSpawningRequestConflict (created=%v)", err, created)
 	}
@@ -226,6 +241,8 @@ func TestWorkflowBindingConcurrentCreateHasOneWinner(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-race-create")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "race-project", now)
 	binding, repos := bindingIntent(attempt, "race-project")
+	// 同一批执行者持有相同旧快照；赢家写入后，其余写入必须被 revision 门禁拒绝。
+	createCtx := sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(3*time.Second))
 
 	const racers = 8
 	var wg sync.WaitGroup
@@ -236,7 +253,7 @@ func TestWorkflowBindingConcurrentCreateHasOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			_, created, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+			_, created, err := s.CreateWorkflowAttemptBinding(createCtx, binding, repos, now.Add(3*time.Second))
 			if err != nil {
 				results[index] = err
 				return
@@ -251,12 +268,15 @@ func TestWorkflowBindingConcurrentCreateHasOneWinner(t *testing.T) {
 	wg.Wait()
 
 	for i, err := range results {
-		if err != nil {
+		if err != nil && !errors.Is(err, domain.ErrSchedulerFence) {
 			t.Fatalf("racer %d failed: %v", i, err)
 		}
 	}
 	if winners != 1 {
 		t.Fatalf("winners = %d, want exactly 1", winners)
+	}
+	if _, created, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), binding, repos, now.Add(4*time.Second)); err != nil || created {
+		t.Fatalf("authorized replay: created=%v err=%v", created, err)
 	}
 }
 
@@ -269,7 +289,7 @@ func TestWorkflowBindingConcurrentBindHasOneWinner(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-race-bind")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "race-bind-project", now)
 	binding, repos := bindingIntent(attempt, "race-bind-project")
-	createdBinding, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	createdBinding, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -285,12 +305,13 @@ func TestWorkflowBindingConcurrentBindHasOneWinner(t *testing.T) {
 	winners := 0
 	var winnerSession domain.SessionID
 	failures := make([]error, racers)
+	bindCtx := sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second))
 	for i := range racers {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
 			_, applied, err := s.BindWorkflowAttemptSession(
-				ctx, attempt.ID, sessions[index], "gen-1",
+				bindCtx, attempt.ID, sessions[index], "gen-1",
 				domain.WorkflowBindingStateBoundReady, createdBinding.Revision, now.Add(4*time.Second),
 			)
 			if err != nil {
@@ -315,7 +336,7 @@ func TestWorkflowBindingConcurrentBindHasOneWinner(t *testing.T) {
 			continue
 		}
 		if !errors.Is(err, domain.ErrWorkflowBindingRevisionConflict) &&
-			!errors.Is(err, domain.ErrWorkflowBindingSessionTaken) {
+			!errors.Is(err, domain.ErrWorkflowBindingSessionTaken) && !errors.Is(err, domain.ErrSchedulerFence) {
 			t.Fatalf("racer %d failed with an unmapped error: %v", i, err)
 		}
 	}
@@ -344,26 +365,26 @@ func TestWorkflowBindingSessionBelongsToOneAttempt(t *testing.T) {
 	attemptB := seedClaimedAttempt(t, s, workflowB, "task-b", projectID, now)
 
 	bindingA, reposA := bindingIntent(attemptA, projectID)
-	createdA, _, err := s.CreateWorkflowAttemptBinding(ctx, bindingA, reposA, now.Add(3*time.Second))
+	createdA, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, bindingA.AttemptID, now.Add(3*time.Second)), bindingA, reposA, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding A: %v", err)
 	}
 	bindingB, reposB := bindingIntent(attemptB, projectID)
-	createdB, _, err := s.CreateWorkflowAttemptBinding(ctx, bindingB, reposB, now.Add(3*time.Second))
+	createdB, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, bindingB.AttemptID, now.Add(3*time.Second)), bindingB, reposB, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding B: %v", err)
 	}
 
 	session := seedSession(t, s, projectID)
 	if _, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attemptA.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attemptA.ID, now.Add(4*time.Second)), attemptA.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, createdA.Revision, now.Add(4*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("bind A: applied=%v err=%v", applied, err)
 	}
 
 	_, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attemptB.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attemptB.ID, now.Add(5*time.Second)), attemptB.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, createdB.Revision, now.Add(5*time.Second),
 	)
 	if err == nil {
@@ -386,14 +407,14 @@ func TestWorkflowBindingWritesAttemptSessionInSameTransaction(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-mirror")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "mirror-project", now)
 	binding, repos := bindingIntent(attempt, "mirror-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 
 	session := seedSession(t, s, "mirror-project")
 	bound, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-7",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-7",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil || !applied {
@@ -435,7 +456,7 @@ func TestWorkflowBindingRollbackLeavesNeitherSideWritten(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-rollback")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "rollback-project", now)
 	binding, repos := bindingIntent(attempt, "rollback-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -447,7 +468,7 @@ func TestWorkflowBindingRollbackLeavesNeitherSideWritten(t *testing.T) {
 	first := seedSession(t, s, "rollback-project")
 	second := seedSession(t, s, "rollback-project")
 	if _, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, first, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, first, "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("first bind: applied=%v err=%v", applied, err)
@@ -459,7 +480,7 @@ func TestWorkflowBindingRollbackLeavesNeitherSideWritten(t *testing.T) {
 		t.Fatalf("get binding: found=%v err=%v", found, err)
 	}
 	_, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, second, "gen-2",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, second, "gen-2",
 		domain.WorkflowBindingStateBoundReady, after.Revision, now.Add(5*time.Second),
 	)
 	if err == nil || applied {
@@ -495,7 +516,7 @@ func TestWorkflowBindingRejectsIllegalTransition(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-illegal")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "illegal-project", now)
 	binding, repos := bindingIntent(attempt, "illegal-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -503,7 +524,7 @@ func TestWorkflowBindingRejectsIllegalTransition(t *testing.T) {
 	// intent_persisted → stop_requested skips the entire spawn-and-bind path. It is
 	// refused for the more specific reason: it is session-bearing and no session is held.
 	_, applied, err := s.TransitionWorkflowAttemptBinding(
-		ctx, attempt.ID, domain.WorkflowBindingStateStopRequested, "no", created.Revision, now.Add(4*time.Second),
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, domain.WorkflowBindingStateStopRequested, "no", created.Revision, now.Add(4*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowBindingSessionRequired) {
 		t.Fatalf("err = %v, want ErrWorkflowBindingSessionRequired", err)
@@ -533,18 +554,18 @@ func TestWorkflowBindingTransitionRequiresRevision(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-cas")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "cas-project", now)
 	binding, repos := bindingIntent(attempt, "cas-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	if _, applied, err := s.TransitionWorkflowAttemptBinding(
-		ctx, attempt.ID, domain.WorkflowBindingStateSpawnRequested, "", created.Revision, now.Add(4*time.Second),
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, domain.WorkflowBindingStateSpawnRequested, "", created.Revision, now.Add(4*time.Second),
 	); err != nil || !applied {
 		t.Fatalf("transition: applied=%v err=%v", applied, err)
 	}
 	// Replaying with the now-stale revision must lose.
 	_, applied, err := s.TransitionWorkflowAttemptBinding(
-		ctx, attempt.ID, domain.WorkflowBindingStateSpawnUnknown, "spawn_lost", created.Revision, now.Add(5*time.Second),
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, domain.WorkflowBindingStateSpawnUnknown, "spawn_lost", created.Revision, now.Add(5*time.Second),
 	)
 	if !errors.Is(err, domain.ErrWorkflowBindingRevisionConflict) {
 		t.Fatalf("stale transition err = %v, want ErrWorkflowBindingRevisionConflict", err)
@@ -567,7 +588,7 @@ func TestWorkflowBindingRepoCrossWorkflowRejected(t *testing.T) {
 	binding, repos := bindingIntent(attempt, projectID)
 	// "frontend" was never registered on this workflow; only "backend" was.
 	repos[0].RepoKey = "frontend"
-	_, created, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	_, created, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err == nil {
 		t.Fatal("a repo binding for an unregistered repository was accepted")
 	}
@@ -593,7 +614,7 @@ func TestWorkflowBindingRepoPerRepoCAS(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-repo-cas")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	if _, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second)); err != nil {
+	if _, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second)); err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 
@@ -610,7 +631,7 @@ func TestWorkflowBindingRepoPerRepoCAS(t *testing.T) {
 	drifted := pending
 	drifted.ObservedHeadSHA = "different-head-sha"
 	drifted.State = domain.WorkflowRepoBindingStateMismatch
-	recorded, applied, err := s.RecordWorkflowAttemptRepoBinding(ctx, drifted, pending.Revision, now.Add(4*time.Second))
+	recorded, applied, err := s.RecordWorkflowAttemptRepoBinding(sqlitetest.ExecutionContext(t, ctx, s, drifted.AttemptID, now.Add(4*time.Second)), drifted, pending.Revision, now.Add(4*time.Second))
 	if err != nil || !applied {
 		t.Fatalf("record: applied=%v err=%v", applied, err)
 	}
@@ -619,7 +640,7 @@ func TestWorkflowBindingRepoPerRepoCAS(t *testing.T) {
 	}
 
 	// Replaying with the now-stale revision loses.
-	_, applied, err = s.RecordWorkflowAttemptRepoBinding(ctx, drifted, pending.Revision, now.Add(5*time.Second))
+	_, applied, err = s.RecordWorkflowAttemptRepoBinding(sqlitetest.ExecutionContext(t, ctx, s, drifted.AttemptID, now.Add(5*time.Second)), drifted, pending.Revision, now.Add(5*time.Second))
 	if !errors.Is(err, domain.ErrWorkflowBindingRevisionConflict) {
 		t.Fatalf("stale record err = %v, want ErrWorkflowBindingRevisionConflict", err)
 	}
@@ -649,13 +670,13 @@ func TestWorkflowBindingNeverCarriesLeaseToken(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-no-lease")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "no-lease-project", now)
 	binding, repos := bindingIntent(attempt, "no-lease-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	session := seedSession(t, s, "no-lease-project")
 	bound, _, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil {
@@ -743,20 +764,20 @@ func TestWorkflowBindingBindRequiresGeneration(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-gen")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "gen-project", now)
 	binding, repos := bindingIntent(attempt, "gen-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	session := seedSession(t, s, "gen-project")
 
 	if _, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "   ",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "   ",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	); !errors.Is(err, domain.ErrInvalidWorkflowBindingSession) || applied {
 		t.Fatalf("blank generation: applied=%v err=%v, want ErrInvalidWorkflowBindingSession", applied, err)
 	}
 	if _, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, "", "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, "", "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	); !errors.Is(err, domain.ErrInvalidWorkflowBindingSession) || applied {
 		t.Fatalf("blank session: applied=%v err=%v, want ErrInvalidWorkflowBindingSession", applied, err)
@@ -833,14 +854,14 @@ func TestWorkflowBindingSessionFKFailureIsNotBlamedOnTheRepo(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-session-fk")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", "session-fk-project", now)
 	binding, repos := bindingIntent(attempt, "session-fk-project")
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 
 	// No sessions row exists for this id.
 	_, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, "session-that-does-not-exist", "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, "session-that-does-not-exist", "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err == nil {
@@ -879,7 +900,7 @@ func TestWorkflowBindingSurvivesSessionDeletion(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-delete")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -898,7 +919,7 @@ func TestWorkflowBindingSurvivesSessionDeletion(t *testing.T) {
 	}
 
 	bound, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil || !applied {
@@ -958,7 +979,7 @@ func TestWorkflowBindingNeverLooksLiveAfterSessionDeletion(t *testing.T) {
 			workflowID := domain.WorkflowID("workflow-bind-live-" + string(startState))
 			attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 			binding, repos := bindingIntent(attempt, projectID)
-			created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+			created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 			if err != nil {
 				t.Fatalf("create binding: %v", err)
 			}
@@ -979,7 +1000,7 @@ func TestWorkflowBindingNeverLooksLiveAfterSessionDeletion(t *testing.T) {
 				bindTarget = domain.WorkflowBindingStateBoundReady
 			}
 			current, applied, err := s.BindWorkflowAttemptSession(
-				ctx, attempt.ID, session, "gen-1",
+				sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 				bindTarget, created.Revision, now.Add(4*time.Second),
 			)
 			if err != nil || !applied {
@@ -1007,7 +1028,7 @@ func TestWorkflowBindingNeverLooksLiveAfterSessionDeletion(t *testing.T) {
 				for _, next := range path {
 					fromState := current.State
 					current, applied, err = s.TransitionWorkflowAttemptBinding(
-						ctx, attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
+						sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
 					)
 					if err != nil || !applied {
 						t.Fatalf("transition from %q to %q: applied=%v err=%v",
@@ -1049,13 +1070,13 @@ func TestWorkflowBindingWalksSessionBearingStates(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-walk")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	session := seedSession(t, s, projectID)
 	current, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil || !applied {
@@ -1065,7 +1086,7 @@ func TestWorkflowBindingWalksSessionBearingStates(t *testing.T) {
 	walk := func(next domain.WorkflowBindingState) domain.WorkflowAttemptBinding {
 		t.Helper()
 		updated, ok, err := s.TransitionWorkflowAttemptBinding(
-			ctx, attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
+			sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
 		)
 		if err != nil || !ok {
 			t.Fatalf("transition to %q: applied=%v err=%v", next, ok, err)
@@ -1095,13 +1116,13 @@ func TestWorkflowBindingWalksStopUnknown(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-walk-unknown")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	session := seedSession(t, s, projectID)
 	current, _, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 		domain.WorkflowBindingStateBoundReady, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil {
@@ -1113,7 +1134,7 @@ func TestWorkflowBindingWalksStopUnknown(t *testing.T) {
 		domain.WorkflowBindingStateStopUnknown,
 	} {
 		updated, applied, err := s.TransitionWorkflowAttemptBinding(
-			ctx, attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
+			sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, next, "", current.Revision, now.Add(5*time.Second),
 		)
 		if err != nil || !applied {
 			t.Fatalf("transition to %q: applied=%v err=%v", next, applied, err)
@@ -1137,7 +1158,7 @@ func TestWorkflowBindingTransitionCannotAcquireSession(t *testing.T) {
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
 	// intent_persisted holds no session.
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -1153,7 +1174,7 @@ func TestWorkflowBindingTransitionCannotAcquireSession(t *testing.T) {
 		domain.WorkflowBindingStateRecoveryUncertain,
 	} {
 		_, applied, err := s.TransitionWorkflowAttemptBinding(
-			ctx, attempt.ID, next, "", created.Revision, now.Add(4*time.Second),
+			sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, next, "", created.Revision, now.Add(4*time.Second),
 		)
 		if !errors.Is(err, domain.ErrWorkflowBindingSessionRequired) {
 			t.Fatalf("transition to %q err = %v, want ErrWorkflowBindingSessionRequired", next, err)
@@ -1182,7 +1203,7 @@ func TestWorkflowBindingBindRejectsRunningTarget(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-no-running")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
@@ -1195,7 +1216,7 @@ func TestWorkflowBindingBindRejectsRunningTarget(t *testing.T) {
 		domain.WorkflowBindingStateFailedConfirmed,
 	} {
 		_, applied, err := s.BindWorkflowAttemptSession(
-			ctx, attempt.ID, session, "gen-1", target, created.Revision, now.Add(4*time.Second),
+			sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1", target, created.Revision, now.Add(4*time.Second),
 		)
 		if !errors.Is(err, domain.ErrInvalidWorkflowBindingTransition) {
 			t.Fatalf("bind to %q err = %v, want ErrInvalidWorkflowBindingTransition", target, err)
@@ -1216,13 +1237,13 @@ func TestWorkflowBindingProvisioningIsSessionBearing(t *testing.T) {
 	workflowID := domain.WorkflowID("workflow-bind-provisioning")
 	attempt := seedClaimedAttempt(t, s, workflowID, "task-a", projectID, now)
 	binding, repos := bindingIntent(attempt, projectID)
-	created, _, err := s.CreateWorkflowAttemptBinding(ctx, binding, repos, now.Add(3*time.Second))
+	created, _, err := s.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, s, binding.AttemptID, now.Add(3*time.Second)), binding, repos, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	session := seedSession(t, s, projectID)
 	provisioning, applied, err := s.BindWorkflowAttemptSession(
-		ctx, attempt.ID, session, "gen-1",
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(4*time.Second)), attempt.ID, session, "gen-1",
 		domain.WorkflowBindingStateSessionProvisioning, created.Revision, now.Add(4*time.Second),
 	)
 	if err != nil || !applied {
@@ -1238,7 +1259,7 @@ func TestWorkflowBindingProvisioningIsSessionBearing(t *testing.T) {
 	// graph, because the binding already holds its session. Acquiring and progressing are
 	// separate operations by design.
 	promoted, applied, err := s.TransitionWorkflowAttemptBinding(
-		ctx, attempt.ID, domain.WorkflowBindingStateBoundReady, "", provisioning.Revision, now.Add(5*time.Second),
+		sqlitetest.ExecutionContext(t, ctx, s, attempt.ID, now.Add(5*time.Second)), attempt.ID, domain.WorkflowBindingStateBoundReady, "", provisioning.Revision, now.Add(5*time.Second),
 	)
 	if err != nil || !applied {
 		t.Fatalf("promote: applied=%v err=%v", applied, err)

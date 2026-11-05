@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // f03BindingIntent 通过真实 SQLite 事务创建 Workflow、Claim 与未绑定 Session 的 Repo 意图。
@@ -17,6 +18,7 @@ func f03BindingIntent(t *testing.T, f *multiRepoFixture, cfg ports.SpawnConfig) 
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC()
+	admission := sqlitetest.NewAdmissionFixture(t, f.store, func() time.Time { return now })
 	wf := domain.Workflow{ID: "f03-workflow", Title: "F03", Goal: "核验持久化归属",
 		State: domain.WorkflowStateDraft, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	task := domain.WorkflowTask{ID: "f03-task", WorkflowID: wf.ID, Title: "核验",
@@ -43,7 +45,7 @@ func f03BindingIntent(t *testing.T, f *multiRepoFixture, cfg ports.SpawnConfig) 
 		t.Fatalf("读取任务：%v，%v", found, err)
 	}
 	leaseUntil := now.Add(time.Hour)
-	attempt, _, err := f.store.ClaimWorkflowTask(ctx, domain.WorkflowAttempt{
+	attempt, _, err := admission.Claim(ctx, domain.WorkflowAttempt{
 		ID: "f03-attempt", WorkflowID: wf.ID, TaskID: task.ID, WorkerID: "f03-worker",
 		LeaseToken: "仅本地测试", LeaseUntil: &leaseUntil, State: domain.WorkflowAttemptStateClaimed,
 		CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second),
@@ -51,7 +53,7 @@ func f03BindingIntent(t *testing.T, f *multiRepoFixture, cfg ports.SpawnConfig) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, _, err := f.store.CreateWorkflowAttemptBinding(ctx, domain.WorkflowAttemptBinding{
+	binding, _, err := f.store.CreateWorkflowAttemptBinding(managerExecutionPermit(t, f.store, attempt.ID, now.Add(3*time.Second)), domain.WorkflowAttemptBinding{
 		AttemptID: attempt.ID, WorkflowID: wf.ID, TaskID: task.ID,
 		SpawnRequestID: cfg.ClientRequestID, SpawnHash: fingerprint,
 	}, expected, now.Add(3*time.Second))
@@ -96,7 +98,7 @@ func TestF03DurableRepoSetFencesSingleWorktree(t *testing.T) {
 	if err := f.store.UpsertSessionWorktree(ctx, row); err != nil {
 		t.Fatal(err)
 	}
-	bound, _, err := f.store.BindWorkflowAttemptSession(ctx, binding.AttemptID, rec.ID, "f03-generation",
+	bound, _, err := f.store.BindWorkflowAttemptSession(managerExecutionPermit(t, f.store, binding.AttemptID, time.Now().UTC()), binding.AttemptID, rec.ID, "f03-generation",
 		domain.WorkflowBindingStateBoundReady, binding.Revision, time.Now().UTC().Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +127,7 @@ func TestF03DurableRepoSetFencesSingleWorktree(t *testing.T) {
 	}
 	proof := expected[0]
 	proof.SessionWorktreeRef, proof.ObservedHeadSHA, proof.State = row.WorktreePath, row.CreationSHA, domain.WorkflowRepoBindingStateVerified
-	if _, _, err := f.store.RecordWorkflowAttemptRepoBinding(ctx, proof, proof.Revision, time.Now().UTC().Add(5*time.Second)); err != nil {
+	if _, _, err := f.store.RecordWorkflowAttemptRepoBinding(managerExecutionPermit(t, f.store, binding.AttemptID, time.Now().UTC()), proof, proof.Revision, time.Now().UTC().Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	// 真正移动同库、同历史、同分支工作树，并更新 Session；独立 binding ref 仍必须拒绝替换。
@@ -170,7 +172,7 @@ func TestF03BoundSessionRequiresRepoReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, _, err = f.store.BindWorkflowAttemptSession(ctx, binding.AttemptID, rec.ID, "f03-generation",
+	binding, _, err = f.store.BindWorkflowAttemptSession(managerExecutionPermit(t, f.store, binding.AttemptID, time.Now().UTC()), binding.AttemptID, rec.ID, "f03-generation",
 		domain.WorkflowBindingStateBoundReady, binding.Revision, time.Now().UTC().Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)

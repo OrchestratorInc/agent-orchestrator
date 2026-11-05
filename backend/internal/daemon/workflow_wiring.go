@@ -7,6 +7,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	workflowsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/workflow"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -30,8 +31,14 @@ const (
 // newWorkflowService builds the Workflow service from the durable store. Clock,
 // ID, and lease-token sources stay nil so the service applies its own defaults.
 func newWorkflowService(store *sqlite.Store) *workflowsvc.Service {
+	return newWorkflowServiceWithAdmission(store, nil)
+}
+
+// newWorkflowServiceWithAdmission 让 HTTP 与自动 Claim 共用同一原子准入边界。
+func newWorkflowServiceWithAdmission(store *sqlite.Store, admission ports.WorkflowAdmissionProvider) *workflowsvc.Service {
 	return workflowsvc.New(workflowsvc.Deps{
-		Store: store,
+		Store:     store,
+		Admission: admission,
 		GraphLimits: domain.WorkflowGraphLimits{
 			MaxTasks: workflowMaxTasks, MaxDepth: workflowMaxDepth, MaxFanOut: workflowMaxFanOut,
 		},

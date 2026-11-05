@@ -16,11 +16,14 @@ import (
 // httptest daemon. Nothing here starts a provider.
 
 const (
-	testWorkflowID  = "workflow-mcp"
-	testAttemptID   = "attempt-mcp-a"
-	testLeaseToken  = "lease-secret-value"
-	testCapability  = "capability-secret-value"
-	testMessagePath = "/api/v1/workflows/" + testWorkflowID + "/messages"
+	envMCPLeaseToken   = "AO_WORKFLOW_LEASE"
+	headerAttemptLease = "X-AO-Attempt-Lease"
+	testWorkflowID     = "workflow-mcp"
+	testSessionID      = "session-mcp-a"
+	testAttemptID      = "attempt-mcp-a"
+	testLeaseToken     = "lease-secret-value"
+	testCapability     = "capability-secret-value"
+	testMessagePath    = "/api/v1/workflows/" + testWorkflowID + "/messages"
 )
 
 // mcpDaemonCapture records every request an `ao mcp` server made.
@@ -110,17 +113,18 @@ func serveMCPLines(ctx context.Context, deps Deps, lines ...string) ([]mcpReply,
 // setWorkflowMCPEnv installs the identity a workflow session's `ao mcp` receives.
 func setWorkflowMCPEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("AO_SESSION_ID", testSessionID)
 	t.Setenv(envMCPWorkflowID, testWorkflowID)
 	t.Setenv(envMCPTaskID, "task-mcp-a")
 	t.Setenv(envMCPAttemptID, testAttemptID)
-	t.Setenv(envMCPLeaseToken, testLeaseToken)
+	t.Setenv(envMCPLeaseToken, "")
 	t.Setenv(envMCPCapability, testCapability)
 }
 
 // clearWorkflowMCPEnv models an ordinary (non-workflow) session.
 func clearWorkflowMCPEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{envMCPWorkflowID, envMCPTaskID, envMCPAttemptID, envMCPLeaseToken, envMCPCapability} {
+	for _, key := range []string{"AO_SESSION_ID", envMCPWorkflowID, envMCPTaskID, envMCPAttemptID, envMCPLeaseToken, envMCPCapability} {
 		t.Setenv(key, "")
 	}
 }
@@ -197,10 +201,11 @@ func TestMCPWorkflowSchemasDeclareNoIdentity(t *testing.T) {
 	}
 }
 
-// TestMCPWorkflowMessageSendUsesEnvironmentIdentity proves the workflow id and the
-// attempt come from the environment and the three identity headers are sent.
+// TestMCPWorkflowMessageSendUsesEnvironmentIdentity 捕获真实 MCP HTTP 请求，旧环境
+// 即使残留 lease 也不得外发；Session capability 与非秘密身份仍需完整发送。
 func TestMCPWorkflowMessageSendUsesEnvironmentIdentity(t *testing.T) {
 	setWorkflowMCPEnv(t)
+	t.Setenv(envMCPLeaseToken, testLeaseToken)
 	capture, deps := newWorkflowMCPDaemon(t, func(w http.ResponseWriter, r *http.Request, _ *mcpDaemonCapture) {
 		if r.URL.Path != testMessagePath || r.Method != http.MethodPost {
 			http.Error(w, "unexpected route", http.StatusNotFound)
@@ -230,8 +235,11 @@ func TestMCPWorkflowMessageSendUsesEnvironmentIdentity(t *testing.T) {
 	if got := request.Header.Get(headerAttemptID); got != testAttemptID {
 		t.Errorf("%s = %q, want the environment attempt", headerAttemptID, got)
 	}
-	if got := request.Header.Get(headerAttemptLease); got != testLeaseToken {
-		t.Errorf("%s did not carry the environment lease", headerAttemptLease)
+	if got := request.Header.Get("X-AO-Session-Id"); got != testSessionID {
+		t.Errorf("session header = %q, want the environment session", got)
+	}
+	if got := request.Header.Get(headerAttemptLease); got != "" {
+		t.Error("legacy attempt lease was sent to the daemon")
 	}
 	// The workflow id is a path segment supplied by the environment, and the body
 	// carries no identity at all.
@@ -409,12 +417,15 @@ func TestMCPWorkflowTaskRequestTools(t *testing.T) {
 	if requests[2].Query != "limit=5&offset=5" {
 		t.Fatalf("list query = %q, want limit=5&offset=5", requests[2].Query)
 	}
-	// Every request carried the three identity headers.
+	// 每条请求都携带 Session capability 和非秘密标识，不携带租约。
 	for _, request := range requests {
 		if request.Header.Get(headerAgentCapability) == "" ||
 			request.Header.Get(headerAttemptID) == "" ||
-			request.Header.Get(headerAttemptLease) == "" {
+			request.Header.Get("X-AO-Session-Id") == "" {
 			t.Fatalf("%s %s omitted an identity header", request.Method, request.Path)
+		}
+		if request.Header.Get(headerAttemptLease) != "" {
+			t.Fatal("legacy attempt lease was sent to the daemon")
 		}
 	}
 }

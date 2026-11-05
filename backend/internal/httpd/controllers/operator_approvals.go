@@ -154,10 +154,12 @@ func (c *OperatorController) confirmApproval(w http.ResponseWriter, r *http.Requ
 
 // hasOperatorAgentHeaders 对已声明 Agent 身份的请求提前拒绝；删除标记也仍须经过 OS 验证。
 func hasOperatorAgentHeaders(r *http.Request) bool {
-	for _, header := range []string{principal.HeaderAgentCapability, principal.HeaderAttemptLease,
-		"X-AO-Session-Id", principal.HeaderAttemptID, "X-AO-Workflow-Id"} {
-		if strings.TrimSpace(r.Header.Get(header)) != "" {
-			return true
+	for present := range r.Header {
+		for _, header := range []string{principal.HeaderAgentCapability, principal.HeaderAttemptLease,
+			principal.HeaderSessionID, principal.HeaderAttemptID, "X-AO-Workflow-Id", "X-AO-Workflow-Lease"} {
+			if strings.EqualFold(present, header) {
+				return true
+			}
 		}
 	}
 	return false

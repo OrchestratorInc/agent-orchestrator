@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -95,7 +96,17 @@ type APIDeps struct {
 	// Workflows is the durable multi-repository orchestration core. Nil leaves
 	// every workflow route mounted and answering 501, like the other optional
 	// surfaces.
-	Workflows controllers.WorkflowService
+	Workflows                controllers.WorkflowService
+	Scheduler                controllers.SchedulerService
+	Budget                   controllers.BudgetService
+	WorkflowExecutionPermits controllers.ExecutionPermitReader
+	WorkflowExecutionFence   func(context.Context) (domain.SchedulerFence, error)
+	// WorkflowClock 供使用受控时钟的装配共享时间源；nil 保留真实 UTC 时间。
+	WorkflowClock            func() time.Time
+	WorkflowRetrySchedule    func(context.Context, domain.WorkflowID, domain.WorkflowTaskID, int64) error
+	WorkflowMaterializer     controllers.TaskRequestMaterializer
+	WorkflowMaterializations controllers.TaskRequestMaterializationReader
+	WorkflowRecovery         controllers.WorkflowRecovery
 	// WorkflowCapabilities, WorkflowBindings, WorkflowBinder, WorkflowInterventions,
 	// WorkflowCollaboration, and WorkflowOwnership are the M2 slots. Each is independent so a
 	// deployment can wire the M1 surface alone; a nil slot leaves only its own routes answering
@@ -213,6 +224,7 @@ type API struct {
 	linkPreview   *controllers.LinkPreviewController
 	github        *controllers.GitHubController
 	workflows     *controllers.WorkflowsController
+	scheduler     *controllers.SchedulerController
 	operator      *controllers.OperatorController
 	events        *EventsController
 }
@@ -227,7 +239,7 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 // newAPIWithLogger carries the daemon logger to controllers that emit service
 // errors, so their logs use the same configured handler as the rest of HTTP.
 func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
-	return &API{
+	api := &API{
 		cfg:  cfg,
 		deps: deps,
 		agents: &controllers.AgentsController{
@@ -279,15 +291,22 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		workflows: &controllers.WorkflowsController{
-			Svc:           deps.Workflows,
-			Capabilities:  deps.WorkflowCapabilities,
-			Bindings:      deps.WorkflowBindings,
-			Binder:        deps.WorkflowBinder,
-			Interventions: deps.WorkflowInterventions,
-			Collaboration: deps.WorkflowCollaboration,
-			Ownership:     deps.WorkflowOwnership,
-			Principals:    deps.WorkflowPrincipals,
-			Audit:         deps.WorkflowAudit,
+			Svc:              deps.Workflows,
+			ExecutionPermits: deps.WorkflowExecutionPermits,
+			ExecutionFence:   deps.WorkflowExecutionFence,
+			Now:              deps.WorkflowClock,
+			RetrySchedule:    deps.WorkflowRetrySchedule,
+			Materializer:     deps.WorkflowMaterializer,
+			Materializations: deps.WorkflowMaterializations,
+			Recovery:         deps.WorkflowRecovery,
+			Capabilities:     deps.WorkflowCapabilities,
+			Bindings:         deps.WorkflowBindings,
+			Binder:           deps.WorkflowBinder,
+			Interventions:    deps.WorkflowInterventions,
+			Collaboration:    deps.WorkflowCollaboration,
+			Ownership:        deps.WorkflowOwnership,
+			Principals:       deps.WorkflowPrincipals,
+			Audit:            deps.WorkflowAudit,
 		},
 		operator: &controllers.OperatorController{
 			Approvals: deps.OperatorApprovals,
@@ -295,6 +314,8 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		},
 		events: &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
+	api.scheduler = &controllers.SchedulerController{Svc: deps.Scheduler, Budget: deps.Budget, Workflows: api.workflows}
+	return api
 }
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
@@ -418,6 +439,7 @@ func (a *API) Register(root chi.Router) {
 			a.github.Register(r)
 			a.workflows.Register(r)
 			a.workflows.RegisterM2(r)
+			a.scheduler.Register(r)
 			a.operator.Register(r)
 			// Sibling REST controllers plug in here.
 		})

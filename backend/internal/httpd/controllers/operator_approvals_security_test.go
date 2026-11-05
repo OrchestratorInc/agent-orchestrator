@@ -209,8 +209,8 @@ func TestM2OperatorOperationsAllowlistIsClosed(t *testing.T) {
 	listed := map[string]bool{}
 	for _, op := range principal.OperatorOperations {
 		listed[op.Method+" "+op.Path] = true
-		if op.Method != http.MethodPost && op.Method != http.MethodGet {
-			t.Fatalf("allowlisted operation %+v is neither POST nor GET", op)
+		if op.Method != http.MethodPost && op.Method != http.MethodGet && op.Method != http.MethodPut {
+			t.Fatalf("allowlisted operation %+v has an unsupported method", op)
 		}
 		if strings.ContainsAny(op.Path, "*") {
 			t.Fatalf("allowlisted operation %q contains a wildcard", op.Path)
@@ -223,7 +223,7 @@ func TestM2OperatorOperationsAllowlistIsClosed(t *testing.T) {
 				t.Fatalf("allowlisted operation %q has an unterminated parameter", op.Path)
 			}
 			concrete = strings.NewReplacer("{workflowId}", "w1", "{attemptId}", "a1",
-				"{requestId}", "r1").Replace(op.Path)
+				"{requestId}", "r1", "{taskId}", "t1").Replace(op.Path)
 		} else if !principal.IsOperatorOperation(op.Method, op.Path) {
 			t.Fatalf("static allowlisted operation %+v does not match itself", op)
 		}

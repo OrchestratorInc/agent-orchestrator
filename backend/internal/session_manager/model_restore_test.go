@@ -85,7 +85,7 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 					launcher := &recordingLauncher{}
 					newManager := func() *Manager {
 						messenger := &fakeMessenger{}
-						manager := New(Deps{
+						manager := newAdmittedTestManager(t, Deps{
 							Runtime: runtime, Agents: singleAgent{agent: agent}, Workspace: workspace,
 							Store: store, Messenger: messenger, Lifecycle: lifecycle.New(store, messenger),
 							Chat: launcher, DataDir: dataDir,

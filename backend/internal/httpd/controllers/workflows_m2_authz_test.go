@@ -638,9 +638,8 @@ func (f *refusingTargetCollaboration) CreateMessage(
 	return collaborationsvc.MessageOutcome{}, f.err
 }
 
-// TestM2AgentCredentialRequiresBothCapabilityAndLease is the item-4 proof at the wire, and the
-// resolver's own rule is pinned in the principal package.
-func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
+// TestM2AgentCredentialRequiresCapabilityAndServerLease 保留 capability、服务端租约及旧协议三条拒绝边界。
+func TestM2AgentCredentialRequiresCapabilityAndServerLease(t *testing.T) {
 	t.Parallel()
 	const token = "agent-token"
 	sessionID := domain.SessionID("session-1")
@@ -648,12 +647,14 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 	session := sessionID
 	binding := m2Binding()
 	binding.SessionID = &session
+	binding.ControllerGeneration = "gen-1"
 
 	sessions := fakePrincipalSessions{sessions: map[domain.SessionID]domain.SessionRecord{
 		sessionID: {
 			ID: sessionID, ProjectID: "project-1",
 			Metadata: domain.SessionMetadata{
 				BrowserCapabilityVerifier: browserVerifierFixture(sessionID, token),
+				ControllerGeneration:      "gen-1",
 			},
 		},
 	}}
@@ -661,8 +662,12 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 		"attempt-1": {
 			ID: "attempt-1", WorkflowID: "workflow-1", TaskID: "task-1",
 			LeaseToken: "lease-1", LeaseUntil: &leaseUntil,
+			SessionID: &session, WorkerID: "worker-1", State: domain.WorkflowAttemptStateClaimed,
 		},
 	}}
+	attempts.bindings = map[domain.SessionID]domain.WorkflowAttemptBinding{sessionID: binding}
+	attempts.leader = domain.SchedulerLeader{Fence: domain.SchedulerFence{OwnerID: "test", Epoch: 1}, Recovered: true, LeaseUntil: leaseUntil}
+	attempts.admissions = []domain.SchedulerAdmission{{ID: "admission-1", AttemptID: "attempt-1", WorkflowID: "workflow-1", TaskID: "task-1", SessionID: sessionID, State: domain.AdmissionActive, Fence: attempts.leader.Fence, Revision: 1}}
 	resolver := principal.StoreResolverWithOperator(sessions, attempts, browserAuthorityFixture{}, testOperatorTrust())
 	bindings := &fakeBindings{bindings: map[domain.WorkflowAttemptID]domain.WorkflowAttemptBinding{
 		"attempt-1": binding,
@@ -694,6 +699,7 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(principal.HeaderAgentCapability, capabilityToken)
+		req.Header.Set(principal.HeaderSessionID, string(sessionID))
 		req.Header.Set(principal.HeaderAttemptID, "attempt-1")
 		if leaseToken != "" {
 			req.Header.Set(principal.HeaderAttemptLease, leaseToken)
@@ -710,8 +716,13 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 		return resp.StatusCode, body
 	}
 
-	// A valid capability with NO lease: refused, and nothing is sent.
+	// 服务端租约缺失时，即使 Session 与 capability 正确也不能到达 Gateway。
+	claimed := attempts.attempts["attempt-1"]
+	withoutLease := claimed
+	withoutLease.LeaseToken = ""
+	attempts.attempts["attempt-1"] = withoutLease
 	status, body := send(token, "")
+	attempts.attempts["attempt-1"] = claimed
 	if status != http.StatusForbidden {
 		t.Fatalf("capability without a lease = %d, want 403; body=%s", status, body)
 	}
@@ -720,9 +731,9 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 		t.Fatal("a capability without a lease reached the gateway")
 	}
 
-	// A lease for a different attempt: refused.
+	// 旧原始租约协议必须明确要求升级，不能作为内部租约的替代物。
 	status, body = send(token, "lease-for-another-attempt")
-	if status != http.StatusForbidden {
+	if status != http.StatusForbidden || !strings.Contains(string(body), principal.CodeSecurityUpgradeRequired) {
 		t.Fatalf("a foreign lease = %d, want 403; body=%s", status, body)
 	}
 
@@ -752,8 +763,8 @@ func TestM2AgentCredentialRequiresBothCapabilityAndLease(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(principal.HeaderAgentCapability, token)
+	req.Header.Set(principal.HeaderSessionID, string(sessionID))
 	req.Header.Set(principal.HeaderAttemptID, "attempt-1")
-	req.Header.Set(principal.HeaderAttemptLease, "lease-1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("do: %v", err)

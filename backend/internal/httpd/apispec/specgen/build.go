@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -368,6 +369,25 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDecideWorkflowTaskRequestResponse":         "DecideWorkflowTaskRequestResponse",
 	"ControllersResolveWorkflowAttemptRequest":             "ResolveWorkflowAttemptRequest",
 	"ControllersWorkflowTaskRequestIDParam":                "WorkflowTaskRequestIDParam",
+	"ControllersOperatorChangeRequest":                     "OperatorChangeRequest",
+	"ControllersRecoverExpiredWorkflowsRequest":            "RecoverExpiredWorkflowsRequest",
+	"ControllersSchedulerPolicyResponse":                   "SchedulerPolicyResponse",
+	"ControllersPutSchedulerPolicyRequest":                 "PutSchedulerPolicyRequest",
+	"ControllersSchedulerPolicyEnvelope":                   "SchedulerPolicyEnvelope",
+	"ControllersSchedulerStatusResponse":                   "SchedulerStatusResponse",
+	"ControllersWorkflowSchedulerResponse":                 "WorkflowSchedulerResponse",
+	"ControllersSchedulerDecisionResponse":                 "SchedulerDecisionResponse",
+	"ControllersSchedulerDecisionsResponse":                "SchedulerDecisionsResponse",
+	"ControllersSchedulerDecisionsQuery":                   "SchedulerDecisionsQuery",
+	"ControllersPutBudgetPolicyRequest":                    "PutBudgetPolicyRequest",
+	"ControllersBudgetPolicyResponse":                      "BudgetPolicyResponse",
+	"ControllersBudgetPolicyEnvelope":                      "BudgetPolicyEnvelope",
+	"ControllersBudgetTokenMetricsResponse":                "BudgetTokenMetricsResponse",
+	"ControllersBudgetSnapshotResponse":                    "BudgetSnapshotResponse",
+	"ControllersBudgetSnapshotsResponse":                   "BudgetSnapshotsResponse",
+	"ControllersMaterializeTaskRequestRequest":             "MaterializeTaskRequestRequest",
+	"ControllersTaskRequestMaterializationResponse":        "TaskRequestMaterializationResponse",
+	"ControllersMaterializeTaskRequestResponse":            "MaterializeTaskRequestResponse",
 	"ControllersWorkflowDefinitionResponse":                "WorkflowDefinitionResponse",
 	"ControllersWorkflowEnvelope":                          "WorkflowEnvelope",
 	"ControllersWorkflowTaskEnvelope":                      "WorkflowTaskEnvelope",
@@ -810,6 +830,7 @@ type operation struct {
 	contentTypes    map[int]string // optional non-JSON response content types by status
 }
 
+// operations 汇集路由，并按已审计的操作闭集声明批准头；不让旧租约进入新契约。
 func operations() []operation {
 	ops := append([]operation{}, eventOperations()...)
 	ops = append(ops, agentOperations()...)
@@ -817,6 +838,7 @@ func operations() []operation {
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
 	ops = append(ops, workflowOperations()...)
+	ops = append(ops, schedulerOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
@@ -839,6 +861,20 @@ func operations() []operation {
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
 	ops = append(ops, operatorOperations()...)
+	for i := range ops {
+		if ops[i].tag != "workflows" {
+			continue
+		}
+		if ops[i].id == "createWorkflowMessage" || ops[i].id == "createWorkflowTaskRequest" {
+			ops[i].pathParams = append(ops[i].pathParams, controllers.WorkflowAgentHeaders{})
+		}
+		for _, approved := range principal.OperatorOperations {
+			if approved.Method == ops[i].method && approved.Path == ops[i].path {
+				ops[i].pathParams = append(ops[i].pathParams, controllers.WorkflowOperatorApprovalHeader{})
+				break
+			}
+		}
+	}
 	return ops
 }
 
@@ -923,6 +959,7 @@ func workflowOperations() []operation {
 	attemptID := []any{controllers.WorkflowAttemptIDParam{}}
 	commonErrors := []respUnit{
 		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusForbidden, envelope.APIError{}},
 		{http.StatusNotFound, envelope.APIError{}},
 		{http.StatusConflict, envelope.APIError{}},
 		{http.StatusInternalServerError, envelope.APIError{}},
@@ -949,8 +986,7 @@ func workflowOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/workflows/recover-expired", id: "recoverExpiredWorkflows", tag: "workflows",
 			summary: "Move expired attempt leases to unknown and block their tasks",
-			// The sweep takes no input; an empty body is a meaningful request.
-			optionalReqBody: true,
+			reqBody: controllers.RecoverExpiredWorkflowsRequest{},
 			resps: append([]respUnit{
 				{http.StatusOK, controllers.RecoverExpiredWorkflowsResponse{}},
 			}, commonErrors...),
@@ -982,7 +1018,7 @@ func workflowOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/claim", id: "claimWorkflowTask", tag: "workflows",
-			summary:    "Lease a ready task to a worker and issue its one-time lease token",
+			summary:    "Claim a ready task after one operator approval; internal lease credentials are never returned",
 			pathParams: taskID,
 			reqBody:    controllers.ClaimWorkflowTaskRequest{},
 			resps: append([]respUnit{
@@ -1116,6 +1152,33 @@ func workflowOperations() []operation {
 			}, commonErrors...),
 		},
 	}
+}
+
+// schedulerOperations 声明 M3 控制面及独立物化审批，预算作用域由具体路由固定。
+func schedulerOperations() []operation {
+	errors := []respUnit{{http.StatusBadRequest, envelope.APIError{}}, {http.StatusForbidden, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}
+	ops := []operation{
+		{method: http.MethodGet, path: "/api/v1/scheduler/status", id: "getSchedulerStatus", tag: "workflows", summary: "Read scheduler recovery, resource and occupancy facts", resps: append([]respUnit{{http.StatusOK, controllers.SchedulerStatusResponse{}}}, errors...)},
+		{method: http.MethodPut, path: "/api/v1/scheduler/policy", id: "putSchedulerPolicy", tag: "workflows", summary: "Change global or adapter resource policy after one operator approval", reqBody: controllers.PutSchedulerPolicyRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.SchedulerPolicyEnvelope{}}}, errors...)},
+		{method: http.MethodGet, path: "/api/v1/scheduler/decisions", id: "listSchedulerDecisions", tag: "workflows", summary: "Read bounded scheduler decision history", pathParams: []any{controllers.SchedulerDecisionsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.SchedulerDecisionsResponse{}}}, errors...)},
+		{method: http.MethodGet, path: "/api/v1/workflows/{workflowId}/scheduler", id: "getWorkflowScheduler", tag: "workflows", summary: "Read workflow scheduling state", pathParams: []any{controllers.WorkflowIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowSchedulerResponse{}}}, errors...)},
+		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/pause", id: "pauseWorkflowScheduling", tag: "workflows", summary: "Pause new admissions after one operator approval", pathParams: []any{controllers.WorkflowIDParam{}}, reqBody: controllers.OperatorChangeRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowSchedulerResponse{}}}, errors...)},
+		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/resume-scheduling", id: "resumeWorkflowScheduling", tag: "workflows", summary: "Resume scheduling without bypassing recovery or budget fences", pathParams: []any{controllers.WorkflowIDParam{}}, reqBody: controllers.OperatorChangeRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowSchedulerResponse{}}}, errors...)},
+		{method: http.MethodPost, path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}/materialize", id: "materializeWorkflowTaskRequest", tag: "workflows", summary: "Materialize an approved request using a separate exact operator approval", pathParams: []any{controllers.WorkflowTaskRequestIDParam{}}, reqBody: controllers.MaterializeTaskRequestRequest{}, resps: append([]respUnit{{http.StatusCreated, controllers.MaterializeTaskRequestResponse{}}, {http.StatusOK, controllers.MaterializeTaskRequestResponse{}}}, errors...)},
+	}
+	for _, scope := range []struct {
+		name, path string
+		params     []any
+	}{
+		{"Global", "/api/v1/scheduler/budget", nil},
+		{"Workflow", "/api/v1/workflows/{workflowId}/budget", []any{controllers.WorkflowIDParam{}}},
+		{"Task", "/api/v1/workflows/{workflowId}/tasks/{taskId}/budget", []any{controllers.WorkflowTaskIDParam{}}},
+	} {
+		ops = append(ops,
+			operation{method: http.MethodGet, path: scope.path, id: "get" + scope.name + "Budget", tag: "workflows", summary: "Read scoped budget policies and canonical cost snapshots", pathParams: scope.params, resps: append([]respUnit{{http.StatusOK, controllers.BudgetSnapshotsResponse{}}}, errors...)},
+			operation{method: http.MethodPut, path: scope.path, id: "put" + scope.name + "Budget", tag: "workflows", summary: "Change the route-scoped budget after one operator approval", pathParams: scope.params, reqBody: controllers.PutBudgetPolicyRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.BudgetPolicyEnvelope{}}}, errors...)})
+	}
+	return ops
 }
 
 // linkPreviewOperations declares the server-side link unfurl. Must stay 1:1

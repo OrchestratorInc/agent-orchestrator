@@ -127,6 +127,8 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
 	now := time.Now().UTC().Truncate(time.Second)
+	workflowClock := func() time.Time { return time.Now().UTC() }
+	admission := sqlitetest.NewAdmissionFixture(t, store, workflowClock)
 	repoBaseSHA := strings.Repeat("d", 40)
 
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{
@@ -146,7 +148,7 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 		ID: taskID, WorkflowID: workflowID, Kind: domain.WorkflowTaskKindDevelopment,
 		Title: "Do it", State: domain.WorkflowTaskStatePending, MaxAttempts: 3, Revision: 1,
 		AgentHarness: domain.HarnessCodex, CreatedAt: now, UpdatedAt: now,
-	}}, nil, nil, "approval-create", strings.Repeat("a", 64)); err != nil {
+	}}, nil, []domain.WorkflowTaskRepository{{WorkflowID: workflowID, TaskID: taskID, RepoKey: "backend", BaseSHA: repoBaseSHA, AllowedPaths: []string{"src"}}}, "approval-create", strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
 	if _, _, err := store.ActivateWorkflow(
@@ -159,7 +161,7 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 		t.Fatalf("load ready task: found=%v err=%v", found, err)
 	}
 	leaseUntil := now.Add(time.Hour)
-	attempt, created, err := store.ClaimWorkflowTask(ctx, domain.WorkflowAttempt{
+	attempt, created, err := admission.Claim(ctx, domain.WorkflowAttempt{
 		ID: "attempt-1", WorkflowID: workflowID, TaskID: taskID,
 		WorkerID: "worker-1", LeaseToken: "lease-1", LeaseUntil: &leaseUntil,
 		State: domain.WorkflowAttemptStateClaimed, CreatedAt: now, UpdatedAt: now,
@@ -176,22 +178,36 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 	// workflow_attempt_bindings.session_id is a real foreign key, so a spawn must create a real
 	// session row. That is the same materializer the M2 wiring tests use, not a weakening.
 	gateway.WithSessionMaterializer(
-		func(ctx context.Context, sessionID domain.SessionID, _ ports.SpawnRequest) (domain.SessionID, error) {
-			rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		func(ctx context.Context, sessionID domain.SessionID, request ports.SpawnRequest) (domain.SessionID, error) {
+			permit, ok := ports.ExecutionPermitFromContext(ctx)
+			if !ok {
+				return "", domain.ErrAdmissionRequired
+			}
+			ad, _, err := store.GetSchedulerAdmission(ctx, permit.AdmissionID)
+			if err != nil {
+				return "", err
+			}
+			rec, _, err := store.CreateAdmittedSession(ctx, domain.SessionRecord{
 				ID: sessionID, ProjectID: "project-1", Kind: domain.KindWorker,
 				Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+				ClientRequestID: request.SpawnKey, ClientRequestHash: request.SpawnHash,
 				Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
-				Metadata:  domain.SessionMetadata{WorkspacePath: t.TempDir()},
+				Metadata:  domain.SessionMetadata{WorkspacePath: t.TempDir(), ControllerGeneration: "approval-generation"},
 				CreatedAt: now, UpdatedAt: now,
-			})
+			}, ad, "", time.Now().UTC())
 			return rec.ID, err
 		})
+	leader, err := store.GetSchedulerLeader(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binder := execution.New(execution.Deps{
 		Store: store, Gateway: gateway, Resolver: resolver, Clock: func() time.Time { return time.Now().UTC() },
+		ExecutionFence: func(context.Context) (domain.SchedulerFence, error) { return leader.Fence, nil },
 	})
 	collab := collaboration.New(collaboration.Deps{Store: store, Bindings: store, Graph: store})
 	workflows := workflow.New(workflow.Deps{
-		Store: store, Clock: func() time.Time { return time.Now().UTC() },
+		Store: store, Clock: workflowClock, Admission: admission,
 		GraphLimits:   domain.WorkflowGraphLimits{MaxTasks: 50, MaxDepth: 20, MaxFanOut: 20},
 		LeaseDuration: time.Hour,
 	})
@@ -206,22 +222,23 @@ func newApprovalEnv(t *testing.T) *approvalEnv {
 		store,
 		principal.CapabilityVerifier{Sessions: store, Authority: approvalAuthority{}},
 		principal.ApprovalOperatorTrust{Approvals: approvals},
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: store, Clock: clock.Now})
+	).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: store, Clock: clock.Now})
 
 	// 注入测试验证器；真实 Windows Hello 在测试中永不弹出。
 	consent := &recordingConsent{}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	deps := httpd.APIDeps{
-		Workflows:             workflows,
-		WorkflowCapabilities:  resolver,
-		WorkflowBindings:      store,
-		WorkflowBinder:        binder,
-		WorkflowCollaboration: collab,
-		WorkflowOwnership:     approvalOwnership{store: store},
-		WorkflowPrincipals:    principals,
-		WorkflowAudit:         store,
-		OperatorApprovals:     approvals,
-		OperatorConsent:       consent,
+		WorkflowExecutionFence: func(context.Context) (domain.SchedulerFence, error) { return leader.Fence, nil },
+		Workflows:              workflows,
+		WorkflowCapabilities:   resolver,
+		WorkflowBindings:       store,
+		WorkflowBinder:         binder,
+		WorkflowCollaboration:  collab,
+		WorkflowOwnership:      approvalOwnership{store: store},
+		WorkflowPrincipals:     principals,
+		WorkflowAudit:          store,
+		OperatorApprovals:      approvals,
+		OperatorConsent:        consent,
 	}
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
@@ -385,12 +402,6 @@ func (v verifierOverride) GetSession(
 	}
 	rec.Metadata.BrowserCapabilityVerifier = v.verifier
 	return rec, true, nil
-}
-
-// jsonInt renders an int64 without importing strconv in every call site.
-func jsonInt(v int64) string {
-	raw, _ := json.Marshal(v)
-	return string(raw)
 }
 
 // approvalVerifier reproduces the browser capability digest the daemon stores, so the seeded

@@ -298,8 +298,6 @@ func Run(buildVersion string) error {
 	// Workflow definitions and leases live in the same durable store. The
 	// recovery sweep runs before any scheduler work so a restart reconciles
 	// attempts whose workers are gone.
-	workflowSvc := newWorkflowService(store)
-	startWorkflowLeaseRecovery(ctx, workflowSvc, log)
 
 	// Terminal streaming: the selected platform runtime supplies the
 	// attach Stream and liveness; the CDC broadcaster feeds the session-state channel. The manager
@@ -637,7 +635,7 @@ func Run(buildVersion string) error {
 	// own — a Spawn is a Session Manager spawn and a Send is a Chat send — so this is
 	// where the offline fake stops being the daemon's execution path.
 	concreteSessMgr, _ := wiredSessMgr.(*sessionmanager.Manager)
-	m2 := newM2ServicesWith(m2GatewayDeps{
+	m3 := newM3Services(m2GatewayDeps{
 		Store:       store,
 		Sessions:    concreteSessMgr,
 		Chats:       chatSvc,
@@ -646,8 +644,11 @@ func Run(buildVersion string) error {
 		Recorder:    capabilityRecorder,
 		Log:         log,
 	})
+	m2 := m3.m2Services
+	workflowSvc := m3.Workflows
+	concreteSessMgr.SetSessionAdmissionProvider(m3.Scheduler)
+	schedulerReady := make(chan struct{})
 	logM2Wiring(log, m2)
-	startM2BindingRecovery(ctx, m2.Binder, store, log)
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
@@ -762,7 +763,9 @@ func Run(buildVersion string) error {
 		stop()
 		<-reportDeliveryDone
 	}()
-	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
+	lcStack.trackerDone = startAfterScheduler(ctx, schedulerReady, func() <-chan struct{} {
+		return startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
+	})
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
@@ -990,7 +993,7 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
-	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	automationSvc, automationDone := startAutomationsAfter(ctx, store, sessionSvc, log, schedulerReady)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
@@ -1125,29 +1128,37 @@ func Run(buildVersion string) error {
 	operatorAuth := newWorkflowOperatorAuth(cfg.DataDir, store, browserAuthority, log)
 	logWorkflowOperatorAuth(log, operatorAuth)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
-		Awake:                 awakeSvc,
-		Projects:              projectSvc,
-		ArtifactVersions:      lcStack.ArtifactVersions,
-		HostID:                hostIdentity.HostID,
-		Endpoints:             bs,
-		Agents:                agentSvc,
-		CodexAccounts:         agentSvc,
-		AgentAccounts:         agentAccountSvc,
-		SystemChecks:          systemChecks,
-		Installer:             systemInstall,
-		ComputerUse:           computerUse,
-		Sessions:              sessionSvc,
-		Automations:           automationSvc,
-		Workflows:             workflowSvc,
-		WorkflowCapabilities:  m2.Capabilities,
-		WorkflowBindings:      m2.Bindings,
-		WorkflowBinder:        m2.Binder,
-		WorkflowInterventions: m2.Interventions,
-		WorkflowCollaboration: m2.Collaboration,
-		WorkflowOwnership:     m2.Ownership,
-		WorkflowPrincipals:    operatorAuth.Principals,
-		OperatorConsent:       operatorAuth.Consent,
-		OperatorApprovals:     operatorAuth.Approvals,
+		Awake:                    awakeSvc,
+		Projects:                 projectSvc,
+		ArtifactVersions:         lcStack.ArtifactVersions,
+		HostID:                   hostIdentity.HostID,
+		Endpoints:                bs,
+		Agents:                   agentSvc,
+		CodexAccounts:            agentSvc,
+		AgentAccounts:            agentAccountSvc,
+		SystemChecks:             systemChecks,
+		Installer:                systemInstall,
+		ComputerUse:              computerUse,
+		Sessions:                 sessionSvc,
+		Automations:              automationSvc,
+		Workflows:                workflowSvc,
+		Scheduler:                m3.Scheduler,
+		Budget:                   m3.Budget,
+		WorkflowExecutionPermits: store,
+		WorkflowExecutionFence:   m3.Scheduler.CurrentFence,
+		WorkflowRetrySchedule:    m3.scheduleRetry,
+		WorkflowMaterializer:     workflowSvc,
+		WorkflowMaterializations: store,
+		WorkflowRecovery:         store,
+		WorkflowCapabilities:     m2.Capabilities,
+		WorkflowBindings:         m2.Bindings,
+		WorkflowBinder:           m2.Binder,
+		WorkflowInterventions:    m2.Interventions,
+		WorkflowCollaboration:    m2.Collaboration,
+		WorkflowOwnership:        m2.Ownership,
+		WorkflowPrincipals:       operatorAuth.Principals,
+		OperatorConsent:          operatorAuth.Consent,
+		OperatorApprovals:        operatorAuth.Approvals,
 		// The audit trail is durable: every applied operator decision appends a row to
 		// workflow_audit_log, and a recorder that fails fails the request rather than
 		// reporting a decision nobody recorded.
@@ -1295,6 +1306,7 @@ func Run(buildVersion string) error {
 	}
 
 	var startupReconcileDone <-chan struct{}
+	var schedulerDone <-chan struct{}
 	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
 		// Agent-readiness warming is advisory and idempotent, and request paths
@@ -1312,6 +1324,7 @@ func Run(buildVersion string) error {
 		}
 		done := make(chan struct{})
 		startupReconcileDone = done
+		schedulerDone = startM3Scheduler(ctx, m3, done, schedulerReady, cdcPipe.Broadcaster, log)
 		go func() {
 			defer sentryobs.RecoverBackground()
 			defer close(done)
@@ -1434,6 +1447,9 @@ func Run(buildVersion string) error {
 	// stop only cancels workers; deferred stopSignals keeps a second automatic
 	// SIGTERM from terminating the process while installer restoration runs.
 	stop()
+	if schedulerDone != nil {
+		<-schedulerDone
+	}
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
 	}

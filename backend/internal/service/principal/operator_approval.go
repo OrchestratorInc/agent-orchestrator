@@ -106,6 +106,20 @@ type OperatorOperation struct {
 // be an approval for "anything", and the whole point is that the human approved a specific
 // operation. Adding a route here is a security-relevant edit and belongs with the route.
 var OperatorOperations = []OperatorOperation{
+	{Method: http.MethodPost, Path: "/api/v1/workflows"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/recover-expired"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/activate"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/claim"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/retry"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/start"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/settle"},
+	{Method: http.MethodPut, Path: "/api/v1/scheduler/policy"},
+	{Method: http.MethodPut, Path: "/api/v1/scheduler/budget"},
+	{Method: http.MethodPut, Path: "/api/v1/workflows/{workflowId}/budget"},
+	{Method: http.MethodPut, Path: "/api/v1/workflows/{workflowId}/tasks/{taskId}/budget"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/pause"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/resume-scheduling"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}/materialize"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/bind"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/resolve"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/reconcile"},

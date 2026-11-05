@@ -17,11 +17,9 @@ const (
 	EnvWorkflowID = "AO_WORKFLOW_ID"
 	// EnvWorkflowTaskID names the task this attempt is executing.
 	EnvWorkflowTaskID = "AO_TASK_ID"
-	// EnvWorkflowAttemptID names the attempt the agent acts as. It is the identity
-	// the daemon checks the capability and lease against.
+	// EnvWorkflowAttemptID 是服务端与 Session 持久绑定核对的非秘密标识。
 	EnvWorkflowAttemptID = "AO_ATTEMPT_ID"
-	// EnvWorkflowLease carries the attempt's lease token. It is a secret: never
-	// logged, never serialized, never shown in a tool result.
+	// EnvWorkflowLease 仅用于清除旧环境残留，不能写入新进程环境。
 	EnvWorkflowLease = "AO_WORKFLOW_LEASE" //nolint:gosec // Environment variable name, not a credential.
 )
 
@@ -29,10 +27,11 @@ const (
 // this launch will hand to a provider. It exists because the capability is minted
 // after the server list is built, and the list is what the driver reads.
 func applyWorkflowMCPEnvToServers(servers []ports.ChatMCPServerConfig, capability string) {
-	if capability == "" {
-		return
-	}
 	for i := range servers {
+		deleteProtectedEnv(servers[i].Env, EnvWorkflowLease, envKeysCaseInsensitive)
+		if capability == "" {
+			continue
+		}
 		if servers[i].Env == nil {
 			servers[i].Env = make(map[string]string, 1)
 		}
@@ -40,12 +39,13 @@ func applyWorkflowMCPEnvToServers(servers []ports.ChatMCPServerConfig, capabilit
 	}
 }
 
-// applyWorkflowMCPEnv adds the attempt identity and lease to one MCP server env.
+// applyWorkflowMCPEnv 清除旧租约，只向 MCP 传递非秘密身份与 Session capability。
 //
 // capability is the session capability from the prepared launch environment. It is
 // passed in rather than read from a global because the token is minted per launch:
 // the caller must hand over the one that will actually be in the agent's process.
 func applyWorkflowMCPEnv(serverEnv map[string]string, workflow *ports.WorkflowSpawnContext, capability string) {
+	deleteProtectedEnv(serverEnv, EnvWorkflowLease, envKeysCaseInsensitive)
 	if workflow == nil {
 		return
 	}
@@ -57,9 +57,6 @@ func applyWorkflowMCPEnv(serverEnv map[string]string, workflow *ports.WorkflowSp
 	}
 	if value := string(workflow.AttemptID); value != "" {
 		serverEnv[EnvWorkflowAttemptID] = value
-	}
-	if workflow.LeaseToken != "" {
-		serverEnv[EnvWorkflowLease] = workflow.LeaseToken
 	}
 	if capability != "" {
 		serverEnv[EnvBrowserCapability] = capability

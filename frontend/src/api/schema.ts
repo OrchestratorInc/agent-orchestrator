@@ -2268,6 +2268,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scheduler/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read scoped budget policies and canonical cost snapshots */
+        get: operations["getGlobalBudget"];
+        /** Change the route-scoped budget after one operator approval */
+        put: operations["putGlobalBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scheduler/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded scheduler decision history */
+        get: operations["listSchedulerDecisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scheduler/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Change global or adapter resource policy after one operator approval */
+        put: operations["putSchedulerPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scheduler/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read scheduler recovery, resource and occupancy facts */
+        get: operations["getSchedulerStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -4688,6 +4757,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read scoped budget policies and canonical cost snapshots */
+        get: operations["getWorkflowBudget"];
+        /** Change the route-scoped budget after one operator approval */
+        put: operations["putWorkflowBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/messages": {
         parameters: {
             query?: never;
@@ -4700,6 +4787,57 @@ export interface paths {
         put?: never;
         /** Store one peer collaboration message; the sender is derived from the caller's attempt, never supplied */
         post: operations["createWorkflowMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause new admissions after one operator approval */
+        post: operations["pauseWorkflowScheduling"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/resume-scheduling": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume scheduling without bypassing recovery or budget fences */
+        post: operations["resumeWorkflowScheduling"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/scheduler": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read workflow scheduling state */
+        get: operations["getWorkflowScheduler"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4758,6 +4896,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/task-requests/{requestId}/materialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Materialize an approved request using a separate exact operator approval */
+        post: operations["materializeWorkflowTaskRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/tasks": {
         parameters: {
             query?: never;
@@ -4792,6 +4947,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/tasks/{taskId}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read scoped budget policies and canonical cost snapshots */
+        get: operations["getTaskBudget"];
+        /** Change the route-scoped budget after one operator approval */
+        put: operations["putTaskBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/tasks/{taskId}/claim": {
         parameters: {
             query?: never;
@@ -4801,7 +4974,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Lease a ready task to a worker and issue its one-time lease token */
+        /** Claim a ready task after one operator approval; internal lease credentials are never returned */
         post: operations["claimWorkflowTask"];
         delete?: never;
         options?: never;
@@ -4887,6 +5060,7 @@ export interface components {
             /** Format: int64 */
             expectedRevision: number;
             idempotencyKey: string;
+            reason?: string;
         };
         AddProjectInput: {
             asWorkspace?: boolean;
@@ -5467,6 +5641,53 @@ export interface components {
             /** @enum {string} */
             transport: "electron-webcontents-debugger" | "chrome-extension";
         };
+        BudgetPolicyEnvelope: {
+            applied: boolean;
+            policy: components["schemas"]["BudgetPolicyResponse"];
+        };
+        BudgetPolicyResponse: {
+            currency: string;
+            id: string;
+            /** Format: int64 */
+            limitNanos: number;
+            mode: string;
+            period: string;
+            reservationBasis: string;
+            reservationNanos: null | number;
+            reservationRef: string;
+            /** Format: int64 */
+            revision: number;
+            /** @enum {string} */
+            scope: "global" | "workflow" | "task";
+            scopeId: string;
+        };
+        BudgetSnapshotResponse: {
+            /** Format: int64 */
+            alertThreshold: number;
+            costNanos: null | number;
+            /** Format: int64 */
+            eventCount: number;
+            /** Format: int64 */
+            knownCostNanos: number;
+            policy: components["schemas"]["BudgetPolicyResponse"];
+            /** @enum {string} */
+            quality: "EXACT" | "ESTIMATED" | "UNKNOWN";
+            reconcilePending: boolean;
+            remainingNanos: null | number;
+            reservedNanos: null | number;
+            tokens: components["schemas"]["BudgetTokenMetricsResponse"];
+            window: string;
+        };
+        BudgetSnapshotsResponse: {
+            policies: components["schemas"]["BudgetPolicyResponse"][];
+            snapshots: components["schemas"]["BudgetSnapshotResponse"][];
+        };
+        BudgetTokenMetricsResponse: {
+            cachedInputTokens: null | number;
+            inputTokens: null | number;
+            outputTokens: null | number;
+            uncachedInputTokens: null | number;
+        };
         CancelReviewResponse: {
             reviewerHandleId: string;
             reviews: components["schemas"]["PRReviewState"][];
@@ -5513,11 +5734,11 @@ export interface components {
             /** Format: int64 */
             expectedRevision: number;
             idempotencyKey: string;
+            reason?: string;
             workerId: string;
         };
         ClaimWorkflowTaskResponse: {
             attempt: components["schemas"]["WorkflowAttemptResponse"];
-            leaseToken: string;
         };
         CleanupSessionsResponse: {
             alreadyGone: string[];
@@ -6415,6 +6636,7 @@ export interface components {
             idempotencyKey: string;
             /** @description Optional owning AO session; creating a workflow never starts one. */
             ownerSessionId?: string;
+            reason?: string;
             repositories: components["schemas"]["WorkflowRepositoryInput"][];
             taskRepositories?: components["schemas"]["WorkflowTaskRepositoryInput"][];
             tasks: components["schemas"]["WorkflowTaskInput"][];
@@ -6954,6 +7176,19 @@ export interface components {
              */
             status: "read";
         };
+        MaterializeTaskRequestRequest: {
+            /** Format: int64 */
+            expectedRequestRevision: number;
+            /** Format: int64 */
+            expectedWorkflowRevision: number;
+            idempotencyKey: string;
+            reason: string;
+            requestSha: string;
+        };
+        MaterializeTaskRequestResponse: {
+            created: boolean;
+            materialization: components["schemas"]["TaskRequestMaterializationResponse"];
+        };
         MemoryPressureResponse: {
             /** Format: double */
             pressureRaw: number;
@@ -7078,6 +7313,12 @@ export interface components {
             startOnAttach?: boolean;
             /** @description Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N). */
             title?: string;
+        };
+        OperatorChangeRequest: {
+            /** Format: int64 */
+            expectedRevision: number;
+            idempotencyKey: string;
+            reason: string;
         };
         OrchestratorResponse: {
             id: string;
@@ -7235,11 +7476,55 @@ export interface components {
             platform?: string;
             token?: string;
         };
+        PutBudgetPolicyRequest: {
+            /** @enum {string} */
+            currency: "USD";
+            /** Format: int64 */
+            expectedRevision: number;
+            id: string;
+            idempotencyKey: string;
+            /** Format: int64 */
+            limitNanos: number;
+            /** @enum {string} */
+            mode: "observe" | "soft" | "hard_admission";
+            /** @enum {string} */
+            period: "lifetime" | "monthly_utc";
+            reason: string;
+            reservationBasis?: string;
+            reservationNanos?: null | number;
+            reservationRef?: string;
+        };
         PutGitHubPATRequest: {
             expiresIn?: number;
             pat: string;
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
+        };
+        PutSchedulerPolicyRequest: {
+            /** Format: int64 */
+            cpuHardPercent: number;
+            /** Format: int64 */
+            cpuRecoverPercent: number;
+            /** Format: int64 */
+            cpuSoftPercent: number;
+            /** Format: int64 */
+            expectedRevision: number;
+            /** @description Empty selects the global policy; otherwise the exact adapter harness. */
+            harness?: string;
+            idempotencyKey: string;
+            /** Format: int64 */
+            maxConcurrent: number;
+            /** Format: int64 */
+            ramFloorBytes: number;
+            /** Format: int64 */
+            ramHardPercent: number;
+            /** Format: int64 */
+            ramSoftPercent: number;
+            reason: string;
+        };
+        RecoverExpiredWorkflowsRequest: {
+            idempotencyKey: string;
+            reason?: string;
         };
         RecoverExpiredWorkflowsResponse: {
             /** Format: int64 */
@@ -7419,6 +7704,7 @@ export interface components {
             /** Format: int64 */
             expectedRevision: number;
             idempotencyKey: string;
+            reason?: string;
         };
         ReviewRun: {
             autoInjectReview: boolean;
@@ -7466,6 +7752,72 @@ export interface components {
             name: string;
             /** @description The file, relative to the session's artifact directory. */
             path: string;
+        };
+        SchedulerDecisionResponse: {
+            admissionId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: int64 */
+            epoch: number;
+            /** Format: int64 */
+            id: number;
+            policyRevisions: {
+                [key: string]: number;
+            } | null;
+            reasonCode: string;
+            taskId: string;
+            workflowId: string;
+        };
+        SchedulerDecisionsResponse: {
+            decisions: components["schemas"]["SchedulerDecisionResponse"][];
+        };
+        SchedulerPolicyEnvelope: {
+            applied: boolean;
+            policy: components["schemas"]["SchedulerPolicyResponse"];
+        };
+        SchedulerPolicyResponse: {
+            /** Format: int64 */
+            cpuHardPercent: number;
+            /** Format: int64 */
+            cpuRecoverPercent: number;
+            /** Format: int64 */
+            cpuSoftPercent: number;
+            id: string;
+            /** Format: int64 */
+            maxConcurrent: number;
+            /** Format: int64 */
+            ramFloorBytes: number;
+            /** Format: int64 */
+            ramHardPercent: number;
+            /** Format: int64 */
+            ramSoftPercent: number;
+            /** Format: int64 */
+            revision: number;
+            /** @enum {string} */
+            scope: "global" | "adapter";
+            scopeId: string;
+        };
+        SchedulerStatusResponse: {
+            availableBytes: number;
+            byHarness: {
+                [key: string]: number;
+            } | null;
+            /** Format: int64 */
+            epoch: number;
+            /** Format: date-time */
+            leaderLeaseUntil: string;
+            /** Format: int64 */
+            limit: number;
+            /** Format: int64 */
+            maxNewClaims: number;
+            /** Format: date-time */
+            observedAt: string;
+            /** Format: int64 */
+            occupied: number;
+            policies: components["schemas"]["SchedulerPolicyResponse"][];
+            reasonCode: string;
+            recovered: boolean;
+            totalBytes: number;
         };
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
@@ -7940,8 +8292,7 @@ export interface components {
         SettleWorkflowAttemptRequest: {
             errorCode?: string;
             idempotencyKey: string;
-            /** @description Capability token returned once by the claim response. */
-            leaseToken: string;
+            reason?: string;
             /** @enum {string} */
             result: "succeeded" | "failed";
         };
@@ -8242,8 +8593,7 @@ export interface components {
         };
         StartWorkflowAttemptRequest: {
             idempotencyKey: string;
-            /** @description Capability token returned once by the claim response. */
-            leaseToken: string;
+            reason?: string;
         };
         SteerConversationRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
@@ -8335,6 +8685,15 @@ export interface components {
             ready: boolean;
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
+        };
+        TaskRequestMaterializationResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            requestId: string;
+            taskId: string;
+            workflowId: string;
+            /** Format: int64 */
+            workflowRevision: number;
         };
         TelemetryIdentityResponse: {
             cloudUserId?: string;
@@ -8711,6 +9070,18 @@ export interface components {
             title: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        WorkflowSchedulerResponse: {
+            /** Format: int64 */
+            candidateOffset: number;
+            /** Format: int64 */
+            deficit: number;
+            paused: boolean;
+            /** Format: int64 */
+            revision: number;
+            /** Format: int64 */
+            weight: number;
+            workflowId: string;
         };
         WorkflowSessionObservationResponse: {
             clientRequestCommitted: boolean;
@@ -16722,6 +17093,393 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getGlobalBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetSnapshotsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putGlobalBudget: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBudgetPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPolicyEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSchedulerDecisions: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulerDecisionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putSchedulerPolicy: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutSchedulerPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulerPolicyEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSchedulerStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulerStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25533,6 +26291,15 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -25574,7 +26341,10 @@ export interface operations {
     createWorkflow: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -25604,6 +26374,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25679,6 +26458,15 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -25720,7 +26508,10 @@ export interface operations {
     activateWorkflow: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -25744,6 +26535,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25792,7 +26592,10 @@ export interface operations {
     bindWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -25818,6 +26621,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25866,7 +26678,10 @@ export interface operations {
     getWorkflowAttemptBinding: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -25888,6 +26703,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25936,7 +26760,10 @@ export interface operations {
     createWorkflowIntervention: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -25971,6 +26798,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26019,7 +26855,10 @@ export interface operations {
     observeWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26041,6 +26880,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26089,7 +26937,10 @@ export interface operations {
     reconcileWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26111,6 +26962,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26159,7 +27019,10 @@ export interface operations {
     resolveWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26185,6 +27048,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26233,7 +27105,10 @@ export interface operations {
     resumeWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26255,6 +27130,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26303,7 +27187,10 @@ export interface operations {
     settleWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26329,6 +27216,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26377,7 +27273,10 @@ export interface operations {
     startWorkflowAttempt: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26403,6 +27302,176 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getWorkflowBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetSnapshotsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putWorkflowBudget: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBudgetPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPolicyEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26456,7 +27525,10 @@ export interface operations {
                 limit?: number;
                 cursor?: string;
             };
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26476,6 +27548,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26524,7 +27605,12 @@ export interface operations {
     createWorkflowMessage: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Session bound to the agent capability; required together with the capability for agent requests. */
+                "X-AO-Session-Id"?: string;
+                /** @description Per-session capability injected into the worker; never an attempt lease. */
+                "X-AO-Agent-Capability"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26557,6 +27643,260 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    pauseWorkflowScheduling: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSchedulerResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resumeWorkflowScheduling: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSchedulerResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getWorkflowScheduler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSchedulerResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26610,7 +27950,10 @@ export interface operations {
                 limit?: number;
                 cursor?: string;
             };
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26630,6 +27973,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26678,7 +28030,12 @@ export interface operations {
     createWorkflowTaskRequest: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Session bound to the agent capability; required together with the capability for agent requests. */
+                "X-AO-Session-Id"?: string;
+                /** @description Per-session capability injected into the worker; never an attempt lease. */
+                "X-AO-Agent-Capability"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26711,6 +28068,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26759,7 +28125,10 @@ export interface operations {
     getWorkflowTaskRequest: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26781,6 +28150,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26829,7 +28207,10 @@ export interface operations {
     decideWorkflowTaskRequest: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -26864,6 +28245,110 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    materializeWorkflowTaskRequest: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Task request identifier, unique inside its workflow. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterializeTaskRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializeTaskRequestResponse"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializeTaskRequestResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26944,6 +28429,15 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -27014,6 +28508,180 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getTaskBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Workflow task identifier, unique inside its workflow. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetSnapshotsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putTaskBudget: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Workflow task identifier, unique inside its workflow. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBudgetPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPolicyEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -27055,7 +28723,10 @@ export interface operations {
     claimWorkflowTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -27090,6 +28761,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27138,7 +28818,10 @@ export interface operations {
     retryWorkflowTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path: {
                 /** @description Workflow identifier. */
                 workflowId: string;
@@ -27164,6 +28847,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27212,7 +28904,10 @@ export interface operations {
     getWorkflowCapabilities: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -27229,6 +28924,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27277,11 +28981,18 @@ export interface operations {
     recoverExpiredWorkflows: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoverExpiredWorkflowsRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -27294,6 +29005,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

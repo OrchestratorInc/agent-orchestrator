@@ -774,7 +774,7 @@ func TestM2RouteWithAnInvalidLeaseIsForbidden(t *testing.T) {
 			sessions,
 			principal.CapabilityVerifier{Sessions: sessions, Authority: browserAuthorityFixture{}},
 			testOperatorTrust(),
-		).WithLeaseProver(principal.StoreLeaseProver{Attempts: fakePrincipalAttempts{}}),
+		).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: fakePrincipalAttempts{}}),
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
@@ -797,8 +797,12 @@ func TestM2RouteWithAnInvalidLeaseIsForbidden(t *testing.T) {
 			if status != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403; body=%s", status, payload)
 			}
-			if !strings.Contains(string(payload), "COLLAB_NOT_AUTHORIZED") {
-				t.Fatalf("body does not carry the authorization code: %s", payload)
+			code := "COLLAB_NOT_AUTHORIZED"
+			if name == "invalid lease" {
+				code = principal.CodeSecurityUpgradeRequired
+			}
+			if !strings.Contains(string(payload), code) {
+				t.Fatalf("body does not carry %s: %s", code, payload)
 			}
 		})
 	}

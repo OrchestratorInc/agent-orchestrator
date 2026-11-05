@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/intervention"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // TestM2ZeroProviderGuarantees is the runtime half of the M2-08 zero-provider proof.
@@ -66,7 +67,7 @@ func TestM2ZeroProviderGuarantees(t *testing.T) {
 	interventions := env.interventionCoordinator()
 	// A steer must join the turn the caller names, so the fake's default steer receipt is
 	// used as-is: it echoes the requested turn and names an AO turn row.
-	if _, err := interventions.Steer(ctx, intervention.SteerRequest{
+	if _, err := interventions.Steer(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.SteerRequest{
 		WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 		ClientMessageID: "msg-zero-provider", Text: "steer",
 		TargetProviderTurnID: "prov-turn-1", Harness: domain.HarnessCodex,
@@ -74,7 +75,7 @@ func TestM2ZeroProviderGuarantees(t *testing.T) {
 		t.Fatalf("Steer: %v", err)
 	}
 	env.gateway.InterruptResult(ports.InterruptReceipt{Confirmed: true})
-	if _, _, err := interventions.Stop(ctx, intervention.StopRequest{
+	if _, _, err := interventions.Stop(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
 		WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 		ClientMessageID: "msg-zero-provider-stop",
 	}); err != nil {

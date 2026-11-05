@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Store is the narrow persistence surface required by Workflow use cases.
@@ -32,7 +33,8 @@ type Store interface {
 	ListWorkflowTaskRepositories(context.Context, domain.WorkflowID, domain.WorkflowTaskID) ([]domain.WorkflowTaskRepository, error)
 	ListWorkflowAttempts(context.Context, domain.WorkflowID, domain.WorkflowTaskID) ([]domain.WorkflowAttempt, error)
 	ActivateWorkflow(context.Context, domain.WorkflowID, int64, string, string, time.Time) (domain.Workflow, bool, error)
-	ClaimWorkflowTask(context.Context, domain.WorkflowAttempt, int64, string, string) (domain.WorkflowAttempt, bool, error)
+	ReserveAndClaim(context.Context, domain.ClaimAdmissionInput) (domain.WorkflowAttempt, domain.SchedulerAdmission, bool, error)
+	FindWorkflowClaimAdmission(context.Context, domain.WorkflowID, string, string) (domain.WorkflowAttempt, domain.SchedulerAdmission, bool, error)
 	StartWorkflowAttempt(context.Context, domain.WorkflowID, domain.WorkflowAttemptID, string, string, string, time.Time) (domain.WorkflowAttempt, bool, error)
 	SettleWorkflowAttempt(context.Context, domain.WorkflowID, domain.WorkflowAttemptID, string, domain.WorkflowAttemptState, string, string, string, time.Time) (domain.WorkflowAttempt, bool, error)
 	ResolveUnknownWorkflowAttempt(context.Context, domain.WorkflowID, domain.WorkflowAttemptID, domain.WorkflowAttemptState, string, int64, string, string, time.Time) (domain.WorkflowAttempt, bool, error)
@@ -43,6 +45,7 @@ type Store interface {
 // Deps contains injectable clock, identity, graph-bound, and lease settings.
 type Deps struct {
 	Store         Store
+	Admission     ports.WorkflowAdmissionProvider
 	Clock         func() time.Time
 	NewID         func() string
 	NewLeaseToken func() (string, error)
@@ -54,6 +57,7 @@ type Deps struct {
 // launches an Agent, invokes a provider, or runs Git commands.
 type Service struct {
 	store         Store
+	admission     ports.WorkflowAdmissionProvider
 	clock         func() time.Time
 	newID         func() string
 	newLeaseToken func() (string, error)
@@ -74,7 +78,7 @@ func New(deps Deps) *Service {
 		deps.NewLeaseToken = randomLeaseToken
 	}
 	return &Service{
-		store: deps.Store, clock: deps.Clock, newID: deps.NewID,
+		store: deps.Store, admission: deps.Admission, clock: deps.Clock, newID: deps.NewID,
 		newLeaseToken: deps.NewLeaseToken, graphLimits: deps.GraphLimits,
 		leaseDuration: deps.LeaseDuration,
 	}
@@ -536,21 +540,9 @@ func (s *Service) Claim(ctx context.Context, input ClaimInput) (ClaimResult, boo
 	if s.leaseDuration <= 0 {
 		return ClaimResult{}, false, apierr.Internal("WORKFLOW_LEASE_NOT_CONFIGURED", "Workflow lease duration is not configured")
 	}
-	if _, err := s.GetTask(ctx, input.WorkflowID, input.TaskID); err != nil {
-		return ClaimResult{}, false, err
-	}
-
-	now := s.clock().UTC()
-	leaseUntil := now.Add(s.leaseDuration)
-	leaseToken, err := s.newLeaseToken()
+	task, err := s.GetTask(ctx, input.WorkflowID, input.TaskID)
 	if err != nil {
-		return ClaimResult{}, false, apierr.InternalCause("WORKFLOW_LEASE_TOKEN_FAILED", "Failed to issue a workflow lease", err)
-	}
-	attempt := domain.WorkflowAttempt{
-		ID:         domain.WorkflowAttemptID("attempt-" + s.newID()),
-		WorkflowID: input.WorkflowID, TaskID: input.TaskID, WorkerID: input.WorkerID,
-		LeaseToken: leaseToken, LeaseUntil: &leaseUntil, State: domain.WorkflowAttemptStateClaimed,
-		CreatedAt: now, UpdatedAt: now,
+		return ClaimResult{}, false, err
 	}
 	fingerprint, err := requestFingerprint(struct {
 		WorkflowID       domain.WorkflowID     `json:"workflowId"`
@@ -561,7 +553,38 @@ func (s *Service) Claim(ctx context.Context, input ClaimInput) (ClaimResult, boo
 	if err != nil {
 		return ClaimResult{}, false, apierr.InternalCause("WORKFLOW_FINGERPRINT_FAILED", "Failed to identify the claim request", err)
 	}
-	rec, created, err := s.store.ClaimWorkflowTask(ctx, attempt, input.ExpectedRevision, input.IdempotencyKey, fingerprint)
+	rec, _, replay, err := s.store.FindWorkflowClaimAdmission(ctx, input.WorkflowID, input.IdempotencyKey, fingerprint)
+	created := false
+	if err == nil && !replay {
+		if s.admission == nil {
+			return ClaimResult{}, false, apierr.Conflict("WORKFLOW_ADMISSION_REQUIRED", "Trusted admission evidence is required", nil)
+		}
+		evidence, prepareErr := s.admission.PrepareWorkflowAdmission(ctx, task)
+		if prepareErr != nil {
+			return ClaimResult{}, false, mapStoreError("WORKFLOW_ADMISSION_FAILED", "Workflow admission is unavailable", prepareErr)
+		}
+		workflow, found, readErr := s.store.GetWorkflow(ctx, input.WorkflowID)
+		if readErr != nil {
+			return ClaimResult{}, false, mapStoreError("WORKFLOW_ADMISSION_FAILED", "Workflow admission is unavailable", readErr)
+		}
+		if !found {
+			return ClaimResult{}, false, apierr.NotFound("WORKFLOW_NOT_FOUND", "Unknown workflow")
+		}
+		now := s.clock().UTC()
+		leaseUntil := now.Add(s.leaseDuration)
+		leaseToken, tokenErr := s.newLeaseToken()
+		if tokenErr != nil {
+			return ClaimResult{}, false, apierr.InternalCause("WORKFLOW_LEASE_TOKEN_FAILED", "Failed to issue a workflow lease", tokenErr)
+		}
+		attempt := domain.WorkflowAttempt{
+			ID: domain.WorkflowAttemptID("attempt-" + s.newID()), WorkflowID: input.WorkflowID, TaskID: input.TaskID,
+			WorkerID: input.WorkerID, LeaseToken: leaseToken, LeaseUntil: &leaseUntil, State: domain.WorkflowAttemptStateClaimed,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		rec, _, created, err = s.store.ReserveAndClaim(ctx, domain.ClaimAdmissionInput{Attempt: attempt,
+			ExpectedTaskRevision: input.ExpectedRevision, ExpectedWorkflowRevision: workflow.Revision,
+			IdempotencyKey: input.IdempotencyKey, RequestFingerprint: fingerprint, Evidence: evidence})
+	}
 	if err != nil {
 		return ClaimResult{}, false, mapStoreError("WORKFLOW_CLAIM_FAILED", "Failed to claim workflow task", err)
 	}
@@ -812,6 +835,14 @@ func randomLeaseToken() (string, error) {
 
 func mapStoreError(code, message string, err error) error {
 	switch {
+	case errors.Is(err, domain.ErrAdmissionRequired), errors.Is(err, domain.ErrSchedulerFence),
+		errors.Is(err, domain.ErrSchedulerPolicy), errors.Is(err, domain.ErrSchedulerCapacity),
+		errors.Is(err, domain.ErrBudgetPolicy), errors.Is(err, domain.ErrBudgetUnknown),
+		errors.Is(err, domain.ErrBudgetExceeded), errors.Is(err, domain.ErrBudgetOverflow),
+		errors.Is(err, domain.ErrCapabilityEvidenceInsufficient):
+		denied := apierr.Conflict("WORKFLOW_ADMISSION_DENIED", "Current resource, capability or budget evidence does not permit a new execution", nil)
+		denied.Cause = err
+		return denied
 	case errors.Is(err, domain.ErrWorkflowProjectNotFound), errors.Is(err, domain.ErrWorkflowProjectArchived):
 		return apierr.NotFound("WORKFLOW_PROJECT_NOT_FOUND", "A workflow repository references an unknown or archived project")
 	case errors.Is(err, domain.ErrWorkflowIdempotencyConflict):

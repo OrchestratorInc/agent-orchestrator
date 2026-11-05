@@ -38,6 +38,9 @@ const (
 	EventWorkflowUpdated        EventType = "workflow_updated"
 	EventWorkflowTaskUpdated    EventType = "workflow_task_updated"
 	EventWorkflowAttemptUpdated EventType = "workflow_attempt_updated"
+
+	// EventSchedulerUpdated 只发布调度记录的身份、状态与版本，秘密由数据库投影排除。
+	EventSchedulerUpdated EventType = "scheduler_updated"
 )
 
 // Event is one CDC change read from change_log. Seq is the monotonic ordering +

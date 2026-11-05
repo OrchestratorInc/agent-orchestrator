@@ -82,7 +82,7 @@ func TestResumeUntouchedChatStartsFreshWhenProviderNeverPersisted(t *testing.T) 
 				created = replacement
 			}
 			launcher := &recordingLauncher{}
-			manager := New(Deps{
+			manager := newAdmittedTestManager(t, Deps{
 				Runtime: &fakeRuntime{}, Agents: singleAgent{agent: claudeagent.New()}, Workspace: &fakeWorkspace{},
 				Store: store, Messenger: &fakeMessenger{}, Chat: launcher,
 				Lifecycle: &sqliteTransitionLifecycle{store: store},

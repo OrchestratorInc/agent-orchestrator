@@ -82,7 +82,7 @@ func newMultiRepoFixture(t *testing.T) *multiRepoFixture {
 	}
 
 	stub := func(string) (string, error) { return "/bin/true", nil }
-	m := New(Deps{
+	m := newAdmittedTestManager(t, Deps{
 		Runtime:   &fakeRuntime{},
 		Agents:    fakeAgents{},
 		Workspace: ws,

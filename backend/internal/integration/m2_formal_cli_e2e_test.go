@@ -37,6 +37,7 @@ func TestM2FormalCLIThroughReopenedSQLite(t *testing.T) {
 	}
 	wid, tid := f.createWorkflowWithPins("formal", "work", pinA, pinB)
 	aid, lease := f.claimAndStart(wid, tid, "formal")
+	approvalsBeforeBind := len(f.consent.approvals())
 	bindArgs := []string{"bind", "--workflow", string(wid), "--attempt", string(aid),
 		"--harness", string(m2smDriverHarness), "--mode", "chat", "--prompt", "work", "--idempotency-key", "formal-bind"}
 
@@ -77,7 +78,7 @@ func TestM2FormalCLIThroughReopenedSQLite(t *testing.T) {
 		t.Fatalf("重复 Bind 创建资源: %v", duplicate)
 	}
 	verifyRegistrations()
-	seen := f.consent.approvals()
+	seen := f.consent.approvals()[approvalsBeforeBind:]
 	if len(seen) != 3 || seen[1].Payload != seen[2].Payload || !strings.Contains(seen[1].Payload, "formal-bind") {
 		t.Fatalf("正式 CLI 未逐次审批相同的精确正文: %v", seen)
 	}
@@ -115,7 +116,7 @@ func TestM2FormalCLIThroughReopenedSQLite(t *testing.T) {
 
 	// 真正 MCP stdio 入口读取 Session 能力与租约，服务端派生 Agent 身份。
 	t.Run("MCP协作", func(t *testing.T) {
-		mcpEnvVars(t, m2MCPEnv{workflowID: string(wid), attemptID: string(aid), lease: lease, capability: f.issueAgentCapability(sid)})
+		mcpEnvVars(t, m2MCPEnv{sessionID: string(sid), workflowID: string(wid), attemptID: string(aid), lease: lease, capability: f.issueAgentCapability(sid)})
 		deps := mcpDeps(t, &m2Env{srv: f.srv})
 		for _, call := range []string{
 			mcpCallLine(t, 1, "workflow_message_send", map[string]any{"kind": "progress", "body": "half done", "clientMessageId": "formal-message"}),
@@ -136,10 +137,11 @@ func TestM2FormalCLIThroughReopenedSQLite(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("MCP 请求未持久化: %t %v", found, err)
 	}
+	auditsBeforeDecide := len(f.audits(wid))
 	m2MustOperator(t, f, "decide", "--workflow", string(wid), "--request", request.ID, "--approve",
 		"--expected-revision", fmt.Sprint(request.Revision))
 	audits := f.audits(wid)
-	if len(audits) != 1 || audits[0].Decision != "decide_task_request" || audits[0].TokenFingerprint != principal.NativeConsentIdentity {
+	if len(audits) != auditsBeforeDecide+1 || audits[len(audits)-1].Decision != "decide_task_request" || audits[len(audits)-1].TokenFingerprint != principal.NativeConsentIdentity {
 		t.Fatalf("CLI Decide 缺少原生审批审计: %+v", audits)
 	}
 
@@ -199,12 +201,13 @@ func TestM2FormalCLIThroughReopenedSQLite(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("读取待裁决任务: %t %v", found, err)
 	}
+	auditsBeforeResolve := len(second.audits(wid))
 	resolved := m2MustOperator(t, second, "resolve", "--workflow", string(wid), "--attempt", string(aid),
 		"--outcome", "succeeded", "--expected-task-revision", fmt.Sprint(task.Revision), "--idempotency-key", "formal-resolve")
 	if str(dig(resolved, "attempt", "state")) != string(domain.WorkflowAttemptStateSucceeded) {
 		t.Fatalf("CLI Resolve 失败: %v", resolved)
 	}
-	if rows := second.audits(wid); len(rows) != 2 || rows[1].Decision != "resolve_attempt" || rows[1].TokenFingerprint != principal.NativeConsentIdentity {
+	if rows := second.audits(wid); len(rows) != auditsBeforeResolve+1 || rows[len(rows)-1].Decision != "resolve_attempt" || rows[len(rows)-1].TokenFingerprint != principal.NativeConsentIdentity {
 		t.Fatalf("重开 SQLite 后审计错误: %+v", rows)
 	}
 }

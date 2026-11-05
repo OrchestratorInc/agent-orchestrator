@@ -215,6 +215,73 @@ type AwakeState struct {
 	Document string
 }
 
+type BudgetPolicy struct {
+	ID               string
+	Scope            string
+	ScopeID          string
+	Currency         string
+	Mode             string
+	Period           string
+	LimitNanos       int64
+	ReservationNanos sql.NullInt64
+	ReservationBasis string
+	ReservationRef   string
+	Revision         int64
+}
+
+type BudgetReservation struct {
+	AdmissionID string
+	AttemptID   sql.NullString
+	PolicyID    string
+	Window      string
+	AmountNanos sql.NullInt64
+	Basis       string
+	Reference   string
+	State       string
+	Revision    int64
+}
+
+type BudgetSoftAlert struct {
+	PolicyID       string
+	Window         string
+	PolicyRevision int64
+	Threshold      int64
+	CreatedAt      time.Time
+}
+
+type BudgetUsageFact struct {
+	EventID               int64
+	SessionID             string
+	AttemptID             string
+	WorkflowID            string
+	TaskID                string
+	OccurredAt            sql.NullTime
+	Currency              string
+	CostNanos             sql.NullInt64
+	Quality               string
+	PriceVersion          string
+	BillingProviderID     string
+	BillingProviderSource string
+	MeasurementKind       string
+}
+
+type BudgetUsagePending struct {
+	EventID               int64
+	SessionID             string
+	AttemptID             string
+	WorkflowID            string
+	TaskID                string
+	OccurredAt            sql.NullTime
+	Currency              string
+	CostNanos             sql.NullInt64
+	Quality               string
+	PriceVersion          string
+	BillingProviderID     string
+	BillingProviderSource string
+	MeasurementKind       string
+	PreviousRevision      sql.NullInt64
+}
+
 type ChangeLog struct {
 	Seq       int64
 	ProjectID *domain.ProjectID
@@ -703,6 +770,87 @@ type ReviewRun struct {
 	TriggerSource    domain.ReviewTriggerSource
 }
 
+type SchedulerAdmission struct {
+	ID                   string
+	AttemptID            sql.NullString
+	WorkflowID           string
+	TaskID               string
+	SessionID            sql.NullString
+	ProjectID            string
+	Harness              string
+	Mode                 string
+	ClientRequestID      sql.NullString
+	RequestFingerprint   string
+	OwnerID              string
+	Epoch                int64
+	State                string
+	Revision             int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	ControllerGeneration string
+}
+
+type SchedulerDecision struct {
+	ID                  int64
+	AdmissionID         string
+	WorkflowID          string
+	TaskID              string
+	OwnerID             string
+	Epoch               int64
+	ReasonCode          string
+	PolicyRevisionsJson string
+	CreatedAt           time.Time
+}
+
+type SchedulerLeader struct {
+	ID         int64
+	OwnerID    string
+	Epoch      int64
+	LeaseUntil time.Time
+	Revision   int64
+	Recovered  int64
+	Cursor     string
+}
+
+type SchedulerPolicy struct {
+	ID            string
+	Scope         string
+	ScopeID       string
+	MaxConcurrent int64
+	PolicyJson    string
+	Revision      int64
+}
+
+type SchedulerPolicyChange struct {
+	IdempotencyKey     string
+	RequestFingerprint string
+	Kind               string
+	PolicyID           string
+	ResultJson         string
+	ActorRef           string
+	Reason             string
+	CreatedAt          time.Time
+}
+
+type SchedulerRetryDue struct {
+	WorkflowID     string
+	TaskID         string
+	AttemptID      string
+	Harness        string
+	NextEligibleAt time.Time
+	ReasonCode     string
+	PolicyRevision int64
+}
+
+type SchedulerWorkflowState struct {
+	WorkflowID      string
+	Deficit         int64
+	CandidateOffset int64
+	Weight          int64
+	Paused          int64
+	Revision        int64
+}
+
 type Session struct {
 	ID                               domain.SessionID
 	ProjectID                        *domain.ProjectID
@@ -1178,6 +1326,26 @@ type WorkflowTask struct {
 	UpdatedAt    time.Time
 }
 
+type WorkflowTaskMaterialization struct {
+	RequestID              string
+	WorkflowID             string
+	ParentTaskID           string
+	ChildTaskID            string
+	RequestSha             string
+	RequestRevision        int64
+	SourceWorkflowRevision int64
+	WorkflowRevision       int64
+	ActorRef               string
+	Reason                 string
+	CreatedAt              time.Time
+}
+
+type WorkflowTaskMaterializationKey struct {
+	IdempotencyKey     string
+	RequestFingerprint string
+	RequestID          string
+}
+
 type WorkflowTaskRepo struct {
 	WorkflowID       domain.WorkflowID
 	TaskID           domain.WorkflowTaskID
@@ -1202,6 +1370,37 @@ type WorkflowTaskRequest struct {
 	Revision         int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+type WorkflowUsageAttribution struct {
+	EventID               int64
+	SessionID             string
+	AttemptID             string
+	WorkflowID            string
+	TaskID                string
+	OccurredAt            sql.NullTime
+	Currency              string
+	CostNanos             sql.NullInt64
+	Quality               string
+	Revision              int64
+	PriceVersion          string
+	BillingProviderID     string
+	BillingProviderSource string
+	MeasurementKind       string
+	UpdatedAt             time.Time
+}
+
+type WorkflowUsageCorrection struct {
+	CorrectionKey        string
+	EventID              int64
+	PreviousRevision     int64
+	Revision             int64
+	OldCostNanos         sql.NullInt64
+	NewCostNanos         sql.NullInt64
+	ReasonCode           string
+	CreatedAt            time.Time
+	PreviousSnapshotJson string
+	NewSnapshotJson      string
 }
 
 type WorkspaceRepo struct {

@@ -10,6 +10,46 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+type executionPermitContextKey struct{}
+
+type sessionReattachContextKey struct{}
+
+// sessionReattachContext 只在内部传递观察许可和动态时钟；慢连接提交时必须重新判断任期是否到期。
+type sessionReattachContext struct {
+	permit domain.SessionReattachPermit
+	clock  func() time.Time
+}
+
+// WithSessionReattachPermit 与业务 ExecutionPermit 分开，不能转换为 Agent 的执行授权。
+func WithSessionReattachPermit(ctx context.Context, permit domain.SessionReattachPermit, clock func() time.Time) context.Context {
+	return context.WithValue(ctx, sessionReattachContextKey{}, sessionReattachContext{permit: permit, clock: clock})
+}
+
+// SessionReattachPermitFromContext 返回现存 Provider 的重附着观察快照。
+func SessionReattachPermitFromContext(ctx context.Context) (domain.SessionReattachPermit, bool) {
+	v, ok := ctx.Value(sessionReattachContextKey{}).(sessionReattachContext)
+	return v.permit, ok
+}
+
+// SessionReattachNow 在实际写事务中读取时间，不能把开始连接时的时间冻结为后续授权。
+func SessionReattachNow(ctx context.Context) time.Time {
+	if v, ok := ctx.Value(sessionReattachContextKey{}).(sessionReattachContext); ok && v.clock != nil {
+		return v.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// WithExecutionPermit 只在 daemon 内部传递可信快照，不进入启动配置、环境或 HTTP。
+func WithExecutionPermit(ctx context.Context, permit domain.ExecutionPermit) context.Context {
+	return context.WithValue(ctx, executionPermitContextKey{}, permit)
+}
+
+// ExecutionPermitFromContext 读取由协调器或身份校验器持有的许可。
+func ExecutionPermitFromContext(ctx context.Context) (domain.ExecutionPermit, bool) {
+	p, ok := ctx.Value(executionPermitContextKey{}).(domain.ExecutionPermit)
+	return p, ok
+}
+
 // ExecutionGateway is the thin boundary between the Workflow coordinator and AO's
 // existing Session Manager and Chat service.
 //
@@ -143,6 +183,8 @@ type SessionObservation struct {
 
 	Terminated bool      `json:"terminated"`
 	ObservedAt time.Time `json:"observedAt"`
+	// SessionUpdatedAt 为无 Controller 的普通终端 Session 提供终止事实版本，不作为 API 字段。
+	SessionUpdatedAt time.Time `json:"-"`
 }
 
 // SpawnRequest asks the gateway to create a session for one attempt.
@@ -170,25 +212,17 @@ type SpawnRequest struct {
 	// provisioning, not ready.
 	Async bool `json:"async"`
 
-	// Workflow is the attempt identity the spawned session acts for, and the only
-	// place a lease token crosses this boundary. It is set by the coordinator from
-	// the attempt it already holds, so the session's tool server can authenticate
-	// as that attempt; it is nil when the caller has no workflow context.
+	// Workflow 只传递协调器确认的非秘密 Attempt 标识；MCP 复用 Session
+	// capability 认证，内部租约不能跨越这个启动边界。
 	Workflow *WorkflowSpawnContext `json:"-"`
 }
 
-// WorkflowSpawnContext identifies the workflow attempt a spawned session acts
-// for.
-//
-// LeaseToken is the attempt's lease. It is never logged, never serialized, and
-// never placed in a prompt: it reaches the agent only through the MCP subprocess
-// environment of its own tool server, which is the same channel that already
-// carries the agent's session capability.
+// WorkflowSpawnContext 仅描述启动 Session 所属的 Workflow/Task/Attempt。
+// 身份标识本身不授予权限，服务端必须通过 Session capability 与持久绑定验证。
 type WorkflowSpawnContext struct {
 	WorkflowID domain.WorkflowID
 	TaskID     domain.WorkflowTaskID
 	AttemptID  domain.WorkflowAttemptID
-	LeaseToken string
 }
 
 // SpawnRepos translates a spawn request's repository references into the

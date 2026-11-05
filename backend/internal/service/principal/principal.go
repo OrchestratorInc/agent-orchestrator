@@ -1,5 +1,5 @@
-// Package principal 为 M2 路由派生可信调用方。
-// Agent 必须先证明 session capability 与 attempt lease；无效 Agent 凭据不能回退为 Operator。
+// Package principal 从 Session capability 及服务端执行事实派生可信调用方。
+// Agent 无权提交内部租约；无效 Agent 凭据不能回退为 Operator。
 // 正式 Operator 只接受 OS 人工确认后、绑定具体 RequestURI 和正文的单次审批。
 // 回环地址、可读取的 token 和请求正文都不能独立证明人工授权。
 package principal
@@ -27,26 +27,32 @@ const (
 // the raw token in its environment; the daemon stores only the verifier.
 const HeaderAgentCapability = "X-AO-Agent-Capability"
 
-// HeaderAttemptLease carries the workflow lease token an agent proves its attempt with. It is
-// a header, never a body field, so a body cannot impersonate an attempt.
+// HeaderAttemptLease 仅用于识别并拒绝升级前的凭据协议。
 const HeaderAttemptLease = "X-AO-Attempt-Lease"
 
-// HeaderAttemptID names the attempt an agent claims on a route whose path carries no attempt
-// segment (the workflow-scoped message and task-request routes). It is a transport fact, not a
-// body field, and it proves nothing on its own: the lease proof below is what makes it identity.
+// HeaderSessionID 选择待验证 capability 的 Session，本身不授予权限。
+const HeaderSessionID = "X-AO-Session-Id"
+
+// HeaderAttemptID 仅约束服务端已推导的身份，不能选择或冒领其他 Attempt。
 const HeaderAttemptID = "X-AO-Attempt-Id"
+
+// CodeSecurityUpgradeRequired 告知旧 MCP 需要安全重附着，不返回任何凭据。
+const CodeSecurityUpgradeRequired = "WORKFLOW_SECURITY_UPGRADE_REQUIRED"
 
 // Caller is the trusted identity a handler derived from the request. It is never built from a
 // body field.
 type Caller struct {
 	Kind      Kind
 	SessionID domain.SessionID // set for KindAgent
-	// AttemptID is set once the caller proved it holds this attempt's lease. It is never the
-	// attempt a URL happens to name: only a lease makes an attempt an identity.
-	AttemptID domain.WorkflowAttemptID
-	// LeaseProven reports whether AttemptID was proven rather than merely named.
+	// 身份来自该 Session 的唯一 binding，而非外部 Attempt 标识。
+	AttemptID  domain.WorkflowAttemptID
+	WorkflowID domain.WorkflowID
+	TaskID     domain.WorkflowTaskID
+	// LeaseProven 表示服务端已核验活跃租约、绑定与当前调度任期。
 	LeaseProven bool
 	ProjectID   domain.ProjectID
+	// ExecutionPermit 仅在 daemon 内交给写事务做 CAS，不能序列化到响应。
+	ExecutionPermit *domain.ExecutionPermit `json:"-"`
 	// OperatorTokenFingerprint 保留审计字段名；生产审批记录 OS 主体标识，Agent 为空。
 	OperatorTokenFingerprint string
 }
@@ -78,8 +84,10 @@ var (
 	ErrNotAuthorized = errors.New("caller is not authorized")
 	// ErrCapabilityInvalid refuses an agent capability that does not match the session.
 	ErrCapabilityInvalid = errors.New("agent capability is invalid")
-	// ErrLeaseUnproven refuses an attempt claim with no lease proof.
+	// ErrLeaseUnproven 拒绝缺失或过期的服务端执行身份。
 	ErrLeaseUnproven = errors.New("workflow attempt lease was not proven")
+	// ErrSecurityUpgradeRequired 拒绝旧协议及新旧凭据混用。
+	ErrSecurityUpgradeRequired = errors.New("旧 Workflow lease 凭据已停用；请通过安全重附着更新 MCP")
 )
 
 // Verifier checks an agent capability against the session's stored verifier.
@@ -99,14 +107,9 @@ type OperatorTrust interface {
 	PermitsOperator(req *http.Request) bool
 }
 
-// LeaseProver checks a workflow lease token against the attempt it names.
-type LeaseProver interface {
-	ProveWorkflowAttemptLease(
-		ctx context.Context,
-		workflowID domain.WorkflowID,
-		attemptID domain.WorkflowAttemptID,
-		token string,
-	) (bool, error)
+// SessionAttemptProver 只从已验证的 Session 读取内部执行身份；false 表示没有绑定。
+type SessionAttemptProver interface {
+	ProveSessionAttempt(ctx context.Context, session domain.SessionRecord) (domain.ExecutionPermit, bool, error)
 }
 
 // LoopbackOperatorTrust permits a request whose peer address is a loopback IP — nothing more.
@@ -131,20 +134,18 @@ func (LoopbackOperatorTrust) PermitsOperator(req *http.Request) bool {
 type Resolver struct {
 	sessions  SessionReader
 	verifier  Verifier
-	lease     LeaseProver
+	attempts  SessionAttemptProver
 	operators OperatorTrust
 }
 
-// NewResolver builds a resolver. verifier and lease may be nil, in which case an agent request
-// is always refused: a missing verifier is not permission.
+// NewResolver 组装身份边界；缺失 capability 或执行事实验证器时拒绝 Agent。
 func NewResolver(sessions SessionReader, verifier Verifier, trust OperatorTrust) *Resolver {
 	return &Resolver{sessions: sessions, verifier: verifier, operators: trust}
 }
 
-// WithLeaseProver attaches the lease proof required for an agent identity. Without it an agent
-// request is refused.
-func (r *Resolver) WithLeaseProver(prover LeaseProver) *Resolver {
-	r.lease = prover
+// WithSessionAttemptProver 注入从持久绑定派生执行身份的验证器。
+func (r *Resolver) WithSessionAttemptProver(prover SessionAttemptProver) *Resolver {
+	r.attempts = prover
 	return r
 }
 
@@ -160,18 +161,11 @@ type RequestFacts struct {
 	// RouteAttemptID is the attempt the request is scoped to, from the path. The resolver never
 	// treats it as identity; it is here so a caller can express both facts at once.
 	RouteAttemptID domain.WorkflowAttemptID
-	// LeaseToken is the workflow lease capability, from HeaderAttemptLease only.
+	// LeaseToken 仅保留供旧调用方得到明确升级拒绝；不得再作为凭据使用。
 	LeaseToken string
 }
 
-// FromRequest derives the caller from transport facts only.
-//
-//   - A request carrying HeaderAgentCapability plus a session id resolves as KindAgent ONLY
-//     when the stored verifier accepts the token; otherwise it is an authorization error, never
-//     a silent downgrade to operator.
-//   - A request with no capability header resolves as KindOperator ONLY when
-//     trust.PermitsOperator(r) holds (loopback peer, or a request the desktop app
-//     authenticated). Otherwise it is refused.
+// FromRequest 为已有 transport 调用方保留入口，权限规则与 Resolve 完全一致。
 func (r *Resolver) FromRequest(
 	req *http.Request,
 	agentSessionID domain.SessionID,
@@ -179,54 +173,50 @@ func (r *Resolver) FromRequest(
 	return r.Resolve(context.Background(), RequestFacts{Request: req, AgentSessionID: agentSessionID})
 }
 
-// Resolve derives the caller, including the attempt lease when one is supplied.
-//
-// The order is deliberate: the cheap transport check decides whether the caller is an agent at
-// all, and only then are the durable checks (capability, then lease) performed. An attempt id
-// supplied without any proof is refused rather than ignored — silently dropping it would let a
-// caller believe it spoke as an agent.
+// Resolve 在消费任何审批前拒绝旧凭据；capability 验证成功后才读取 Session 的绑定。
 func (r *Resolver) Resolve(ctx context.Context, facts RequestFacts) (Caller, error) {
 	req := facts.Request
 	if req == nil {
 		return Caller{}, ErrNotAuthorized
 	}
-	if facts.AgentSessionID == "" {
-		// No session id in the URL: the caller cannot be a worker, so a capability header here
-		// is a claim with nothing to check it against.
-		if strings.TrimSpace(req.Header.Get(HeaderAgentCapability)) != "" {
+	if facts.LeaseToken != "" || hasHeader(req, HeaderAttemptLease) || hasHeader(req, "X-AO-Workflow-Lease") {
+		return Caller{}, ErrSecurityUpgradeRequired
+	}
+	if id := domain.SessionID(strings.TrimSpace(req.Header.Get(HeaderSessionID))); id != "" {
+		if facts.AgentSessionID != "" && facts.AgentSessionID != id {
+			return Caller{}, ErrCapabilityInvalid
+		}
+		facts.AgentSessionID = id
+	}
+	if id := domain.WorkflowAttemptID(strings.TrimSpace(req.Header.Get(HeaderAttemptID))); id != "" {
+		if facts.AttemptID != "" && facts.AttemptID != id {
+			return Caller{}, ErrLeaseUnproven
+		}
+		facts.AttemptID = id
+	}
+	if hasHeader(req, HeaderAgentCapability) {
+		if facts.AgentSessionID == "" {
 			return Caller{}, ErrNotAuthorized
 		}
-		caller, err := r.operator(req)
-		if err != nil {
-			return Caller{}, err
-		}
-		if facts.AttemptID != "" || strings.TrimSpace(facts.LeaseToken) != "" {
-			// An operator may act on an attempt through the established M1 surfaces, but this
-			// resolver does not mint an attempt identity from a request that claimed one.
-			return Caller{}, ErrLeaseUnproven
-		}
-		return caller, nil
+		return r.agent(ctx, facts, strings.TrimSpace(req.Header.Get(HeaderAgentCapability)))
 	}
+	if hasHeader(req, HeaderSessionID) {
+		return Caller{}, ErrCapabilityInvalid
+	}
+	if facts.AttemptID != "" {
+		return Caller{}, ErrLeaseUnproven
+	}
+	return r.operator(req)
+}
 
-	token := strings.TrimSpace(req.Header.Get(HeaderAgentCapability))
-	if token == "" {
-		// No capability: the operator path. An agent session id in the URL does not turn an
-		// operator into an agent, and an attempt claim without proof is still refused below.
-		caller, err := r.operator(req)
-		if err != nil {
-			return Caller{}, err
+// hasHeader 连空值和非标准大小写也视为协议声明，避免无效 Agent 降级为 Operator。
+func hasHeader(req *http.Request, name string) bool {
+	for key := range req.Header {
+		if strings.EqualFold(key, name) {
+			return true
 		}
-		if facts.AttemptID != "" || strings.TrimSpace(facts.LeaseToken) != "" {
-			return Caller{}, ErrLeaseUnproven
-		}
-		return caller, nil
 	}
-
-	caller, err := r.agent(ctx, facts, token)
-	if err != nil {
-		return Caller{}, err
-	}
-	return caller, nil
+	return false
 }
 
 // operator 保留自定义 trust 的测试兼容入口；生产 ApprovalOperatorTrust 的布尔路径永远拒绝。
@@ -266,7 +256,7 @@ func (r *Resolver) operator(req *http.Request) (Caller, error) {
 	return Caller{Kind: KindOperator, OperatorTokenFingerprint: fingerprint}, nil
 }
 
-// agent proves the capability and then the attempt lease.
+// agent 先证明 Session，再核验内部租约与任期；已有坏绑定不能降级为 Session 权限。
 func (r *Resolver) agent(ctx context.Context, facts RequestFacts, token string) (Caller, error) {
 	if r.sessions == nil || r.verifier == nil {
 		return Caller{}, ErrCapabilityInvalid
@@ -275,7 +265,7 @@ func (r *Resolver) agent(ctx context.Context, facts RequestFacts, token string) 
 	if err != nil {
 		return Caller{}, err
 	}
-	if !found || session.IsTerminated || session.Metadata.BrowserCapabilityVerifier == "" {
+	if !found || session.ID != facts.AgentSessionID || session.IsTerminated || session.Metadata.BrowserCapabilityVerifier == "" || token == "" {
 		return Caller{}, ErrCapabilityInvalid
 	}
 	valid, err := r.verifier.VerifyAgentCapability(ctx, facts.AgentSessionID, token)
@@ -285,29 +275,42 @@ func (r *Resolver) agent(ctx context.Context, facts RequestFacts, token string) 
 	if !valid {
 		return Caller{}, ErrCapabilityInvalid
 	}
+	current, found, err := r.sessions.GetSession(ctx, facts.AgentSessionID)
+	if err != nil {
+		return Caller{}, err
+	}
+	// capability 验证期间可能轮换 Controller，不能把新凭据和旧 generation 拼成身份。
+	if !found || current.ID != session.ID || current.IsTerminated || current.ProjectID != session.ProjectID ||
+		current.Metadata.BrowserCapabilityVerifier != session.Metadata.BrowserCapabilityVerifier ||
+		current.Metadata.ControllerGeneration != session.Metadata.ControllerGeneration {
+		return Caller{}, ErrCapabilityInvalid
+	}
 	caller := Caller{
 		Kind:      KindAgent,
 		SessionID: facts.AgentSessionID,
 		ProjectID: session.ProjectID,
 	}
-	if facts.AttemptID == "" {
-		// A capability with no attempt claim is a legitimate session-scoped agent (a worker
-		// asking to read its own binding), just not an attempt identity.
-		return caller, nil
-	}
-	if strings.TrimSpace(facts.LeaseToken) == "" || r.lease == nil {
+	if r.attempts == nil {
 		return Caller{}, ErrLeaseUnproven
 	}
-	proven, err := r.lease.ProveWorkflowAttemptLease(
-		ctx, facts.WorkflowID, facts.AttemptID, facts.LeaseToken,
-	)
+	permit, bound, err := r.attempts.ProveSessionAttempt(ctx, session)
 	if err != nil {
 		return Caller{}, err
 	}
-	if !proven {
+	if !bound {
+		if facts.WorkflowID != "" || facts.AttemptID != "" || facts.RouteAttemptID != "" {
+			return Caller{}, ErrLeaseUnproven
+		}
+		return caller, nil
+	}
+	if (facts.WorkflowID != "" && facts.WorkflowID != permit.WorkflowID) ||
+		(facts.AttemptID != "" && facts.AttemptID != permit.AttemptID) {
 		return Caller{}, ErrLeaseUnproven
 	}
-	caller.AttemptID = facts.AttemptID
+	caller.AttemptID = permit.AttemptID
+	caller.WorkflowID = permit.WorkflowID
+	caller.TaskID = permit.TaskID
 	caller.LeaseProven = true
+	caller.ExecutionPermit = &permit
 	return caller, nil
 }

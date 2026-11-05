@@ -17,7 +17,7 @@ import (
 // The identity question is the whole design. An agent must be able to speak as the
 // workflow attempt it IS, and must not be able to speak as any other one. So:
 //
-//   - the workflow id, attempt id, capability, and lease come ONLY from this
+//   - the session id, workflow id, attempt id, and capability come ONLY from this
 //     process's own environment, which the daemon sets on the MCP subprocess when it
 //     starts a workflow session;
 //   - no tool schema declares workflowId, attemptId, lease, capability, or a sender
@@ -32,20 +32,20 @@ import (
 // Workflow MCP env var names. They mirror sessionmanager's constants; the CLI is a
 // separate binary boundary and deliberately does not import the daemon's internals.
 const (
+	envMCPSessionID   = "AO_SESSION_ID"
 	envMCPWorkflowID  = "AO_WORKFLOW_ID"
 	envMCPTaskID      = "AO_TASK_ID"
 	envMCPAttemptID   = "AO_ATTEMPT_ID"
-	envMCPLeaseToken  = "AO_WORKFLOW_LEASE"       //nolint:gosec // Environment variable name, not a value.
-	envMCPCapability  = "AO_BROWSER_CAPABILITY"   //nolint:gosec // Environment variable name, not a value.
-	envMCPRunFileHint = "AO_RUN_FILE"             //nolint:unused // documented for readers of this file
+	envMCPCapability  = "AO_BROWSER_CAPABILITY" //nolint:gosec // Environment variable name, not a value.
+	envMCPRunFileHint = "AO_RUN_FILE"           //nolint:unused // documented for readers of this file
 )
 
 // Identity headers the daemon's principal resolver reads. Named here rather than
 // imported so the CLI keeps its one-way dependency on the daemon's HTTP contract.
 const (
 	headerAgentCapability = "X-AO-Agent-Capability"
+	headerSessionID       = "X-AO-Session-Id"
 	headerAttemptID       = "X-AO-Attempt-Id"
-	headerAttemptLease    = "X-AO-Attempt-Lease"
 )
 
 // errNotWorkflowAttempt is the readable answer for a session that is not a workflow
@@ -54,44 +54,38 @@ const (
 var errNotWorkflowAttempt = errors.New(
 	"this session is not a workflow attempt: workflow collaboration tools are unavailable here")
 
-// workflowToolIdentity is the trusted identity one call acts as.
+// workflowToolIdentity 携带待服务端验证的 Session capability 和一致性标识。
+// Workflow/Attempt 标识不能替代服务端从 Session 读取的持久身份。
 type workflowToolIdentity struct {
+	sessionID  string
 	workflowID string
 	attemptID  string
-	lease      string
 	capability string
 }
 
 // workflowIdentityFromEnv reads the identity this process holds.
 //
-// The workflow and attempt ids are required together: one without the other names no
-// attempt. The lease and capability may be absent (a daemon without a capability
-// issuer), in which case the call is still attributable by attempt id and the daemon
-// answers with its own refusal — but the tool never fabricates them.
+// Session、Workflow、Attempt 和 capability 缺一不可；不完整身份在本地拒绝。
+// 旧 lease 环境不读取，内部租约不进入 CLI 身份或 HTTP 请求。
 func workflowIdentityFromEnv(getenv func(string) string) (workflowToolIdentity, bool) {
 	identity := workflowToolIdentity{
+		sessionID:  strings.TrimSpace(getenv(envMCPSessionID)),
 		workflowID: strings.TrimSpace(getenv(envMCPWorkflowID)),
 		attemptID:  strings.TrimSpace(getenv(envMCPAttemptID)),
-		lease:      strings.TrimSpace(getenv(envMCPLeaseToken)),
 		capability: strings.TrimSpace(getenv(envMCPCapability)),
 	}
-	return identity, identity.workflowID != "" && identity.attemptID != ""
+	return identity, identity.sessionID != "" && identity.workflowID != "" &&
+		identity.attemptID != "" && identity.capability != ""
 }
 
-// headers returns the identity headers for one call. Absent values are omitted
-// rather than sent empty, so a missing lease is never mistaken for a proven one.
+// headers 将已通过本地完整性检查的 Session 凭据与非秘密标识写入请求。
 func (i workflowToolIdentity) headers() map[string]string {
-	headers := map[string]string{"Content-Type": "application/json"}
-	if i.capability != "" {
-		headers[headerAgentCapability] = i.capability
+	return map[string]string{
+		"Content-Type":        "application/json",
+		headerAgentCapability: i.capability,
+		headerSessionID:       i.sessionID,
+		headerAttemptID:       i.attemptID,
 	}
-	if i.attemptID != "" {
-		headers[headerAttemptID] = i.attemptID
-	}
-	if i.lease != "" {
-		headers[headerAttemptLease] = i.lease
-	}
-	return headers
 }
 
 // workflowMessagesPath is the workflow-scoped messages route.
@@ -141,8 +135,8 @@ var workflowToolSchemas = []map[string]any{
 		},
 	},
 	{
-		"name":  "workflow_messages_list",
-		"title": "List workflow messages",
+		"name":        "workflow_messages_list",
+		"title":       "List workflow messages",
 		"description": "List this workflow's collaboration messages, oldest first.",
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -169,8 +163,8 @@ var workflowToolSchemas = []map[string]any{
 					"description": "Caller-chosen stable id for this request.",
 				},
 				"requestKind": map[string]any{
-					"type": "string",
-					"enum": []string{"create_task", "add_dependency", "expand_repos", "increase_concurrency", "increase_budget"},
+					"type":        "string",
+					"enum":        []string{"create_task", "add_dependency", "expand_repos", "increase_concurrency", "increase_budget"},
 					"description": "What is being requested.",
 				},
 				"payload": map[string]any{
@@ -185,8 +179,8 @@ var workflowToolSchemas = []map[string]any{
 		},
 	},
 	{
-		"name":  "workflow_task_request_get",
-		"title": "Read one workflow task request",
+		"name":        "workflow_task_request_get",
+		"title":       "Read one workflow task request",
 		"description": "Read one task request of this workflow, including its decision state.",
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -201,8 +195,8 @@ var workflowToolSchemas = []map[string]any{
 		},
 	},
 	{
-		"name":  "workflow_task_requests_list",
-		"title": "List workflow task requests",
+		"name":        "workflow_task_requests_list",
+		"title":       "List workflow task requests",
 		"description": "List this workflow's task requests with their decision states.",
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -488,7 +482,7 @@ func (r workflowTaskRequestDTO) asMap() map[string]any {
 		"decidedByKind": r.DecidedByKind, "decidedByRef": r.DecidedByRef,
 		"reason": r.Reason, "workflowRevision": r.WorkflowRevision, "revision": r.Revision,
 		"materialization": r.materialization(), "reasonCode": r.ReasonCode,
-		"note":            r.note(),
+		"note": r.note(),
 	}
 }
 

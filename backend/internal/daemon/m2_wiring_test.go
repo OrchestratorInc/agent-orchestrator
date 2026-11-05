@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/intervention"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // TestM2WiringLogRedaction is the M2-08 log-redaction check for the one log statement M2 adds
@@ -232,7 +233,8 @@ func TestM2WiringForwardsTheInjectedGateway(t *testing.T) {
 		SpawnGeneration("gen-injected")
 	materializeSession(t, store, fake)
 
-	services := newM2ServicesWith(m2GatewayDeps{Store: store, Gateway: fake, Log: slog.Default()})
+	attempt := seedWiringAttempt(t, store, "wiring-gw")
+	services := newM2ServicesWith(m2GatewayDeps{Store: store, Gateway: fake, ExecutionFence: daemonExecutionFence(t, store), Log: slog.Default()})
 
 	// The capability gate runs first and would refuse without evidence, so register a probe
 	// that reports a real handshake. This keeps the assertion about the gateway rather than
@@ -242,7 +244,6 @@ func TestM2WiringForwardsTheInjectedGateway(t *testing.T) {
 		features: []domain.CapabilityFeature{domain.CapabilityFeatureStreaming},
 	})
 
-	attempt := seedWiringAttempt(t, store, "wiring-gw")
 	outcome, err := services.Binder.BindAttempt(context.Background(), ports.SpawnRequest{
 		WorkflowID: "wiring-workflow", TaskID: "wiring-task", AttemptID: attempt,
 		ProjectID: "wiring-proj", Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
@@ -273,7 +274,8 @@ func TestM2WiringInterventionsAdvanceTheBindingOnAConfirmedStop(t *testing.T) {
 		InterruptResult(ports.InterruptReceipt{Confirmed: true})
 	materializeSession(t, store, fake)
 
-	services := newM2ServicesWith(m2GatewayDeps{Store: store, Gateway: fake, Log: slog.Default()})
+	attemptID := seedWiringAttempt(t, store, "wiring-stop")
+	services := newM2ServicesWith(m2GatewayDeps{Store: store, Gateway: fake, ExecutionFence: daemonExecutionFence(t, store), Log: slog.Default()})
 	services.Capabilities.RegisterProbe(domain.HarnessCodex, wiringProbe{
 		grade: domain.CapabilitySourceConfirmedRuntime,
 		features: []domain.CapabilityFeature{
@@ -281,7 +283,6 @@ func TestM2WiringInterventionsAdvanceTheBindingOnAConfirmedStop(t *testing.T) {
 		},
 	})
 
-	attemptID := seedWiringAttempt(t, store, "wiring-stop")
 	outcome, err := services.Binder.BindAttempt(ctx, ports.SpawnRequest{
 		WorkflowID: "wiring-workflow", TaskID: "wiring-task", AttemptID: attemptID,
 		ProjectID: "wiring-proj", Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
@@ -385,20 +386,16 @@ func TestM2ProductionWiringNeverNamesTheFakeGateway(t *testing.T) {
 func materializeSession(t *testing.T, store *sqlite.Store, fake *execution.FakeGateway) {
 	t.Helper()
 	fake.WithSessionMaterializer(func(
-		_ context.Context,
+		ctx context.Context,
 		_ domain.SessionID,
 		request ports.SpawnRequest,
 	) (domain.SessionID, error) {
-		created, err := store.CreateSession(context.Background(), domain.SessionRecord{
+		return materializeAdmittedDaemonSession(ctx, store, domain.SessionRecord{
 			ProjectID: request.ProjectID, Kind: domain.KindWorker, Harness: request.Harness,
 			Mode:     domain.SessionModeChat,
 			Activity: domain.Activity{State: domain.ActivityActive},
 			Metadata: domain.SessionMetadata{ControllerGeneration: "gen-wiring"},
-		})
-		if err != nil {
-			return "", err
-		}
-		return created.ID, nil
+		}, request, time.Now().UTC())
 	})
 }
 
@@ -439,6 +436,7 @@ func seedWiringAttempt(t *testing.T, store *sqlite.Store, idem string) domain.Wo
 	t.Helper()
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
+	admission := sqlitetest.NewAdmissionFixture(t, store, func() time.Time { return now })
 
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{
 		ID: "wiring-proj", Path: t.TempDir(), RegisteredAt: now,
@@ -477,7 +475,7 @@ func seedWiringAttempt(t *testing.T, store *sqlite.Store, idem string) domain.Wo
 		WorkerID: "worker-" + idem, LeaseToken: "lease-" + idem, LeaseUntil: &leaseUntil,
 		State: domain.WorkflowAttemptStateClaimed, CreatedAt: now, UpdatedAt: now,
 	}
-	claimed, _, err := store.ClaimWorkflowTask(
+	claimed, _, err := admission.Claim(
 		ctx, attempt, 2, "wiring-claim-"+idem, strings.Repeat("f", 64),
 	)
 	if err != nil {

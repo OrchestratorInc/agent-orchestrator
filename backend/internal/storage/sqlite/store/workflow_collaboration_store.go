@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -47,7 +48,16 @@ func (s *Store) CreateWorkflowMessage(
 
 	var result domain.WorkflowMessage
 	created := false
-	err := s.inTx(ctx, "create workflow message", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "create workflow message", func(q *gen.Queries) error {
+		if message.SenderKind.IsAgent() {
+			p, ok := ports.ExecutionPermitFromContext(ctx)
+			if !ok || p.WorkflowID != message.WorkflowID || p.TaskID != message.FromTaskID || message.SenderSessionID == nil || p.SessionID != *message.SenderSessionID {
+				return domain.ErrAdmissionRequired
+			}
+			if err := executionPermitFence(ctx, q, p.AttemptID, now, true); err != nil {
+				return err
+			}
+		}
 		// Queue depth, evaluated in this transaction so it cannot race with a sibling insert.
 		// This is a store check rather than a schema constraint by necessity: SQLite has no
 		// row-count CHECK. M2 defines no rate limit — only this depth cap.
@@ -180,7 +190,23 @@ func (s *Store) UpdateWorkflowMessageDelivery(
 	defer s.writeMu.Unlock()
 
 	applied := false
-	err := s.inTx(ctx, "update workflow message delivery", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "update workflow message delivery", func(q *gen.Queries) error {
+		message, found, err := s.loadMessage(ctx, q, workflowID, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return domain.ErrWorkflowMessageNotFound
+		}
+		if message.SenderKind.IsAgent() {
+			p, ok := ports.ExecutionPermitFromContext(ctx)
+			if !ok || p.WorkflowID != workflowID || p.TaskID != message.FromTaskID {
+				return domain.ErrAdmissionRequired
+			}
+			if err := executionPermitFence(ctx, q, p.AttemptID, now, false); err != nil {
+				return err
+			}
+		}
 		rows, err := q.UpdateWorkflowMessageDelivery(ctx, gen.UpdateWorkflowMessageDeliveryParams{
 			DeliveryState: next, UpdatedAt: now,
 			WorkflowID: workflowID, ID: id, ExpectedRevision: expectedRevision,
@@ -231,7 +257,14 @@ func (s *Store) CreateWorkflowTaskRequest(
 
 	var result domain.WorkflowTaskRequest
 	created := false
-	err := s.inTx(ctx, "create workflow task request", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "create workflow task request", func(q *gen.Queries) error {
+		p, ok := ports.ExecutionPermitFromContext(ctx)
+		if !ok || p.WorkflowID != request.WorkflowID || p.TaskID != request.RequesterTaskID {
+			return domain.ErrAdmissionRequired
+		}
+		if err := executionPermitFence(ctx, q, p.AttemptID, now, true); err != nil {
+			return err
+		}
 		rows, err := q.InsertWorkflowTaskRequest(ctx, gen.InsertWorkflowTaskRequestParams{
 			ID: request.ID, WorkflowID: request.WorkflowID,
 			RequesterTaskID: request.RequesterTaskID, RequestKind: request.RequestKind,

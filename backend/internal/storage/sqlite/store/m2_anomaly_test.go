@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/intervention"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // The M2-08 anomaly-injection matrix.
@@ -66,7 +67,8 @@ func newAnomalyEnv(t *testing.T, name string, ready ports.SessionReadiness) *ano
 		store: s, gateway: gateway, attempt: attempt,
 		workflowID: workflowID, taskID: taskID, projectID: projectID,
 		coordinator: execution.New(execution.Deps{
-			Store: s, Gateway: gateway, Resolver: resolver, Clock: e2eNow,
+			ExecutionFence: executionTestFence(t, s),
+			Store:          s, Gateway: gateway, Resolver: resolver, Clock: e2eNow,
 		}),
 	}
 }
@@ -271,7 +273,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SpawnHash: %v", err)
 		}
-		binding, created, err := env.store.CreateWorkflowAttemptBinding(ctx,
+		binding, created, err := env.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()),
 			domain.WorkflowAttemptBinding{
 				AttemptID: request.AttemptID, WorkflowID: request.WorkflowID,
 				TaskID:         request.TaskID,
@@ -281,7 +283,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 		if err != nil || !created {
 			t.Fatalf("create intent: created=%v err=%v", created, err)
 		}
-		stalled, applied, err := env.store.TransitionWorkflowAttemptBinding(ctx,
+		stalled, applied, err := env.store.TransitionWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()),
 			request.AttemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, e2eNow())
 		if err != nil || !applied {
 			t.Fatalf("claim spawn right: applied=%v err=%v", applied, err)
@@ -366,7 +368,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 
 		// An unsettled stop: the gateway answers with no confirmation at all.
 		env.gateway.InterruptResult(ports.InterruptReceipt{})
-		stop, _, err := interventions.Stop(ctx, intervention.StopRequest{
+		stop, _, err := interventions.Stop(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
 			WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 			ClientMessageID: "msg-stop-open",
 		})
@@ -495,7 +497,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 		interventions := env.interventionCoordinator()
 		env.gateway.InterruptResult(ports.InterruptReceipt{Confirmed: true})
 
-		first, _, err := interventions.Stop(ctx, intervention.StopRequest{
+		first, _, err := interventions.Stop(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
 			WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 			ClientMessageID: "msg-stop-same",
 		})
@@ -510,7 +512,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 		}
 
 		for i := 0; i < 3; i++ {
-			replay, _, err := interventions.Stop(ctx, intervention.StopRequest{
+			replay, _, err := interventions.Stop(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.StopRequest{
 				WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 				ClientMessageID: "msg-stop-same",
 			})
@@ -541,7 +543,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 			Resolver: resolver, Clock: e2eNow,
 		})
 
-		outcome, err := interventions.Steer(ctx, intervention.SteerRequest{
+		outcome, err := interventions.Steer(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), intervention.SteerRequest{
 			WorkflowID: env.workflowID, TaskID: env.taskID, AttemptID: env.attempt.ID,
 			ClientMessageID: "msg-refused", Text: "steer me",
 			TargetProviderTurnID: "prov-turn-1", Harness: domain.HarnessCodex,
@@ -582,7 +584,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 			t.Fatalf("MaxOpenWorkflowMessages = %d, want the documented 32", cap)
 		}
 		for i := 0; i < cap; i++ {
-			if _, err := collab.CreateMessage(ctx, domain.CreateWorkflowMessageInput{
+			if _, err := collab.CreateMessage(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
 				WorkflowID: env.workflowID, AttemptID: env.attempt.ID,
 				Kind: domain.WorkflowMessageKindProgress, Body: "progress",
 				ClientMessageID: "msg-cap-" + itoa(i),
@@ -591,7 +593,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 			}
 		}
 
-		_, err := collab.CreateMessage(ctx, domain.CreateWorkflowMessageInput{
+		_, err := collab.CreateMessage(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), domain.CreateWorkflowMessageInput{
 			WorkflowID: env.workflowID, AttemptID: env.attempt.ID,
 			Kind: domain.WorkflowMessageKindProgress, Body: "one too many",
 			ClientMessageID: "msg-cap-overflow",
@@ -639,7 +641,7 @@ func TestM2AnomalyInjectionMatrix(t *testing.T) {
 			Store: env.store, Bindings: env.store, Graph: env.store, Clock: e2eNow,
 		})
 
-		created, err := collab.CreateTaskRequest(ctx, collaboration.CreateTaskRequestInput{
+		created, err := collab.CreateTaskRequest(sqlitetest.ExecutionContext(t, ctx, env.store, env.attempt.ID, e2eNow()), collaboration.CreateTaskRequestInput{
 			WorkflowID: env.workflowID, AttemptID: env.attempt.ID,
 			RequestID: "req-decide-1", RequestKind: domain.WorkflowTaskRequestKindCreateTask,
 			Payload: []byte(`{"title":"add the tests"}`),

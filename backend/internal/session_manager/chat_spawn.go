@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/google/uuid"
 )
 
 // The chat-mode controller launch.
@@ -364,11 +365,9 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 // rollback, fork). Its env holds only what the CLI needs to reach this daemon
 // for this session.
 //
-// For a workflow attempt the env additionally carries the attempt identity and the
-// lease, so the agent's own tool server can act as that attempt. That env is
-// delivered to the MCP subprocess only: it never reaches the prompt and never
-// appears in a tool result, and the capability it carries is the very token the
-// agent process already holds, so no new privilege is created.
+// Workflow 环境额外携带非秘密 Attempt 标识，服务端通过 Session capability
+// 和持久绑定验证身份。内部租约不进入进程环境；MCP 使用与 Agent 启动环境
+// 相同的 capability，凭据不会写入提示词或工具结果。
 func (m *Manager) aoMCPServers(
 	ctx context.Context,
 	harness domain.AgentHarness,
@@ -397,7 +396,7 @@ func (m *Manager) aoMCPServers(
 		serverEnv[envComputerUse] = "1"
 	}
 	if workflow != nil {
-		// The lease is read from the spawn config and goes nowhere else.
+		// 启动上下文只提供非秘密 Workflow 身份。
 		applyWorkflowMCPEnv(serverEnv, workflow, env[EnvBrowserCapability])
 	}
 	return []ports.ChatMCPServerConfig{{
@@ -538,7 +537,9 @@ func (m *Manager) resumeChatController(
 	}
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
-	if requireNativeHistory {
+	if reconnectOnly {
+		ctx, err = m.prepareSessionReattach(ctx, rec)
+	} else if requireNativeHistory {
 		historyMode = ports.ChatHistoryRequired
 		providerHandoff, err = m.prepareLiveChatProviderHandoff(ctx, rec)
 	} else {
@@ -557,12 +558,15 @@ func (m *Manager) resumeChatController(
 		awakeTarget = &target
 	}
 	var completionErr error
-	// A resume has no spawn config, so the attempt identity is recovered from
-	// durable state instead: the binding names the attempt, and the attempt row holds
-	// the lease. The lease is carried only while it is still valid, so an expired
-	// session presents no dead credential and the daemon answers its own clean 403.
-	// A session with no binding (every ordinary session) gets nil and is unchanged.
-	workflowContext, workflowErr := m.workflowSpawnContext(ctx, rec)
+	// 恢复时从持久绑定验证 Session/Attempt 归属、generation、状态和租约期限，
+	// 仅重建非秘密身份；已有绑定无法验证就拒绝恢复，无绑定的普通 Session 返回 nil。
+	var workflowContext *ports.WorkflowSpawnContext
+	var workflowErr error
+	if reconnectOnly {
+		workflowContext, workflowErr = m.reattachWorkflowContext(ctx, rec)
+	} else {
+		workflowContext, workflowErr = m.workflowSpawnContext(ctx, rec)
+	}
 	if workflowErr != nil {
 		// A resume that cannot read its own durable identity facts says so rather than
 		// silently downgrading the session to "not a workflow attempt".
@@ -571,6 +575,18 @@ func (m *Manager) resumeChatController(
 	}
 	validationSessionID := rec.ID
 	resumeMCPServers := m.aoMCPServers(ctx, rec.Harness, env, workflowContext)
+	if controllerGeneration == "" {
+		controllerGeneration = uuid.NewString()
+	}
+	if !reconnectOnly {
+		admissionRecord, err := m.restartRecord(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, relaunchFailed("admission snapshot", err)
+		}
+		if err := m.admitSessionRestart(ctx, admissionRecord, controllerGeneration); err != nil {
+			return RestoreResult{}, relaunchFailed("execution admission", err)
+		}
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		AwakeReconnectTarget: awakeTarget,
 		ReconnectOnly:        reconnectOnly,
@@ -621,6 +637,12 @@ func (m *Manager) resumeChatController(
 		HistoryMode:          historyMode,
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
+			if reconnectOnly {
+				if err := m.validateReattachedController(ctx, started); err != nil {
+					completionErr = err
+					return ChatControllerCommit{}, err
+				}
+			}
 			metadata := rec.Metadata
 			metadata.WorkspacePath = ws.Path
 			metadata.WorkspaceRepoPath = ws.RepoPath
@@ -663,8 +685,16 @@ func (m *Manager) resumeChatController(
 	})
 	if err != nil {
 		if completionErr != nil {
-			m.stopChatBestEffort(ctx, rec.ID)
+			if !reconnectOnly {
+				m.stopChatBestEffort(ctx, rec.ID)
+			}
 			return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr))
+		}
+		if p, ok := ports.SessionReattachPermitFromContext(ctx); ok {
+			// 慢失败也必须属于原任期，否则 Host 不存在的回执会把新主人标为退出。
+			if checkErr := m.store.(sessionReattachStore).ValidateSessionReattach(ctx, p, "", m.clock().UTC()); checkErr != nil {
+				return RestoreResult{}, relaunchFailed("reattach ownership", checkErr)
+			}
 		}
 		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}

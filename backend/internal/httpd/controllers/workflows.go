@@ -59,7 +59,15 @@ type WorkflowService interface {
 // The M2 fields are separate slots so a deployment can wire the M1 surface alone: nil leaves
 // only the corresponding M2 routes answering 501, exactly like a nil Svc does for M1.
 type WorkflowsController struct {
-	Svc WorkflowService
+	Svc              WorkflowService
+	ExecutionPermits ExecutionPermitReader
+	ExecutionFence   func(context.Context) (domain.SchedulerFence, error)
+	// Now 与执行服务共用时间源，避免许可校验和能力过期判断混用时钟；默认使用真实时间。
+	Now              func() time.Time
+	RetrySchedule    func(context.Context, domain.WorkflowID, domain.WorkflowTaskID, int64) error
+	Materializer     TaskRequestMaterializer
+	Materializations TaskRequestMaterializationReader
+	Recovery         WorkflowRecovery
 	// Capabilities reports graded capability evidence.
 	Capabilities CapabilityResolver
 	// Bindings reads the persisted binding projection.
@@ -109,8 +117,8 @@ func (c *WorkflowsController) create(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, workflowCreateBodyLimit)
 	var req CreateWorkflowRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
 	rec, applied, err := c.Svc.Create(r.Context(), req.IdempotencyKey, workflowCreateInput(req))
@@ -121,6 +129,9 @@ func (c *WorkflowsController) create(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if applied {
 		status = http.StatusCreated
+	}
+	if !c.recordMutation(w, r, caller, rec.ID, "", req.IdempotencyKey, "create_workflow", applied) {
+		return
 	}
 	envelope.WriteJSON(w, status, WorkflowEnvelope{Workflow: workflowResponse(rec)})
 }
@@ -238,28 +249,30 @@ func (c *WorkflowsController) activate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req ActivateWorkflowRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
-	rec, _, err := c.Svc.Activate(r.Context(), domain.WorkflowID(chi.URLParam(r, "workflowId")), req.ExpectedRevision, req.IdempotencyKey)
+	rec, applied, err := c.Svc.Activate(r.Context(), domain.WorkflowID(chi.URLParam(r, "workflowId")), req.ExpectedRevision, req.IdempotencyKey)
 	if err != nil {
 		envelope.WriteError(w, r, err)
+		return
+	}
+	if !c.recordMutation(w, r, caller, rec.ID, "", req.IdempotencyKey, "activate_workflow", applied) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, WorkflowEnvelope{Workflow: workflowResponse(rec)})
 }
 
-// claim leases a ready task to a worker and answers 201 with the one-time
-// lease capability, or 200 when the idempotency key replays the first claim.
+// claim 经独立 Operator 批准领取任务；内部租约不会进入响应。
 func (c *WorkflowsController) claim(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/workflows/{workflowId}/tasks/{taskId}/claim")
 		return
 	}
 	var req ClaimWorkflowTaskRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
 	result, applied, err := c.Svc.Claim(r.Context(), workflowsvc.ClaimInput{
@@ -277,51 +290,62 @@ func (c *WorkflowsController) claim(w http.ResponseWriter, r *http.Request) {
 	if applied {
 		status = http.StatusCreated
 	}
-	envelope.WriteJSON(w, status, ClaimWorkflowTaskResponse{
-		Attempt:    workflowAttemptResponse(result.Attempt),
-		LeaseToken: result.LeaseToken,
-	})
+	if !c.recordMutation(w, r, caller, result.Attempt.WorkflowID, result.Attempt.ID, req.IdempotencyKey, "claim_task", applied) {
+		return
+	}
+	envelope.WriteJSON(w, status, ClaimWorkflowTaskResponse{Attempt: workflowAttemptResponse(result.Attempt)})
 }
 
-// start marks a claimed attempt as running after checking its lease capability.
+// start 消费 Operator 批准后读取内部许可，Store 仍验证租约与任期 CAS。
 func (c *WorkflowsController) start(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/workflows/{workflowId}/attempts/{attemptId}/start")
 		return
 	}
 	var req StartWorkflowAttemptRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
-	attempt, _, err := c.Svc.Start(r.Context(), workflowsvc.StartInput{
+	permit, ok := c.executionPermit(w, r)
+	if !ok {
+		return
+	}
+	attempt, applied, err := c.Svc.Start(r.Context(), workflowsvc.StartInput{
 		WorkflowID:     domain.WorkflowID(chi.URLParam(r, "workflowId")),
 		AttemptID:      domain.WorkflowAttemptID(chi.URLParam(r, "attemptId")),
-		LeaseToken:     req.LeaseToken,
+		LeaseToken:     permit.LeaseToken,
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if !c.recordMutation(w, r, caller, attempt.WorkflowID, attempt.ID, req.IdempotencyKey, "start_attempt", applied) {
+		return
+	}
 	envelope.WriteJSON(w, http.StatusOK, WorkflowAttemptEnvelope{Attempt: workflowAttemptResponse(attempt)})
 }
 
-// settle records a worker's terminal result for its attempt.
+// settle 的外部调用只接受 Operator 批准，凭据从服务端当前许可读取。
 func (c *WorkflowsController) settle(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/workflows/{workflowId}/attempts/{attemptId}/settle")
 		return
 	}
 	var req SettleWorkflowAttemptRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
-	attempt, _, err := c.Svc.Settle(r.Context(), workflowsvc.SettleInput{
+	permit, ok := c.executionPermit(w, r)
+	if !ok {
+		return
+	}
+	attempt, applied, err := c.Svc.Settle(r.Context(), workflowsvc.SettleInput{
 		WorkflowID:     domain.WorkflowID(chi.URLParam(r, "workflowId")),
 		AttemptID:      domain.WorkflowAttemptID(chi.URLParam(r, "attemptId")),
-		LeaseToken:     req.LeaseToken,
+		LeaseToken:     permit.LeaseToken,
 		Result:         domain.WorkflowAttemptState(req.Result),
 		ErrorCode:      req.ErrorCode,
 		IdempotencyKey: req.IdempotencyKey,
@@ -330,21 +354,28 @@ func (c *WorkflowsController) settle(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if !c.recordMutation(w, r, caller, attempt.WorkflowID, attempt.ID, req.IdempotencyKey, "settle_attempt", applied) {
+		return
+	}
 	envelope.WriteJSON(w, http.StatusOK, WorkflowAttemptEnvelope{Attempt: workflowAttemptResponse(attempt)})
 }
 
 // retry reopens a retry_wait task after a failed attempt.
 func (c *WorkflowsController) retry(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
+	if c.Svc == nil || c.RetrySchedule == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/workflows/{workflowId}/tasks/{taskId}/retry")
 		return
 	}
 	var req RetryWorkflowTaskRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
 		return
 	}
-	task, _, err := c.Svc.Retry(r.Context(), workflowsvc.RetryInput{
+	if err := c.RetrySchedule(r.Context(), domain.WorkflowID(chi.URLParam(r, "workflowId")), domain.WorkflowTaskID(chi.URLParam(r, "taskId")), req.ExpectedRevision); err != nil {
+		envelope.WriteError(w, r, schedulerError(err))
+		return
+	}
+	task, applied, err := c.Svc.Retry(r.Context(), workflowsvc.RetryInput{
 		WorkflowID:       domain.WorkflowID(chi.URLParam(r, "workflowId")),
 		TaskID:           domain.WorkflowTaskID(chi.URLParam(r, "taskId")),
 		ExpectedRevision: req.ExpectedRevision,
@@ -359,20 +390,30 @@ func (c *WorkflowsController) retry(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if !c.recordMutation(w, r, caller, task.WorkflowID, "", req.IdempotencyKey, "retry_task", applied) {
+		return
+	}
 	envelope.WriteJSON(w, http.StatusOK, WorkflowTaskEnvelope{
 		Task:     workflowTaskResponse(task),
 		Attempts: workflowAttemptResponses(attempts),
 	})
 }
 
-// recoverExpired sweeps attempts whose lease expired, moving them to unknown
-// and blocking their tasks. It takes no body.
+// recoverExpired 将全局授权和恢复结果交给同一 Store 事务记录，不伪造 Workflow 审计归属。
 func (c *WorkflowsController) recoverExpired(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
+	if c.Recovery == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/workflows/recover-expired")
 		return
 	}
-	recovered, err := c.Svc.RecoverExpired(r.Context())
+	var req RecoverExpiredWorkflowsRequest
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
+		return
+	}
+	if req.Reason == "" {
+		req.Reason = "OPERATOR_RECOVERY"
+	}
+	recovered, _, err := c.Recovery.RecoverExpiredWorkflowsAuthorized(r.Context(), policyChange(r, req.IdempotencyKey, req.Reason, caller))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -726,6 +767,93 @@ type BindingReader interface {
 	) ([]domain.WorkflowAttemptRepoBinding, error)
 }
 
+// ExecutionPermitReader 在 Operator 批准后读取内部租约快照，客户端永远不能指定 lease。
+type ExecutionPermitReader interface {
+	LoadExecutionPermit(context.Context, domain.WorkflowAttemptID, domain.SchedulerFence, time.Time) (domain.ExecutionPermit, error)
+}
+
+// TaskRequestMaterializer 消费已批准原件并在单一事务扩展图。
+type TaskRequestMaterializer interface {
+	MaterializeTaskRequest(context.Context, domain.TaskRequestMaterializationInput, principal.Caller) (domain.TaskRequestMaterialization, bool, error)
+}
+
+// TaskRequestMaterializationReader 让 Decide 重放报告真实物化状态。
+type TaskRequestMaterializationReader interface {
+	GetWorkflowTaskMaterialization(context.Context, domain.WorkflowID, string) (domain.TaskRequestMaterialization, bool, error)
+}
+
+// WorkflowRecovery 将全局人工恢复的幂等键、批准指纹与结果一起持久化。
+type WorkflowRecovery interface {
+	RecoverExpiredWorkflowsAuthorized(context.Context, domain.PolicyChange) (int64, bool, error)
+}
+
+// operatorWrite 先完整解析原始正文，再消费只属于这一次具体操作的 Operator 批准。
+func (c *WorkflowsController) operatorWrite(w http.ResponseWriter, r *http.Request, body any) (principal.Caller, bool) {
+	bound, ok := withApprovalDigest(w, r)
+	if !ok {
+		return principal.Caller{}, false
+	}
+	*r = *bound
+	if err := decodeJSONStrict(r, body); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return principal.Caller{}, false
+	}
+	caller, ok := c.caller(w, r, principal.RequestFacts{WorkflowID: domain.WorkflowID(chi.URLParam(r, "workflowId"))})
+	if !ok {
+		return principal.Caller{}, false
+	}
+	if !caller.IsOperator() || caller.IsAgent() || caller.AttemptID != "" || caller.LeaseProven || caller.OperatorTokenFingerprint == "" {
+		envelope.WriteError(w, r, apierr.Forbidden("COLLAB_NOT_AUTHORIZED", "This operation requires a human operator approval"))
+		return principal.Caller{}, false
+	}
+	return caller, true
+}
+
+// now 保持 HTTP 的时间判断与注入的执行服务时钟一致，生产未注入时读取当前 UTC 时间。
+func (c *WorkflowsController) now() time.Time {
+	if c.Now != nil {
+		return c.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// executionPermit 只使用当前 Scheduler 身份读取服务端许可，跨 Workflow 或旧任期均不执行。
+func (c *WorkflowsController) executionPermit(w http.ResponseWriter, r *http.Request) (domain.ExecutionPermit, bool) {
+	if c.ExecutionPermits == nil || c.ExecutionFence == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return domain.ExecutionPermit{}, false
+	}
+	fence, err := c.ExecutionFence(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, schedulerError(err))
+		return domain.ExecutionPermit{}, false
+	}
+	permit, err := c.ExecutionPermits.LoadExecutionPermit(r.Context(), domain.WorkflowAttemptID(chi.URLParam(r, "attemptId")), fence, c.now())
+	if err != nil {
+		envelope.WriteError(w, r, schedulerError(err))
+		return domain.ExecutionPermit{}, false
+	}
+	if permit.WorkflowID != domain.WorkflowID(chi.URLParam(r, "workflowId")) || permit.AttemptID != domain.WorkflowAttemptID(chi.URLParam(r, "attemptId")) {
+		envelope.WriteError(w, r, apierr.Forbidden("COLLAB_NOT_AUTHORIZED", "The execution permit does not belong to this workflow"))
+		return domain.ExecutionPermit{}, false
+	}
+	*r = *r.WithContext(ports.WithExecutionPermit(r.Context(), permit))
+	return permit, true
+}
+
+// recordMutation 为已成功的 M1 授权保留审计，包括幂等重放；空 Workflow 的全局操作另走事务账本。
+func (c *WorkflowsController) recordMutation(w http.ResponseWriter, r *http.Request, caller principal.Caller, workflowID domain.WorkflowID, attemptID domain.WorkflowAttemptID, key, operation string, applied bool) bool {
+	outcome := "replayed"
+	if applied {
+		outcome = "applied"
+	}
+	if c.recordDecision(r, principal.AuditRecord{ActorKind: caller.Kind, ActorRef: caller.Ref(), WorkflowID: workflowID, AttemptID: attemptID, RequestID: key, Decision: operation, Outcome: outcome, TokenFingerprint: caller.OperatorTokenFingerprint}) {
+		return true
+	}
+	envelope.WriteError(w, r, apierr.Internal("WORKFLOW_AUDIT_UNAVAILABLE", "The operation was applied but its audit record could not be stored"))
+	return false
+}
+
 // RegisterM2 mounts the M2 workflow routes. It is separate from Register so the M1 route set
 // stays a fixed, audited list.
 //
@@ -750,6 +878,7 @@ func (c *WorkflowsController) RegisterM2(r chi.Router) {
 		r.Post("/workflows/{workflowId}/task-requests", c.createTaskRequest)
 		r.Get("/workflows/{workflowId}/task-requests/{requestId}", c.taskRequest)
 		r.Post("/workflows/{workflowId}/task-requests/{requestId}/decide", c.decideTaskRequest)
+		r.Post("/workflows/{workflowId}/task-requests/{requestId}/materialize", c.materializeTaskRequest)
 	})
 }
 
@@ -757,6 +886,7 @@ func (c *WorkflowsController) RegisterM2(r chi.Router) {
 //
 // A principal failure is a 403 and nothing else happens: the check runs before any service call
 // so a refused caller costs no work and leaves no row behind.
+// Agent 许可还须匹配当前 HTTP daemon 持有的任期，不能借用数据库中新实例的领导权。
 func (c *WorkflowsController) caller(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -768,40 +898,30 @@ func (c *WorkflowsController) caller(
 		return principal.Caller{}, false
 	}
 	facts.Request = r
-	// An attempt id in the URL names the RESOURCE this request is about; it is not the caller's
-	// identity, or any caller could act for the attempt it names. Only an attempt the caller
-	// CLAIMS — through the header, on a route with no attempt segment — is checked against a
-	// lease, and the lease is the only thing that turns that claim into identity.
-	if named := strings.TrimSpace(r.Header.Get(principal.HeaderAttemptID)); named != "" {
-		claimed := domain.WorkflowAttemptID(named)
-		if facts.RouteAttemptID != "" && facts.RouteAttemptID != claimed {
-			envelope.WriteError(w, r, apierr.Invalid("COLLAB_ATTEMPT_MISMATCH",
-				"The claimed attempt does not match the attempt this route names", nil))
-			return principal.Caller{}, false
-		}
-		facts.AttemptID = claimed
-	}
-	if facts.LeaseToken == "" {
-		facts.LeaseToken = strings.TrimSpace(r.Header.Get(principal.HeaderAttemptLease))
-	}
-	if facts.AgentSessionID == "" &&
-		strings.TrimSpace(r.Header.Get(principal.HeaderAgentCapability)) != "" &&
-		facts.AttemptID != "" && c.Bindings != nil {
-		// The capability is checked against the session the attempt is bound to, which is the
-		// only session that attempt may speak for. Reading the binding first discloses nothing:
-		// it only supplies the id the verifier needs, and a missing binding leaves the capability
-		// unverifiable, which the resolver reports as invalid.
-		if binding, found, err := c.Bindings.GetWorkflowAttemptBinding(r.Context(), facts.AttemptID); err != nil {
-			envelope.WriteError(w, r, err)
-			return principal.Caller{}, false
-		} else if found && binding.SessionID != nil {
-			facts.AgentSessionID = *binding.SessionID
-		}
-	}
+	facts.AgentSessionID = domain.SessionID(strings.TrimSpace(r.Header.Get(principal.HeaderSessionID)))
 	caller, err := c.Principals.Resolve(r.Context(), facts)
 	if err != nil {
 		envelope.WriteError(w, r, principalError(err))
 		return principal.Caller{}, false
+	}
+	if caller.IsAgent() && facts.RouteAttemptID != "" && facts.RouteAttemptID != caller.AttemptID {
+		envelope.WriteError(w, r, apierr.Invalid("COLLAB_ATTEMPT_MISMATCH", "The caller does not own the attempt this route names", nil))
+		return principal.Caller{}, false
+	}
+	if caller.ExecutionPermit != nil {
+		if c.ExecutionFence == nil {
+			envelope.WriteError(w, r, apierr.NotImplemented("SCHEDULER_FENCE_UNAVAILABLE", "This daemon cannot establish execution ownership"))
+			return principal.Caller{}, false
+		}
+		fence, err := c.ExecutionFence(r.Context())
+		if err == nil && fence != caller.ExecutionPermit.Fence {
+			err = domain.ErrSchedulerFence
+		}
+		if err != nil {
+			envelope.WriteError(w, r, schedulerError(err))
+			return principal.Caller{}, false
+		}
+		*r = *r.WithContext(ports.WithExecutionPermit(r.Context(), *caller.ExecutionPermit))
 	}
 	return caller, true
 }
@@ -824,7 +944,9 @@ func operatorApprovalBinding(next http.Handler) http.Handler {
 	})
 }
 
-// withApprovalDigest 只为携带审批的请求读取正文；Agent capability 和 lease 身份优先级不变。
+type approvalBodyDigestKey struct{}
+
+// withApprovalDigest 只为携带审批的请求读取正文，保存同源 SHA 供事务幂等审计使用。
 func withApprovalDigest(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if strings.TrimSpace(r.Header.Get(principal.HeaderOperatorApproval)) == "" {
 		return r, true
@@ -848,7 +970,9 @@ func withApprovalDigest(w http.ResponseWriter, r *http.Request) (*http.Request, 
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	// The CONCRETE path is what the human approved; the route pattern would only name the
 	// shape. Both ends of the approval therefore travel as the concrete path.
-	return principal.WithApprovalBinding(r, r.Method, r.URL.RequestURI(), principal.PayloadDigest(raw)), true
+	digest := principal.PayloadDigest(raw)
+	r = r.WithContext(context.WithValue(r.Context(), approvalBodyDigestKey{}, strings.TrimPrefix(digest, principal.ApprovalDigestPrefix)))
+	return principal.WithApprovalBinding(r, r.Method, r.URL.RequestURI(), digest), true
 }
 
 // principalError maps an identity refusal onto the API error envelope.
@@ -877,6 +1001,8 @@ func principalError(err error) error {
 		return apierr.New(apierr.KindForbidden, code, message, details)
 	}
 	switch {
+	case errors.Is(err, principal.ErrSecurityUpgradeRequired):
+		return apierr.Forbidden(principal.CodeSecurityUpgradeRequired, err.Error())
 	case errors.Is(err, principal.ErrNotAuthorized),
 		errors.Is(err, principal.ErrCapabilityInvalid),
 		errors.Is(err, principal.ErrLeaseUnproven):
@@ -899,7 +1025,7 @@ func (c *WorkflowsController) capabilities(w http.ResponseWriter, r *http.Reques
 		domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessOMP, domain.HarnessDeepSeek,
 	}
 	out := make([]WorkflowCapabilityResponse, 0, len(harnesses))
-	now := time.Now().UTC()
+	now := c.now()
 	for _, harness := range harnesses {
 		snapshot, err := c.Capabilities.Resolve(r.Context(), ports.CapabilityProbeRequest{Harness: harness})
 		if err != nil {
@@ -1823,7 +1949,10 @@ func (c *WorkflowsController) decideTaskRequest(w http.ResponseWriter, r *http.R
 				// A replay reports the state the FIRST call produced. Materialization is derived
 				// from that stored state, never from the retried request, so a retry cannot make a
 				// rejection look materialized or invent a task.
-				materialization := materializationFor(replay.State)
+				materialization, ok := c.persistedMaterialization(w, r, replay, materializationFor(replay.State))
+				if !ok {
+					return
+				}
 				envelope.WriteJSON(w, decideStatus(materialization), DecideWorkflowTaskRequestResponse{
 					Request:         workflowTaskRequestResponse(replay),
 					Materialization: string(materialization),
@@ -1851,7 +1980,10 @@ func (c *WorkflowsController) decideTaskRequest(w http.ResponseWriter, r *http.R
 	// from the coordinator's field, so the response's state and its materialization can never
 	// contradict each other — and a future coordinator cannot report "materialized" for an
 	// approval that left no task row.
-	materialization := decisionMaterialization(decision)
+	materialization, ok := c.persistedMaterialization(w, r, decision.Request, decisionMaterialization(decision))
+	if !ok {
+		return
+	}
 	envelope.WriteJSON(w, decideStatus(materialization), DecideWorkflowTaskRequestResponse{
 		Request:         workflowTaskRequestResponse(decision.Request),
 		Materialization: string(materialization),
@@ -1859,6 +1991,50 @@ func (c *WorkflowsController) decideTaskRequest(w http.ResponseWriter, r *http.R
 		ReasonCode:      decision.ReasonCode,
 		Message:         decideMessage(materialization),
 	})
+}
+
+// materializeTaskRequest 独立审批本次图 revision 与原申请 SHA，不复用 Decide 已消费的批准。
+func (c *WorkflowsController) materializeTaskRequest(w http.ResponseWriter, r *http.Request) {
+	if c.Materializer == nil {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+		return
+	}
+	var req MaterializeTaskRequestRequest
+	caller, ok := c.operatorWrite(w, r, &req)
+	if !ok {
+		return
+	}
+	change := policyChange(r, req.IdempotencyKey, req.Reason, caller)
+	result, created, err := c.Materializer.MaterializeTaskRequest(r.Context(), domain.TaskRequestMaterializationInput{
+		WorkflowID: domain.WorkflowID(chi.URLParam(r, "workflowId")), RequestID: chi.URLParam(r, "requestId"), RequestSHA: req.RequestSHA,
+		ExpectedRequestRevision: req.ExpectedRequestRevision, ExpectedWorkflowRevision: req.ExpectedWorkflowRevision,
+		IdempotencyKey: req.IdempotencyKey, RequestFingerprint: change.RequestFingerprint, ActorRef: change.ActorRef, Reason: req.Reason, Now: change.Now,
+	}, caller)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	envelope.WriteJSON(w, status, MaterializeTaskRequestResponse{Materialization: TaskRequestMaterializationResponse{RequestID: result.RequestID, WorkflowID: string(result.WorkflowID), TaskID: string(result.TaskID), WorkflowRevision: result.WorkflowRevision, CreatedAt: result.CreatedAt}, Created: created})
+}
+
+// persistedMaterialization 在 M3 从持久结果重读；批准状态本身不能证明是否已创建 Task。
+func (c *WorkflowsController) persistedMaterialization(w http.ResponseWriter, r *http.Request, request domain.WorkflowTaskRequest, fallback domain.WorkflowTaskRequestMaterialization) (domain.WorkflowTaskRequestMaterialization, bool) {
+	if c.Materializations == nil || request.State != domain.WorkflowTaskRequestStateApproved {
+		return fallback, true
+	}
+	_, found, err := c.Materializations.GetWorkflowTaskMaterialization(r.Context(), request.WorkflowID, request.ID)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return "", false
+	}
+	if found {
+		return domain.WorkflowTaskRequestMaterializationMaterialized, true
+	}
+	return domain.WorkflowTaskRequestMaterializationPending, true
 }
 
 // decideStatus maps a materialization to the status a client must act on.
@@ -1920,7 +2096,7 @@ func decisionMaterialization(
 func decideMessage(materialization domain.WorkflowTaskRequestMaterialization) string {
 	switch materialization {
 	case domain.WorkflowTaskRequestMaterializationPending:
-		return "The decision was recorded. No task was created: this milestone records approvals only, and scheduling is a later milestone."
+		return "The decision was recorded. No task was created. A separate operator approval is required to materialize the task."
 	case domain.WorkflowTaskRequestMaterializationMaterialized:
 		return "The decision was recorded and a task was created."
 	default:
@@ -2213,7 +2389,7 @@ func (c *WorkflowsController) recordDecision(r *http.Request, record principal.A
 		return true
 	}
 	record.DaemonRequestID = middleware.GetReqID(r.Context())
-	record.At = time.Now().UTC()
+	record.At = c.now()
 	if err := c.Audit.RecordSensitiveDecision(r.Context(), record); err != nil {
 		return false
 	}
@@ -2297,7 +2473,7 @@ func bindError(err error) error {
 		errors.Is(err, domain.ErrWorkflowBindingSessionRequired):
 		return apierr.Conflict("WORKFLOW_BIND_CONFLICT", "That binding transition is not legal", nil)
 	}
-	return err
+	return schedulerError(err)
 }
 
 // bindReasonCode maps a frozen bind reason onto a stable client code.
@@ -2436,5 +2612,5 @@ func collaborationError(err error) error {
 		errors.Is(err, domain.ErrInvalidWorkflowTaskRequestDecision):
 		return apierr.Invalid("WORKFLOW_MESSAGE_INVALID", "The request body is not valid", nil)
 	}
-	return err
+	return schedulerError(err)
 }

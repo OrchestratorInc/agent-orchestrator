@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -69,6 +70,7 @@ func newRecoveryEnv(t *testing.T) *recoveryEnv {
 	t.Helper()
 	store := sqlitetest.MustOpen(t)
 	ctx := context.Background()
+	admission := sqlitetest.NewAdmissionFixture(t, store, func() time.Time { return recoveryTestNow })
 
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{
 		ID: "recover-proj", Path: t.TempDir(), RegisteredAt: recoveryTestNow,
@@ -115,7 +117,7 @@ func newRecoveryEnv(t *testing.T) *recoveryEnv {
 	leaseUntil := recoveryTestNow.Add(time.Hour)
 	attempt.LeaseUntil = &leaseUntil
 	attempt.LeaseToken = "lease-recover"
-	if _, _, err := store.ClaimWorkflowTask(
+	if _, _, err := admission.Claim(
 		ctx, attempt, 2, "recover-claim", strings.Repeat("b", 64),
 	); err != nil {
 		t.Fatalf("claim task: %v", err)
@@ -133,25 +135,22 @@ func newRecoveryEnv(t *testing.T) *recoveryEnv {
 	// be adoptable has to be created by a real spawn through the gateway. The materializer
 	// writes the durable row (the binding's foreign key needs it) and returns its id.
 	gateway.WithSessionMaterializer(func(
-		_ context.Context,
+		ctx context.Context,
 		_ domain.SessionID,
 		request ports.SpawnRequest,
 	) (domain.SessionID, error) {
-		created, err := store.CreateSession(context.Background(), domain.SessionRecord{
+		return materializeAdmittedDaemonSession(ctx, store, domain.SessionRecord{
 			ProjectID: "recover-proj", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
 			Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityActive},
 			ClientRequestID: request.SpawnKey, ClientRequestCommitted: true,
 			Metadata: domain.SessionMetadata{ControllerGeneration: "gen-recover"},
-		})
-		if err != nil {
-			return "", err
-		}
-		return created.ID, nil
+		}, request, recoveryTestNow)
 	})
 	coordinator := execution.New(execution.Deps{
-		Store:   store,
-		Gateway: gateway,
-		Clock:   func() time.Time { return recoveryTestNow },
+		ExecutionFence: daemonExecutionFence(t, store),
+		Store:          store,
+		Gateway:        gateway,
+		Clock:          func() time.Time { return recoveryTestNow },
 	})
 	recorded := &recordedBinder{
 		inner: coordinator, errs: map[domain.WorkflowAttemptID]error{},
@@ -175,7 +174,7 @@ func newRecoveryEnv(t *testing.T) *recoveryEnv {
 
 // seedUnknownBinding creates a binding already in spawn_unknown, which is the state a
 // crashed spawn leaves behind.
-func (e *recoveryEnv) seedUnknownBinding(t *testing.T) {
+func (e *recoveryEnv) seedUnknownBinding(t *testing.T, hasRow bool) {
 	t.Helper()
 	ctx := context.Background()
 	hash, err := execution.SpawnHash(ports.SpawnRequest{
@@ -185,7 +184,7 @@ func (e *recoveryEnv) seedUnknownBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpawnHash: %v", err)
 	}
-	binding, created, err := e.store.CreateWorkflowAttemptBinding(ctx, domain.WorkflowAttemptBinding{
+	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), domain.WorkflowAttemptBinding{
 		AttemptID: e.attemptID, WorkflowID: e.workflow, TaskID: e.task,
 		SpawnRequestID: e.spawnKey, SpawnHash: hash,
 	}, []domain.WorkflowAttemptRepoBinding{{
@@ -196,16 +195,19 @@ func (e *recoveryEnv) seedUnknownBinding(t *testing.T) {
 		t.Fatalf("create binding: created=%v err=%v", created, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		ctx, e.attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, recoveryTestNow,
+		sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("claim spawn: applied=%v err=%v", applied, err)
+	}
+	if hasRow {
+		e.spawnThroughGateway(t)
 	}
 	current, found, err := e.store.GetWorkflowAttemptBinding(ctx, e.attemptID)
 	if err != nil || !found {
 		t.Fatalf("read binding: found=%v err=%v", found, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		ctx, e.attemptID, domain.WorkflowBindingStateSpawnUnknown,
+		sqlitetest.ExecutionContext(t, ctx, e.store, e.attemptID, recoveryTestNow), e.attemptID, domain.WorkflowBindingStateSpawnUnknown,
 		"spawn_unclassified", current.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("record unknown: applied=%v err=%v", applied, err)
@@ -220,7 +222,7 @@ func (e *recoveryEnv) spawnThroughGateway(t *testing.T) {
 		WorkflowID: e.workflow, TaskID: e.task, AttemptID: e.attemptID,
 		SpawnKey: e.spawnKey, ProjectID: "recover-proj", Harness: domain.HarnessCodex,
 	}
-	if _, err := e.gateway.Spawn(context.Background(), resource); err != nil {
+	if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(t, context.Background(), e.store, e.attemptID, recoveryTestNow), resource); err != nil {
 		t.Fatalf("gateway spawn: %v", err)
 	}
 	// The counter is captured here, so "recovery spawned" can be asserted by comparing
@@ -240,11 +242,10 @@ func (e *recoveryEnv) state(t *testing.T) domain.WorkflowBindingState {
 
 func TestM2RecoveryPromotesABindingWhoseSessionExists(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, true)
 
 	// The session exists under the binding's spawn request id: a crashed spawn whose
 	// side effect landed.
-	env.spawnThroughGateway(t)
 
 	result := env.sweep.run(context.Background())
 	if result.Examined != 1 {
@@ -268,7 +269,7 @@ func TestM2RecoveryPromotesABindingWhoseSessionExists(t *testing.T) {
 
 func TestM2RecoveryLeavesAFrozenBindingFrozen(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, false)
 
 	// No session exists for the spawn key: absence of evidence after a lost answer is not
 	// proof that nothing happened.
@@ -293,9 +294,8 @@ func TestM2RecoveryLeavesAFrozenBindingFrozen(t *testing.T) {
 
 func TestM2RecoverySecondSweepIsANoOp(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, true)
 	// The spawn's side effect landed: the first sweep adopts it.
-	env.spawnThroughGateway(t)
 
 	first := env.sweep.run(context.Background())
 	if first.Advanced != 1 {
@@ -321,7 +321,7 @@ func TestM2RecoverySecondSweepIsANoOp(t *testing.T) {
 
 func TestM2RecoveryContinuesPastOneFailure(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, true)
 	env.recorded.errs[env.attemptID] = errors.New("one binding is unreadable")
 
 	result := env.sweep.run(context.Background())
@@ -341,7 +341,6 @@ func TestM2RecoveryContinuesPastOneFailure(t *testing.T) {
 	// Clearing the failure lets the same sweep resolve it, proving the failure was not
 	// terminal.
 	delete(env.recorded.errs, env.attemptID)
-	env.spawnThroughGateway(t)
 	second := env.sweep.run(context.Background())
 	if second.Advanced != 1 {
 		t.Fatalf("retry advanced = %d, want 1", second.Advanced)
@@ -350,7 +349,7 @@ func TestM2RecoveryContinuesPastOneFailure(t *testing.T) {
 
 func TestM2RecoverySweepIsBounded(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, false)
 	// A batch of one proves the bound is applied rather than ignored.
 	env.sweep.batch = 1
 
@@ -368,7 +367,7 @@ func TestM2RecoveryRepeatedFrozenSweepIsNotAFailure(t *testing.T) {
 	// the sweep again must count it as frozen, not as a failure: otherwise a daemon would
 	// log an error every minute for a row that is behaving exactly as designed.
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, false)
 
 	// The first sweep records the settled outcome (spawn_unknown → reconcile_required).
 	first := env.sweep.run(context.Background())
@@ -390,8 +389,7 @@ func TestM2RecoveryRepeatedFrozenSweepIsNotAFailure(t *testing.T) {
 
 func TestM2RecoverySkipsRecoveryUncertain(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
-	env.spawnThroughGateway(t)
+	env.seedUnknownBinding(t, true)
 	// A first sweep promotes it to bound_ready, which is the only state that can move to
 	// recovery_uncertain (that state requires a session).
 	if first := env.sweep.run(context.Background()); first.Advanced != 1 {
@@ -406,7 +404,7 @@ func TestM2RecoverySkipsRecoveryUncertain(t *testing.T) {
 		t.Fatalf("state = %q, want bound_ready before the uncertain move", current.State)
 	}
 	if _, applied, err := env.store.TransitionWorkflowAttemptBinding(
-		ctx, env.attemptID, domain.WorkflowBindingStateRecoveryUncertain,
+		sqlitetest.ExecutionContext(t, ctx, env.store, env.attemptID, recoveryTestNow), env.attemptID, domain.WorkflowBindingStateRecoveryUncertain,
 		"evidence_insufficient", current.Revision, recoveryTestNow,
 	); err != nil || !applied {
 		t.Fatalf("to recovery_uncertain: applied=%v err=%v", applied, err)
@@ -430,7 +428,7 @@ func TestM2RecoverySkipsRecoveryUncertain(t *testing.T) {
 
 func TestM2RecoveryLogCarriesCountsOnly(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, false)
 	env.sweep.run(context.Background())
 
 	// The sweep itself logs; assert nothing identifying reached the log.
@@ -447,7 +445,7 @@ func TestM2RecoveryLogCarriesCountsOnly(t *testing.T) {
 
 func TestStartM2BindingRecoveryStopsOnCancellation(t *testing.T) {
 	env := newRecoveryEnv(t)
-	env.seedUnknownBinding(t)
+	env.seedUnknownBinding(t, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	startM2BindingRecovery(ctx, env.binder, env.store, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
@@ -501,6 +499,7 @@ func newMultiBindingEnv(t *testing.T) *multiBindingEnv {
 	store := sqlitetest.MustOpen(t)
 	ctx := context.Background()
 	now := recoveryTestNow
+	sqlitetest.NewAdmissionFixture(t, store, func() time.Time { return now })
 
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{
 		ID: "multi-proj", Path: t.TempDir(), RegisteredAt: now,
@@ -517,23 +516,20 @@ func newMultiBindingEnv(t *testing.T) *multiBindingEnv {
 			BaseSHA: recoveryRepoBaseSHA, HeadSHA: strings.Repeat("e", 40),
 		}})
 	gateway.WithSessionMaterializer(func(
-		_ context.Context,
+		ctx context.Context,
 		_ domain.SessionID,
 		request ports.SpawnRequest,
 	) (domain.SessionID, error) {
-		created, err := store.CreateSession(ctx, domain.SessionRecord{
+		return materializeAdmittedDaemonSession(ctx, store, domain.SessionRecord{
 			ProjectID: request.ProjectID, Kind: domain.KindWorker, Harness: request.Harness,
 			Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityActive},
 			ClientRequestID: request.SpawnKey, ClientRequestCommitted: true,
 			Metadata: domain.SessionMetadata{ControllerGeneration: "gen-multi"},
-		})
-		if err != nil {
-			return "", err
-		}
-		return created.ID, nil
+		}, request, now)
 	})
 	coordinator := execution.New(execution.Deps{
-		Store: store, Gateway: gateway, Clock: func() time.Time { return now },
+		ExecutionFence: daemonExecutionFence(t, store),
+		Store:          store, Gateway: gateway, Clock: func() time.Time { return now },
 	})
 	recorded := &recordedBinder{inner: coordinator, errs: map[domain.WorkflowAttemptID]error{}}
 	logs := &bytes.Buffer{}
@@ -550,12 +546,39 @@ func newMultiBindingEnv(t *testing.T) *multiBindingEnv {
 	}
 }
 
-// seed creates one workflow/task/attempt plus a spawn_unknown binding, and optionally the
-// session a lost spawn left behind.
+// seed 通过真实准入创建待恢复绑定；批量恢复使用显式有限容量，不清空既有占位。
 func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 	t.Helper()
 	ctx := context.Background()
 	now := recoveryTestNow
+	policies, err := e.store.ListSchedulerPolicies(ctx)
+	if err != nil {
+		t.Fatalf("load recovery admission policies: %v", err)
+	}
+	for _, harness := range []domain.AgentHarness{"", domain.HarnessCodex} {
+		policy := domain.DefaultSchedulerPolicy(harness)
+		for _, existing := range policies {
+			if existing.ID == policy.ID {
+				policy = existing
+				break
+			}
+		}
+		if policy.MaxConcurrent == 10 {
+			continue
+		}
+		expectedRevision := policy.Revision
+		policy.MaxConcurrent = 10
+		request := fmt.Sprintf("%#v:%d", policy, expectedRevision)
+		fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(request)))
+		change := domain.PolicyChange{
+			IdempotencyKey: "recovery-capacity:" + policy.ID, RequestFingerprint: fingerprint,
+			ActorRef: "sqlitetest", Reason: "TEST_CAPACITY", Now: now,
+		}
+		if _, applied, err := e.store.PutSchedulerPolicy(ctx, policy, expectedRevision, change); err != nil || !applied {
+			t.Fatalf("set bounded recovery capacity: applied=%v err=%v", applied, err)
+		}
+	}
+	admission := sqlitetest.NewAdmissionFixture(t, e.store, func() time.Time { return now })
 
 	workflowID := domain.WorkflowID("multi-workflow-" + name)
 	taskID := domain.WorkflowTaskID("multi-task-" + name)
@@ -593,7 +616,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 		WorkerID: "worker-" + name, LeaseToken: "lease-" + name, LeaseUntil: &leaseUntil,
 		State: domain.WorkflowAttemptStateClaimed, CreatedAt: now, UpdatedAt: now,
 	}
-	if _, _, err := e.store.ClaimWorkflowTask(
+	if _, _, err := admission.Claim(
 		ctx, attempt, 2, "multi-claim-"+name, strings.Repeat("c", 64),
 	); err != nil {
 		t.Fatalf("claim task %s: %v", name, err)
@@ -607,7 +630,7 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 	if err != nil {
 		t.Fatalf("SpawnHash: %v", err)
 	}
-	binding, created, err := e.store.CreateWorkflowAttemptBinding(ctx, domain.WorkflowAttemptBinding{
+	binding, created, err := e.store.CreateWorkflowAttemptBinding(sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), domain.WorkflowAttemptBinding{
 		AttemptID: attemptID, WorkflowID: workflowID, TaskID: taskID,
 		SpawnRequestID: spawnKey, SpawnHash: hash,
 	}, []domain.WorkflowAttemptRepoBinding{{
@@ -618,27 +641,16 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 		t.Fatalf("create binding %s: created=%v err=%v", name, created, err)
 	}
 	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		ctx, attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, now,
+		sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnRequested, "", binding.Revision, now,
 	); err != nil || !applied {
 		t.Fatalf("claim spawn %s: applied=%v err=%v", name, applied, err)
 	}
-	current, _, err := e.store.GetWorkflowAttemptBinding(ctx, attemptID)
-	if err != nil {
-		t.Fatalf("read binding %s: %v", name, err)
-	}
-	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
-		ctx, attemptID, domain.WorkflowBindingStateSpawnUnknown,
-		"spawn_unclassified", current.Revision, now,
-	); err != nil || !applied {
-		t.Fatalf("record unknown %s: applied=%v err=%v", name, applied, err)
-	}
-
 	if hasRow {
 		// The lost spawn's side effect: a committed session under this spawn key. It is
 		// created THROUGH the gateway, because FindSpawn answers from the gateway's own
 		// record — a row written straight into the store would be invisible to reconcile
 		// and the test would be proving nothing about adoption.
-		if _, err := e.gateway.Spawn(ctx, ports.SpawnRequest{
+		if _, err := e.gateway.Spawn(sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), ports.SpawnRequest{
 			WorkflowID: workflowID, TaskID: taskID, AttemptID: attemptID,
 			SpawnKey: spawnKey, SpawnHash: hash,
 			ProjectID: "multi-proj", Harness: domain.HarnessCodex,
@@ -646,6 +658,17 @@ func (e *multiBindingEnv) seed(t *testing.T, name string, hasRow bool) {
 			t.Fatalf("gateway spawn %s: %v", name, err)
 		}
 	}
+	current, _, err := e.store.GetWorkflowAttemptBinding(ctx, attemptID)
+	if err != nil {
+		t.Fatalf("read binding %s: %v", name, err)
+	}
+	if _, applied, err := e.store.TransitionWorkflowAttemptBinding(
+		sqlitetest.ExecutionContext(t, ctx, e.store, attemptID, now), attemptID, domain.WorkflowBindingStateSpawnUnknown,
+		"spawn_unclassified", current.Revision, now,
+	); err != nil || !applied {
+		t.Fatalf("record unknown %s: applied=%v err=%v", name, applied, err)
+	}
+
 	e.seeds = append(e.seeds, multiSeed{attemptID: attemptID, spawnKey: spawnKey, hasRow: hasRow})
 }
 
@@ -763,19 +786,20 @@ func TestM2RecoverySweepContinuesPastOneFailingBinding(t *testing.T) {
 // when the backlog is larger.
 func TestM2RecoverySweepHonoursTheBatchBound(t *testing.T) {
 	env := newMultiBindingEnv(t)
-	total := int(m2BindingRecoveryBatch) + 5
+	// 积压大于单批数量且不超过 M3 硬上限，保留 LIMIT 行为并通过真实准入。
+	total := 5
 	for i := 0; i < total; i++ {
 		env.seed(t, fmt.Sprintf("bulk-%02d", i), false)
 	}
 	// A small batch keeps the test fast while still proving the LIMIT applies.
-	env.sweep.batch = 10
+	env.sweep.batch = 3
 
 	result := env.sweep.run(context.Background())
-	if result.Examined != 10 {
-		t.Fatalf("examined = %d, want exactly the batch size (10)", result.Examined)
+	if result.Examined != 3 {
+		t.Fatalf("examined = %d, want exactly the batch size (3)", result.Examined)
 	}
-	if len(env.recorded.calls) != 10 {
-		t.Fatalf("reconciler calls = %d, want 10", len(env.recorded.calls))
+	if len(env.recorded.calls) != 3 {
+		t.Fatalf("reconciler calls = %d, want 3", len(env.recorded.calls))
 	}
 	if !result.Truncated {
 		t.Fatal("a full batch did not report that more work remains")

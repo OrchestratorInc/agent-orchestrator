@@ -59,7 +59,7 @@ func neverStartedChatOrchestrator(
 		armed:   make(chan domain.SessionInterfaceTransitionPolicy, 1),
 		aborted: make(chan struct{}, 1),
 	}
-	manager := New(Deps{
+	manager := newAdmittedTestManager(t, Deps{
 		Runtime: &transitionRuntime{fakeRuntime: &fakeRuntime{}, log: log}, Agents: singleAgent{agent: claudeagent.New()},
 		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Chat: chat,
 		Lifecycle: lifecycle(store),

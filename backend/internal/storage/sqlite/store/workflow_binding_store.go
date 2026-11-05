@@ -55,7 +55,10 @@ func (s *Store) CreateWorkflowAttemptBinding(
 
 	var result domain.WorkflowAttemptBinding
 	created := false
-	err := s.inTx(ctx, "create workflow attempt binding", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "create workflow attempt binding", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, binding.AttemptID, now, true); err != nil {
+			return err
+		}
 		rows, err := q.InsertWorkflowAttemptBinding(ctx, gen.InsertWorkflowAttemptBindingParams{
 			AttemptID: binding.AttemptID, WorkflowID: binding.WorkflowID, TaskID: binding.TaskID,
 			SpawnRequestID: binding.SpawnRequestID, SpawnHash: binding.SpawnHash,
@@ -220,7 +223,10 @@ func (s *Store) BindWorkflowAttemptSession(
 
 	var result domain.WorkflowAttemptBinding
 	applied := false
-	err := s.inTx(ctx, "bind workflow attempt session", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "bind workflow attempt session", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, attemptID, now, false); err != nil {
+			return err
+		}
 		current, found, err := s.loadBinding(ctx, q, attemptID)
 		if err != nil {
 			return err
@@ -348,7 +354,10 @@ func (s *Store) ReanchorWorkflowAttemptGeneration(
 
 	var result domain.WorkflowAttemptBinding
 	applied := false
-	err := s.inTx(ctx, "reanchor workflow attempt generation", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "reanchor workflow attempt generation", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, attemptID, now, false); err != nil {
+			return err
+		}
 		current, found, err := s.loadBinding(ctx, q, attemptID)
 		if err != nil {
 			return err
@@ -380,6 +389,9 @@ func (s *Store) ReanchorWorkflowAttemptGeneration(
 		}
 		if rows == 0 {
 			return domain.ErrWorkflowBindingRevisionConflict
+		}
+		if err := syncReanchoredAdmissionGeneration(ctx, q, attemptID, sessionID, generation, now); err != nil {
+			return err
 		}
 
 		stored, found, err := s.loadBinding(ctx, q, attemptID)
@@ -424,7 +436,10 @@ func (s *Store) TransitionWorkflowAttemptBinding(
 
 	var result domain.WorkflowAttemptBinding
 	applied := false
-	err := s.inTx(ctx, "transition workflow attempt binding", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "transition workflow attempt binding", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, attemptID, now, next == domain.WorkflowBindingStateSpawnRequested); err != nil {
+			return err
+		}
 		current, found, err := s.loadBinding(ctx, q, attemptID)
 		if err != nil {
 			return err
@@ -506,7 +521,10 @@ func (s *Store) RecordWorkflowAttemptRepoBinding(
 	defer s.writeMu.Unlock()
 
 	applied := false
-	err := s.inTx(ctx, "record workflow attempt repo binding", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "record workflow attempt repo binding", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, binding.AttemptID, now, false); err != nil {
+			return err
+		}
 		rows, err := q.UpdateWorkflowAttemptRepoBinding(ctx, gen.UpdateWorkflowAttemptRepoBindingParams{
 			ObservedHeadSha: binding.ObservedHeadSHA, SessionWorktreeRef: binding.SessionWorktreeRef,
 			State: binding.State, UpdatedAt: now,

@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/collaboration"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	"net/http"
@@ -102,7 +103,15 @@ func TestM2OperatorApprovalDecideWritesExactlyOneAuditRow(t *testing.T) {
 	if err != nil || !found || bound.SessionID == nil {
 		t.Fatalf("binding: found=%v err=%v", found, err)
 	}
-	raised, _, err := env.store.CreateWorkflowTaskRequest(ctx, domain.WorkflowTaskRequest{
+	leader, err := env.store.GetSchedulerLeader(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permit, err := env.store.LoadExecutionPermit(ctx, domain.WorkflowAttemptID(env.attemptID), leader.Fence, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raised, _, err := env.store.CreateWorkflowTaskRequest(ports.WithExecutionPermit(ctx, permit), domain.WorkflowTaskRequest{
 		ID: "req-1", WorkflowID: domain.WorkflowID(env.workflowID), RequesterTaskID: domain.WorkflowTaskID(env.taskID),
 		RequestKind: domain.WorkflowTaskRequestKindIncreaseBudget,
 		RequestJSON: `{"credits":10}`, RequestSHA: collaboration.RequestSHA(`{"credits":10}`),

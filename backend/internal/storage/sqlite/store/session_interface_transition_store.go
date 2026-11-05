@@ -313,6 +313,9 @@ func (s *Store) commitSessionControllerEpoch(
 	if rows == 0 {
 		return false, nil
 	}
+	if err := resetControllerEpochAdmission(ctx, q, id, now); err != nil {
+		return false, fmt.Errorf("reset controller epoch admission for %s: %w", id, err)
+	}
 	if source == domain.SessionModeChat && target == domain.SessionModeTUI && nativeID == "" {
 		// A fresh TUI will choose its own native identity. Release the unused
 		// Chat reservation and event namespace in the same transaction, so a

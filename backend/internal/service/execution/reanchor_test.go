@@ -48,6 +48,7 @@ func newReanchorStore(t *testing.T) (*sqlite.Store, domain.WorkflowAttempt) {
 	t.Helper()
 	ctx := context.Background()
 	s := sqlitetest.MustOpenAt(t, t.TempDir())
+	admission := sqlitetest.NewAdmissionFixture(t, s, reanchorClock())
 	if err := s.UpsertProject(ctx, domain.ProjectRecord{
 		ID: reanchorProject, Path: "/tmp/" + reanchorProject,
 		RegisteredAt: reanchorNow.Truncate(time.Second),
@@ -78,7 +79,7 @@ func newReanchorStore(t *testing.T) (*sqlite.Store, domain.WorkflowAttempt) {
 	if err != nil || !found {
 		t.Fatalf("GetWorkflowTask: found=%v err=%v", found, err)
 	}
-	attempt, created, err := s.ClaimWorkflowTask(ctx, domain.WorkflowAttempt{
+	attempt, created, err := admission.Claim(ctx, domain.WorkflowAttempt{
 		ID: "attempt-reanchor", WorkflowID: workflowID, TaskID: taskID, WorkerID: "worker-1",
 		LeaseToken: "lease-reanchor", LeaseUntil: new(reanchorNow.Add(time.Hour)),
 		State:     domain.WorkflowAttemptStateClaimed,
@@ -86,6 +87,13 @@ func newReanchorStore(t *testing.T) (*sqlite.Store, domain.WorkflowAttempt) {
 	}, task.Revision, "reanchor-claim", reanchorHash('c'))
 	if err != nil || !created {
 		t.Fatalf("ClaimWorkflowTask: created=%v err=%v", created, err)
+	}
+	leader, err := s.GetSchedulerLeader(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RenewSchedulerLeader(ctx, leader, reanchorNow, reanchorNow.Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
 	return s, attempt
 }
@@ -111,7 +119,6 @@ func seededSession(t *testing.T, s *sqlite.Store) domain.SessionID {
 // reanchorFixture binds one attempt at generation gen-1 and returns the durable binding.
 func reanchorFixture(t *testing.T) (*sqlite.Store, domain.SessionID, domain.WorkflowAttemptBinding) {
 	t.Helper()
-	ctx := context.Background()
 	s, attempt := newReanchorStore(t)
 	sessionID := seededSession(t, s)
 
@@ -119,12 +126,12 @@ func reanchorFixture(t *testing.T) (*sqlite.Store, domain.SessionID, domain.Work
 		AttemptID: attempt.ID, WorkflowID: attempt.WorkflowID, TaskID: attempt.TaskID,
 		SpawnRequestID: "spawn-reanchor", SpawnHash: reanchorHash('d'),
 	}
-	binding, created, err := s.CreateWorkflowAttemptBinding(ctx, intent, nil, reanchorNow)
+	binding, created, err := s.CreateWorkflowAttemptBinding(reanchorPermit(t, s, attempt.ID), intent, nil, reanchorNow)
 	if err != nil || !created {
 		t.Fatalf("CreateWorkflowAttemptBinding: created=%v err=%v", created, err)
 	}
 	bound, applied, err := s.BindWorkflowAttemptSession(
-		ctx, binding.AttemptID, sessionID, "gen-1",
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-1",
 		domain.WorkflowBindingStateBoundReady, binding.Revision, reanchorNow,
 	)
 	if err != nil || !applied {
@@ -145,7 +152,7 @@ func TestReanchorMovesTheBindingToTheNewGeneration(t *testing.T) {
 	startRevision := binding.Revision
 
 	reanchored, applied, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, sessionID, "gen-2", binding.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-2", binding.Revision,
 		binding.State, reanchorNow.Add(time.Minute),
 	)
 	if err != nil {
@@ -205,7 +212,7 @@ func TestReanchorRefusesADifferentSession(t *testing.T) {
 	}
 
 	_, applied, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, other, "gen-2", binding.Revision, binding.State, reanchorNow,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, other, "gen-2", binding.Revision, binding.State, reanchorNow,
 	)
 	if err == nil {
 		t.Fatal("a re-anchor naming another session reported no error")
@@ -247,7 +254,7 @@ func TestReanchorRefusesAnEmptyOrPlaceholderGeneration(t *testing.T) {
 			t.Parallel()
 			s, sessionID, binding := reanchorFixture(t)
 			_, applied, err := s.ReanchorWorkflowAttemptGeneration(
-				ctx, binding.AttemptID, sessionID, generation, binding.Revision,
+				reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, generation, binding.Revision,
 				binding.State, reanchorNow,
 			)
 			if err == nil || applied {
@@ -305,7 +312,7 @@ func TestReanchorCASIsRevisionFenced(t *testing.T) {
 	s, sessionID, binding := reanchorFixture(t)
 
 	_, firstApplied, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, sessionID, "gen-2", binding.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-2", binding.Revision,
 		binding.State, reanchorNow,
 	)
 	if err != nil || !firstApplied {
@@ -314,7 +321,7 @@ func TestReanchorCASIsRevisionFenced(t *testing.T) {
 
 	// A caller that read the binding BEFORE the first write still holds the old revision.
 	_, staleApplied, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, sessionID, "gen-3", binding.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-3", binding.Revision,
 		binding.State, reanchorNow.Add(time.Minute),
 	)
 	if err == nil || staleApplied {
@@ -335,14 +342,14 @@ func TestReanchorCASIsRevisionFenced(t *testing.T) {
 	// The state is part of the fence too: a caller whose row moved on must not write a
 	// generation under the assumption it is still bound_ready.
 	moved, movedApplied, err := s.TransitionWorkflowAttemptBinding(
-		ctx, binding.AttemptID, domain.WorkflowBindingStateStopRequested, "", durable.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, domain.WorkflowBindingStateStopRequested, "", durable.Revision,
 		reanchorNow.Add(2*time.Minute),
 	)
 	if err != nil || !movedApplied {
 		t.Fatalf("transition to stop_requested: applied=%v err=%v", movedApplied, err)
 	}
 	_, wrongState, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, sessionID, "gen-3", moved.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-3", moved.Revision,
 		domain.WorkflowBindingStateBoundReady, reanchorNow.Add(3*time.Minute),
 	)
 	if err == nil || wrongState {
@@ -354,11 +361,10 @@ func TestReanchorCASIsRevisionFenced(t *testing.T) {
 // the OLD generation is still refused, and only the NEW one is accepted.
 func TestReanchorKeepsOldGenerationFenced(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
 	s, sessionID, binding := reanchorFixture(t)
 
 	reanchored, applied, err := s.ReanchorWorkflowAttemptGeneration(
-		ctx, binding.AttemptID, sessionID, "gen-2", binding.Revision,
+		reanchorPermit(t, s, binding.AttemptID), binding.AttemptID, sessionID, "gen-2", binding.Revision,
 		binding.State, reanchorNow,
 	)
 	if err != nil || !applied {
@@ -445,6 +451,10 @@ func newReanchorCoordinator(t *testing.T, s *sqlite.Store, gateway ports.Executi
 	t.Helper()
 	return execution.New(execution.Deps{
 		Store: s, Gateway: gateway, Resolver: reanchorResolver(), Clock: reanchorClock(),
+		ExecutionFence: func(ctx context.Context) (domain.SchedulerFence, error) {
+			leader, err := s.GetSchedulerLeader(ctx)
+			return leader.Fence, err
+		},
 	})
 }
 

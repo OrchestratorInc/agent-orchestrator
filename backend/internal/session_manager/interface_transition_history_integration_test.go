@@ -120,7 +120,7 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 					log := &[]string{}
 					runtime := &transitionRuntime{fakeRuntime: &fakeRuntime{}, log: log}
 					lcm := lifecycle.New(st, nil)
-					m := New(Deps{
+					m := newAdmittedTestManager(t, Deps{
 						Store: st, Lifecycle: lcm, Chat: integrationChatLauncher{svc},
 						Agents: singleAgent{agent: agent}, Runtime: runtime,
 						Workspace: &fakeWorkspace{path: workspace}, Messenger: &fakeMessenger{}, DataDir: dir,

@@ -401,6 +401,7 @@ type Manager struct {
 	agents    ports.AgentResolver
 	workspace ports.Workspace
 	store     Store
+	admission SessionAdmissionProvider
 	// agentReadiness is late-bound by SetAgentReadiness.
 	agentReadiness ports.AgentReadinessProvider
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
@@ -1129,6 +1130,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 
 	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	admission, err := m.prepareSpawnAdmission(ctx, &cfg)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStageEarly(ErrSpawnCreate, err)
+	}
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -1143,7 +1148,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
 		}
-		if cfg.ClientRequestID != "" {
+		if admission != nil {
+			var fresh bool
+			rec, fresh, err = m.createAdmittedSession(ctx, seed, admission, "")
+			if err == nil && !fresh {
+				replay, replayErr := replayClientRequest(rec, cfg.ClientRequestHash)
+				return replay, 0, 0, replayErr
+			}
+		} else if cfg.ClientRequestID != "" {
 			var fresh bool
 			rec, fresh, err = m.store.CreateClientRequestSession(ctx, seed)
 			if err == nil && !fresh {
@@ -1245,7 +1257,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if asyncChat {
 			seed.ProvisionState = domain.SessionProvisionProvisioning
 		}
-		rec, err = m.promoteTaskPreparation(ctx, prep, seed)
+		if admission != nil {
+			var fresh bool
+			rec, fresh, err = m.createAdmittedSession(ctx, seed, admission, id)
+			if err == nil && !fresh {
+				replay, replayErr := replayClientRequest(rec, cfg.ClientRequestHash)
+				return replay, 0, 0, replayErr
+			}
+			if err == nil {
+				prep.promoted = true
+			}
+		} else {
+			rec, err = m.promoteTaskPreparation(ctx, prep, seed)
+		}
 		if err != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -3756,6 +3780,13 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		Env:           env,
 	}
 	var handle ports.RuntimeHandle
+	admissionRecord, err := m.restartRecord(ctx, rec)
+	if err != nil {
+		return RestoreResult{}, relaunchFailed("admission snapshot", err)
+	}
+	if err := m.admitSessionRestart(ctx, admissionRecord, launchID); err != nil {
+		return RestoreResult{}, relaunchFailed("execution admission", err)
+	}
 	if restartHandle == nil {
 		handle, err = m.runtime.Create(ctx, runtimeCfg)
 	} else {
@@ -6366,6 +6397,8 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
+	// 账户环境在项目过滤后才合并；所有返回路径都必须移除旧租约及 Windows 别名。
+	defer deleteProtectedEnv(env, EnvWorkflowLease, caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.

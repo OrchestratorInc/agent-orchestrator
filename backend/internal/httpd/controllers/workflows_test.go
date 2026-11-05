@@ -205,6 +205,13 @@ func newWorkflowTestServer(t *testing.T, service controllers.WorkflowService) *h
 	if service != nil {
 		deps.Workflows = service
 	}
+	deps.WorkflowExecutionPermits, _ = service.(controllers.ExecutionPermitReader)
+	deps.WorkflowRetrySchedule = func(context.Context, domain.WorkflowID, domain.WorkflowTaskID, int64) error { return nil }
+	deps.WorkflowExecutionFence = func(context.Context) (domain.SchedulerFence, error) {
+		return domain.SchedulerFence{OwnerID: "test", Epoch: 1}, nil
+	}
+	deps.WorkflowRecovery, _ = service.(controllers.WorkflowRecovery)
+	deps = approvedWorkflowDeps(deps)
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -225,12 +232,23 @@ func newRealWorkflowService(t *testing.T) (controllers.WorkflowService, *httptes
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	clock := func() time.Time { return time.Now().UTC() }
 	service := workflowsvc.New(workflowsvc.Deps{
 		Store:         store,
+		Clock:         clock,
+		Admission:     sqlitetest.NewAdmissionFixture(t, store, clock),
 		GraphLimits:   domain.WorkflowGraphLimits{MaxTasks: 50, MaxDepth: 20, MaxFanOut: 20},
 		LeaseDuration: 5 * time.Minute,
 	})
-	return service, newWorkflowTestServer(t, service)
+	deps := approvedWorkflowDeps(httpd.APIDeps{Workflows: service, WorkflowExecutionPermits: store, WorkflowRecovery: store})
+	deps.WorkflowRetrySchedule = func(context.Context, domain.WorkflowID, domain.WorkflowTaskID, int64) error { return nil }
+	deps.WorkflowExecutionFence = func(ctx context.Context) (domain.SchedulerFence, error) {
+		leader, err := store.GetSchedulerLeader(ctx)
+		return leader.Fence, err
+	}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, deps, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	return service, srv
 }
 
 const workflowCreateBody = `{
@@ -254,7 +272,7 @@ func TestWorkflowsCreateReplayAndConflict(t *testing.T) {
 	service := newWorkflowService()
 	srv := newWorkflowTestServer(t, service)
 
-	body, status, headers := doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, headers := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	assertJSON(t, headers)
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201; body=%s", status, body)
@@ -282,7 +300,7 @@ func TestWorkflowsCreateReplayAndConflict(t *testing.T) {
 
 	// A replay (applied=false) answers 200 with the identical workflow.
 	service.applied = false
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	if status != http.StatusOK {
 		t.Fatalf("replay status = %d, want 200; body=%s", status, body)
 	}
@@ -295,7 +313,7 @@ func TestWorkflowsCreateReplayAndConflict(t *testing.T) {
 	// The same key with a different body is a conflict, not a second create.
 	service.createErr = apierr.Conflict("WORKFLOW_IDEMPOTENCY_CONFLICT",
 		"Idempotency key was already used for a different request", nil)
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows",
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows",
 		strings.Replace(workflowCreateBody, `"Ship M1-04"`, `"Different title"`, 1))
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_IDEMPOTENCY_CONFLICT")
 }
@@ -307,7 +325,7 @@ func TestWorkflowsCreateRejectsCyclicGraph(t *testing.T) {
 	service.createErr = apierr.Invalid("INVALID_WORKFLOW_GRAPH", "workflow graph: dependency cycle", nil)
 	srv := newWorkflowTestServer(t, service)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_WORKFLOW_GRAPH")
 }
 
@@ -332,7 +350,7 @@ func TestWorkflowsListPagination(t *testing.T) {
 	service := newWorkflowService()
 	srv := newWorkflowTestServer(t, service)
 
-	body, status, _ := doRequest(t, srv, "GET", "/api/v1/workflows", "")
+	body, status, _ := doWorkflowRequest(t, srv, "GET", "/api/v1/workflows", "")
 	if status != http.StatusOK {
 		t.Fatalf("list status = %d; body=%s", status, body)
 	}
@@ -346,14 +364,14 @@ func TestWorkflowsListPagination(t *testing.T) {
 		t.Fatalf("nextCursor = %q, want empty for a short page", page.NextCursor)
 	}
 
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows?state=nonsense", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?state=nonsense", "")
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_QUERY")
 
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows?limit=101", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=101", "")
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_PAGINATION")
 
 	// limit=0 is the service's "default" spelling; the route must not reject it.
-	_, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows?limit=0", "")
+	_, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=0", "")
 	if status != http.StatusOK {
 		t.Fatalf("limit=0 status = %d, want 200", status)
 	}
@@ -363,11 +381,11 @@ func TestWorkflowsListPagination(t *testing.T) {
 
 	// A full page may have more, so it reports the next offset as a cursor.
 	service.items = []domain.Workflow{newWorkflowSample()}
-	_, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
+	_, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
 	if status != http.StatusOK {
 		t.Fatalf("full page status = %d", status)
 	}
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows?limit=1", "")
 	mustJSON(t, body, &page)
 	if page.NextCursor != "MQ" {
 		t.Fatalf("nextCursor = %q, want %q (base64 of 1)", page.NextCursor, "MQ")
@@ -378,7 +396,7 @@ func TestWorkflowsListPagination(t *testing.T) {
 // the real service can answer "missing", so this runs against it.
 func TestWorkflowsGetUnknownWorkflowIs404(t *testing.T) {
 	_, srv := newRealWorkflowService(t)
-	body, status, _ := doRequest(t, srv, "GET", "/api/v1/workflows/workflow-missing", "")
+	body, status, _ := doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/workflow-missing", "")
 	assertErrorCode(t, body, status, http.StatusNotFound, "WORKFLOW_NOT_FOUND")
 }
 
@@ -387,7 +405,7 @@ func TestWorkflowsGetUnknownWorkflowIs404(t *testing.T) {
 func TestWorkflowsDefinitionIncludesGraph(t *testing.T) {
 	srv := newWorkflowTestServer(t, newWorkflowService())
 
-	body, status, _ := doRequest(t, srv, "GET", "/api/v1/workflows/workflow-1", "")
+	body, status, _ := doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/workflow-1", "")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", status, body)
 	}
@@ -428,11 +446,11 @@ func TestWorkflowsActivateRevisionConflict(t *testing.T) {
 
 	// The real service owns the revision check; drive it there.
 	_, realSrv := newRealWorkflowService(t)
-	body, status, _ := doRequest(t, realSrv, "POST", "/api/v1/workflows/workflow-missing/activate",
+	body, status, _ := doWorkflowRequest(t, realSrv, "POST", "/api/v1/workflows/workflow-missing/activate",
 		`{"expectedRevision":1,"idempotencyKey":"activate-key"}`)
 	assertErrorCode(t, body, status, http.StatusNotFound, "WORKFLOW_NOT_FOUND")
 
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/activate",
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/activate",
 		`{"expectedRevision":1,"idempotencyKey":"activate-key"}`)
 	if status != http.StatusOK {
 		t.Fatalf("activate status = %d; body=%s", status, body)
@@ -449,7 +467,7 @@ func TestWorkflowsActivateRevisionConflict(t *testing.T) {
 // from the fake.
 func TestWorkflowsActivateStaleRevisionIs409(t *testing.T) {
 	_, srv := newRealWorkflowService(t)
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d; body=%s", status, body)
 	}
@@ -457,10 +475,10 @@ func TestWorkflowsActivateStaleRevisionIs409(t *testing.T) {
 	mustJSON(t, body, &created)
 	path := "/api/v1/workflows/" + created.Workflow.ID + "/activate"
 
-	body, status, _ = doRequest(t, srv, "POST", path, `{"expectedRevision":9,"idempotencyKey":"stale-key"}`)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", path, `{"expectedRevision":9,"idempotencyKey":"stale-key"}`)
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_REVISION_CONFLICT")
 
-	body, status, _ = doRequest(t, srv, "POST", path, `{"expectedRevision":1,"idempotencyKey":"fresh-key"}`)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", path, `{"expectedRevision":1,"idempotencyKey":"fresh-key"}`)
 	if status != http.StatusOK {
 		t.Fatalf("activate status = %d; body=%s", status, body)
 	}
@@ -478,7 +496,7 @@ func TestWorkflowsTaskDetailCarriesAttemptsWithoutLeaseToken(t *testing.T) {
 	service := newWorkflowService()
 	srv := newWorkflowTestServer(t, service)
 
-	body, status, _ := doRequest(t, srv, "GET", "/api/v1/workflows/workflow-1/tasks/task-a", "")
+	body, status, _ := doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/workflow-1/tasks/task-a", "")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", status, body)
 	}
@@ -506,8 +524,8 @@ func TestWorkflowsTaskDetailCarriesAttemptsWithoutLeaseToken(t *testing.T) {
 		t.Fatalf("response leaked the lease capability: %s", body)
 	}
 
-	// The claim response is the one place the token appears.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
+	// Claim 同样不向调用方返回内部租约。
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
 		`{"expectedRevision":2,"workerId":"worker-1","idempotencyKey":"claim-key-1"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("claim status = %d; body=%s", status, body)
@@ -517,8 +535,8 @@ func TestWorkflowsTaskDetailCarriesAttemptsWithoutLeaseToken(t *testing.T) {
 		LeaseToken string         `json:"leaseToken"`
 	}
 	mustJSON(t, body, &claim)
-	if claim.LeaseToken != "lease-secret" {
-		t.Fatalf("claim leaseToken = %q, want the issued capability", claim.LeaseToken)
+	if claim.LeaseToken != "" || strings.Contains(string(body), "lease-secret") {
+		t.Fatalf("claim leaked its internal lease: %s", body)
 	}
 	if _, leaked := claim.Attempt["leaseToken"]; leaked {
 		t.Fatalf("claim attempt object also carries leaseToken: %v", claim.Attempt)
@@ -526,7 +544,7 @@ func TestWorkflowsTaskDetailCarriesAttemptsWithoutLeaseToken(t *testing.T) {
 
 	// A replayed claim answers 200 with the same body shape.
 	service.applied = false
-	_, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
+	_, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
 		`{"expectedRevision":2,"workerId":"worker-1","idempotencyKey":"claim-key-1"}`)
 	if status != http.StatusOK {
 		t.Fatalf("replayed claim status = %d, want 200", status)
@@ -540,7 +558,7 @@ func TestWorkflowsClaimTwiceIsConflict(t *testing.T) {
 	service := newWorkflowService()
 	srv := newWorkflowTestServer(t, service)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
 		`{"expectedRevision":2,"workerId":"worker-1","idempotencyKey":"claim-key-1"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("first claim status = %d; body=%s", status, body)
@@ -548,7 +566,7 @@ func TestWorkflowsClaimTwiceIsConflict(t *testing.T) {
 
 	service.claimErr = apierr.Conflict("WORKFLOW_TASK_NOT_CLAIMABLE",
 		"Workflow task is no longer ready to claim", nil)
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/claim",
 		`{"expectedRevision":2,"workerId":"worker-2","idempotencyKey":"claim-key-2"}`)
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_TASK_NOT_CLAIMABLE")
 }
@@ -562,13 +580,13 @@ func TestWorkflowsSettleWrongLeaseIsConflict(t *testing.T) {
 
 	service.settleErr = apierr.Conflict("WORKFLOW_ATTEMPT_LEASE_CONFLICT",
 		"Workflow attempt lease is invalid or expired", nil)
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/attempts/attempt-1/settle",
-		`{"leaseToken":"wrong-token","result":"succeeded","idempotencyKey":"settle-key-1"}`)
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/attempts/attempt-1/settle",
+		`{"result":"succeeded","idempotencyKey":"settle-key-1"}`)
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_ATTEMPT_LEASE_CONFLICT")
 
 	service.settleErr = nil
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/attempts/attempt-1/settle",
-		`{"leaseToken":"lease-secret","result":"succeeded","idempotencyKey":"settle-key-2"}`)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/attempts/attempt-1/settle",
+		`{"result":"succeeded","idempotencyKey":"settle-key-2"}`)
 	if status != http.StatusOK {
 		t.Fatalf("settle status = %d; body=%s", status, body)
 	}
@@ -587,7 +605,7 @@ func TestWorkflowsSettleWrongLeaseIsConflict(t *testing.T) {
 // read returns, so a worker sees the full state after a retry.
 func TestWorkflowsRetryReturnsTaskWithAttempts(t *testing.T) {
 	srv := newWorkflowTestServer(t, newWorkflowService())
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/retry",
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/workflow-1/tasks/task-a/retry",
 		`{"expectedRevision":2,"idempotencyKey":"retry-key-1"}`)
 	if status != http.StatusOK {
 		t.Fatalf("retry status = %d; body=%s", status, body)
@@ -605,7 +623,7 @@ func TestWorkflowsRetryReturnsTaskWithAttempts(t *testing.T) {
 // TestWorkflowsRecoverExpiredReportsCount pins the body-less sweep route.
 func TestWorkflowsRecoverExpiredReportsCount(t *testing.T) {
 	srv := newWorkflowTestServer(t, newWorkflowService())
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows/recover-expired", "")
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/recover-expired", `{"idempotencyKey":"recovery-test"}`)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", status, body)
 	}
@@ -635,7 +653,7 @@ func TestWorkflowsRoutesAreStubsWithoutService(t *testing.T) {
 		{http.MethodPost, "/api/v1/workflows/workflow-1/attempts/attempt-1/settle"},
 		{http.MethodPost, "/api/v1/workflows/workflow-1/tasks/task-a/retry"},
 	} {
-		body, status, headers := doRequest(t, srv, route.method, route.path, "")
+		body, status, headers := doWorkflowRequest(t, srv, route.method, route.path, "")
 		assertJSON(t, headers)
 		if status != http.StatusNotImplemented {
 			t.Fatalf("%s %s status = %d, want 501; body=%s", route.method, route.path, status, body)
@@ -661,7 +679,7 @@ func TestWorkflowsRoutesAreStubsWithoutService(t *testing.T) {
 func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	_, srv := newRealWorkflowService(t)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, _ := doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d; body=%s", status, body)
 	}
@@ -673,7 +691,7 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	}
 
 	// The same key replays with 200 and the same id.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", workflowCreateBody)
 	if status != http.StatusOK {
 		t.Fatalf("replay status = %d; body=%s", status, body)
 	}
@@ -684,12 +702,12 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	}
 
 	// A different body under the same key is the idempotency conflict.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows",
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows",
 		strings.Replace(workflowCreateBody, `"Ship M1-04"`, `"Different"`, 1))
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_IDEMPOTENCY_CONFLICT")
 
 	// A cyclic graph is rejected before anything is stored.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows", `{
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows", `{
 	  "title": "Cyclic", "goal": "Prove the cycle is rejected", "idempotencyKey": "cycle-key",
 	  "repositories": [{"repoKey": "backend", "projectId": "demo"}],
 	  "tasks": [{"id": "task-a", "kind": "development", "title": "A"},
@@ -700,7 +718,7 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_WORKFLOW_GRAPH")
 
 	// The definition detail carries the whole persisted graph.
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID, "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID, "")
 	if status != http.StatusOK {
 		t.Fatalf("definition status = %d; body=%s", status, body)
 	}
@@ -721,7 +739,7 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	}
 
 	// The list carries it too.
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows", "")
 	if status != http.StatusOK {
 		t.Fatalf("list status = %d; body=%s", status, body)
 	}
@@ -732,11 +750,11 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	}
 
 	// A bad task state is the query's problem, not the service's.
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks?state=bogus", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks?state=bogus", "")
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_QUERY")
 
 	// Activation promotes the root task to ready.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/"+workflowID+"/activate",
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/"+workflowID+"/activate",
 		`{"expectedRevision":1,"idempotencyKey":"activate-key"}`)
 	if status != http.StatusOK {
 		t.Fatalf("activate status = %d; body=%s", status, body)
@@ -747,7 +765,7 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 		t.Fatalf("activated = %#v", activated.Workflow)
 	}
 
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks", "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks", "")
 	if status != http.StatusOK {
 		t.Fatalf("tasks status = %d; body=%s", status, body)
 	}
@@ -769,36 +787,36 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	// Claiming issues the capability, and replaying the claim answers 200.
 	claimPath := "/api/v1/workflows/" + workflowID + "/tasks/" + ready.ID + "/claim"
 	claimBody := `{"expectedRevision":` + itoa(ready.Revision) + `,"workerId":"worker-1","idempotencyKey":"claim-key"}`
-	body, status, _ = doRequest(t, srv, "POST", claimPath, claimBody)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", claimPath, claimBody)
 	if status != http.StatusCreated {
 		t.Fatalf("claim status = %d; body=%s", status, body)
 	}
 	var claim controllers.ClaimWorkflowTaskResponse
 	mustJSON(t, body, &claim)
-	if claim.LeaseToken == "" {
-		t.Fatal("claim response carried no lease token")
+	if strings.Contains(string(body), "leaseToken") {
+		t.Fatal("claim response leaked its internal lease")
 	}
 	if claim.Attempt.State != "claimed" || claim.Attempt.AttemptNo != 1 {
 		t.Fatalf("claimed attempt = %#v", claim.Attempt)
 	}
 
-	body, status, _ = doRequest(t, srv, "POST", claimPath, claimBody)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", claimPath, claimBody)
 	if status != http.StatusOK {
 		t.Fatalf("replayed claim status = %d; body=%s", status, body)
 	}
 	var replayClaim controllers.ClaimWorkflowTaskResponse
 	mustJSON(t, body, &replayClaim)
-	if replayClaim.Attempt.ID != claim.Attempt.ID || replayClaim.LeaseToken != claim.LeaseToken {
+	if replayClaim.Attempt.ID != claim.Attempt.ID {
 		t.Fatalf("replayed claim = %#v, want the original %#v", replayClaim, claim)
 	}
 
 	// A second worker cannot claim the same task.
-	body, status, _ = doRequest(t, srv, "POST", claimPath,
+	body, status, _ = doWorkflowRequest(t, srv, "POST", claimPath,
 		`{"expectedRevision":`+itoa(ready.Revision)+`,"workerId":"worker-2","idempotencyKey":"claim-key-2"}`)
 	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_TASK_NOT_CLAIMABLE")
 
 	// The task detail shows the attempt history and never the token.
-	body, status, _ = doRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks/"+ready.ID, "")
+	body, status, _ = doWorkflowRequest(t, srv, "GET", "/api/v1/workflows/"+workflowID+"/tasks/"+ready.ID, "")
 	if status != http.StatusOK {
 		t.Fatalf("task status = %d; body=%s", status, body)
 	}
@@ -807,14 +825,14 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	if len(detail.Attempts) != 1 || detail.Attempts[0].ID != claim.Attempt.ID {
 		t.Fatalf("attempts = %#v", detail.Attempts)
 	}
-	if strings.Contains(string(body), claim.LeaseToken) {
+	if strings.Contains(string(body), "leaseToken") {
 		t.Fatalf("task detail leaked the lease capability: %s", body)
 	}
 
 	// Start, then a wrong token is a lease conflict and the right one settles.
 	startPath := "/api/v1/workflows/" + workflowID + "/attempts/" + claim.Attempt.ID + "/start"
-	body, status, _ = doRequest(t, srv, "POST", startPath,
-		`{"leaseToken":"`+claim.LeaseToken+`","idempotencyKey":"start-key"}`)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", startPath,
+		`{"idempotencyKey":"start-key"}`)
 	if status != http.StatusOK {
 		t.Fatalf("start status = %d; body=%s", status, body)
 	}
@@ -825,12 +843,12 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	}
 
 	settlePath := "/api/v1/workflows/" + workflowID + "/attempts/" + claim.Attempt.ID + "/settle"
-	body, status, _ = doRequest(t, srv, "POST", settlePath,
+	body, status, _ = doWorkflowRequest(t, srv, "POST", settlePath,
 		`{"leaseToken":"wrong-token","result":"succeeded","idempotencyKey":"settle-bad"}`)
-	assertErrorCode(t, body, status, http.StatusConflict, "WORKFLOW_ATTEMPT_LEASE_CONFLICT")
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 
-	body, status, _ = doRequest(t, srv, "POST", settlePath,
-		`{"leaseToken":"`+claim.LeaseToken+`","result":"succeeded","idempotencyKey":"settle-key"}`)
+	body, status, _ = doWorkflowRequest(t, srv, "POST", settlePath,
+		`{"result":"succeeded","idempotencyKey":"settle-key"}`)
 	if status != http.StatusOK {
 		t.Fatalf("settle status = %d; body=%s", status, body)
 	}
@@ -839,12 +857,12 @@ func TestWorkflowsEndToEndOverRealService(t *testing.T) {
 	if settled.Attempt.State != "succeeded" {
 		t.Fatalf("settled attempt = %#v", settled.Attempt)
 	}
-	if strings.Contains(string(body), claim.LeaseToken) {
+	if strings.Contains(string(body), "leaseToken") {
 		t.Fatalf("settle response leaked the lease capability: %s", body)
 	}
 
 	// The sweep is callable and reports a count, including on an idle workflow.
-	body, status, _ = doRequest(t, srv, "POST", "/api/v1/workflows/recover-expired", "")
+	body, status, _ = doWorkflowRequest(t, srv, "POST", "/api/v1/workflows/recover-expired", `{"idempotencyKey":"recovery-e2e"}`)
 	if status != http.StatusOK {
 		t.Fatalf("recover status = %d; body=%s", status, body)
 	}

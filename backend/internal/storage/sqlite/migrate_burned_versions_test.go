@@ -251,6 +251,12 @@ var shippedMigrations = map[int64]string{
 	20261104020830811: "20261104020830811_harness_capability_snapshots.sql",
 	20261104094706356: "20261104094706356_workflow_audit_log.sql",
 	20261104170421478: "20261104170421478_session_worktree_repo_identity.sql",
+	20261105073957583: "20261105073957583_m3_scheduler_admission.sql",
+	20261105084719358: "20261105084719358_m3_task_request_materialization.sql",
+	20261105090651703: "20261105090651703_m3_budget_ledger.sql",
+	20261105094026402: "20261105094026402_m3_scheduler_control.sql",
+	20261105101553243: "20261105101553243_m3_session_execution_generations.sql",
+	20261105102052187: "20261105102052187_m3_budget_session_attribution.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

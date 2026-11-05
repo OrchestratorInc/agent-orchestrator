@@ -5780,6 +5780,294 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/scheduler/budget:
+    get:
+      operationId: getGlobalBudget
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetSnapshotsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read scoped budget policies and canonical cost snapshots
+      tags:
+      - workflows
+    put:
+      operationId: putGlobalBudget
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetPolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetPolicyEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change the route-scoped budget after one operator approval
+      tags:
+      - workflows
+  /api/v1/scheduler/decisions:
+    get:
+      operationId: listSchedulerDecisions
+      parameters:
+      - in: query
+        name: after
+        schema:
+          format: int64
+          minimum: 0
+          type: integer
+      - in: query
+        name: limit
+        schema:
+          format: int64
+          maximum: 500
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerDecisionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read bounded scheduler decision history
+      tags:
+      - workflows
+  /api/v1/scheduler/policy:
+    put:
+      operationId: putSchedulerPolicy
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutSchedulerPolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerPolicyEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change global or adapter resource policy after one operator approval
+      tags:
+      - workflows
+  /api/v1/scheduler/status:
+    get:
+      operationId: getSchedulerStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulerStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read scheduler recovery, resource and occupancy facts
+      tags:
+      - workflows
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -13357,6 +13645,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13386,6 +13680,15 @@ paths:
       - workflows
     post:
       operationId: createWorkflow
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -13411,6 +13714,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13463,6 +13772,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13501,6 +13816,14 @@ paths:
         schema:
           description: Workflow identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -13520,6 +13843,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13565,6 +13894,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -13584,6 +13921,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13630,6 +13973,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -13643,6 +13994,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13688,6 +14045,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -13713,6 +14078,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13758,6 +14129,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -13771,6 +14150,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13817,6 +14202,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -13830,6 +14223,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13876,6 +14275,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -13895,6 +14302,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -13941,6 +14354,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -13954,6 +14375,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14000,6 +14427,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14019,6 +14454,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14064,6 +14505,14 @@ paths:
         schema:
           description: Workflow attempt identifier.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14083,6 +14532,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14108,6 +14563,133 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Mark a claimed attempt as running after checking its lease capability
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/budget:
+    get:
+      operationId: getWorkflowBudget
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetSnapshotsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read scoped budget policies and canonical cost snapshots
+      tags:
+      - workflows
+    put:
+      operationId: putWorkflowBudget
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetPolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetPolicyEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change the route-scoped budget after one operator approval
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/messages:
@@ -14144,6 +14726,14 @@ paths:
         name: cursor
         schema:
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -14157,6 +14747,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14194,6 +14790,22 @@ paths:
         schema:
           description: Workflow identifier.
           type: string
+      - description: Session bound to the agent capability; required together with
+          the capability for agent requests.
+        in: header
+        name: X-AO-Session-Id
+        schema:
+          description: Session bound to the agent capability; required together with
+            the capability for agent requests.
+          type: string
+      - description: Per-session capability injected into the worker; never an attempt
+          lease.
+        in: header
+        name: X-AO-Agent-Capability
+        schema:
+          description: Per-session capability injected into the worker; never an attempt
+            lease.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14219,6 +14831,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14245,6 +14863,205 @@ paths:
           description: Not Implemented
       summary: Store one peer collaboration message; the sender is derived from the
         caller's attempt, never supplied
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/pause:
+    post:
+      operationId: pauseWorkflowScheduling
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperatorChangeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowSchedulerResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Pause new admissions after one operator approval
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/resume-scheduling:
+    post:
+      operationId: resumeWorkflowScheduling
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperatorChangeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowSchedulerResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resume scheduling without bypassing recovery or budget fences
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/scheduler:
+    get:
+      operationId: getWorkflowScheduler
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowSchedulerResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read workflow scheduling state
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/task-requests:
@@ -14281,6 +15098,14 @@ paths:
         name: cursor
         schema:
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -14294,6 +15119,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14332,6 +15163,22 @@ paths:
         schema:
           description: Workflow identifier.
           type: string
+      - description: Session bound to the agent capability; required together with
+          the capability for agent requests.
+        in: header
+        name: X-AO-Session-Id
+        schema:
+          description: Session bound to the agent capability; required together with
+            the capability for agent requests.
+          type: string
+      - description: Per-session capability injected into the worker; never an attempt
+          lease.
+        in: header
+        name: X-AO-Agent-Capability
+        schema:
+          description: Per-session capability injected into the worker; never an attempt
+            lease.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14357,6 +15204,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14402,6 +15255,14 @@ paths:
         schema:
           description: Task request identifier, unique inside its workflow.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -14415,6 +15276,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14461,6 +15328,14 @@ paths:
         schema:
           description: Task request identifier, unique inside its workflow.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14486,6 +15361,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14513,6 +15394,90 @@ paths:
       summary: Record an owner decision; a rejection answers 200, an approval that
         created no task answers 202 with materialization=pending, and only a materialized
         approval answers 200
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/task-requests/{requestId}/materialize:
+    post:
+      operationId: materializeWorkflowTaskRequest
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Task request identifier, unique inside its workflow.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: Task request identifier, unique inside its workflow.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaterializeTaskRequestRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterializeTaskRequestResponse'
+          description: OK
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterializeTaskRequestResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Materialize an approved request using a separate exact operator approval
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/tasks:
@@ -14569,6 +15534,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14627,6 +15598,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14654,6 +15631,147 @@ paths:
       summary: Get one workflow task with its durable attempt history
       tags:
       - workflows
+  /api/v1/workflows/{workflowId}/tasks/{taskId}/budget:
+    get:
+      operationId: getTaskBudget
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow task identifier, unique inside its workflow.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Workflow task identifier, unique inside its workflow.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetSnapshotsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read scoped budget policies and canonical cost snapshots
+      tags:
+      - workflows
+    put:
+      operationId: putTaskBudget
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow task identifier, unique inside its workflow.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Workflow task identifier, unique inside its workflow.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutBudgetPolicyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetPolicyEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change the route-scoped budget after one operator approval
+      tags:
+      - workflows
   /api/v1/workflows/{workflowId}/tasks/{taskId}/claim:
     post:
       operationId: claimWorkflowTask
@@ -14671,6 +15789,14 @@ paths:
         required: true
         schema:
           description: Workflow task identifier, unique inside its workflow.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
           type: string
       requestBody:
         content:
@@ -14697,6 +15823,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14721,7 +15853,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Lease a ready task to a worker and issue its one-time lease token
+      summary: Claim a ready task after one operator approval; internal lease credentials
+        are never returned
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/tasks/{taskId}/retry:
@@ -14742,6 +15875,14 @@ paths:
         schema:
           description: Workflow task identifier, unique inside its workflow.
           type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       requestBody:
         content:
           application/json:
@@ -14761,6 +15902,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14791,6 +15938,15 @@ paths:
   /api/v1/workflows/capabilities:
     get:
       operationId: getWorkflowCapabilities
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
       responses:
         "200":
           content:
@@ -14804,6 +15960,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14835,6 +15997,21 @@ paths:
   /api/v1/workflows/recover-expired:
     post:
       operationId: recoverExpiredWorkflows
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecoverExpiredWorkflowsRequest'
+        required: true
       responses:
         "200":
           content:
@@ -14848,6 +16025,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -14928,6 +16111,8 @@ components:
         idempotencyKey:
           maxLength: 200
           minLength: 1
+          type: string
+        reason:
           type: string
       required:
       - expectedRevision
@@ -16432,6 +17617,149 @@ components:
       - transport
       - target
       type: object
+    BudgetPolicyEnvelope:
+      properties:
+        applied:
+          type: boolean
+        policy:
+          $ref: '#/components/schemas/BudgetPolicyResponse'
+      required:
+      - policy
+      - applied
+      type: object
+    BudgetPolicyResponse:
+      properties:
+        currency:
+          type: string
+        id:
+          type: string
+        limitNanos:
+          format: int64
+          type: integer
+        mode:
+          type: string
+        period:
+          type: string
+        reservationBasis:
+          type: string
+        reservationNanos:
+          type:
+          - "null"
+          - integer
+        reservationRef:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        scope:
+          enum:
+          - global
+          - workflow
+          - task
+          type: string
+        scopeId:
+          type: string
+      required:
+      - id
+      - scope
+      - scopeId
+      - currency
+      - mode
+      - period
+      - limitNanos
+      - reservationNanos
+      - reservationBasis
+      - reservationRef
+      - revision
+      type: object
+    BudgetSnapshotResponse:
+      properties:
+        alertThreshold:
+          format: int64
+          type: integer
+        costNanos:
+          type:
+          - "null"
+          - integer
+        eventCount:
+          format: int64
+          type: integer
+        knownCostNanos:
+          format: int64
+          type: integer
+        policy:
+          $ref: '#/components/schemas/BudgetPolicyResponse'
+        quality:
+          enum:
+          - EXACT
+          - ESTIMATED
+          - UNKNOWN
+          type: string
+        reconcilePending:
+          type: boolean
+        remainingNanos:
+          type:
+          - "null"
+          - integer
+        reservedNanos:
+          type:
+          - "null"
+          - integer
+        tokens:
+          $ref: '#/components/schemas/BudgetTokenMetricsResponse'
+        window:
+          type: string
+      required:
+      - policy
+      - window
+      - knownCostNanos
+      - costNanos
+      - reservedNanos
+      - remainingNanos
+      - quality
+      - tokens
+      - eventCount
+      - alertThreshold
+      - reconcilePending
+      type: object
+    BudgetSnapshotsResponse:
+      properties:
+        policies:
+          items:
+            $ref: '#/components/schemas/BudgetPolicyResponse'
+          type: array
+        snapshots:
+          items:
+            $ref: '#/components/schemas/BudgetSnapshotResponse'
+          type: array
+      required:
+      - policies
+      - snapshots
+      type: object
+    BudgetTokenMetricsResponse:
+      properties:
+        cachedInputTokens:
+          type:
+          - "null"
+          - integer
+        inputTokens:
+          type:
+          - "null"
+          - integer
+        outputTokens:
+          type:
+          - "null"
+          - integer
+        uncachedInputTokens:
+          type:
+          - "null"
+          - integer
+      required:
+      - inputTokens
+      - cachedInputTokens
+      - uncachedInputTokens
+      - outputTokens
+      type: object
     CancelReviewResponse:
       properties:
         reviewerHandleId:
@@ -16567,6 +17895,8 @@ components:
           maxLength: 200
           minLength: 1
           type: string
+        reason:
+          type: string
         workerId:
           maxLength: 200
           minLength: 1
@@ -16580,11 +17910,8 @@ components:
       properties:
         attempt:
           $ref: '#/components/schemas/WorkflowAttemptResponse'
-        leaseToken:
-          type: string
       required:
       - attempt
-      - leaseToken
       type: object
     CleanupSessionsResponse:
       properties:
@@ -18977,6 +20304,8 @@ components:
           description: Optional owning AO session; creating a workflow never starts
             one.
           type: string
+        reason:
+          type: string
         repositories:
           items:
             $ref: '#/components/schemas/WorkflowRepositoryInput'
@@ -20451,6 +21780,45 @@ components:
       required:
       - status
       type: object
+    MaterializeTaskRequestRequest:
+      properties:
+        expectedRequestRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        expectedWorkflowRevision:
+          format: int64
+          minimum: 1
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        reason:
+          maxLength: 80
+          minLength: 1
+          type: string
+        requestSha:
+          maxLength: 64
+          minLength: 64
+          type: string
+      required:
+      - requestSha
+      - expectedRequestRevision
+      - expectedWorkflowRevision
+      - idempotencyKey
+      - reason
+      type: object
+    MaterializeTaskRequestResponse:
+      properties:
+        created:
+          type: boolean
+        materialization:
+          $ref: '#/components/schemas/TaskRequestMaterializationResponse'
+      required:
+      - materialization
+      - created
+      type: object
     MemoryPressureResponse:
       properties:
         pressureRaw:
@@ -20769,6 +22137,25 @@ components:
             its tab. Trimmed; omitted or empty numbers it after the existing shells
             (Terminal N).
           type: string
+      type: object
+    OperatorChangeRequest:
+      properties:
+        expectedRevision:
+          format: int64
+          minimum: 0
+          type: integer
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        reason:
+          maxLength: 80
+          minLength: 1
+          type: string
+      required:
+      - expectedRevision
+      - idempotencyKey
+      - reason
       type: object
     OrchestratorResponse:
       properties:
@@ -21155,6 +22542,61 @@ components:
       - createdAt
       - lastSeenAt
       type: object
+    PutBudgetPolicyRequest:
+      properties:
+        currency:
+          enum:
+          - USD
+          type: string
+        expectedRevision:
+          format: int64
+          minimum: 0
+          type: integer
+        id:
+          minLength: 1
+          type: string
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        limitNanos:
+          format: int64
+          minimum: 0
+          type: integer
+        mode:
+          enum:
+          - observe
+          - soft
+          - hard_admission
+          type: string
+        period:
+          enum:
+          - lifetime
+          - monthly_utc
+          type: string
+        reason:
+          maxLength: 80
+          minLength: 1
+          type: string
+        reservationBasis:
+          type: string
+        reservationNanos:
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        reservationRef:
+          type: string
+      required:
+      - expectedRevision
+      - idempotencyKey
+      - reason
+      - id
+      - currency
+      - mode
+      - period
+      - limitNanos
+      type: object
     PutGitHubPATRequest:
       properties:
         expiresIn:
@@ -21167,6 +22609,71 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    PutSchedulerPolicyRequest:
+      properties:
+        cpuHardPercent:
+          format: int64
+          type: integer
+        cpuRecoverPercent:
+          format: int64
+          type: integer
+        cpuSoftPercent:
+          format: int64
+          type: integer
+        expectedRevision:
+          format: int64
+          minimum: 0
+          type: integer
+        harness:
+          description: Empty selects the global policy; otherwise the exact adapter
+            harness.
+          type: string
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        maxConcurrent:
+          format: int64
+          maximum: 10
+          minimum: 1
+          type: integer
+        ramFloorBytes:
+          format: int64
+          type: integer
+        ramHardPercent:
+          format: int64
+          type: integer
+        ramSoftPercent:
+          format: int64
+          type: integer
+        reason:
+          maxLength: 80
+          minLength: 1
+          type: string
+      required:
+      - expectedRevision
+      - idempotencyKey
+      - reason
+      - maxConcurrent
+      - cpuRecoverPercent
+      - cpuSoftPercent
+      - cpuHardPercent
+      - ramSoftPercent
+      - ramHardPercent
+      - ramFloorBytes
+      type: object
+    RecoverExpiredWorkflowsRequest:
+      properties:
+        idempotencyKey:
+          maxLength: 200
+          minLength: 1
+          type: string
+        reason:
+          maxLength: 80
+          type: string
+      required:
+      - idempotencyKey
       type: object
     RecoverExpiredWorkflowsResponse:
       properties:
@@ -21597,6 +23104,8 @@ components:
           maxLength: 200
           minLength: 1
           type: string
+        reason:
+          type: string
       required:
       - expectedRevision
       - idempotencyKey
@@ -21720,6 +23229,164 @@ components:
       required:
       - path
       - name
+      type: object
+    SchedulerDecisionResponse:
+      properties:
+        admissionId:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        epoch:
+          format: int64
+          type: integer
+        id:
+          format: int64
+          type: integer
+        policyRevisions:
+          additionalProperties:
+            format: int64
+            type: integer
+          type:
+          - object
+          - "null"
+        reasonCode:
+          type: string
+        taskId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - admissionId
+      - workflowId
+      - taskId
+      - epoch
+      - reasonCode
+      - policyRevisions
+      - createdAt
+      type: object
+    SchedulerDecisionsResponse:
+      properties:
+        decisions:
+          items:
+            $ref: '#/components/schemas/SchedulerDecisionResponse'
+          type: array
+      required:
+      - decisions
+      type: object
+    SchedulerPolicyEnvelope:
+      properties:
+        applied:
+          type: boolean
+        policy:
+          $ref: '#/components/schemas/SchedulerPolicyResponse'
+      required:
+      - policy
+      - applied
+      type: object
+    SchedulerPolicyResponse:
+      properties:
+        cpuHardPercent:
+          format: int64
+          type: integer
+        cpuRecoverPercent:
+          format: int64
+          type: integer
+        cpuSoftPercent:
+          format: int64
+          type: integer
+        id:
+          type: string
+        maxConcurrent:
+          format: int64
+          type: integer
+        ramFloorBytes:
+          format: int64
+          type: integer
+        ramHardPercent:
+          format: int64
+          type: integer
+        ramSoftPercent:
+          format: int64
+          type: integer
+        revision:
+          format: int64
+          type: integer
+        scope:
+          enum:
+          - global
+          - adapter
+          type: string
+        scopeId:
+          type: string
+      required:
+      - id
+      - scope
+      - scopeId
+      - maxConcurrent
+      - cpuRecoverPercent
+      - cpuSoftPercent
+      - cpuHardPercent
+      - ramSoftPercent
+      - ramHardPercent
+      - ramFloorBytes
+      - revision
+      type: object
+    SchedulerStatusResponse:
+      properties:
+        availableBytes:
+          minimum: 0
+          type: integer
+        byHarness:
+          additionalProperties:
+            format: int64
+            type: integer
+          type:
+          - object
+          - "null"
+        epoch:
+          format: int64
+          type: integer
+        leaderLeaseUntil:
+          format: date-time
+          type: string
+        limit:
+          format: int64
+          type: integer
+        maxNewClaims:
+          format: int64
+          type: integer
+        observedAt:
+          format: date-time
+          type: string
+        occupied:
+          format: int64
+          type: integer
+        policies:
+          items:
+            $ref: '#/components/schemas/SchedulerPolicyResponse'
+          type: array
+        reasonCode:
+          type: string
+        recovered:
+          type: boolean
+        totalBytes:
+          minimum: 0
+          type: integer
+      required:
+      - epoch
+      - leaderLeaseUntil
+      - recovered
+      - observedAt
+      - totalBytes
+      - availableBytes
+      - limit
+      - maxNewClaims
+      - reasonCode
+      - occupied
+      - byHarness
+      - policies
       type: object
     SendConversationMessageRequest:
       properties:
@@ -22916,9 +24583,7 @@ components:
           maxLength: 200
           minLength: 1
           type: string
-        leaseToken:
-          description: Capability token returned once by the claim response.
-          minLength: 1
+        reason:
           type: string
         result:
           enum:
@@ -22926,7 +24591,6 @@ components:
           - failed
           type: string
       required:
-      - leaseToken
       - result
       - idempotencyKey
       type: object
@@ -23709,12 +25373,9 @@ components:
           maxLength: 200
           minLength: 1
           type: string
-        leaseToken:
-          description: Capability token returned once by the claim response.
-          minLength: 1
+        reason:
           type: string
       required:
-      - leaseToken
       - idempotencyKey
       type: object
     SteerConversationRequest:
@@ -23927,6 +25588,27 @@ components:
       required:
       - ready
       - requirements
+      type: object
+    TaskRequestMaterializationResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        requestId:
+          type: string
+        taskId:
+          type: string
+        workflowId:
+          type: string
+        workflowRevision:
+          format: int64
+          type: integer
+      required:
+      - requestId
+      - workflowId
+      - taskId
+      - workflowRevision
+      - createdAt
       type: object
     TelemetryIdentityResponse:
       properties:
@@ -24997,6 +26679,32 @@ components:
       - revision
       - createdAt
       - updatedAt
+      type: object
+    WorkflowSchedulerResponse:
+      properties:
+        candidateOffset:
+          format: int64
+          type: integer
+        deficit:
+          format: int64
+          type: integer
+        paused:
+          type: boolean
+        revision:
+          format: int64
+          type: integer
+        weight:
+          format: int64
+          type: integer
+        workflowId:
+          type: string
+      required:
+      - workflowId
+      - paused
+      - revision
+      - candidateOffset
+      - deficit
+      - weight
       type: object
     WorkflowSessionObservationResponse:
       properties:

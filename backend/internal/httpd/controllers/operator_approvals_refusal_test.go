@@ -95,32 +95,15 @@ func TestM2OperatorApprovalCannotPromoteAnAgent(t *testing.T) {
 	// an identity — the two refusals are different facts and the assertion below must be about the
 	// first one.
 	const agentToken = "agent-capability-for-approval"
-	now := time.Now().UTC().Truncate(time.Second)
-	created, err := env.store.CreateSession(ctx, domain.SessionRecord{
-		ProjectID: "project-1", Kind: domain.KindWorker,
-		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
-		Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
-		Metadata:  domain.SessionMetadata{WorkspacePath: t.TempDir()},
-		CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		t.Fatalf("seed session: %v", err)
+	if status, raw := env.approvedAction(t, http.MethodPost, env.bindPath(), `{"idempotencyKey":"operator-seed"}`); status != http.StatusOK {
+		t.Fatalf("bind fixture: %d %s", status, raw)
 	}
-	sessionID := created.ID
-	attemptID := domain.WorkflowAttemptID(env.attemptID)
-	if _, _, err := env.store.CreateWorkflowAttemptBinding(ctx, domain.WorkflowAttemptBinding{
-		AttemptID: attemptID, WorkflowID: domain.WorkflowID(env.workflowID),
-		TaskID: domain.WorkflowTaskID(env.taskID), SpawnRequestID: "spawn-agent",
-		SpawnHash: strings.Repeat("d", 64), State: domain.WorkflowBindingStateIntentPersisted,
-	}, nil, now); err != nil {
-		t.Fatalf("seed binding: %v", err)
+	binding, found, err := env.store.GetWorkflowAttemptBinding(ctx, domain.WorkflowAttemptID(env.attemptID))
+	if err != nil || !found || binding.SessionID == nil {
+		t.Fatalf("load binding: found=%v err=%v", found, err)
 	}
-	if _, _, err := env.store.BindWorkflowAttemptSession(
-		ctx, attemptID, sessionID, "gen-agent",
-		domain.WorkflowBindingStateBoundReady, 1, now,
-	); err != nil {
-		t.Fatalf("bind session: %v", err)
-	}
+	sessionID := *binding.SessionID
+	spawnBefore := env.gateway.SpawnCalls()
 	// The capability is checked against the session the attempt is BOUND to. The store mints the
 	// session id, so the verifier for that id is supplied by a reader wrapper rather than by
 	// rewriting the row: the resolver's SessionReader is the production interface, and overriding
@@ -129,10 +112,10 @@ func TestM2OperatorApprovalCannotPromoteAnAgent(t *testing.T) {
 		verifierOverride{Sessions: env.store, verifier: approvalVerifier(sessionID, agentToken)},
 		principal.CapabilityVerifier{
 			Sessions:  verifierOverride{Sessions: env.store, verifier: approvalVerifier(sessionID, agentToken)},
-			Authority: approvalAuthority{},
+			Authority: browserAuthorityFixture{},
 		},
 		principal.ApprovalOperatorTrust{Approvals: env.approvals},
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: env.store, Clock: env.clock.Now})
+	).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: env.store, Clock: env.clock.Now})
 	srv := env.serverWith(t, resolver)
 
 	for _, tc := range []struct {
@@ -145,7 +128,7 @@ func TestM2OperatorApprovalCannotPromoteAnAgent(t *testing.T) {
 				principal.HeaderOperatorApproval: approval.Approval.ApprovalID,
 				principal.HeaderAgentCapability:  agentToken,
 				principal.HeaderAttemptID:        env.attemptID,
-				principal.HeaderAttemptLease:     "lease-1",
+				principal.HeaderSessionID:        string(sessionID),
 			},
 		},
 		{
@@ -155,7 +138,7 @@ func TestM2OperatorApprovalCannotPromoteAnAgent(t *testing.T) {
 				principal.HeaderOperatorToken:    env.token,
 				principal.HeaderAgentCapability:  agentToken,
 				principal.HeaderAttemptID:        env.attemptID,
-				principal.HeaderAttemptLease:     "lease-1",
+				principal.HeaderSessionID:        string(sessionID),
 			},
 		},
 	} {
@@ -169,7 +152,11 @@ func TestM2OperatorApprovalCannotPromoteAnAgent(t *testing.T) {
 			}
 		})
 	}
-	if env.gateway.SpawnCalls() != 0 {
+	if env.gateway.SpawnCalls() != spawnBefore {
 		t.Fatalf("an agent bound an attempt: spawn calls = %d", env.gateway.SpawnCalls())
+	}
+	stored, found := env.approvals.Get(approval.Approval.ApprovalID)
+	if !found || stored.State(env.clock.Now()) != principal.ApprovalStateConfirmed {
+		t.Fatalf("Agent 消费了 Operator 批准: %+v", stored)
 	}
 }

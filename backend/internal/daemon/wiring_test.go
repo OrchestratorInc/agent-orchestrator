@@ -463,10 +463,15 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	}
 	agent := &wiringScratchAgent{Agent: claude, binary: filepath.Join(binDir, "claude.cmd")}
 	agents = cachedBinaryAgents{domain.HarnessClaudeCode: agent}
-	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, sessionLifecycle, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
+	manager, ok := sessionLifecycle.(*sessionmanager.Manager)
+	if !ok {
+		t.Fatalf("session lifecycle = %T, want real session manager", sessionLifecycle)
+	}
+	manager.SetSessionAdmissionProvider(sqlitetest.NewAdmissionFixture(t, store, time.Now))
 
 	session, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "scratch", Kind: domain.KindWorker, Prompt: "try scratch"})
 	if err != nil {

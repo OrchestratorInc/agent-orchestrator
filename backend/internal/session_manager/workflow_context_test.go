@@ -85,13 +85,17 @@ func boundWorkflowSession(
 	sessionID := domain.SessionID("mer-1")
 	store.found = true
 	store.binding = domain.WorkflowAttemptBinding{
-		AttemptID:  "attempt-resume",
-		WorkflowID: "workflow-resume",
-		TaskID:     "task-resume",
-		State:      state,
-		SessionID:  &sessionID,
-		Revision:   1,
+		AttemptID:            "attempt-resume",
+		WorkflowID:           "workflow-resume",
+		TaskID:               "task-resume",
+		State:                state,
+		SessionID:            &sessionID,
+		Revision:             1,
+		ControllerGeneration: "generation-before-resume",
 	}
+	rec := store.sessions[sessionID]
+	rec.Metadata.ControllerGeneration = store.binding.ControllerGeneration
+	store.sessions[sessionID] = rec
 	store.attemptFound = true
 	store.attempt = domain.WorkflowAttempt{
 		ID:         "attempt-resume",
@@ -99,6 +103,7 @@ func boundWorkflowSession(
 		TaskID:     "task-resume",
 		LeaseToken: lease,
 		LeaseUntil: leaseUntil,
+		State:      domain.WorkflowAttemptStateClaimed,
 	}
 }
 
@@ -121,6 +126,9 @@ func TestResumeRecoversWorkflowMCPEnvFromDurableState(t *testing.T) {
 	mgr, store := newWorkflowResumeManager(t, launcher)
 	future := time.Now().UTC().Add(10 * time.Minute)
 	boundWorkflowSession(store, domain.WorkflowBindingStateBoundReady, "live-lease", &future)
+	project := store.projects[string(chatTestProject)]
+	project.Config.Env = map[string]string{EnvWorkflowLease: "legacy-project-lease"}
+	store.projects[string(chatTestProject)] = project
 
 	if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
 		t.Fatalf("ResumeAgentWithMode: %v", err)
@@ -134,11 +142,15 @@ func TestResumeRecoversWorkflowMCPEnvFromDurableState(t *testing.T) {
 		EnvWorkflowID:        "workflow-resume",
 		EnvWorkflowTaskID:    "task-resume",
 		EnvWorkflowAttemptID: "attempt-resume",
-		EnvWorkflowLease:     "live-lease",
 	}
 	for key, value := range want {
 		if got := env[key]; got != value {
 			t.Errorf("%s = %q, want %q", key, got, value)
+		}
+	}
+	for _, captured := range []map[string]string{env, launcher.started[0].Env} {
+		if _, present := captured[EnvWorkflowLease]; present || containsAny(mcpEnvText(captured), "live-lease", "legacy-project-lease") {
+			t.Fatal("resume sent a lease to the agent or MCP environment")
 		}
 	}
 	// The capability is the same one this launch minted for the agent itself.
@@ -154,34 +166,20 @@ func TestResumeRecoversWorkflowMCPEnvFromDurableState(t *testing.T) {
 	}
 }
 
-// TestResumeOmitsAnExpiredLease proves the daemon's own predicate is honoured: an
-// expired lease yields the ids but no credential, so the call fails closed at the
-// daemon instead of presenting a dead token.
+// TestResumeOmitsAnExpiredLease 要求过期绑定恢复失败关闭，不降为普通 Session 启动。
 func TestResumeOmitsAnExpiredLease(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store := newWorkflowResumeManager(t, launcher)
 	past := time.Now().UTC().Add(-time.Minute)
 	boundWorkflowSession(store, domain.WorkflowBindingStateBoundReady, "expired-lease", &past)
 
-	if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); err != nil {
-		t.Fatalf("ResumeAgentWithMode: %v", err)
+	if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); err == nil {
+		t.Fatal("expired workflow identity resumed")
+	} else if containsAny(err.Error(), "expired-lease") {
+		t.Fatal("resume error disclosed the lease")
 	}
-	env := mcpEnvOf(t, launcher.started[0])
-
-	for key, value := range map[string]string{
-		EnvWorkflowID:        "workflow-resume",
-		EnvWorkflowTaskID:    "task-resume",
-		EnvWorkflowAttemptID: "attempt-resume",
-	} {
-		if got := env[key]; got != value {
-			t.Errorf("%s = %q, want %q", key, got, value)
-		}
-	}
-	if _, present := env[EnvWorkflowLease]; present {
-		t.Fatalf("an expired lease was handed to the tool server: %q", env[EnvWorkflowLease])
-	}
-	if containsAny(mcpEnvText(env), "expired-lease") {
-		t.Fatal("the expired lease appears somewhere in the tool server env")
+	if len(launcher.started) != 0 {
+		t.Fatal("expired workflow identity started a controller")
 	}
 }
 
@@ -218,11 +216,8 @@ func TestWorkflowSpawnContextRequiresABoundSession(t *testing.T) {
 		boundWorkflowSession(store, state, "lease-1", &future)
 
 		context, err := mgr.workflowSpawnContext(context.Background(), store.sessions["mer-1"])
-		if err != nil {
-			t.Fatalf("%s: %v", state, err)
-		}
-		if context != nil {
-			t.Fatalf("%s must not yield a workflow context: it names no bound session", state)
+		if err == nil || context != nil {
+			t.Fatalf("%s must reject an invalid bound identity: context=%v err=%v", state, context, err)
 		}
 	}
 }

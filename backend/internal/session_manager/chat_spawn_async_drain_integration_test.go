@@ -66,7 +66,7 @@ func TestIncompleteClientRequestAfterStartupCrashDoesNotReplayOpeningPrompt(t *t
 	}
 	firstChat := newChat()
 	t.Cleanup(func() { firstChat.StopAll(context.Background()) })
-	first := New(Deps{
+	first := newAdmittedTestManager(t, Deps{
 		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store: &failedClientRequestCommitStore{st}, Messenger: &fakeMessenger{},
 		Chat:      realQueueDrainLauncher{integrationChatLauncher{service: firstChat}},
@@ -96,7 +96,7 @@ func TestIncompleteClientRequestAfterStartupCrashDoesNotReplayOpeningPrompt(t *t
 
 	secondChat := newChat()
 	t.Cleanup(func() { secondChat.StopAll(context.Background()) })
-	second := New(Deps{
+	second := newAdmittedTestManager(t, Deps{
 		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store: st, Messenger: &fakeMessenger{},
 		Chat:      realQueueDrainLauncher{integrationChatLauncher{service: secondChat}},
@@ -162,7 +162,7 @@ func TestAsyncChatSpawnRealDrainFailureStaysRetryable(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { service.StopAll(context.Background()) })
-	m := New(Deps{
+	m := newAdmittedTestManager(t, Deps{
 		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store: st, Messenger: &fakeMessenger{}, Chat: realQueueDrainLauncher{integrationChatLauncher{service: service}},
 		Lifecycle: lifecycle.New(st, nil), DataDir: dataDir,

@@ -55,7 +55,7 @@ func TestTerminalStoppedForUpdateSurvivesTheReaperAndResumes(t *testing.T) {
 	base := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
 	runtime := idleRestartRuntime{&fakeRestartRuntime{fakeRuntime: base}}
 	lcm := lifecycle.New(st, nil)
-	m := New(Deps{
+	m := newAdmittedTestManager(t, Deps{
 		Runtime:     runtime,
 		Agents:      singleAgent{agent: supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}},
 		Workspace:   &fakeWorkspace{},

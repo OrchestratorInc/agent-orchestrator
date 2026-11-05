@@ -868,7 +868,23 @@ func browserVerifierFixture(sessionID domain.SessionID, token string) string {
 }
 
 type fakePrincipalAttempts struct {
-	attempts map[domain.WorkflowAttemptID]domain.WorkflowAttempt
+	attempts   map[domain.WorkflowAttemptID]domain.WorkflowAttempt
+	bindings   map[domain.SessionID]domain.WorkflowAttemptBinding
+	admissions []domain.SchedulerAdmission
+	leader     domain.SchedulerLeader
+}
+
+func (f fakePrincipalAttempts) GetWorkflowAttemptBindingBySession(_ context.Context, id domain.SessionID) (domain.WorkflowAttemptBinding, bool, error) {
+	binding, ok := f.bindings[id]
+	return binding, ok, nil
+}
+
+func (f fakePrincipalAttempts) ListSchedulerAdmissions(context.Context, bool) ([]domain.SchedulerAdmission, error) {
+	return f.admissions, nil
+}
+
+func (f fakePrincipalAttempts) GetSchedulerLeader(context.Context) (domain.SchedulerLeader, error) {
+	return f.leader, nil
 }
 
 func (f fakePrincipalAttempts) GetWorkflowAttempt(

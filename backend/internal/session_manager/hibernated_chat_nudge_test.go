@@ -87,7 +87,7 @@ func testLifecycleNudgeWakesHibernatedChat(
 		})
 	}
 	newManager := func(chat *chatsvc.Service) *Manager {
-		m := New(Deps{
+		m := newAdmittedTestManager(t, Deps{
 			Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{path: t.TempDir()},
 			Store: st, Messenger: &fakeMessenger{}, Chat: integrationChatLauncher{service: chat},
 			Lifecycle: lifecycle.New(st, nil), DataDir: dataDir,

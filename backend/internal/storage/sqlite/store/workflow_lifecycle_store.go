@@ -86,99 +86,12 @@ func (s *Store) ActivateWorkflow(
 	return result, applied, nil
 }
 
-// ClaimWorkflowTask atomically claims a ready task and inserts its first-class
-// attempt. The conditional UPDATE, unique active-attempt index, and transaction
-// together are the durable single-winner boundary across Store instances.
-func (s *Store) ClaimWorkflowTask(
-	ctx context.Context,
-	attempt domain.WorkflowAttempt,
-	expectedTaskRevision int64,
-	idempotencyKey string,
-	requestFingerprint string,
-) (domain.WorkflowAttempt, bool, error) {
-	if strings.TrimSpace(idempotencyKey) == "" || len(requestFingerprint) != 64 {
-		return domain.WorkflowAttempt{}, false, domain.ErrInvalidWorkflowAttempt
-	}
-	if attempt.State != domain.WorkflowAttemptStateClaimed || attempt.AttemptNo != 0 {
-		return domain.WorkflowAttempt{}, false, domain.ErrInvalidWorkflowAttempt
-	}
-	validationAttempt := attempt
-	validationAttempt.AttemptNo = 1
-	if err := validationAttempt.Validate(); err != nil {
+// ClaimWorkflowTask 保留旧调用的参数错误语义，拒绝没有可信准入证据的新领取。
+func (s *Store) ClaimWorkflowTask(ctx context.Context, attempt domain.WorkflowAttempt, expectedTaskRevision int64, key, fingerprint string) (domain.WorkflowAttempt, bool, error) {
+	if err := validateAdmissionAttempt(attempt, key, fingerprint); err != nil {
 		return domain.WorkflowAttempt{}, false, err
 	}
-	if attempt.LeaseUntil == nil || !attempt.LeaseUntil.After(attempt.UpdatedAt) {
-		return domain.WorkflowAttempt{}, false, domain.ErrInvalidWorkflowAttemptLease
-	}
-	// Lease ordering is a TEXT comparison in SQLite, so every stored instant must
-	// share one offset.
-	attempt.CreatedAt = utcTime(attempt.CreatedAt)
-	attempt.UpdatedAt = utcTime(attempt.UpdatedAt)
-	attempt.LeaseUntil = utcTimePtr(attempt.LeaseUntil)
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	var result domain.WorkflowAttempt
-	created := false
-	err := s.inTx(ctx, "claim workflow task", func(q *gen.Queries) error {
-		rows, err := q.ClaimWorkflowTask(ctx, gen.ClaimWorkflowTaskParams{
-			UpdatedAt: attempt.UpdatedAt, WorkflowID: attempt.WorkflowID,
-			TaskID: attempt.TaskID, ExpectedRevision: expectedTaskRevision,
-		})
-		if err != nil {
-			return err
-		}
-		if rows == 0 {
-			record, found, err := lookupWorkflowIdempotency(
-				ctx, q, idempotencyKey, attempt.WorkflowID, domain.WorkflowOperationClaimTask,
-				requestFingerprint, "attempt",
-			)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return domain.ErrWorkflowTaskNotClaimable
-			}
-			row, err := q.GetWorkflowAttempt(ctx, domain.WorkflowAttemptID(record.ResultID))
-			if err != nil {
-				return err
-			}
-			result = workflowAttemptFromGen(row)
-			return nil
-		}
-
-		nextAttemptNo, err := q.GetNextWorkflowAttemptNo(ctx, gen.GetNextWorkflowAttemptNoParams{
-			WorkflowID: attempt.WorkflowID, TaskID: attempt.TaskID,
-		})
-		if err != nil {
-			return err
-		}
-		attempt.AttemptNo = nextAttemptNo
-		if err := q.InsertWorkflowAttempt(ctx, workflowAttemptToInsert(attempt)); err != nil {
-			return err
-		}
-		if err := insertWorkflowIdempotency(ctx, q, workflowIdempotencyInsert{
-			Key: idempotencyKey, WorkflowID: attempt.WorkflowID, Operation: domain.WorkflowOperationClaimTask,
-			Fingerprint: requestFingerprint, ResultType: "attempt", ResultID: string(attempt.ID),
-			CreatedAt: attempt.CreatedAt,
-		}); err != nil {
-			return err
-		}
-		result, created = attempt, true
-		return nil
-	})
-	if errors.Is(err, domain.ErrWorkflowIdempotencyConflict) {
-		return s.loadIdempotentAttempt(
-			ctx, idempotencyKey, attempt.WorkflowID, domain.WorkflowOperationClaimTask, requestFingerprint,
-		)
-	}
-	if err != nil {
-		return domain.WorkflowAttempt{}, false, fmt.Errorf(
-			"claim workflow task %s/%s: %w", attempt.WorkflowID, attempt.TaskID, err,
-		)
-	}
-	return result, created, nil
+	return domain.WorkflowAttempt{}, false, domain.ErrAdmissionRequired
 }
 
 // StartWorkflowAttempt changes a live claim to running and advances the task
@@ -206,7 +119,10 @@ func (s *Store) StartWorkflowAttempt(
 
 	var result domain.WorkflowAttempt
 	applied := false
-	err := s.inTx(ctx, "start workflow attempt", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "start workflow attempt", func(q *gen.Queries) error {
+		if err := executionPermitFence(ctx, q, attemptID, now, true); err != nil {
+			return err
+		}
 		rows, err := q.StartWorkflowAttempt(ctx, gen.StartWorkflowAttemptParams{
 			Now: timePtrToNullTime(&now), ID: attemptID, WorkflowID: workflowID, LeaseToken: leaseToken,
 		})
@@ -370,7 +286,13 @@ func (s *Store) SettleWorkflowAttempt(
 
 	var result domain.WorkflowAttempt
 	applied := false
-	err := s.inTx(ctx, "settle workflow attempt", func(q *gen.Queries) error {
+	err := s.inSchedulerTx(ctx, "settle workflow attempt", func(q *gen.Queries) error {
+		if replay, err := replayExecutionSettlement(ctx, q, workflowID, attemptID, resultState, errorCode, idempotencyKey, requestFingerprint, now, &result); err != nil || replay {
+			return err
+		}
+		if err := executionPermitFence(ctx, q, attemptID, now, true); err != nil {
+			return err
+		}
 		rows, err := q.SettleWorkflowAttempt(ctx, gen.SettleWorkflowAttemptParams{
 			NextState: resultState, Now: timePtrToNullTime(&now), ErrorCode: errorCode,
 			ID: attemptID, WorkflowID: workflowID, LeaseToken: leaseToken,
@@ -444,11 +366,6 @@ func (s *Store) SettleWorkflowAttempt(
 		result, applied = workflowAttemptFromGen(attemptRow), true
 		return nil
 	})
-	if errors.Is(err, domain.ErrWorkflowIdempotencyConflict) {
-		return s.loadIdempotentAttempt(
-			ctx, idempotencyKey, workflowID, domain.WorkflowOperationSettleAttempt, requestFingerprint,
-		)
-	}
 	if err != nil {
 		return domain.WorkflowAttempt{}, false, fmt.Errorf("settle workflow attempt %s: %w", attemptID, err)
 	}
@@ -699,20 +616,47 @@ func (s *Store) RecoverExpiredWorkflowAttempts(ctx context.Context, now time.Tim
 
 	var expired int64
 	err := s.inTx(ctx, "recover expired workflow attempts", func(q *gen.Queries) error {
-		rows, err := q.MarkExpiredWorkflowAttemptsUnknown(ctx, timePtrToNullTime(&now))
-		if err != nil {
-			return err
-		}
-		expired = rows
-		if _, err := q.BlockTasksWithUnknownWorkflowAttempts(ctx, now); err != nil {
-			return err
-		}
-		return nil
+		var err error
+		expired, err = recoverExpiredWorkflowAttempts(ctx, q, now)
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("recover expired workflow attempts: %w", err)
 	}
 	return expired, nil
+}
+
+// recoverExpiredWorkflowAttempts 只把过期执行标为 UNKNOWN，不释放占位或推断已经死亡。
+func recoverExpiredWorkflowAttempts(ctx context.Context, q *gen.Queries, now time.Time) (int64, error) {
+	rows, err := q.MarkExpiredWorkflowAttemptsUnknown(ctx, timePtrToNullTime(&now))
+	if err != nil {
+		return 0, err
+	}
+	if _, err := q.BlockTasksWithUnknownWorkflowAttempts(ctx, now); err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
+
+// RecoverExpiredWorkflowsAuthorized 将全局 Operator 恢复和审批审计一起提交，重放仅返回原计数。
+func (s *Store) RecoverExpiredWorkflowsAuthorized(ctx context.Context, change domain.PolicyChange) (int64, bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var count int64
+	var replay bool
+	err := s.inSchedulerTx(ctx, "authorized workflow recovery", func(q *gen.Queries) error {
+		var err error
+		replay, err = policyChangeReplay(ctx, q, "resource", "global:recovery", change, &count)
+		if err != nil || replay {
+			return err
+		}
+		count, err = recoverExpiredWorkflowAttempts(ctx, q, change.Now.UTC())
+		if err != nil {
+			return err
+		}
+		return insertPolicyChange(ctx, q, "resource", "global:recovery", fmt.Sprint(count), change)
+	})
+	return count, !replay && err == nil, err
 }
 
 func (s *Store) loadIdempotentWorkflow(

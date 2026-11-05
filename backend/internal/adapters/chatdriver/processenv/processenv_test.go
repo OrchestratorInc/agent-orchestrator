@@ -60,3 +60,21 @@ func TestMergeWindowsExactPATHWinsConflictingOverlaySpelling(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeDropsLegacyWorkflowLease 删除最终过滤会使 daemon 或 overlay 的旧租约进入 Agent。
+func TestMergeDropsLegacyWorkflowLease(t *testing.T) {
+	t.Setenv("AO_WORKFLOW_LEASE", "fake-daemon-lease")
+	got := Merge(map[string]string{
+		"aO_wOrKfLoW_lEaSe": "fake-overlay-lease",
+		"AO_SESSION_ID":     "session-1", "AO_BROWSER_CAPABILITY": "session-capability",
+	})
+	for _, entry := range got {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "AO_WORKFLOW_LEASE") {
+			t.Fatal("child environment retained the legacy lease")
+		}
+	}
+	if !slices.Contains(got, "AO_SESSION_ID=session-1") || !slices.Contains(got, "AO_BROWSER_CAPABILITY=session-capability") {
+		t.Fatal("lease cleanup removed the Session capability or identity")
+	}
+}

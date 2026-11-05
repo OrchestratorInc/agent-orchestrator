@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -225,9 +226,10 @@ func sessionsHaveProcesses(ctx context.Context, pids []int) bool {
 
 type execRunner struct{}
 
+// Run 在稳定目录执行 tmux，并在最终环境合并后清除内部租约。
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, args...)
-	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
+	cmd.Env = processenv.StripWorkflowLease(append(os.Environ(), env...))
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which
 	// inherits ITS launching process's cwd and keeps it for the server's entire
@@ -1096,6 +1098,7 @@ func (r *Runtime) attachCommandForSocket(id, socketName string) []string {
 	return append(argv, "-u", "-T", "RGB", "attach-session", "-t", exactSessionTarget(id))
 }
 
+// attachEnv 为附着客户端配置颜色能力，同时移除旧内部租约。
 func attachEnv(base []string) []string {
 	env := append([]string(nil), base...)
 	hasTerm := false
@@ -1116,7 +1119,7 @@ func attachEnv(base []string) []string {
 	if !hasColorTerm {
 		env = append(env, "COLORTERM=truecolor")
 	}
-	return env
+	return processenv.StripWorkflowLease(env)
 }
 
 // run wraps runner.Run with a per-call timeout context.
@@ -1664,6 +1667,8 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
 	b.WriteString(" || exit; ")
+	// 旧 tmux server 仍可能保存升级前的环境；子 shell 必须再次清除旧规范键名。
+	b.WriteString("unset AO_WORKFLOW_LEASE; ")
 	if _, configured := cfg.Env["NO_COLOR"]; !configured {
 		// The daemon may be launched from another agent or CI environment that
 		// sets NO_COLOR for its own captured output. Do not leak that ambient
@@ -1671,14 +1676,19 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 		// opt out of color explicitly through its configured environment.
 		b.WriteString("unset NO_COLOR; ")
 	}
+	configured := make([]string, 0, len(cfg.Env))
 	for _, key := range sortedKeys(cfg.Env) {
+		configured = append(configured, key+"="+cfg.Env[key])
+	}
+	for _, entry := range processenv.StripWorkflowLease(configured) {
+		key, value, _ := strings.Cut(entry, "=")
 		if key == "PATH" || key == "COLORTERM" {
 			continue
 		}
 		b.WriteString("export ")
 		b.WriteString(key)
 		b.WriteString("=")
-		b.WriteString(shellQuote(cfg.Env[key]))
+		b.WriteString(shellQuote(value))
 		b.WriteString("; ")
 	}
 	// The AO web terminal and tmux attach client both support 24-bit SGR color.

@@ -32,8 +32,9 @@ func newWorkflowService(t *testing.T) (*workflow.Service, *sqlite.Store) {
 	nextID := 0
 	nextToken := 0
 	service := workflow.New(workflow.Deps{
-		Store: store,
-		Clock: func() time.Time { return now },
+		Store:     store,
+		Admission: sqlitetest.NewAdmissionFixture(t, store, func() time.Time { return now }),
+		Clock:     func() time.Time { return now },
 		NewID: func() string {
 			nextID++
 			return fmt.Sprintf("id-%d", nextID)
@@ -210,7 +211,7 @@ func TestLifecycleReplaysActivationAndClaimWithoutCreatingDuplicates(t *testing.
 
 func TestLifecycleStartsSettlesAndRetriesThroughService(t *testing.T) {
 	ctx := context.Background()
-	service, _ := newWorkflowService(t)
+	service, store := newWorkflowService(t)
 	input := validWorkflowCreateInput()
 	input.Tasks = []workflow.TaskInput{{ID: "task-a", Kind: domain.WorkflowTaskKindDevelopment, Title: "Implement", MaxAttempts: 2}}
 	input.Dependencies = nil
@@ -237,11 +238,11 @@ func TestLifecycleStartsSettlesAndRetriesThroughService(t *testing.T) {
 		WorkflowID: created.ID, AttemptID: claim.Attempt.ID,
 		LeaseToken: claim.LeaseToken, IdempotencyKey: "service-start-1",
 	}
-	started, applied, err := service.Start(ctx, startInput)
+	started, applied, err := service.Start(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), startInput)
 	if err != nil || !applied || started.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("Start = %+v applied=%v err=%v", started, applied, err)
 	}
-	startReplay, applied, err := service.Start(ctx, startInput)
+	startReplay, applied, err := service.Start(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), startInput)
 	if err != nil || applied || startReplay.State != domain.WorkflowAttemptStateRunning {
 		t.Fatalf("Start replay = %+v applied=%v err=%v", startReplay, applied, err)
 	}
@@ -251,11 +252,11 @@ func TestLifecycleStartsSettlesAndRetriesThroughService(t *testing.T) {
 		Result: domain.WorkflowAttemptStateFailed, ErrorCode: "test_failure",
 		IdempotencyKey: "service-settle-1",
 	}
-	failed, applied, err := service.Settle(ctx, settleInput)
+	failed, applied, err := service.Settle(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
 	if err != nil || !applied || failed.State != domain.WorkflowAttemptStateFailed {
 		t.Fatalf("Settle failed = %+v applied=%v err=%v", failed, applied, err)
 	}
-	settleReplay, applied, err := service.Settle(ctx, settleInput)
+	settleReplay, applied, err := service.Settle(sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, workflowServiceTime()), settleInput)
 	if err != nil || applied || settleReplay.State != domain.WorkflowAttemptStateFailed {
 		t.Fatalf("Settle replay = %+v applied=%v err=%v", settleReplay, applied, err)
 	}
@@ -331,8 +332,9 @@ func newWorkflowServiceWithClock(t *testing.T) (*workflow.Service, *sqlite.Store
 	nextID := 0
 	nextToken := 0
 	service := workflow.New(workflow.Deps{
-		Store: store,
-		Clock: func() time.Time { return clock },
+		Store:     store,
+		Admission: sqlitetest.NewAdmissionFixture(t, store, func() time.Time { return clock }),
+		Clock:     func() time.Time { return clock },
 		NewID: func() string {
 			nextID++
 			return fmt.Sprintf("id-%d", nextID)
@@ -419,6 +421,8 @@ func TestRecoveredAttemptRejectsStartAndSettle(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 保留恢复前的执行快照，证明旧执行者不能在租约撤销后继续写入。
+	ctx = sqlitetest.ExecutionContext(t, ctx, store, claim.Attempt.ID, *clock)
 	*clock = clock.Add(2 * time.Minute)
 	recovered, err := service.RecoverExpired(ctx)
 	if err != nil || recovered != 1 {
@@ -439,7 +443,7 @@ func TestRecoveredAttemptRejectsStartAndSettle(t *testing.T) {
 	}); err == nil {
 		t.Fatal("Start on a recovered attempt succeeded")
 	} else {
-		requireAPIError(t, err, "WORKFLOW_ATTEMPT_LEASE_CONFLICT")
+		requireAPIError(t, err, "WORKFLOW_ADMISSION_DENIED")
 	}
 	if _, _, err := service.Settle(ctx, workflow.SettleInput{
 		WorkflowID: created.ID, AttemptID: claim.Attempt.ID, LeaseToken: claim.LeaseToken,
@@ -447,7 +451,7 @@ func TestRecoveredAttemptRejectsStartAndSettle(t *testing.T) {
 	}); err == nil {
 		t.Fatal("Settle on a recovered attempt succeeded")
 	} else {
-		requireAPIError(t, err, "WORKFLOW_ATTEMPT_LEASE_CONFLICT")
+		requireAPIError(t, err, "WORKFLOW_ADMISSION_DENIED")
 	}
 }
 

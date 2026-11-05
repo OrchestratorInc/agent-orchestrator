@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -86,14 +87,19 @@ func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionR
 }
 
 func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	return s.createSessionWithQueriesLocked(ctx, s.qw, rec)
+}
+
+// createSessionWithQueriesLocked 复用事务内身份分配，使执行许可消费和 Session 插入一起提交。
+func (s *Store) createSessionWithQueriesLocked(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
 	if rec.ClientRequestID != "" {
-		existing, found, err := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+		existing, found, err := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 		if err != nil || found {
 			return existing, false, err
 		}
 	}
 	if rec.AutomationRunID != nil {
-		existing, err := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+		existing, err := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 		if err == nil {
 			return rowToRecord(gen.GetSessionRow(existing)), false, nil
 		}
@@ -106,16 +112,16 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	var err error
 	prefix := string(rec.ProjectID)
 	if rec.ProjectID == "" {
-		num, err = s.qw.NextStandaloneSessionNum(ctx)
+		num, err = q.NextStandaloneSessionNum(ctx)
 		prefix = standaloneSessionIDPrefix
 	} else {
-		num, err = s.qw.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
+		num, err = q.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
 	}
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
 	}
 	// A deleted session's number is never handed out again.
-	floor, err := s.sessionNumFloor(ctx, prefix)
+	floor, err := q.GetExecutionSessionNumFloor(ctx, prefix)
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("session num floor for %s: %w", rec.ProjectID, err)
 	}
@@ -124,7 +130,7 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	}
 	for {
 		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, num))
-		exists, err := s.qw.SessionIDExists(ctx, rec.ID)
+		exists, err := q.SessionIDExists(ctx, rec.ID)
 		if err != nil {
 			return domain.SessionRecord{}, false, fmt.Errorf("check session id %s: %w", rec.ID, err)
 		}
@@ -133,15 +139,15 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		}
 		num++
 	}
-	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+	if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
-			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 			if reloadErr == nil && found {
 				return existing, false, nil
 			}
 		}
 		if rec.AutomationRunID != nil {
-			existing, reloadErr := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+			existing, reloadErr := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 			if reloadErr == nil {
 				return rowToRecord(gen.GetSessionRow(existing)), false, nil
 			}
@@ -305,8 +311,13 @@ func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, 
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	return promoteTaskPreparation(ctx, s.qw, id, rec)
+}
+
+// promoteTaskPreparation 允许许可消费事务一起发布已准备的隐藏 Session。
+func promoteTaskPreparation(ctx context.Context, q *gen.Queries, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
-	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
+	rows, err := q.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
 		IssueID:            rec.IssueID,
 		Kind:               rec.Kind,
 		Harness:            rec.Harness,
@@ -508,7 +519,7 @@ func (s *Store) UpdateBrowserCapabilityVerifier(
 ) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateBrowserCapabilityVerifier(ctx, gen.UpdateBrowserCapabilityVerifierParams{
+	params := gen.UpdateBrowserCapabilityVerifierParams{
 		BrowserCapabilityVerifier:      verifier,
 		ID:                             id,
 		ExpectedHarness:                expected.Harness,
@@ -519,7 +530,24 @@ func (s *Store) UpdateBrowserCapabilityVerifier(
 		ExpectedAgentSessionIDLaunchID: expected.AgentSessionIDLaunchID,
 		ExpectedProviderConversationID: expected.ProviderConversationID,
 		ExpectedControllerGeneration:   expected.ControllerGeneration,
-	})
+	}
+	var rows int64
+	var err error
+	if permit, reattaching := ports.SessionReattachPermitFromContext(ctx); reattaching {
+		err = s.inSchedulerTx(ctx, "rotate reattached controller verifier", func(q *gen.Queries) error {
+			if permit.SessionID != id || permit.Owner != expected {
+				return domain.ErrSchedulerAdmissionConflict
+			}
+			if err := validateSessionReattach(ctx, q, permit, "", ports.SessionReattachNow(ctx)); err != nil {
+				return err
+			}
+			var err error
+			rows, err = q.UpdateBrowserCapabilityVerifier(ctx, params)
+			return err
+		})
+	} else {
+		rows, err = s.qw.UpdateBrowserCapabilityVerifier(ctx, params)
+	}
 	if err != nil {
 		return false, fmt.Errorf("update browser capability verifier for %s: %w", id, err)
 	}
@@ -925,6 +953,9 @@ SELECT EXISTS (
 	}
 	if shared {
 		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	if err := releaseDeletedSessionAdmission(ctx, s.qw.WithTx(tx), id); err != nil {
+		return false, fmt.Errorf("delete session %s: release execution: %w", id, err)
 	}
 	prefix := standaloneSessionIDPrefix
 	if projectID.Valid && projectID.String != "" {

@@ -1,7 +1,10 @@
 # 多编码 Agent 桌面编排改造区
 
+> **当前有效状态（2026-11-05）：M2 第六轮 Windows 离线 G0 = PASS；M3 Windows 离线 G7 = PASS。** M2 的 [第六轮独立复验](m2-acceptance-round6.md)、M3 的 [独立验收](m3-acceptance.md)、[本轮再次复验](m3-independent-recheck.md) 及 [M3 实施报告](m3-report.md) 为最新事实来源。下方此前第五轮「NOT ACCEPTED」、M3「尚未编码」等段落为历史阶段记录，**不再代表当前状态**。真实四 Provider、Windows Hello 人工正向、完整桌面/安装包及发布验证仍 **NOT_TESTED**；M0-05 真实 Provider 预算未批准。
+
 > **M2 提交决定（2026-11-05）：** 用户要求先提交现有 M2 实现，将第六轮离线独立复验、真实 Agent 完整验收两项暂缓留档。后续入口见 [M2 提交与后续验收留档](m2-handoff.md)。提交不等于验收通过，M2 仍为 NOT ACCEPTED；真实 Provider 预算未批准。
 
+> **M3 设计已准备（2026-11-05，尚未编码）：** [M3 动态调度与预算详细设计](m3-design.md) + [M3 实施计划（M3-01～M3-09）](m3-plan.md)。M3 仅处于 DESIGN READY / IMPLEMENTATION GATED；M2 最新第五轮独立结论仍未通过，第五轮修复报告不是第六轮独立验收；M0-05 未批，禁止真实 Provider。
 
 > **最新独立验收（2026-11-05，第五轮）：M2 NOT ACCEPTED，M3 不准启动。** 第四轮的 F-01 历史 BaseSHA 已通过独立真实双仓库 Git 反例；F-02 正式 CLI/原生审批链有离线正向证据。但新的 **F-03（P1）单仓库 Workflow Worktree 无实时 Git 验证却报告 READY** 已被运行反向用例证实失败；M2 Fake E2E 与 Race 正向通过，不代表安全门禁已闭合。详见 [m2-acceptance-round5.md](m2-acceptance-round5.md)。旧段落保留阶段历史状态。
 
@@ -51,6 +54,12 @@
 - [M2 第五轮独立验收](m2-acceptance-round5.md)：F-01 实测已修，F-02 离线链路已验证；新增 F-03 单仓库 Worktree 实时核验绕过，仍 NOT ACCEPTED。
 - [M2 Windows 测试基线](m2-baseline-windows.md)：M2 开工前的只读全仓红基线（56 包 / 267 条失败）与两处已知噪声源，供 M2 集合差判读。
 - [M2 计划审计](m2-plan-audit.md)：对 `m2-plan.md` 的独立抽样复核（85 个锚点，76 条 `EXACT`、0 条 `FABRICATED`），以及 §6 六条偏差的逐条复核。
+- [M3 详细设计 V0.1](m3-design.md)：单机 Scheduler/公平调度、Windows 资源感知、原子 Admission、三层预算、租约恢复、权限、API 与验收矩阵；目前仅设计。
+- [M3 实施计划](m3-plan.md)：M3-01～M3-09 的任务拆分、文件边界、依赖、测试命令与准入/退出门槛；M3 已完成 Windows 离线交付。
+- [M2 第六轮独立离线验收](m2-acceptance-round6.md)：F-01/F-02/F-03 关闭、完整离线回归与 Pricing 复核；M3 G0 准入 PASS。
+- [M3 实施报告](m3-report.md)：调度、预算、运行闭环、迁移/API 与完整普通/Race 证据。
+- [M3 独立验收](m3-acceptance.md)：限定 Windows 离线 G7 PASS、剩余真实环境边界。
+- [M3 最新独立复验](m3-independent-recheck.md)：再次执行 M3 6 项/Race、M2 F-03 真实 Git 异常回归、代码审查与已知两项历史 Domain 失败。
 
 ## 当前环境
 

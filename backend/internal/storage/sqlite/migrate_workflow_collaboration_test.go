@@ -361,7 +361,8 @@ func TestNoSchedulerReadsWorkflowTaskRequests(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".go") {
+		// 只约束生产读路径；隔离数据库夹具不是可派发任务的服务入口。
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		content, readErr := os.ReadFile(path)

@@ -99,6 +99,8 @@ type m2GatewayDeps struct {
 	// in rather than constructed here; nil builds a fresh one over the store.
 	Recorder *capability.Recorder
 	Log      *slog.Logger
+	// ExecutionFence 只能读取本 daemon 已取得的任期，不能借用另一个 Leader。
+	ExecutionFence func(context.Context) (domain.SchedulerFence, error)
 }
 
 // newM2Services builds the M2 coordinators over the durable store.
@@ -157,9 +159,10 @@ func newM2ServicesWith(deps m2GatewayDeps) m2Services {
 	}
 
 	binder := execution.New(execution.Deps{
-		Store:    store,
-		Gateway:  gateway,
-		Resolver: resolver,
+		Store:          store,
+		Gateway:        gateway,
+		Resolver:       resolver,
+		ExecutionFence: deps.ExecutionFence,
 	})
 	return m2Services{
 		Capabilities:       resolver,

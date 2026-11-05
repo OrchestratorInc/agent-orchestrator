@@ -4053,6 +4053,7 @@ type WorkflowTaskRepositoryInput struct {
 
 // CreateWorkflowRequest is the body accepted when creating a workflow.
 type CreateWorkflowRequest struct {
+	Reason           string                        `json:"reason,omitempty"`
 	Title            string                        `json:"title" minLength:"1"`
 	Goal             string                        `json:"goal" minLength:"1"`
 	OwnerSessionID   string                        `json:"ownerSessionId,omitempty" description:"Optional owning AO session; creating a workflow never starts one."`
@@ -4065,12 +4066,14 @@ type CreateWorkflowRequest struct {
 
 // ActivateWorkflowRequest is the body accepted when activating a workflow.
 type ActivateWorkflowRequest struct {
+	Reason           string `json:"reason,omitempty"`
 	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
 	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
 }
 
 // ClaimWorkflowTaskRequest is the body accepted when a worker claims a ready task.
 type ClaimWorkflowTaskRequest struct {
+	Reason           string `json:"reason,omitempty"`
 	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
 	WorkerID         string `json:"workerId" minLength:"1" maxLength:"200"`
 	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
@@ -4079,14 +4082,14 @@ type ClaimWorkflowTaskRequest struct {
 // StartWorkflowAttemptRequest is the body accepted when a claiming worker
 // starts running its attempt.
 type StartWorkflowAttemptRequest struct {
-	LeaseToken     string `json:"leaseToken" minLength:"1" description:"Capability token returned once by the claim response."`
+	Reason         string `json:"reason,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
 }
 
 // SettleWorkflowAttemptRequest is the body accepted when a worker reports the
 // terminal outcome of its attempt.
 type SettleWorkflowAttemptRequest struct {
-	LeaseToken     string `json:"leaseToken" minLength:"1" description:"Capability token returned once by the claim response."`
+	Reason         string `json:"reason,omitempty"`
 	Result         string `json:"result" enum:"succeeded,failed"`
 	ErrorCode      string `json:"errorCode,omitempty" maxLength:"256"`
 	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
@@ -4094,6 +4097,7 @@ type SettleWorkflowAttemptRequest struct {
 
 // RetryWorkflowTaskRequest is the body accepted when reopening a retry_wait task.
 type RetryWorkflowTaskRequest struct {
+	Reason           string `json:"reason,omitempty"`
 	ExpectedRevision int64  `json:"expectedRevision" minimum:"1"`
 	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
 }
@@ -4195,12 +4199,9 @@ type WorkflowAttemptEnvelope struct {
 	Attempt WorkflowAttemptResponse `json:"attempt"`
 }
 
-// ClaimWorkflowTaskResponse is the body of a successful task claim. LeaseToken
-// is the one-time capability the worker must present to start and settle: it
-// is exposed here and nowhere else.
+// ClaimWorkflowTaskResponse 只返回领取事实，租约仅供 daemon 内部写栅栏使用。
 type ClaimWorkflowTaskResponse struct {
-	Attempt    WorkflowAttemptResponse `json:"attempt"`
-	LeaseToken string                  `json:"leaseToken"`
+	Attempt WorkflowAttemptResponse `json:"attempt"`
 }
 
 // ListWorkflowsResponse is one page of workflow definitions.
@@ -4628,4 +4629,182 @@ type OperatorApprovalIDParam struct {
 type WorkflowTaskRequestIDParam struct {
 	WorkflowID string `path:"workflowId" description:"Workflow identifier."`
 	RequestID  string `path:"requestId" description:"Task request identifier, unique inside its workflow."`
+}
+
+// WorkflowAgentHeaders 只携带 Session 能力；Attempt 由服务端绑定推导，旧租约头一律拒绝。
+type WorkflowAgentHeaders struct {
+	SessionID  string `header:"X-AO-Session-Id" description:"Session bound to the agent capability; required together with the capability for agent requests."`
+	Capability string `header:"X-AO-Agent-Capability" description:"Per-session capability injected into the worker; never an attempt lease."`
+}
+
+// WorkflowOperatorApprovalHeader 绑定本次具体方法、路径及原始正文的一次性批准。
+type WorkflowOperatorApprovalHeader struct {
+	Approval string `header:"X-AO-Operator-Approval" description:"One confirmed native operator approval bound to the exact method, path and raw request body; consumed once."`
+}
+
+// OperatorChangeRequest 将修改依据全部放入原始正文的一次性批准范围。
+type OperatorChangeRequest struct {
+	ExpectedRevision int64  `json:"expectedRevision" minimum:"0"`
+	IdempotencyKey   string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+	Reason           string `json:"reason" minLength:"1" maxLength:"80"`
+}
+
+type RecoverExpiredWorkflowsRequest struct {
+	IdempotencyKey string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+	Reason         string `json:"reason,omitempty" maxLength:"80"`
+}
+
+type SchedulerPolicyResponse struct {
+	ID                string `json:"id"`
+	Scope             string `json:"scope" enum:"global,adapter"`
+	ScopeID           string `json:"scopeId"`
+	MaxConcurrent     int64  `json:"maxConcurrent"`
+	CPURecoverPercent int64  `json:"cpuRecoverPercent"`
+	CPUSoftPercent    int64  `json:"cpuSoftPercent"`
+	CPUHardPercent    int64  `json:"cpuHardPercent"`
+	RAMSoftPercent    int64  `json:"ramSoftPercent"`
+	RAMHardPercent    int64  `json:"ramHardPercent"`
+	RAMFloorBytes     int64  `json:"ramFloorBytes"`
+	Revision          int64  `json:"revision"`
+}
+
+type PutSchedulerPolicyRequest struct {
+	OperatorChangeRequest
+	Harness           string `json:"harness,omitempty" description:"Empty selects the global policy; otherwise the exact adapter harness."`
+	MaxConcurrent     int64  `json:"maxConcurrent" minimum:"1" maximum:"10"`
+	CPURecoverPercent int64  `json:"cpuRecoverPercent"`
+	CPUSoftPercent    int64  `json:"cpuSoftPercent"`
+	CPUHardPercent    int64  `json:"cpuHardPercent"`
+	RAMSoftPercent    int64  `json:"ramSoftPercent"`
+	RAMHardPercent    int64  `json:"ramHardPercent"`
+	RAMFloorBytes     int64  `json:"ramFloorBytes"`
+}
+
+type SchedulerPolicyEnvelope struct {
+	Policy  SchedulerPolicyResponse `json:"policy"`
+	Applied bool                    `json:"applied"`
+}
+
+// SchedulerStatusResponse 不返回 owner、租约能力或机器路径，只投影资源与调度事实。
+type SchedulerStatusResponse struct {
+	Epoch            int64                     `json:"epoch"`
+	LeaderLeaseUntil time.Time                 `json:"leaderLeaseUntil"`
+	Recovered        bool                      `json:"recovered"`
+	ObservedAt       time.Time                 `json:"observedAt"`
+	TotalBytes       uint64                    `json:"totalBytes"`
+	AvailableBytes   uint64                    `json:"availableBytes"`
+	Limit            int64                     `json:"limit"`
+	MaxNewClaims     int64                     `json:"maxNewClaims"`
+	ReasonCode       string                    `json:"reasonCode"`
+	Occupied         int64                     `json:"occupied"`
+	ByHarness        map[string]int64          `json:"byHarness"`
+	Policies         []SchedulerPolicyResponse `json:"policies"`
+}
+
+type WorkflowSchedulerResponse struct {
+	WorkflowID      string `json:"workflowId"`
+	Paused          bool   `json:"paused"`
+	Revision        int64  `json:"revision"`
+	CandidateOffset int64  `json:"candidateOffset"`
+	Deficit         int64  `json:"deficit"`
+	Weight          int64  `json:"weight"`
+}
+
+type SchedulerDecisionResponse struct {
+	ID              int64            `json:"id"`
+	AdmissionID     string           `json:"admissionId"`
+	WorkflowID      string           `json:"workflowId"`
+	TaskID          string           `json:"taskId"`
+	Epoch           int64            `json:"epoch"`
+	ReasonCode      string           `json:"reasonCode"`
+	PolicyRevisions map[string]int64 `json:"policyRevisions"`
+	CreatedAt       time.Time        `json:"createdAt"`
+}
+
+type SchedulerDecisionsResponse struct {
+	Decisions []SchedulerDecisionResponse `json:"decisions"`
+}
+type SchedulerDecisionsQuery struct {
+	After int64 `query:"after" minimum:"0"`
+	Limit int64 `query:"limit" minimum:"1" maximum:"500"`
+}
+
+// PutBudgetPolicyRequest 没有 scope 字段；Global/Workflow/Task 边界固定来自 URL。
+type PutBudgetPolicyRequest struct {
+	OperatorChangeRequest
+	ID               string `json:"id" minLength:"1"`
+	Currency         string `json:"currency" enum:"USD"`
+	Mode             string `json:"mode" enum:"observe,soft,hard_admission"`
+	Period           string `json:"period" enum:"lifetime,monthly_utc"`
+	LimitNanos       int64  `json:"limitNanos" minimum:"0"`
+	ReservationNanos *int64 `json:"reservationNanos,omitempty" minimum:"0"`
+	ReservationBasis string `json:"reservationBasis,omitempty"`
+	ReservationRef   string `json:"reservationRef,omitempty"`
+}
+
+type BudgetPolicyResponse struct {
+	ID               string `json:"id"`
+	Scope            string `json:"scope" enum:"global,workflow,task"`
+	ScopeID          string `json:"scopeId"`
+	Currency         string `json:"currency"`
+	Mode             string `json:"mode"`
+	Period           string `json:"period"`
+	LimitNanos       int64  `json:"limitNanos"`
+	ReservationNanos *int64 `json:"reservationNanos"`
+	ReservationBasis string `json:"reservationBasis"`
+	ReservationRef   string `json:"reservationRef"`
+	Revision         int64  `json:"revision"`
+}
+
+type BudgetPolicyEnvelope struct {
+	Policy  BudgetPolicyResponse `json:"policy"`
+	Applied bool                 `json:"applied"`
+}
+
+type BudgetTokenMetricsResponse struct {
+	InputTokens         *int64 `json:"inputTokens"`
+	CachedInputTokens   *int64 `json:"cachedInputTokens"`
+	UncachedInputTokens *int64 `json:"uncachedInputTokens"`
+	OutputTokens        *int64 `json:"outputTokens"`
+}
+
+// BudgetSnapshotResponse 保留 nil 的未知含义，不能把未知费用投影成零。
+type BudgetSnapshotResponse struct {
+	Policy           BudgetPolicyResponse       `json:"policy"`
+	Window           string                     `json:"window"`
+	KnownCostNanos   int64                      `json:"knownCostNanos"`
+	CostNanos        *int64                     `json:"costNanos"`
+	ReservedNanos    *int64                     `json:"reservedNanos"`
+	RemainingNanos   *int64                     `json:"remainingNanos"`
+	Quality          string                     `json:"quality" enum:"EXACT,ESTIMATED,UNKNOWN"`
+	Tokens           BudgetTokenMetricsResponse `json:"tokens"`
+	EventCount       int64                      `json:"eventCount"`
+	AlertThreshold   int64                      `json:"alertThreshold"`
+	ReconcilePending bool                       `json:"reconcilePending"`
+}
+
+type BudgetSnapshotsResponse struct {
+	Policies  []BudgetPolicyResponse   `json:"policies"`
+	Snapshots []BudgetSnapshotResponse `json:"snapshots"`
+}
+
+type MaterializeTaskRequestRequest struct {
+	RequestSHA               string `json:"requestSha" minLength:"64" maxLength:"64"`
+	ExpectedRequestRevision  int64  `json:"expectedRequestRevision" minimum:"1"`
+	ExpectedWorkflowRevision int64  `json:"expectedWorkflowRevision" minimum:"1"`
+	IdempotencyKey           string `json:"idempotencyKey" minLength:"1" maxLength:"200"`
+	Reason                   string `json:"reason" minLength:"1" maxLength:"80"`
+}
+
+type TaskRequestMaterializationResponse struct {
+	RequestID        string    `json:"requestId"`
+	WorkflowID       string    `json:"workflowId"`
+	TaskID           string    `json:"taskId"`
+	WorkflowRevision int64     `json:"workflowRevision"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+type MaterializeTaskRequestResponse struct {
+	Materialization TaskRequestMaterializationResponse `json:"materialization"`
+	Created         bool                               `json:"created"`
 }

@@ -1552,7 +1552,7 @@ func TestInterfaceTransitionProviderHistoryRecoverySurvivesDaemonRestart(t *test
 	chat := &historyPolicyTransitionChat{transitionChat: baseChat}
 	reconcileCtx, cancelReconcile := context.WithCancel(context.Background())
 	t.Cleanup(cancelReconcile)
-	restarted := New(Deps{
+	restarted := newAdmittedTestManager(t, Deps{
 		Runtime: runtime, Agents: singleAgent{agent: transitionAgent{}}, Workspace: &fakeWorkspace{},
 		Store: afterRestart, Messenger: &fakeMessenger{}, Chat: chat,
 		Lifecycle:         &sqliteTransitionLifecycle{store: afterRestart},
@@ -3191,7 +3191,7 @@ func TestRecoverInterruptedClaudeTUIToChatPreservesPoisonedCheckpointThroughResu
 	chat := &historyPolicyTransitionChat{transitionChat: baseChat}
 	reconcileCtx, cancelReconcile := context.WithCancel(context.Background())
 	t.Cleanup(cancelReconcile)
-	manager := New(Deps{
+	manager := newAdmittedTestManager(t, Deps{
 		Runtime: runtime, Agents: singleAgent{agent: transitionAgent{}}, Workspace: &fakeWorkspace{},
 		Store: st, Messenger: &fakeMessenger{}, Chat: chat, Lifecycle: lcm,
 		LookPath:          func(string) (string, error) { return "/bin/true", nil },

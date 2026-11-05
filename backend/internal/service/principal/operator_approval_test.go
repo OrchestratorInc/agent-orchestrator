@@ -153,7 +153,7 @@ func TestOperatorApprovalRefusesAnUnlistedOperation(t *testing.T) {
 	f := newApprovalFixture(t)
 	for _, path := range []string{
 		"/api/v1/sessions",
-		"/api/v1/workflows/w1/attempts/a1/start",
+		"/api/v1/workflows/w1/attempts/a1/renew-lease",
 		"/api/v1/workflows/w1/attempts/a1/bind/extra",
 		"/api/v1/operator/approvals",
 	} {

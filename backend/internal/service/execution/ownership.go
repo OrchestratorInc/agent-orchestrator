@@ -168,6 +168,20 @@ func ResolveAttemptOwnership(
 
 	harness := task.AgentHarness
 	if strings.TrimSpace(string(harness)) == "" {
+		if admissions, ok := reader.(interface {
+			GetSchedulerAdmissionForAttempt(context.Context, domain.WorkflowAttemptID) (domain.SchedulerAdmission, bool, error)
+		}); ok {
+			admission, found, err := admissions.GetSchedulerAdmissionForAttempt(ctx, attempt.ID)
+			if err != nil {
+				return AttemptOwnership{}, err
+			}
+			if found && admission.AttemptID == attempt.ID && admission.WorkflowID == workflowID && admission.TaskID == task.ID && admission.State != domain.AdmissionReleased {
+				// 已 Claim 的 Harness 是持久执行选择，项目默认值后续修改不能替换它。
+				harness = admission.Harness
+			}
+		}
+	}
+	if strings.TrimSpace(string(harness)) == "" {
 		// Guessing a harness would launch an agent the workflow never chose, and the
 		// project/role default is a Session Manager decision this boundary cannot see.
 		return AttemptOwnership{}, fmt.Errorf(

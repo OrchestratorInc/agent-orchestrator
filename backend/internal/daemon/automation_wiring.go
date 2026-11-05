@@ -14,10 +14,19 @@ import (
 // cadence-only observer. Reconciliation is best effort so one malformed legacy
 // row cannot prevent daemon readiness.
 func startAutomations(ctx context.Context, store *sqlite.Store, sessions *sessionsvc.Service, logger *slog.Logger) (*automationsvc.Service, <-chan struct{}) {
+	ready := make(chan struct{})
+	close(ready)
+	return startAutomationsAfter(ctx, store, sessions, logger, ready)
+}
+
+// startAutomationsAfter 保留查询服务，同时将首轮副作用延迟到调度恢复门禁。
+func startAutomationsAfter(ctx context.Context, store *sqlite.Store, sessions *sessionsvc.Service, logger *slog.Logger, ready <-chan struct{}) (*automationsvc.Service, <-chan struct{}) {
 	service := automationsvc.New(automationsvc.Deps{Store: store, Spawner: sessions})
-	if err := service.Reconcile(ctx); err != nil {
-		logger.Warn("automation startup reconciliation completed with errors", "err", err)
-	}
-	observer := automationobserver.New(service, automationobserver.Config{Logger: logger})
-	return service, observer.Start(ctx)
+	return service, startAfterScheduler(ctx, ready, func() <-chan struct{} {
+		if err := service.Reconcile(ctx); err != nil {
+			logger.Warn("automation startup reconciliation completed with errors", "err", err)
+		}
+		observer := automationobserver.New(service, automationobserver.Config{Logger: logger})
+		return observer.Start(ctx)
+	})
 }

@@ -209,17 +209,9 @@ func TestCacheInstallsPrivateManifestLastAndLoadsLKG(t *testing.T) {
 		t.Fatalf("loaded openai version = %q", got)
 	}
 	for _, file := range append([]string{filepath.Join(cache.Root(), "manifest.json")}, providerFilePaths(t, cache.Root(), fixture)...) {
-		info, err := os.Stat(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != 0o600 {
-			t.Fatalf("%s mode = %o, want 600", file, got)
-		}
+		assertPrivateCachePath(t, file, false)
 	}
-	if info, err := os.Stat(cache.Root()); err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("cache root mode = %v, %v", info.Mode().Perm(), err)
-	}
+	assertPrivateCachePath(t, cache.Root(), true)
 }
 
 // Break caught: shutdown cancellation was dropped at the cache boundary, so a
@@ -248,8 +240,8 @@ func TestCacheHonorsCancellationBeforeLoadAndBetweenProviderInstalls(t *testing.
 		ctx, cancel := context.WithCancel(context.Background())
 		realRename := cache.rename
 		providerRenames := 0
-		cache.rename = func(oldPath, newPath string) error {
-			if err := realRename(oldPath, newPath); err != nil {
+		cache.rename = func(root *os.Root, oldPath, newPath string) error {
+			if err := realRename(root, oldPath, newPath); err != nil {
 				return err
 			}
 			if filepath.Base(newPath) != "manifest.json" {
@@ -289,14 +281,17 @@ func TestCacheManifestReplaceFailurePreservesOldLKG(t *testing.T) {
 		t.Fatal(err)
 	}
 	realRename := cache.rename
-	cache.rename = func(oldPath, newPath string) error {
+	cache.rename = func(root *os.Root, oldPath, newPath string) error {
 		if filepath.Base(newPath) == "manifest.json" {
 			return errors.New("injected manifest replace failure")
 		}
-		return realRename(oldPath, newPath)
+		return realRename(root, oldPath, newPath)
 	}
 	if err := cache.Install(t.Context(), newCatalog); err == nil {
 		t.Fatal("Install error = nil")
+	}
+	if files, err := filepath.Glob(filepath.Join(cache.Root(), ".pricing-*")); err != nil || len(files) != 0 {
+		t.Fatalf("temporary manifests remain after failed publication: %v, %v", files, err)
 	}
 	cache.rename = realRename
 	loaded, err := cache.Load(t.Context())
@@ -359,9 +354,7 @@ func TestCacheInstallRepairsCorruptProviderBlob(t *testing.T) {
 	if got := loaded.Snapshot().ProviderVersion("openai"); got != fixture.versions["openai"] {
 		t.Fatalf("repaired openai version = %q, want %q", got, fixture.versions["openai"])
 	}
-	if info, err := os.Stat(corrupted); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("repaired blob mode = %v, %v", info.Mode().Perm(), err)
-	}
+	assertPrivateCachePath(t, corrupted, false)
 }
 
 func providerFilePaths(t *testing.T, root string, fixture testCatalog) []string {

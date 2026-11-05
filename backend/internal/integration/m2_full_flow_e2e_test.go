@@ -76,6 +76,7 @@ type m2ffFixture struct {
 	projectA   domain.ProjectID
 	projectB   domain.ProjectID
 	managedDir string
+	m3         *m3Control
 	// deploy is the immutable project/workspace layout, reused by a restart so the second
 	// daemon composes over the SAME repositories and the SAME managed root.
 	deploy m2ffDeploy
@@ -97,6 +98,7 @@ type m2ffPlant struct {
 	managedDir string
 	repoA      string
 	repoB      string
+	m3         *m3Control
 }
 
 // newM2FFFixture builds one daemon boot over an existing store and an existing layout.
@@ -107,6 +109,9 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	t.Helper()
 	ctx := context.Background()
 	clock := func() time.Time { return time.Now().UTC() }
+	if plant.m3 != nil {
+		clock = plant.m3.clock.Now
+	}
 
 	st := plant.store
 
@@ -178,6 +183,7 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 		Chat:      m2smChatLauncher{svc: chatSvc},
 		Lifecycle: lcm,
 		DataDir:   plant.dataDir,
+		Clock:     clock,
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
 		Executable: func() (string, error) {
 			return filepath.Join(plant.dataDir, "ao"), nil
@@ -185,6 +191,16 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	mgr.SetAgentReadiness(m2smReadiness{})
+	var admission ports.WorkflowAdmissionProvider
+	var fence func(context.Context) (domain.SchedulerFence, error)
+	if plant.m3 != nil {
+		admission, fence = plant.m3.scheduler, plant.m3.scheduler.CurrentFence
+		mgr.SetSessionAdmissionProvider(plant.m3.scheduler)
+		plant.m3.manager = mgr
+	} else {
+		admission = sqlitetest.NewAdmissionFixture(t, st, clock)
+		fence = m2FixtureFence(t, st, clock)
+	}
 
 	gateway := execution.NewLocalGateway(execution.LocalGatewayDeps{
 		Sessions: mgr, Resumer: mgr, Records: st, Commits: st, Worktrees: st, Turns: st,
@@ -193,6 +209,7 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	})
 	binder := execution.New(execution.Deps{
 		Store: st, Gateway: gateway, Resolver: resolver, Clock: clock,
+		ExecutionFence: fence,
 	})
 	interventions := intervention.New(intervention.Deps{
 		Store: st, Bindings: st, BindingWriter: binder, Gateway: gateway,
@@ -201,10 +218,14 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	collab := collaboration.New(collaboration.Deps{
 		Store: st, Bindings: st, Graph: st, Clock: clock,
 	})
+	leaseDuration := 15 * time.Minute
+	if plant.m3 != nil {
+		leaseDuration = 45 * time.Second
+	}
 	workflows := workflow.New(workflow.Deps{
-		Store: st, Clock: clock,
+		Store: st, Clock: clock, Admission: admission,
 		GraphLimits:   domain.WorkflowGraphLimits{MaxTasks: 50, MaxDepth: 12, MaxFanOut: 8},
-		LeaseDuration: 15 * time.Minute,
+		LeaseDuration: leaseDuration,
 	})
 
 	// 只替代 OS 人工确认边界；每次装配使用新的内存审批表。
@@ -217,26 +238,34 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 		st,
 		principal.CapabilityVerifier{Sessions: st, Authority: browser.NewAuthority()},
 		principal.ApprovalOperatorTrust{Approvals: approvals},
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: st, Clock: clock})
+	).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: st, Clock: clock})
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
-		Workflows:             workflows,
-		WorkflowCapabilities:  resolver,
-		WorkflowBindings:      st,
-		WorkflowBinder:        binder,
-		WorkflowInterventions: interventions,
-		WorkflowCollaboration: collab,
-		WorkflowOwnership:     m2smOwnership{store: st},
-		WorkflowPrincipals:    principals,
-		WorkflowAudit:         st,
-		OperatorApprovals:     approvals,
-		OperatorConsent:       consent,
-	}, httpd.ControlDeps{}))
+	deps := httpd.APIDeps{
+		Workflows:                workflows,
+		WorkflowExecutionPermits: st,
+		WorkflowExecutionFence:   fence,
+		WorkflowClock:            clock,
+		WorkflowCapabilities:     resolver,
+		WorkflowBindings:         st,
+		WorkflowBinder:           binder,
+		WorkflowInterventions:    interventions,
+		WorkflowCollaboration:    collab,
+		WorkflowOwnership:        m2smOwnership{store: st},
+		WorkflowPrincipals:       principals,
+		WorkflowAudit:            st,
+		OperatorApprovals:        approvals,
+		OperatorConsent:          consent,
+	}
+	if plant.m3 != nil {
+		plant.m3.wire(t, &deps, workflows, binder)
+	}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
 	return &m2ffFixture{
 		t: t, store: st, approvals: approvals, consent: consent,
+		m3:   plant.m3,
 		chat: chatSvc, srv: srv, base: srv.URL + "/api/v1",
 		dataDir: plant.dataDir, managedDir: plant.managedDir,
 		repoA: plant.repoA, repoB: plant.repoB,
@@ -421,13 +450,15 @@ func (f *m2ffFixture) submitWithApproval(approval m2ffApproval) m2ffResp {
 		map[string]string{principal.HeaderOperatorApproval: approval.ID})
 }
 
-// asAgent presents the spawned session's capability plus the attempt's lease. Both are
-// verified against durable rows; neither is derived from the request body.
+// asAgent 只发送 Session capability 和 SessionID，Attempt 与租约由真实 Store 推导。
 func (f *m2ffFixture) asAgent(capabilityToken, lease string, attemptID domain.WorkflowAttemptID) map[string]string {
+	binding := f.binding(attemptID)
+	if binding.SessionID == nil {
+		f.t.Fatal("agent binding has no session")
+	}
 	return map[string]string{
 		principal.HeaderAgentCapability: capabilityToken,
-		principal.HeaderAttemptID:       string(attemptID),
-		principal.HeaderAttemptLease:    lease,
+		principal.HeaderSessionID:       string(*binding.SessionID),
 	}
 }
 
@@ -589,21 +620,21 @@ func (f *m2ffFixture) claimAndStart(
 	}
 	revision := f.number(task.Body, "task", "revision")
 
-	claimed := f.do(http.MethodPost,
+	claimed := f.asOperator(http.MethodPost,
 		"/workflows/"+string(workflowID)+"/tasks/"+string(taskID)+"/claim",
-		fmt.Sprintf(`{"expectedRevision":%d,"workerId":"w1","idempotencyKey":"%s-claim"}`, revision, key), nil)
+		fmt.Sprintf(`{"expectedRevision":%d,"workerId":"w1","idempotencyKey":"%s-claim"}`, revision, key))
 	if claimed.Status != http.StatusCreated {
 		f.t.Fatalf("claim: %d %s", claimed.Status, claimed.Raw)
 	}
 	attemptID := domain.WorkflowAttemptID(f.text(claimed.Body, "attempt", "id"))
-	lease := f.text(claimed.Body, "leaseToken")
+	lease := m2StoredLease(f.t, f.store, attemptID)
 	if attemptID == "" || lease == "" {
 		f.t.Fatalf("claim answered without an attempt id or lease: %s", claimed.Raw)
 	}
 
-	started := f.do(http.MethodPost,
+	started := f.asOperator(http.MethodPost,
 		"/workflows/"+string(workflowID)+"/attempts/"+string(attemptID)+"/start",
-		fmt.Sprintf(`{"leaseToken":%q,"idempotencyKey":"%s-start"}`, lease, key), nil)
+		fmt.Sprintf(`{"idempotencyKey":"%s-start"}`, key))
 	if started.Status != http.StatusOK {
 		f.t.Fatalf("start: %d %s", started.Status, started.Raw)
 	}
@@ -1043,68 +1074,6 @@ func TestM2FullFlowOperatorBindThroughDaemonRestart(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------
-	// 7. Human resolves the attempt, through the approval flow.
-	// -------------------------------------------------------------------
-	taskBefore, found, err := f.store.GetWorkflowTask(context.Background(), workflowID, taskID)
-	if err != nil || !found {
-		t.Fatalf("reload task: found=%v err=%v", found, err)
-	}
-	// Resolve is the only exit from UNKNOWN, so the attempt must reach it first. That is what
-	// an expired lease does, and it is the store's own recovery path rather than a test write.
-	if _, err := f.store.RecoverExpiredWorkflowAttempts(context.Background(), time.Now().UTC().Add(2*time.Hour)); err != nil {
-		t.Fatalf("expire attempts: %v", err)
-	}
-	attemptAfterExpiry, found, err := f.store.GetWorkflowAttempt(context.Background(), attemptID)
-	if err != nil || !found {
-		t.Fatalf("read expired attempt: found=%v err=%v", found, err)
-	}
-	if attemptAfterExpiry.State != domain.WorkflowAttemptStateUnknown {
-		t.Fatalf("attempt state after expiry = %q, want unknown", attemptAfterExpiry.State)
-	}
-	taskForResolve, found, err := f.store.GetWorkflowTask(context.Background(), workflowID, taskID)
-	if err != nil || !found {
-		t.Fatalf("reload task for resolve: found=%v err=%v", found, err)
-	}
-	if taskForResolve.Revision <= taskBefore.Revision {
-		t.Fatalf("task revision did not advance across expiry: %d -> %d",
-			taskBefore.Revision, taskForResolve.Revision)
-	}
-	resolveBody := fmt.Sprintf(
-		`{"outcome":"succeeded","expectedTaskRevision":%d,"idempotencyKey":"m2ff-resolve-1"}`,
-		taskForResolve.Revision)
-	resolved := f.approvedAction(http.MethodPost, f.attemptPath(workflowID, attemptID, "resolve"), resolveBody)
-	if resolved.Status != http.StatusOK {
-		t.Fatalf("approved resolve = %d, want 200; body=%s", resolved.Status, resolved.Raw)
-	}
-	if state := f.text(resolved.Body, "attempt", "state"); state != string(domain.WorkflowAttemptStateSucceeded) {
-		t.Fatalf("attempt state = %q, want succeeded; body=%s", state, resolved.Raw)
-	}
-	attemptResolved, found, err := f.store.GetWorkflowAttempt(context.Background(), attemptID)
-	if err != nil || !found {
-		t.Fatalf("reload resolved attempt: found=%v err=%v", found, err)
-	}
-	if attemptResolved.State != domain.WorkflowAttemptStateSucceeded {
-		t.Fatalf("durable attempt state = %q, want succeeded", attemptResolved.State)
-	}
-
-	// A second audit row, and only one more.
-	afterResolve := f.audits(workflowID)
-	if len(afterResolve) != len(afterDecide)+1 {
-		t.Fatalf("audit rows = %d after one resolve, want %d: %+v",
-			len(afterResolve), len(afterDecide)+1, afterResolve)
-	}
-	resolveAudit := afterResolve[len(afterResolve)-1]
-	if resolveAudit.Decision != "resolve_attempt" {
-		t.Fatalf("audit decision = %q, want resolve_attempt", resolveAudit.Decision)
-	}
-	if resolveAudit.Outcome != string(domain.WorkflowAttemptStateSucceeded) {
-		t.Fatalf("audit outcome = %q, want succeeded", resolveAudit.Outcome)
-	}
-	if resolveAudit.TokenFingerprint != wantFingerprint {
-		t.Fatalf("resolve audit fingerprint = %q, want %q", resolveAudit.TokenFingerprint, wantFingerprint)
-	}
-
-	// -------------------------------------------------------------------
 	// 8. Reconcile / resume re-attach; they never spawn a second session.
 	// -------------------------------------------------------------------
 	sessionsAfterResolve := len(f.sessionsFor())
@@ -1405,7 +1374,7 @@ func TestM2FullFlowOperatorBindThroughDaemonRestart(t *testing.T) {
 	// approvals live in memory, per boot.
 	preRestartBody := fmt.Sprintf(
 		`{"outcome":"succeeded","expectedTaskRevision":%d,"idempotencyKey":"m2ff-prerestart"}`,
-		taskForResolve.Revision)
+		int64(1))
 	preRestartApproval := f.requestApproval(http.MethodPost, f.attemptPath(workflowID, attemptID, "resolve"), preRestartBody)
 	f.confirmApproval(preRestartApproval)
 
@@ -1584,6 +1553,69 @@ func TestM2FullFlowOperatorBindThroughDaemonRestart(t *testing.T) {
 		t.Fatalf("worktree directories after restart = %d, want %d (re-verified, not recreated)",
 			got, dirsAfterRestart)
 	}
+	// -------------------------------------------------------------------
+	// 7. Human resolves the attempt, through the approval flow.
+	// -------------------------------------------------------------------
+	taskBefore, found, err := second.store.GetWorkflowTask(context.Background(), workflowID, taskID)
+	if err != nil || !found {
+		t.Fatalf("reload task: found=%v err=%v", found, err)
+	}
+	// Resolve is the only exit from UNKNOWN, so the attempt must reach it first. That is what
+	// an expired lease does, and it is the store's own recovery path rather than a test write.
+	if _, err := second.store.RecoverExpiredWorkflowAttempts(context.Background(), time.Now().UTC().Add(2*time.Hour)); err != nil {
+		t.Fatalf("expire attempts: %v", err)
+	}
+	attemptAfterExpiry, found, err := second.store.GetWorkflowAttempt(context.Background(), attemptID)
+	if err != nil || !found {
+		t.Fatalf("read expired attempt: found=%v err=%v", found, err)
+	}
+	if attemptAfterExpiry.State != domain.WorkflowAttemptStateUnknown {
+		t.Fatalf("attempt state after expiry = %q, want unknown", attemptAfterExpiry.State)
+	}
+	taskForResolve, found, err := second.store.GetWorkflowTask(context.Background(), workflowID, taskID)
+	if err != nil || !found {
+		t.Fatalf("reload task for resolve: found=%v err=%v", found, err)
+	}
+	if taskForResolve.Revision <= taskBefore.Revision {
+		t.Fatalf("task revision did not advance across expiry: %d -> %d",
+			taskBefore.Revision, taskForResolve.Revision)
+	}
+	resolveBody := fmt.Sprintf(
+		`{"outcome":"succeeded","expectedTaskRevision":%d,"idempotencyKey":"m2ff-resolve-1"}`,
+		taskForResolve.Revision)
+	auditsBeforeResolve := len(second.audits(workflowID))
+	resolved := second.approvedAction(http.MethodPost, second.attemptPath(workflowID, attemptID, "resolve"), resolveBody)
+	if resolved.Status != http.StatusOK {
+		t.Fatalf("approved resolve = %d, want 200; body=%s", resolved.Status, resolved.Raw)
+	}
+	if state := second.text(resolved.Body, "attempt", "state"); state != string(domain.WorkflowAttemptStateSucceeded) {
+		t.Fatalf("attempt state = %q, want succeeded; body=%s", state, resolved.Raw)
+	}
+	attemptResolved, found, err := second.store.GetWorkflowAttempt(context.Background(), attemptID)
+	if err != nil || !found {
+		t.Fatalf("reload resolved attempt: found=%v err=%v", found, err)
+	}
+	if attemptResolved.State != domain.WorkflowAttemptStateSucceeded {
+		t.Fatalf("durable attempt state = %q, want succeeded", attemptResolved.State)
+	}
+
+	// A second audit row, and only one more.
+	afterResolve := second.audits(workflowID)
+	if len(afterResolve) != auditsBeforeResolve+1 {
+		t.Fatalf("audit rows = %d after one resolve, want %d: %+v",
+			len(afterResolve), auditsBeforeResolve+1, afterResolve)
+	}
+	resolveAudit := afterResolve[len(afterResolve)-1]
+	if resolveAudit.Decision != "resolve_attempt" {
+		t.Fatalf("audit decision = %q, want resolve_attempt", resolveAudit.Decision)
+	}
+	if resolveAudit.Outcome != string(domain.WorkflowAttemptStateSucceeded) {
+		t.Fatalf("audit outcome = %q, want succeeded", resolveAudit.Outcome)
+	}
+	if resolveAudit.TokenFingerprint != wantFingerprint {
+		t.Fatalf("resolve audit fingerprint = %q, want %q", resolveAudit.TokenFingerprint, wantFingerprint)
+	}
+
 	if got := len(second.audits(workflowID)); got < len(afterResolve) {
 		t.Fatalf("audit rows after restart = %d, want at least the %d recorded before it", got, len(afterResolve))
 	}
@@ -1610,6 +1642,8 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 
 	workflowID, taskID := f.createWorkflowWithPins("m2ff-refusals", "do the work", pinA, pinB)
 	attemptID, _ := f.claimAndStart(workflowID, taskID, "m2ff-refusals")
+	auditsBeforeRefusals := len(f.audits(workflowID))
+	approvalsBeforeRefusals := len(f.consent.approvals())
 
 	// The request this matrix will try (and fail) to decide. It is seeded through the store
 	// because raising one requires a bound attempt, and NOTHING here may bind: the whole point is
@@ -1619,7 +1653,8 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 		t.Fatalf("read workflow: found=%v err=%v", foundWorkflow, err)
 	}
 	const refusalPayload = `{"credits":5}`
-	raised, createdReq, err := f.store.CreateWorkflowTaskRequest(context.Background(), domain.WorkflowTaskRequest{
+	requestContext := sqlitetest.ExecutionContext(t, context.Background(), f.store, attemptID, time.Now().UTC())
+	raised, createdReq, err := f.store.CreateWorkflowTaskRequest(requestContext, domain.WorkflowTaskRequest{
 		ID: "m2ff-refusal-req", WorkflowID: workflowID, RequesterTaskID: taskID,
 		RequestKind: domain.WorkflowTaskRequestKindIncreaseBudget,
 		RequestJSON: refusalPayload, RequestSHA: collaboration.RequestSHA(refusalPayload),
@@ -1692,7 +1727,7 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 	if _, found, err := f.store.GetWorkflowAttemptBinding(context.Background(), attemptID); err != nil || found {
 		t.Fatalf("a refused bind created a binding row: found=%v err=%v", found, err)
 	}
-	if got := len(f.audits(workflowID)); got != 0 {
+	if got := len(f.audits(workflowID)); got != auditsBeforeRefusals {
 		t.Fatalf("refused requests wrote %d audit row(s)", got)
 	}
 
@@ -1704,7 +1739,7 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 	denied := f.do(http.MethodPost, "/operator/approvals/"+replayApproval.ID+"/confirm",
 		fmt.Sprintf(`{"code":%q,"payloadDigest":%q}`, replayApproval.Code, principal.PayloadDigest([]byte(replayBody))),
 		map[string]string{principal.HeaderOperatorToken: "legacy-token-readable-by-agent"})
-	if denied.Status != http.StatusForbidden || len(f.consent.approvals()) != 1 {
+	if denied.Status != http.StatusForbidden || len(f.consent.approvals()) != approvalsBeforeRefusals+1 {
 		t.Fatalf("旧 token 绕过原生审批: %d %s", denied.Status, denied.Raw)
 	}
 	if refused := f.submitWithApproval(replayApproval); refused.Status != http.StatusForbidden {
@@ -1749,7 +1784,7 @@ func TestM2FullFlowRefusesEverythingWithoutOperatorProof(t *testing.T) {
 	if undecided.State != domain.WorkflowTaskRequestStatePending {
 		t.Fatalf("task request state = %q, want pending: a refused approval decided it", undecided.State)
 	}
-	if got := len(f.audits(workflowID)); got != 0 {
+	if got := len(f.audits(workflowID)); got != auditsBeforeRefusals {
 		t.Fatalf("a refused flow wrote %d audit row(s)", got)
 	}
 }

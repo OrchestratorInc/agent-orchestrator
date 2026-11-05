@@ -913,6 +913,7 @@ func (g *LocalGateway) observe(
 		ClientRequestCommitted: rec.ClientRequestCommitted,
 		Terminated:             rec.IsTerminated,
 		ObservedAt:             g.now().UTC(),
+		SessionUpdatedAt:       rec.UpdatedAt,
 	}
 	worktrees, err := g.observeWorktrees(ctx, rec)
 	observation.Worktrees = worktrees
@@ -963,7 +964,7 @@ func (g *LocalGateway) controllerGeneration(rec domain.SessionRecord, live bool)
 			}
 		}
 	}
-	return rec.Metadata.ControllerGeneration
+	return domain.SessionExecutionGeneration(rec)
 }
 
 // originOrDefault attributes a workflow message to automation. A workflow message is

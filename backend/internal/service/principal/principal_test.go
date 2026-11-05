@@ -37,19 +37,6 @@ func (f fakeSessions) GetSession(
 	return rec, ok, nil
 }
 
-// fakeAttempts is an attempt reader over a fixed map.
-type fakeAttempts struct {
-	attempts map[domain.WorkflowAttemptID]domain.WorkflowAttempt
-}
-
-func (f fakeAttempts) GetWorkflowAttempt(
-	_ context.Context,
-	id domain.WorkflowAttemptID,
-) (domain.WorkflowAttempt, bool, error) {
-	attempt, ok := f.attempts[id]
-	return attempt, ok, nil
-}
-
 const agentToken = "agent-capability-token"
 
 // browserStyleVerifier reproduces service/browser.Authority's digest, which is the digest the
@@ -86,28 +73,10 @@ func (testAuthority) Valid(sessionID domain.SessionID, token, verifier string) b
 	return browserStyleVerifier(sessionID, token) == verifier
 }
 
-// resolverFixture builds a resolver whose session `session-1` accepts agentToken and whose
-// attempt `attempt-1` (in `workflow-1`) holds leaseToken.
+// resolverFixture 把 capability、Session 绑定、内部租约和当前 admission 接入生产构造器。
 func resolverFixture() *principal.Resolver {
-	sessions := fakeSessions{sessions: map[domain.SessionID]domain.SessionRecord{
-		"session-1": sessionWithVerifier("session-1", "project-1", agentToken),
-	}}
-	leaseUntil := time.Now().Add(time.Hour)
-	attempts := fakeAttempts{attempts: map[domain.WorkflowAttemptID]domain.WorkflowAttempt{
-		"attempt-1": {
-			ID: "attempt-1", WorkflowID: "workflow-1", TaskID: "task-1",
-			LeaseToken: "lease-token-1", LeaseUntil: &leaseUntil,
-		},
-		"attempt-2": {
-			ID: "attempt-2", WorkflowID: "workflow-1", TaskID: "task-2",
-			LeaseToken: "lease-token-2", LeaseUntil: &leaseUntil,
-		},
-	}}
-	return principal.NewResolver(
-		sessions,
-		principal.CapabilityVerifier{Sessions: sessions, Authority: testAuthority{}},
-		operatorTrustFixture(),
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: attempts})
+	s := identityFixture()
+	return principal.StoreResolverWithOperator(s, s, testAuthority{}, operatorTrustFixture())
 }
 
 // operatorToken is the operator credential the fixtures accept. It is a fixed test value, never a
@@ -174,7 +143,7 @@ func TestValidCapabilityResolvesAsAgent(t *testing.T) {
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	caller, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -198,7 +167,7 @@ func TestWrongCapabilityIsRefusedWithoutDowngrade(t *testing.T) {
 	req.Header.Set(principal.HeaderAgentCapability, "not-the-token")
 	_, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
 	if !errors.Is(err, principal.ErrCapabilityInvalid) {
 		t.Fatalf("err = %v, want ErrCapabilityInvalid", err)
@@ -226,12 +195,14 @@ func TestCapabilityForAnotherSessionIsRefused(t *testing.T) {
 	}
 }
 
-// TestCapabilityWithoutLeaseIsRefused proves holding a capability is not holding an attempt.
+// TestCapabilityWithoutLeaseIsRefused 证明内部租约已撤销时 capability 不能继续获得 Attempt 身份。
 func TestCapabilityWithoutLeaseIsRefused(t *testing.T) {
 	t.Parallel()
 	req := loopbackRequest()
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
-	_, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
+	s := identityFixture()
+	s.attempt.LeaseToken = ""
+	_, err := principal.StoreResolver(s, s, testAuthority{}).Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
 		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
@@ -240,15 +211,14 @@ func TestCapabilityWithoutLeaseIsRefused(t *testing.T) {
 	}
 }
 
-// TestLeaseForAnotherAttemptIsRefused proves an attempt id is not identity: naming attempt-1
-// while holding attempt-2's lease is refused.
+// TestLeaseForAnotherAttemptIsRefused 证明合法 capability 不能把身份改成另一个 Attempt。
 func TestLeaseForAnotherAttemptIsRefused(t *testing.T) {
 	t.Parallel()
 	req := loopbackRequest()
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	_, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-2",
+		WorkflowID: "workflow-1", AttemptID: "attempt-2",
 	})
 	if !errors.Is(err, principal.ErrLeaseUnproven) {
 		t.Fatalf("err = %v, want ErrLeaseUnproven", err)
@@ -262,7 +232,7 @@ func TestLeaseForAnotherWorkflowIsRefused(t *testing.T) {
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	_, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-2", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-2", AttemptID: "attempt-1",
 	})
 	if !errors.Is(err, principal.ErrLeaseUnproven) {
 		t.Fatalf("err = %v, want ErrLeaseUnproven", err)
@@ -272,25 +242,16 @@ func TestLeaseForAnotherWorkflowIsRefused(t *testing.T) {
 // TestExpiredLeaseIsRefused proves a settled or expired attempt cannot be claimed.
 func TestExpiredLeaseIsRefused(t *testing.T) {
 	t.Parallel()
-	sessions := fakeSessions{sessions: map[domain.SessionID]domain.SessionRecord{
-		"session-1": sessionWithVerifier("session-1", "project-1", agentToken),
-	}}
+	s := identityFixture()
 	expired := time.Now().Add(-time.Minute)
-	attempts := fakeAttempts{attempts: map[domain.WorkflowAttemptID]domain.WorkflowAttempt{
-		"attempt-1": {
-			ID: "attempt-1", WorkflowID: "workflow-1", TaskID: "task-1",
-			LeaseToken: "lease-token-1", LeaseUntil: &expired,
-		},
-	}}
-	resolver := principal.NewResolver(
-		sessions, principal.CapabilityVerifier{Sessions: sessions, Authority: testAuthority{}}, operatorTrustFixture(),
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: attempts})
+	s.attempt.LeaseUntil = &expired
+	resolver := principal.StoreResolver(s, s, testAuthority{})
 
 	req := loopbackRequest()
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	_, err := resolver.Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
 	if !errors.Is(err, principal.ErrLeaseUnproven) {
 		t.Fatalf("err = %v, want ErrLeaseUnproven", err)
@@ -383,23 +344,14 @@ func TestCapabilityVerifierRequiresAnAuthority(t *testing.T) {
 // TestStoreResolverWiresEveryCheck proves the production constructor answers both questions.
 func TestStoreResolverWiresEveryCheck(t *testing.T) {
 	t.Parallel()
-	sessions := fakeSessions{sessions: map[domain.SessionID]domain.SessionRecord{
-		"session-1": sessionWithVerifier("session-1", "project-1", agentToken),
-	}}
-	leaseUntil := time.Now().Add(time.Hour)
-	attempts := fakeAttempts{attempts: map[domain.WorkflowAttemptID]domain.WorkflowAttempt{
-		"attempt-1": {
-			ID: "attempt-1", WorkflowID: "workflow-1", TaskID: "task-1",
-			LeaseToken: "lease-token-1", LeaseUntil: &leaseUntil,
-		},
-	}}
-	resolver := principal.StoreResolverWithOperator(sessions, attempts, testAuthority{}, operatorTrustFixture())
+	s := identityFixture()
+	resolver := principal.StoreResolverWithOperator(s, s, testAuthority{}, operatorTrustFixture())
 
 	req := loopbackRequest()
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	caller, err := resolver.Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -424,10 +376,12 @@ func TestStoreResolverWiresEveryCheck(t *testing.T) {
 //
 // AO persists one verifier per session, so the capability a worker receives at launch is the one
 // it presents here. This test states that as a fact rather than leaving it implicit, and pairs it
-// with the rule that matters: the capability alone is NOT attempt identity — the lease below is.
+// 普通 Session 没有 binding 时只获得 Session 权限，不能按外部 AttemptID 获权。
 func TestTheWorkerCapabilityIsTheAgentCapability(t *testing.T) {
 	t.Parallel()
-	resolver := resolverFixture()
+	s := identityFixture()
+	s.binding = domain.WorkflowAttemptBinding{}
+	resolver := principal.StoreResolver(s, s, testAuthority{})
 
 	// The capability alone resolves a session-scoped agent.
 	req := loopbackRequest()
@@ -681,7 +635,7 @@ func TestAgentWithAValidOperatorTokenIsStillAnAgent(t *testing.T) {
 	req.Header.Set(principal.HeaderAgentCapability, agentToken)
 	caller, err := resolverFixture().Resolve(context.Background(), principal.RequestFacts{
 		Request: req, AgentSessionID: "session-1",
-		WorkflowID: "workflow-1", AttemptID: "attempt-1", LeaseToken: "lease-token-1",
+		WorkflowID: "workflow-1", AttemptID: "attempt-1",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)

@@ -197,7 +197,8 @@ type Coordinator struct {
 	newID    func() string
 	// allowAction lets a deployment refuse an action entirely (for example resume
 	// before M2-05 wires stop/resume receipts). Nil allows both.
-	allowAction func(Action) error
+	allowAction    func(Action) error
+	executionFence func(context.Context) (domain.SchedulerFence, error)
 }
 
 // Deps are the coordinator's injected collaborators.
@@ -213,17 +214,20 @@ type Deps struct {
 	// AllowAction is optional. Returning an error refuses the action before any
 	// durable state is written.
 	AllowAction func(Action) error
+	// ExecutionFence 只返回本 daemon 当前持有的任期；不能读取 DB 后冒用其他实例的 owner。
+	ExecutionFence func(context.Context) (domain.SchedulerFence, error)
 }
 
 // New builds a coordinator.
 func New(deps Deps) *Coordinator {
 	c := &Coordinator{
-		store:       deps.Store,
-		gateway:     deps.Gateway,
-		resolver:    deps.Resolver,
-		now:         deps.Clock,
-		newID:       deps.NewID,
-		allowAction: deps.AllowAction,
+		store:          deps.Store,
+		gateway:        deps.Gateway,
+		resolver:       deps.Resolver,
+		now:            deps.Clock,
+		newID:          deps.NewID,
+		allowAction:    deps.AllowAction,
+		executionFence: deps.ExecutionFence,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -325,6 +329,11 @@ func (c *Coordinator) BindAttempt(
 	if err := request.Validate(); err != nil {
 		return BindOutcome{}, err
 	}
+	var permitErr error
+	ctx, permitErr = c.executionContext(ctx, request.AttemptID)
+	if permitErr != nil {
+		return BindOutcome{}, permitErr
+	}
 	now := c.now().UTC()
 
 	// 1. Capability gate. A session may only be requested when the evidence allows it,
@@ -378,6 +387,7 @@ func (c *Coordinator) BindAttempt(
 			return outcome, nil
 		}
 	}
+	ctx = bindingPermitContext(ctx, binding)
 
 	// 4. Claim the right to spawn. This CAS is the concurrency fence: exactly one caller
 	// may move intent_persisted to spawn_requested, so two callers racing on one attempt
@@ -413,15 +423,13 @@ func (c *Coordinator) BindAttempt(
 		return BindOutcome{Binding: current, ReasonCode: "spawn_in_progress"}, nil
 	}
 	binding = claimed
+	ctx = bindingPermitContext(ctx, binding)
 
 	// 5. Ask the gateway. This is the only external side effect in the package, and only
 	// the caller that won the claim above reaches it.
 	//
-	// The attempt's durable identity travels with the request so the spawned session's
-	// tool server can authenticate as this attempt. The lease exists in exactly one
-	// place — the attempt row — and is read from there rather than accepted from a
-	// caller: a body can never supply it. It is not hashed (SpawnHash ignores
-	// Workflow) and never appears in a log line or an error.
+	// 从持久 Attempt 确认启动身份，跨边界只传非秘密标识。
+	// MCP 通过 Session capability 认证，内部租约不会交给 Gateway 或 Agent。
 	attempt, found, err := c.store.GetWorkflowAttempt(ctx, request.AttemptID)
 	if err != nil {
 		return BindOutcome{}, err
@@ -436,7 +444,6 @@ func (c *Coordinator) BindAttempt(
 			WorkflowID: request.WorkflowID,
 			TaskID:     request.TaskID,
 			AttemptID:  request.AttemptID,
-			LeaseToken: attempt.LeaseToken,
 		}
 	}
 	// The hash computed in step 1 must travel with the request. The gateway forwards it
@@ -446,6 +453,10 @@ func (c *Coordinator) BindAttempt(
 	// how this gap survived until the real Session Manager was wired underneath.
 	request.SpawnHash = hash
 	observation, spawnErr := c.gateway.Spawn(ctx, request)
+	ctx, err = c.refreshExecutionContext(ctx, request.AttemptID)
+	if err != nil {
+		return BindOutcome{Binding: binding, Frozen: true, Spawned: true, ReasonCode: "execution_fenced"}, err
+	}
 	if spawnErr != nil {
 		return c.recordSpawnFailure(ctx, binding, spawnErr, now)
 	}
@@ -513,6 +524,7 @@ func (c *Coordinator) recordSpawnFailure(
 	spawnErr error,
 	now time.Time,
 ) (BindOutcome, error) {
+	ctx = bindingPermitContext(ctx, binding)
 	if errors.Is(spawnErr, ports.ErrExecutionRefused) {
 		// The gateway proved it did not create anything.
 		updated, _, err := c.store.TransitionWorkflowAttemptBinding(
@@ -618,6 +630,7 @@ func (c *Coordinator) bindObservation(
 	observation ports.SessionObservation,
 	now time.Time,
 ) (BindOutcome, error) {
+	ctx = bindingPermitContext(ctx, binding)
 	if observation.SessionID == "" {
 		// The gateway answered without a session: that is an unknown outcome, not a
 		// successful spawn.
@@ -699,6 +712,10 @@ func (c *Coordinator) bindObservation(
 				return BindOutcome{Binding: binding, Frozen: true, ReasonCode: "generation_changed"}, nil
 			}
 			binding = updated
+			ctx, err = c.refreshExecutionContext(bindingPermitContext(ctx, binding), binding.AttemptID)
+			if err != nil {
+				return BindOutcome{}, err
+			}
 		}
 		updated, applied, err := c.store.TransitionWorkflowAttemptBinding(
 			ctx, binding.AttemptID, targetState, "", binding.Revision, now,
@@ -880,6 +897,11 @@ func (c *Coordinator) recordRepoBindings(
 	observation ports.SessionObservation,
 	now time.Time,
 ) error {
+	var permitErr error
+	ctx, permitErr = c.refreshExecutionContext(ctx, binding.AttemptID)
+	if permitErr != nil {
+		return permitErr
+	}
 	store := c.repoStore()
 	if store == nil {
 		return nil
@@ -967,6 +989,11 @@ func (c *Coordinator) Reconcile(
 	ctx context.Context,
 	attemptID domain.WorkflowAttemptID,
 ) (BindOutcome, error) {
+	var permitErr error
+	ctx, permitErr = c.executionContext(ctx, attemptID)
+	if permitErr != nil {
+		return BindOutcome{}, permitErr
+	}
 	binding, found, err := c.store.GetWorkflowAttemptBinding(ctx, attemptID)
 	if err != nil {
 		return BindOutcome{}, err
@@ -1021,6 +1048,7 @@ func (c *Coordinator) Reconcile(
 // reconcileKnownSession 重新核验已经绑定的会话；曾经 ready 不是当前可恢复的证据。
 // 失去证据时保留 SessionID 与工作区，冻结而不重建；成功时复用原 generation 重锚逻辑。
 func (c *Coordinator) reconcileKnownSession(ctx context.Context, binding domain.WorkflowAttemptBinding, now time.Time) (BindOutcome, error) {
+	ctx = bindingPermitContext(ctx, binding)
 	if binding.SessionID == nil {
 		return BindOutcome{Binding: binding, Frozen: true, ReasonCode: "reconcile_no_session"}, nil
 	}
@@ -1065,6 +1093,11 @@ func (c *Coordinator) SendMessage(
 	attemptID domain.WorkflowAttemptID,
 	request ports.MessageRequest,
 ) (ports.MessageReceipt, error) {
+	var permitErr error
+	ctx, permitErr = c.actionContext(ctx, attemptID)
+	if permitErr != nil {
+		return ports.MessageReceipt{}, permitErr
+	}
 	binding, _, live, reason, err := c.LiveTarget(ctx, attemptID)
 	if err != nil {
 		return ports.MessageReceipt{}, err
@@ -1107,6 +1140,11 @@ func (c *Coordinator) SteerMessage(
 	attemptID domain.WorkflowAttemptID,
 	request ports.MessageRequest,
 ) (ports.MessageReceipt, error) {
+	var permitErr error
+	ctx, permitErr = c.actionContext(ctx, attemptID)
+	if permitErr != nil {
+		return ports.MessageReceipt{}, permitErr
+	}
 	if request.Delivery != ports.MessageDeliverySteer {
 		return ports.MessageReceipt{}, fmt.Errorf(
 			"%w: SteerMessage requires delivery=steer, not %q", ports.ErrExecutionRefused, request.Delivery)
@@ -1257,6 +1295,11 @@ func (c *Coordinator) InterruptTurn(
 	attemptID domain.WorkflowAttemptID,
 	clientMessageID string,
 ) (ports.InterruptReceipt, error) {
+	var permitErr error
+	ctx, permitErr = c.actionContext(ctx, attemptID)
+	if permitErr != nil {
+		return ports.InterruptReceipt{}, permitErr
+	}
 	binding, _, live, reason, err := c.LiveTarget(ctx, attemptID)
 	if err != nil {
 		return ports.InterruptReceipt{}, err
@@ -1291,6 +1334,11 @@ func (c *Coordinator) Resume(
 	ctx context.Context,
 	attemptID domain.WorkflowAttemptID,
 ) (BindOutcome, error) {
+	var permitErr error
+	ctx, permitErr = c.actionContext(ctx, attemptID)
+	if permitErr != nil {
+		return BindOutcome{}, permitErr
+	}
 	if c.store == nil || c.gateway == nil {
 		return BindOutcome{}, apierrUnavailable()
 	}
@@ -1317,6 +1365,12 @@ func (c *Coordinator) Resume(
 	observation, resumeErr := c.gateway.Resume(ctx, ports.ResumeRequest{
 		SessionID: *binding.SessionID, SpawnKey: binding.SpawnRequestID,
 	})
+	// Manager 接受恢复时会先推进 Admission 代际；只跟随本次同任期执行的快照，
+	// 才能记录成功重锚或失败观测，不能拿启动前 revision 回写。
+	ctx, permitErr = c.refreshExecutionContext(ctx, attemptID)
+	if permitErr != nil {
+		return BindOutcome{}, permitErr
+	}
 	if resumeErr != nil {
 		// A failed resume is not proof the previous session is gone, and it is not proof
 		// it came back. Freeze instead of guessing, but only when the transition is legal:
@@ -1350,6 +1404,11 @@ func (c *Coordinator) MarkStopOutcome(
 	confirmed bool,
 	unknown bool,
 ) (domain.WorkflowAttemptBinding, error) {
+	var permitErr error
+	ctx, permitErr = c.executionContext(ctx, attemptID)
+	if permitErr != nil {
+		return domain.WorkflowAttemptBinding{}, permitErr
+	}
 	if c.store == nil {
 		return domain.WorkflowAttemptBinding{}, apierrUnavailable()
 	}
@@ -1404,6 +1463,7 @@ func (c *Coordinator) MarkStopOutcome(
 			return binding, err
 		}
 		binding = pending
+		ctx = bindingPermitContext(ctx, binding)
 	}
 
 	updated, applied, err := c.store.TransitionWorkflowAttemptBinding(

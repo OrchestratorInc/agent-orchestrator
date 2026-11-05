@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/creack/pty"
 )
 
@@ -32,13 +33,14 @@ type darwinPTYConn struct {
 
 const darwinPTYCloseGrace = 500 * time.Millisecond
 
+// newConPTY 启动隔离进程组的 PTY 子进程，并清除旧宿主可能继承的内部租约。
 func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
 	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
 	// trusted agent adapter, not input interpreted by a shell.
 	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
+	cmd.Env = processenv.StripWorkflowLease(os.Environ())
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Cols: cols,

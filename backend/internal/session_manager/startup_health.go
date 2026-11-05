@@ -77,11 +77,10 @@ var defaultStartupChatRetryDelays = []time.Duration{
 	30 * time.Second, time.Minute, time.Minute,
 }
 
-// retryableStartupChatCheck reports failures a later reattach can succeed past:
-// the check's deadline (a busy writer at startup) and an inconclusive host owner
-// (a replaced daemon has not detached yet). Anything else needs the user.
+// retryableStartupChatCheck 仅重试启动期限、Host 归属未确定或本实例调度任期尚未恢复；
+// 后续重附着仍核对完整归属，不把暂时缺少任期变成永久不可用。
 func retryableStartupChatCheck(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ports.ErrChatRecoveryInconclusive)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ports.ErrChatRecoveryInconclusive) || errors.Is(err, domain.ErrSchedulerFence)
 }
 
 // retryStartupChatChecks reattaches Chats whose startup check failed

@@ -34,6 +34,7 @@ import (
 // m2MCPEnv is one workflow attempt's MCP environment, exactly as the session manager
 // builds it for a workflow session.
 type m2MCPEnv struct {
+	sessionID  string
 	workflowID string
 	attemptID  string
 	lease      string
@@ -78,9 +79,9 @@ func mcpEnvVars(t *testing.T, env m2MCPEnv) {
 	t.Helper()
 	t.Setenv("AO_WORKFLOW_ID", env.workflowID)
 	t.Setenv("AO_ATTEMPT_ID", env.attemptID)
-	t.Setenv("AO_WORKFLOW_LEASE", env.lease)
+	t.Setenv("AO_WORKFLOW_LEASE", "")
 	t.Setenv("AO_BROWSER_CAPABILITY", env.capability)
-	t.Setenv("AO_SESSION_ID", "m2-mcp-session")
+	t.Setenv("AO_SESSION_ID", env.sessionID)
 }
 
 // mcpDeps points the CLI's daemon client at the fixture's httptest server by writing
@@ -179,8 +180,8 @@ func m2MCPFixture(t *testing.T, key string) (*m2Env, m2MCPEnv, m2MCPEnv) {
 	capabilityB := m2IssueCapabilityToken(t, env, sessionB)
 
 	return env,
-		m2MCPEnv{workflowID: string(workflowID), attemptID: string(attemptA), lease: leaseA, capability: capabilityA},
-		m2MCPEnv{workflowID: string(workflowID), attemptID: string(attemptB), lease: leaseB, capability: capabilityB}
+		m2MCPEnv{sessionID: string(sessionA), workflowID: string(workflowID), attemptID: string(attemptA), lease: leaseA, capability: capabilityA},
+		m2MCPEnv{sessionID: string(sessionB), workflowID: string(workflowID), attemptID: string(attemptB), lease: leaseB, capability: capabilityB}
 }
 
 // m2IssueCapabilityToken is m2IssueCapability without the verifier return value.
@@ -423,8 +424,7 @@ func TestM2MCPToolsOverTheRealServer(t *testing.T) {
 			"/workflows/"+string(otherWorkflowID)+route, "",
 			map[string]string{
 				principal.HeaderAgentCapability: identityA.capability,
-				principal.HeaderAttemptID:       identityA.attemptID,
-				principal.HeaderAttemptLease:    identityA.lease,
+				principal.HeaderSessionID:       identityA.sessionID,
 			})
 		if crossed.Status != http.StatusNotFound && crossed.Status != http.StatusForbidden {
 			t.Fatalf("GET %s with A's headers: status=%d, want 404 or 403; body=%s",

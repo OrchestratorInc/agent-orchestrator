@@ -81,10 +81,11 @@ func TestExecutionCoordinatorBindsAgainstRealStore(t *testing.T) {
 		SpawnReadiness(ports.SessionReadinessProvisioning).
 		SpawnGeneration("gen-exec-1")
 	coordinator := execution.New(execution.Deps{
-		Store:    s,
-		Gateway:  gateway,
-		Resolver: permitAllCodex(now),
-		Clock:    func() time.Time { return now },
+		ExecutionFence: executionTestFence(t, s),
+		Store:          s,
+		Gateway:        gateway,
+		Resolver:       permitAllCodex(now),
+		Clock:          func() time.Time { return now },
 	})
 
 	repos := []domain.WorkflowAttemptRepoBinding{{
@@ -157,10 +158,11 @@ func TestExecutionCoordinatorLostSpawnIsDurableAndNotRetried(t *testing.T) {
 		WithSessionMaterializer(sessionMaterializer(t, s, projectID)).
 		LoseSpawnResponse()
 	coordinator := execution.New(execution.Deps{
-		Store:    s,
-		Gateway:  gateway,
-		Resolver: permitAllCodex(now),
-		Clock:    func() time.Time { return now },
+		ExecutionFence: executionTestFence(t, s),
+		Store:          s,
+		Gateway:        gateway,
+		Resolver:       permitAllCodex(now),
+		Clock:          func() time.Time { return now },
 	})
 
 	request := executionSpawnRequest(attempt, projectID)
@@ -178,10 +180,11 @@ func TestExecutionCoordinatorLostSpawnIsDurableAndNotRetried(t *testing.T) {
 	// A fresh coordinator over the same store is the restart case. It must read the
 	// durable unknown and refuse, without the gateway being asked again.
 	restarted := execution.New(execution.Deps{
-		Store:    s,
-		Gateway:  gateway,
-		Resolver: permitAllCodex(now),
-		Clock:    func() time.Time { return now },
+		ExecutionFence: executionTestFence(t, s),
+		Store:          s,
+		Gateway:        gateway,
+		Resolver:       permitAllCodex(now),
+		Clock:          func() time.Time { return now },
 	})
 	retry, err := restarted.BindAttempt(ctx, request, nil)
 	if err != nil {
@@ -231,10 +234,11 @@ func TestExecutionCoordinatorStorageRejectionRollsBack(t *testing.T) {
 		WithClock(func() time.Time { return now }).
 		WithSessionMaterializer(sessionMaterializer(t, s, projectID))
 	coordinator := execution.New(execution.Deps{
-		Store:    s,
-		Gateway:  gateway,
-		Resolver: permitAllCodex(now),
-		Clock:    func() time.Time { return now },
+		ExecutionFence: executionTestFence(t, s),
+		Store:          s,
+		Gateway:        gateway,
+		Resolver:       permitAllCodex(now),
+		Clock:          func() time.Time { return now },
 	})
 
 	// "frontend" was never registered on this workflow, so the composite foreign key
@@ -270,10 +274,11 @@ func TestExecutionCoordinatorStableSpawnKeyAcrossRestart(t *testing.T) {
 		WithSessionMaterializer(sessionMaterializer(t, s, projectID))
 	newCoordinator := func() *execution.Coordinator {
 		return execution.New(execution.Deps{
-			Store:    s,
-			Gateway:  gateway,
-			Resolver: permitAllCodex(now),
-			Clock:    func() time.Time { return now },
+			ExecutionFence: executionTestFence(t, s),
+			Store:          s,
+			Gateway:        gateway,
+			Resolver:       permitAllCodex(now),
+			Clock:          func() time.Time { return now },
 		})
 	}
 
@@ -318,10 +323,11 @@ func TestExecutionCoordinatorLeaseStaysOnAttempt(t *testing.T) {
 		WithClock(func() time.Time { return now }).
 		WithSessionMaterializer(sessionMaterializer(t, s, projectID))
 	coordinator := execution.New(execution.Deps{
-		Store:    s,
-		Gateway:  gateway,
-		Resolver: permitAllCodex(now),
-		Clock:    func() time.Time { return now },
+		ExecutionFence: executionTestFence(t, s),
+		Store:          s,
+		Gateway:        gateway,
+		Resolver:       permitAllCodex(now),
+		Clock:          func() time.Time { return now },
 	})
 	if _, err := coordinator.BindAttempt(ctx, executionSpawnRequest(attempt, projectID), nil); err != nil {
 		t.Fatalf("BindAttempt: %v", err)
@@ -351,18 +357,33 @@ func TestExecutionCoordinatorLeaseStaysOnAttempt(t *testing.T) {
 	}
 }
 
-// sessionMaterializer creates a real session row for the id the fake gateway is about to
-// report, so the binding's foreign key into sessions is satisfied by the database rather
-// than bypassed.
+// sessionMaterializer 让 FakeGateway 的副作用消费已有真实准入，保留会话、绑定和占位的一致身份。
 func sessionMaterializer(
 	t *testing.T,
 	s *sqlite.Store,
 	projectID string,
 ) func(ctx context.Context, sessionID domain.SessionID, request ports.SpawnRequest) (domain.SessionID, error) {
 	t.Helper()
-	return func(_ context.Context, _ domain.SessionID, _ ports.SpawnRequest) (domain.SessionID, error) {
+	return func(ctx context.Context, _ domain.SessionID, request ports.SpawnRequest) (domain.SessionID, error) {
+		admission, found, err := s.GetSchedulerAdmissionForAttempt(ctx, request.AttemptID)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", domain.ErrAdmissionRequired
+		}
+		binding, found, err := s.GetWorkflowAttemptBinding(ctx, request.AttemptID)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", domain.ErrWorkflowBindingNotFound
+		}
 		rec := sampleRecord(projectID)
-		created, err := s.CreateSession(context.Background(), rec)
+		rec.Harness, rec.Mode = request.Harness, request.Mode
+		rec.ClientRequestID, rec.ClientRequestHash = binding.SpawnRequestID, binding.SpawnHash
+		rec.CreatedAt, rec.UpdatedAt = binding.UpdatedAt, binding.UpdatedAt
+		created, _, err := s.CreateAdmittedSession(ctx, rec, admission, "", binding.UpdatedAt)
 		if err != nil {
 			return "", err
 		}

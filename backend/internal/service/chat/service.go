@@ -892,6 +892,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if reconnected, ok := conv.(ports.ChatLiveReconnector); ok {
 		liveReconnect = reconnected.ReconnectedLive()
 	}
+	// 纯观察重连不能接受新进程或不同 Provider 的回执；此处尚未发布代际，
+	// 只断开本次连接，避免误杀其他实例正在持有的现存 Host。
+	if cfg.ReconnectOnly && (!liveReconnect || conv.ProviderConversationID() != cfg.ProviderConversationID) {
+		_ = conv.Close()
+		return nil, fmt.Errorf("%w: reconnect did not return the existing live provider", ports.ErrChatRecoveryInconclusive)
+	}
 	freshReplacement := false
 	if cfg.ProviderConversationID != "" &&
 		conv.ProviderConversationID() != cfg.ProviderConversationID {

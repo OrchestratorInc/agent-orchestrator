@@ -402,8 +402,10 @@ func newM2SMFixture(t *testing.T, st *store.Store, dataDir, managedRoot string) 
 		Chats: chatSvc, Controllers: chatSvc,
 		Capabilities: recorder, Clock: clock, Log: slog.New(slog.DiscardHandler),
 	})
+	executionFence := m2FixtureFence(t, st, clock)
 	binder := execution.New(execution.Deps{
 		Store: st, Gateway: gateway, Resolver: resolver, Clock: clock,
+		ExecutionFence: executionFence,
 	})
 	interventions := intervention.New(intervention.Deps{
 		Store: st, Bindings: st, BindingWriter: binder, Gateway: gateway,
@@ -413,7 +415,7 @@ func newM2SMFixture(t *testing.T, st *store.Store, dataDir, managedRoot string) 
 		Store: st, Bindings: st, Graph: st, Clock: clock,
 	})
 	workflows := workflow.New(workflow.Deps{
-		Store: st, Clock: clock,
+		Store: st, Clock: clock, Admission: sqlitetest.NewAdmissionFixture(t, st, clock),
 		GraphLimits:   domain.WorkflowGraphLimits{MaxTasks: 50, MaxDepth: 12, MaxFanOut: 8},
 		LeaseDuration: 15 * time.Minute,
 	})
@@ -422,21 +424,23 @@ func newM2SMFixture(t *testing.T, st *store.Store, dataDir, managedRoot string) 
 		st,
 		principal.CapabilityVerifier{Sessions: st, Authority: browser.NewAuthority()},
 		principal.ApprovalOperatorTrust{Approvals: approvals},
-	).WithLeaseProver(principal.StoreLeaseProver{Attempts: st, Clock: clock})
+	).WithSessionAttemptProver(principal.StoreSessionAttemptProver{Store: st, Clock: clock})
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
-		Workflows:             workflows,
-		WorkflowCapabilities:  resolver,
-		WorkflowBindings:      st,
-		WorkflowBinder:        binder,
-		WorkflowInterventions: interventions,
-		WorkflowCollaboration: collab,
-		WorkflowOwnership:     m2smOwnership{store: st},
-		WorkflowPrincipals:    principals,
-		WorkflowAudit:         st,
-		OperatorApprovals:     approvals,
-		OperatorConsent:       &m2Consent{},
+		Workflows:                workflows,
+		WorkflowExecutionPermits: st,
+		WorkflowExecutionFence:   executionFence,
+		WorkflowCapabilities:     resolver,
+		WorkflowBindings:         st,
+		WorkflowBinder:           binder,
+		WorkflowInterventions:    interventions,
+		WorkflowCollaboration:    collab,
+		WorkflowOwnership:        m2smOwnership{store: st},
+		WorkflowPrincipals:       principals,
+		WorkflowAudit:            st,
+		OperatorApprovals:        approvals,
+		OperatorConsent:          &m2Consent{},
 	}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 
@@ -651,11 +655,11 @@ func (f *m2smFixture) claimAndStart(
 		f.t.Fatalf("claim: %d %s", claimed.Status, claimed.Raw)
 	}
 	attemptID := domain.WorkflowAttemptID(f.text(claimed.Body, "attempt", "id"))
-	lease := f.text(claimed.Body, "leaseToken")
+	lease := m2StoredLease(f.t, f.store, attemptID)
 
 	started := f.do(http.MethodPost,
 		"/workflows/"+string(workflowID)+"/attempts/"+string(attemptID)+"/start",
-		fmt.Sprintf(`{"leaseToken":"%s","idempotencyKey":"%s-start"}`, lease, key))
+		fmt.Sprintf(`{"idempotencyKey":"%s-start"}`, key))
 	if started.Status != http.StatusOK {
 		f.t.Fatalf("start: %d %s", started.Status, started.Raw)
 	}
@@ -1147,15 +1151,7 @@ func TestM2SessionManagerRestartReportsAMissingWorktree(t *testing.T) {
 	if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
 		t.Fatalf("worktree still exists after removal: %v", statErr)
 	}
-	// The session must be terminated for a restart to take the restore path: a live chat
-	// session is resumed by relaunch, not by restoring a workspace, and this scenario is
-	// about the WORKSPACE fact.
-	rec := f.session(*binding.SessionID)
-	rec.IsTerminated = true
-	if err := st.UpdateSession(context.Background(), rec); err != nil {
-		t.Fatalf("terminate session: %v", err)
-	}
-
+	// 保持 Attempt 的执行许可有效，让恢复走真实工作区门禁；已终止 Session 会更早拒绝。
 	f.stopControllers()
 	f.srv.Close()
 	second := newM2SMFixture(t, st, dataDir, managedRoot)
