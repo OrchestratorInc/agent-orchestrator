@@ -3009,7 +3009,6 @@
 	"chat.image.untitled": "图片",
 	"chat.image.copy": "复制图片",
 	"chat.image.save": "保存图片",
-	"chat.image.copied": "已复制图片",
 	"chat.image.copyFailed": "无法复制图片",
 	"chat.image.saveFailed": "无法保存图片",
 	"chat.render.expand": "放大页面",

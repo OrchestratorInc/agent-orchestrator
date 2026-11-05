@@ -3163,7 +3163,6 @@
 	"chat.image.untitled": "Изображение",
 	"chat.image.copy": "Копировать изображение",
 	"chat.image.save": "Сохранить изображение",
-	"chat.image.copied": "Изображение скопировано",
 	"chat.image.copyFailed": "Не удалось скопировать изображение",
 	"chat.image.saveFailed": "Не удалось сохранить изображение",
 	"chat.render.expand": "Развернуть страницу",

@@ -74,7 +74,7 @@ function ChatImageMenu({ url, label, children }: { url: string; label: string; c
 		<ContextMenu>
 			<ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-40">
-				<ContextMenuItem onSelect={() => run(() => copyChatImage(url), t("chat.image.copied"), t("chat.image.copyFailed"))}>
+				<ContextMenuItem onSelect={() => run(() => copyChatImage(url), null, t("chat.image.copyFailed"))}>
 					<Copy aria-hidden="true" />
 					{t("chat.image.copy")}
 				</ContextMenuItem>

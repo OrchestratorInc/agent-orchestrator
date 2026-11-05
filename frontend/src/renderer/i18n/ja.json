@@ -3027,7 +3027,6 @@
 	"chat.image.untitled": "画像",
 	"chat.image.copy": "画像をコピー",
 	"chat.image.save": "画像を保存",
-	"chat.image.copied": "画像をコピーしました",
 	"chat.image.copyFailed": "画像をコピーできませんでした",
 	"chat.image.saveFailed": "画像を保存できませんでした",
 	"chat.render.expand": "ページを拡大",
