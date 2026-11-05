@@ -1135,6 +1135,8 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
 		// The fold names the time, so the answer's own row does not repeat it.
 		expect(document.querySelector("[data-turn-duration]")).toBeNull();
+		// "Worked for" fills the row under the prompt, so no empty one is reserved.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
 
 		await user.click(worked);
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
@@ -1172,6 +1174,8 @@ describe("ChatWorkspace timeline", () => {
 
 		// Nothing to fold, so no "Worked for": the time ends the answer's action row instead.
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
+		// An empty row of the same height keeps the prompt's hover actions off the answer.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeInTheDocument();
 		const duration = screen.getByText("1m");
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
 		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));

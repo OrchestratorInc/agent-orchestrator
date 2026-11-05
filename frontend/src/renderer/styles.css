@@ -3108,10 +3108,12 @@ html.sidebar-reordering * {
 	--chat-human-fade: 40px;
 }
 
-/* Open and settled, the message carries no mask or clip at all. */
+/* Open and settled, the message carries no mask or clip at all. Clip, not hidden:
+   a hidden box still scrolls when focus or find-in-page reaches the folded text,
+   which would leave the fold showing a slice from the middle. */
 .chat-human-fold[data-folded],
 .chat-human-fold[data-animating] {
-	overflow: hidden;
+	overflow: clip;
 	mask-image: linear-gradient(to bottom, #000 calc(100% - var(--chat-human-fade)), transparent);
 }
 
