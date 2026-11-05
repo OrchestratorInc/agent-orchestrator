@@ -18,6 +18,11 @@ func cursorRoot(home string) string {
 	return filepath.Join(home, ".cursor")
 }
 
+// cursorPlaceholderTitle is the name Cursor gives a chat it has not titled.
+// Like OpenCode's "New session - …", it is treated as no title so the list
+// shows the opening prompt instead of many identical rows.
+const cursorPlaceholderTitle = "New Agent"
+
 func readCursorTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessCursor, root: canonical(root)}
 	if len(paths) != 1 {
@@ -29,6 +34,9 @@ func readCursorTranscript(ctx context.Context, root string, paths ...string) (tr
 	}
 	t.path, t.paths, t.nativeID, t.cwd = paths[0], paths, archive.ID, archive.CWD
 	t.title, t.model, t.last = importTitle(archive.Title), archive.Model, archive.Updated
+	if t.title == cursorPlaceholderTitle {
+		t.title = ""
+	}
 	t.messages = make([]Message, 0, len(archive.Messages))
 	for _, message := range archive.Messages {
 		role := domain.MessageRoleAssistant

@@ -191,6 +191,44 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	}
 }
 
+func TestCursorPlaceholderTitleUsesOpeningPrompt(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	path := cursorFixture(t, root, cwd)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded string
+	if err := db.QueryRow("SELECT value FROM meta WHERE key='0'").Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	body, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["name"] = cursorPlaceholderTitle
+	if body, err = json.Marshal(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE meta SET value=? WHERE key='0'", hex.EncodeToString(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readCursorTranscript(context.Background(), root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.title != "synthetic native cursor prompt" {
+		t.Fatalf("title = %q, want the opening prompt", got.title)
+	}
+}
+
 func TestCursorScanInvalidatesWALAndSidecarChanges(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	path := cursorFixture(t, root, cwd)

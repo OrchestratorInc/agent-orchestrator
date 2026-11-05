@@ -12,6 +12,11 @@ vi.mock("../../../lib/api-client", () => ({
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: () => "Import failed",
 }));
+const openSession = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/navigate-to-session", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../lib/navigate-to-session")>()),
+	useNavigateToSession: () => openSession,
+}));
 it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
@@ -83,6 +88,33 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
 	expect(screen.getByText("Already in AO")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
+});
+
+it("filters the list by a search over titles and projects", async () => {
+	renderPanel();
+	await screen.findByRole("checkbox", { name: "Import Fix parser" });
+	const search = screen.getByRole("searchbox", { name: "Search chats" });
+	fireEvent.change(search, { target: { value: "parser" } });
+	expect(screen.getByText("Fix parser")).toBeInTheDocument();
+	expect(screen.queryByText("Old discussion")).not.toBeInTheDocument();
+	fireEvent.change(search, { target: { value: "standalone" } });
+	expect(screen.getByText("Old discussion")).toBeInTheDocument();
+	fireEvent.change(search, { target: { value: "nothing like this" } });
+	expect(screen.getByText("No chats match \u201cnothing like this\u201d.")).toBeInTheDocument();
+});
+
+it("opens an imported chat from the result line and from its row", async () => {
+	renderPanel();
+	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Fix parser" }));
+	fireEvent.click(screen.getByRole("checkbox", { name: "Import Old discussion" }));
+	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
+	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
+	// A Standalone chat has no project to show.
+	expect(screen.queryByRole("button", { name: "Show project" })).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
+	expect(openSession).toHaveBeenLastCalledWith(undefined, "standalone-1");
+	fireEvent.click(screen.getByRole("button", { name: "Open" }));
+	expect(openSession).toHaveBeenCalledTimes(2);
 });
 
 it("gates importable harnesses to the ones with a verified resume path", () => {

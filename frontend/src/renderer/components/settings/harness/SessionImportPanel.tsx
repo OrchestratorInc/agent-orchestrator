@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
 import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
+import { formatTimeCompact } from "../../../lib/format-time";
+import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
+import { useUiStore } from "../../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { SettingsSearch } from "../SettingsSearch";
 import type { components } from "../../../../api/schema";
 
 type Candidate = components["schemas"]["SessionImportCandidate"];
@@ -54,13 +59,19 @@ function folderName(path: string): string {
 export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const { t } = useTranslation();
 	const [project, setProject] = useState("all");
+	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState(new Set<string>());
 	const [results, setResults] = useState<ImportResult[]>([]);
 	const [importing, setImporting] = useState(false);
 	// The scan an import runs after adding folders must not reset its results.
 	const importingRef = useRef(false);
+	// Choices made on the last list (a selection or an import) survive the next scan.
+	const keepChoicesRef = useRef(false);
 	const [error, setError] = useState<string>();
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const navigateToSession = useNavigateToSession();
+	const closeSettings = useUiStore((state) => state.closeSettings);
 	const workspaces = useQuery(workspaceQueryOptions);
 	const projects = useMemo(
 		() =>
@@ -85,13 +96,13 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	});
 	useEffect(() => {
 		if (!preview.data || importingRef.current) return;
-		setSelected(
-			new Set(
-				preview.data.candidates
-					.filter((c) => c.suggested && !c.sessionId)
-					.map((c) => c.id),
-			),
-		);
+		const list = preview.data.candidates;
+		if (keepChoicesRef.current) {
+			const open = new Set(list.filter((c) => !c.sessionId).map((c) => c.id));
+			setSelected((current) => new Set([...current].filter((id) => open.has(id))));
+			return;
+		}
+		setSelected(new Set(list.filter((c) => c.suggested && !c.sessionId).map((c) => c.id)));
 		setResults([]);
 	}, [preview.data]);
 	const candidates = useMemo(
@@ -102,18 +113,23 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		() => [...new Set(candidates.flatMap((c) => (c.folder ? [c.folder] : [])))].sort(),
 		[candidates],
 	);
-	const visible = useMemo(
-		() =>
-			candidates.filter(
-				(c) =>
-					project === "all" ||
-					(project === "standalone"
-						? !c.projectId && !c.folder
-						: project.startsWith(folderFilter)
-							? c.folder === project.slice(folderFilter.length)
-							: c.projectId === project),
-			),
-		[candidates, project],
+	const names = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
+	const projectName = (c: Candidate) =>
+		c.projectId
+			? (names.get(c.projectId) ?? c.projectId)
+			: c.folder
+				? t("sessionImport.newProject", { name: folderName(c.folder) })
+				: t("remote.standalone");
+	const needle = query.trim().toLocaleLowerCase();
+	const visible = candidates.filter(
+		(c) =>
+			(project === "all" ||
+				(project === "standalone"
+					? !c.projectId && !c.folder
+					: project.startsWith(folderFilter)
+						? c.folder === project.slice(folderFilter.length)
+						: c.projectId === project)) &&
+			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
 	const selectedVisible = visible.filter(
 		(c) =>
@@ -122,8 +138,21 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			!results.some((r) => r.id === c.id && r.status !== "failed"),
 	);
 	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
-	const names = new Map(projects.map((p) => [p.id, p.name]));
-	const toggle = (ids: string[], checked: boolean) =>
+	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
+	const openSession = (c: Candidate, sessionId: string) => {
+		closeSettings();
+		navigateToSession(c.projectId, sessionId);
+	};
+	const created = results
+		.filter((r) => r.status === "created" && r.sessionId)
+		.flatMap((r) => {
+			const c = candidates.find((item) => item.id === r.id);
+			return c && r.sessionId ? [{ candidate: c, sessionId: r.sessionId }] : [];
+		})
+		.sort((a, b) => b.candidate.lastActivity.localeCompare(a.candidate.lastActivity));
+	const firstCreated = created[0];
+	const toggle = (ids: string[], checked: boolean) => {
+		keepChoicesRef.current = true;
 		setSelected((current) => {
 			const next = new Set(current);
 			for (const id of ids) {
@@ -132,6 +161,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			}
 			return next;
 		});
+	};
 	const eligible = visible.filter(
 		(c) =>
 			!c.sessionId &&
@@ -140,6 +170,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const importSelected = async () => {
 		setImporting(true);
 		importingRef.current = true;
+		keepChoicesRef.current = true;
 		setError(undefined);
 		const ids = selectedVisible.map((c) => c.id);
 		try {
@@ -196,9 +227,12 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.description", { agent: agentLabel(harness) })}
 				</p>
-				<div className="flex flex-wrap gap-3">
-					<div className="flex flex-col gap-1 text-xs">
-						<span aria-hidden="true">{t("newTask.project")}</span>
+				<SettingsSearch
+					value={query}
+					onChange={setQuery}
+					placeholder={t("sessionImport.searchPlaceholder")}
+					aria-label={t("sessionImport.searchPlaceholder")}
+					trailing={
 						<Select value={project} onValueChange={setProject} disabled={importing}>
 							<SelectTrigger size="sm" className="w-56 text-control" aria-label={t("newTask.project")}>
 								<SelectValue />
@@ -218,8 +252,8 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 								))}
 							</SelectContent>
 						</Select>
-					</div>
-				</div>
+					}
+				/>
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.selectionHelp")}
 				</p>
@@ -235,8 +269,9 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 			</div>
-			<div className="settings-thin-scrollbar min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain rounded-md border border-border">
-				<label className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
+			<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
+				{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
+				<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
 					<Checkbox
 						aria-label={t("sessionImport.selectAllAria")}
 						checked={
@@ -252,28 +287,25 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					/>
 					{t("sessionImport.selectAll", { count: visible.length })}
 				</label>
-				{visible.map((c) => (
-					<ImportRow
-						key={c.id}
-						candidate={c}
-						projectName={
-							c.projectId
-								? (names.get(c.projectId) ?? c.projectId)
-								: c.folder
-									? t("sessionImport.newProject", { name: folderName(c.folder) })
-									: t("remote.standalone")
-						}
-						selected={selected.has(c.id)}
-						disabled={importing}
-						result={results.find((r) => r.id === c.id)}
-						onSelect={(checked) => toggle([c.id], checked)}
-					/>
-				))}
-				{!preview.isFetching && !visible.length ? (
-					<p className="p-6 text-sm text-muted-foreground">
-						{t("sessionImport.empty")}
-					</p>
-				) : null}
+				<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+					{visible.map((c) => (
+						<ImportRow
+							key={c.id}
+							candidate={c}
+							projectName={projectName(c)}
+							selected={selected.has(c.id)}
+							disabled={importing}
+							result={results.find((r) => r.id === c.id)}
+							onSelect={(checked) => toggle([c.id], checked)}
+							onOpen={(sessionId) => openSession(c, sessionId)}
+						/>
+					))}
+					{!preview.isFetching && !visible.length ? (
+						<p className="p-6 text-sm text-muted-foreground">
+							{needle ? t("sessionImport.noMatches", { query: query.trim() }) : t("sessionImport.empty")}
+						</p>
+					) : null}
+				</div>
 			</div>
 			<div className="flex shrink-0 flex-col gap-3">
 				{newFolders.length ? (
@@ -285,15 +317,37 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 				{results.length ? (
-					<p role="status" className="text-sm">
-						{summarize(results)}
-					</p>
+					<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+						<p role="status" className="text-sm">
+							{summarize(results)}
+						</p>
+						{firstCreated ? (
+							<>
+								<Button size="sm" variant="secondary" onClick={() => openSession(firstCreated.candidate, firstCreated.sessionId)}>
+									{t("sessionImport.openChat")}
+								</Button>
+								{firstCreated.candidate.projectId ? (
+									<Button
+										size="sm"
+										variant="ghost"
+										onClick={() => {
+											closeSettings();
+											void navigate(projectNavigateTarget(firstCreated.candidate.projectId as string));
+										}}
+									>
+										{t("sessionImport.showProject")}
+									</Button>
+								) : null}
+							</>
+						) : null}
+					</div>
 				) : null}
 				<div className="flex items-center justify-between gap-3">
 					<Button
 						variant="ghost"
 						onClick={() => {
 							setError(undefined);
+							keepChoicesRef.current = false;
 							void preview.refetch();
 						}}
 						disabled={importing || preview.isFetching}
@@ -305,8 +359,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						disabled={
 							!selectedVisible.length ||
 							selectedVisible.length > 500 ||
-							importing ||
-							preview.isFetching
+							importing
 						}
 					>
 						{importing
@@ -331,6 +384,7 @@ function ImportRow({
 	disabled,
 	result,
 	onSelect,
+	onOpen,
 }: {
 	candidate: Candidate;
 	projectName: string;
@@ -338,11 +392,13 @@ function ImportRow({
 	disabled: boolean;
 	result?: ImportResult;
 	onSelect: (checked: boolean) => void;
+	onOpen: (sessionId: string) => void;
 }) {
 	const { t, i18n } = useTranslation();
 	const imported = Boolean(
 		c.sessionId || (result && result.status !== "failed"),
 	);
+	const sessionId = c.sessionId || (result?.status !== "failed" ? result?.sessionId : undefined);
 	return (
 		<label className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-3 last:border-0">
 			<Checkbox
@@ -355,8 +411,10 @@ function ImportRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
 				<span className="block truncate text-xs text-muted-foreground">
-					{projectName} · {agentLabel(c.harness)} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
-					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
+					<span title={c.folder}>{projectName}</span> · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					<time dateTime={c.lastActivity} title={new Date(c.lastActivity).toLocaleString(i18n.resolvedLanguage)}>
+						{formatTimeCompact(c.lastActivity, { longUnits: true })}
+					</time>
 				</span>
 				{c.shortened ? (
 					<span className="block text-xs text-warning">
@@ -364,8 +422,20 @@ function ImportRow({
 					</span>
 				) : null}
 				{imported ? (
-					<span className="block text-xs text-muted-foreground">
+					<span className="flex items-center gap-2 text-xs text-muted-foreground">
 						{t("sessionImport.alreadyImported")}
+						{sessionId ? (
+							<Button
+								size="xs"
+								variant="ghost"
+								onClick={(event) => {
+									event.preventDefault();
+									onOpen(sessionId);
+								}}
+							>
+								{t("sessionImport.open")}
+							</Button>
+						) : null}
 					</span>
 				) : null}
 				{result?.error ? (
