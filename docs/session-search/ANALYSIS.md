@@ -1494,3 +1494,24 @@ deletion path, including seed sessions and task preparations, and any added
 later. `TestADeletedSessionLeavesTheIndex` deletes an archived session the way
 main does. Afterwards its words find nothing and only the kept session's source
 remains. Without the trigger, the deleted session is still found.
+
+### 8.10 A match below a folded message's fold (5 Nov 2026)
+
+Main now folds a long user message to about ten lines behind Show more
+(#7784), clipping the rest with `overflow: clip`. Opening a search result, and
+stepping with Enter/Shift+Enter in the find bar, both go through the chat's
+annotation navigation, which measures the matched text and centers it. For a
+word below the fold, it centered text the fold clipped: the reader saw the top
+of the prompt and no highlight.
+
+Navigation now asks whatever folds the match to open first
+(`revealFoldedRange` in `lib/chat-annotation-navigation.ts`). A folded
+`CollapsibleHumanBody` opens only when the match's bottom is below its visible
+text, the last 40px fade included, and remembers it opened as Show more would.
+A match in the first lines leaves the message folded. The navigation then
+measures again once the open message has rendered, so it centers text that is
+there to see. Main's own annotation links and the palette's chat search take
+the same path, so they are fixed too. Tests: `CollapsibleHumanBody.test.tsx`
+(above the fold stays folded; in the fade or below opens) and
+`ChatWorkspace.test.tsx` (a navigation request at a word below a long prompt's
+fold opens it and highlights the word). Both fail without the fix.

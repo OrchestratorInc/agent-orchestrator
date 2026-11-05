@@ -57,7 +57,7 @@ import {
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation, revealFoldedRange } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -3880,6 +3880,13 @@ export function Timeline({
 			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision);
 			const scrollerNode = scroller.current;
 			let range = annotationTextRange(annotationBody(source), annotationTarget.text);
+			if (range && annotationRetryCount.current < 20 && revealFoldedRange(range)) {
+				// The match was below a long message's fold, which is opening: measure
+				// once it has rendered rather than center text the fold still clips.
+				annotationRetryCount.current++;
+				setAnnotationTarget((current) => current ? { ...current } : current);
+				return;
+			}
 			if (range && scrollerNode) {
 				const rangeRect = range.getBoundingClientRect();
 				const scrollerRect = scrollerNode.getBoundingClientRect();
