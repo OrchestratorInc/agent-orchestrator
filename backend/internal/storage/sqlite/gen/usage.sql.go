@@ -201,6 +201,15 @@ func (q *Queries) CompleteUsageBindingIfSettled(ctx context.Context, arg Complet
 	return result.RowsAffected()
 }
 
+const deleteUsageTierRepair = `-- name: DeleteUsageTierRepair :exec
+DELETE FROM usage_tier_repairs WHERE usage_source_id = ?
+`
+
+func (q *Queries) DeleteUsageTierRepair(ctx context.Context, usageSourceID int64) error {
+	_, err := q.db.ExecContext(ctx, deleteUsageTierRepair, usageSourceID)
+	return err
+}
+
 const enrichModelUsageEventProviderUsage = `-- name: EnrichModelUsageEventProviderUsage :execrows
 UPDATE model_usage_events
 SET provider_usage_json = ?1
@@ -1293,6 +1302,114 @@ func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) (
 	return items, nil
 }
 
+const listUsageModelCostCandidates = `-- name: ListUsageModelCostCandidates :many
+SELECT event.id, event.binding_id, event.usage_source_id, event.provider_id, event.billing_provider_id, event.model_id, event.usage_measurement_kind, event.input_tokens, event.cached_input_tokens, event.uncached_input_tokens, event.output_tokens, event.provider_usage_json, event.source_event_key, event.created_at, event.input_cost_nanos, event.cached_input_cost_nanos, event.output_cost_nanos, event.estimated_cost_nanos, event.pricing_version, event.billing_provider_source, event.service_tier, event.provider_message_id
+FROM model_usage_events event
+WHERE event.model_id = ?1
+  AND (event.estimated_cost_nanos IS NULL
+       OR event.pricing_version LIKE 'ao-catalog:%'
+       OR event.pricing_version LIKE 'ao-override:%')
+  AND event.id > ?2
+ORDER BY event.id
+LIMIT 256
+`
+
+type ListUsageModelCostCandidatesParams struct {
+	ModelID string
+	AfterID int64
+}
+
+type ListUsageModelCostCandidatesRow struct {
+	ModelUsageEvent ModelUsageEvent
+}
+
+// One model's events that AO prices itself, for a price override change.
+func (q *Queries) ListUsageModelCostCandidates(ctx context.Context, arg ListUsageModelCostCandidatesParams) ([]ListUsageModelCostCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageModelCostCandidates, arg.ModelID, arg.AfterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageModelCostCandidatesRow{}
+	for rows.Next() {
+		var i ListUsageModelCostCandidatesRow
+		if err := rows.Scan(
+			&i.ModelUsageEvent.ID,
+			&i.ModelUsageEvent.BindingID,
+			&i.ModelUsageEvent.UsageSourceID,
+			&i.ModelUsageEvent.ProviderID,
+			&i.ModelUsageEvent.BillingProviderID,
+			&i.ModelUsageEvent.ModelID,
+			&i.ModelUsageEvent.UsageMeasurementKind,
+			&i.ModelUsageEvent.InputTokens,
+			&i.ModelUsageEvent.CachedInputTokens,
+			&i.ModelUsageEvent.UncachedInputTokens,
+			&i.ModelUsageEvent.OutputTokens,
+			&i.ModelUsageEvent.ProviderUsageJson,
+			&i.ModelUsageEvent.SourceEventKey,
+			&i.ModelUsageEvent.CreatedAt,
+			&i.ModelUsageEvent.InputCostNanos,
+			&i.ModelUsageEvent.CachedInputCostNanos,
+			&i.ModelUsageEvent.OutputCostNanos,
+			&i.ModelUsageEvent.EstimatedCostNanos,
+			&i.ModelUsageEvent.PricingVersion,
+			&i.ModelUsageEvent.BillingProviderSource,
+			&i.ModelUsageEvent.ServiceTier,
+			&i.ModelUsageEvent.ProviderMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsagePricedVersions = `-- name: ListUsagePricedVersions :many
+SELECT DISTINCT pricing_version
+FROM model_usage_events
+WHERE estimated_cost_nanos IS NOT NULL
+  AND pricing_version >= ?1
+  AND pricing_version < ?2
+ORDER BY pricing_version
+`
+
+type ListUsagePricedVersionsParams struct {
+	VersionFrom string
+	VersionTo   string
+}
+
+// Versions a provider's priced events carry, read from the partial index
+// idx_model_usage_events_priced_version. The range is one provider's
+// 'ao-catalog:<provider>:' prefix.
+func (q *Queries) ListUsagePricedVersions(ctx context.Context, arg ListUsagePricedVersionsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listUsagePricedVersions, arg.VersionFrom, arg.VersionTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var pricing_version string
+		if err := rows.Scan(&pricing_version); err != nil {
+			return nil, err
+		}
+		items = append(items, pricing_version)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageReportEvents = `-- name: ListUsageReportEvents :many
 SELECT
     model_usage_events.created_at,
@@ -1408,6 +1525,71 @@ func (q *Queries) ListUsageReportEvents(ctx context.Context, arg ListUsageReport
 	return items, nil
 }
 
+const listUsageRepriceCandidates = `-- name: ListUsageRepriceCandidates :many
+SELECT event.id, event.binding_id, event.usage_source_id, event.provider_id, event.billing_provider_id, event.model_id, event.usage_measurement_kind, event.input_tokens, event.cached_input_tokens, event.uncached_input_tokens, event.output_tokens, event.provider_usage_json, event.source_event_key, event.created_at, event.input_cost_nanos, event.cached_input_cost_nanos, event.output_cost_nanos, event.estimated_cost_nanos, event.pricing_version, event.billing_provider_source, event.service_tier, event.provider_message_id
+FROM model_usage_events event
+WHERE event.pricing_version = ?1
+  AND event.estimated_cost_nanos IS NOT NULL
+  AND event.id > ?2
+ORDER BY event.id
+LIMIT 256
+`
+
+type ListUsageRepriceCandidatesParams struct {
+	PricingVersion string
+	AfterID        int64
+}
+
+type ListUsageRepriceCandidatesRow struct {
+	ModelUsageEvent ModelUsageEvent
+}
+
+func (q *Queries) ListUsageRepriceCandidates(ctx context.Context, arg ListUsageRepriceCandidatesParams) ([]ListUsageRepriceCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageRepriceCandidates, arg.PricingVersion, arg.AfterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageRepriceCandidatesRow{}
+	for rows.Next() {
+		var i ListUsageRepriceCandidatesRow
+		if err := rows.Scan(
+			&i.ModelUsageEvent.ID,
+			&i.ModelUsageEvent.BindingID,
+			&i.ModelUsageEvent.UsageSourceID,
+			&i.ModelUsageEvent.ProviderID,
+			&i.ModelUsageEvent.BillingProviderID,
+			&i.ModelUsageEvent.ModelID,
+			&i.ModelUsageEvent.UsageMeasurementKind,
+			&i.ModelUsageEvent.InputTokens,
+			&i.ModelUsageEvent.CachedInputTokens,
+			&i.ModelUsageEvent.UncachedInputTokens,
+			&i.ModelUsageEvent.OutputTokens,
+			&i.ModelUsageEvent.ProviderUsageJson,
+			&i.ModelUsageEvent.SourceEventKey,
+			&i.ModelUsageEvent.CreatedAt,
+			&i.ModelUsageEvent.InputCostNanos,
+			&i.ModelUsageEvent.CachedInputCostNanos,
+			&i.ModelUsageEvent.OutputCostNanos,
+			&i.ModelUsageEvent.EstimatedCostNanos,
+			&i.ModelUsageEvent.PricingVersion,
+			&i.ModelUsageEvent.BillingProviderSource,
+			&i.ModelUsageEvent.ServiceTier,
+			&i.ModelUsageEvent.ProviderMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageSourcesForBinding = `-- name: ListUsageSourcesForBinding :many
 SELECT id, binding_id, kind, native_session_id, subagent_id, artifact_path, file_identity, generation, byte_offset, parser_state_json, state, failure_count, anomaly_count, next_retry_at, last_error_code, updated_at
 FROM usage_sources
@@ -1445,6 +1627,33 @@ func (q *Queries) ListUsageSourcesForBinding(ctx context.Context, bindingID int6
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsageTierRepairSourceIDs = `-- name: ListUsageTierRepairSourceIDs :many
+SELECT usage_source_id FROM usage_tier_repairs ORDER BY usage_source_id
+`
+
+func (q *Queries) ListUsageTierRepairSourceIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageTierRepairSourceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var usage_source_id int64
+		if err := rows.Scan(&usage_source_id); err != nil {
+			return nil, err
+		}
+		items = append(items, usage_source_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1604,6 +1813,38 @@ type RehomeOpenUsageEventToReplacementSourceParams struct {
 // that is a fact about how it was observed rather than a stale pointer.
 func (q *Queries) RehomeOpenUsageEventToReplacementSource(ctx context.Context, arg RehomeOpenUsageEventToReplacementSourceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, rehomeOpenUsageEventToReplacementSource, arg.UsageSourceID, arg.ID, arg.ExpectedUsageSourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setUntieredUsageEventTier = `-- name: SetUntieredUsageEventTier :execrows
+UPDATE model_usage_events
+SET service_tier = ?1,
+    input_cost_nanos = NULL,
+    cached_input_cost_nanos = NULL,
+    output_cost_nanos = NULL,
+    estimated_cost_nanos = NULL,
+    pricing_version = ''
+WHERE binding_id = ?2
+  AND source_event_key = ?3
+  AND service_tier IS NULL
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%')
+`
+
+type SetUntieredUsageEventTierParams struct {
+	ServiceTier    sql.NullString
+	BindingID      int64
+	SourceEventKey string
+}
+
+// The tier changes the price, so the cost is cleared for the backfiller to
+// price again at the tier's rates.
+func (q *Queries) SetUntieredUsageEventTier(ctx context.Context, arg SetUntieredUsageEventTierParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setUntieredUsageEventTier, arg.ServiceTier, arg.BindingID, arg.SourceEventKey)
 	if err != nil {
 		return 0, err
 	}
@@ -1818,7 +2059,11 @@ WHERE id = ?6
   AND service_tier IS ?16
   AND source_event_key = ?17
   AND pricing_version = ?18
-  AND estimated_cost_nanos IS NULL
+  AND estimated_cost_nanos IS ?19
+  -- AO's own prices only: an agent's reported cost is never overwritten.
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%')
 RETURNING binding_id
 `
 
@@ -1841,6 +2086,7 @@ type UpdateUsageCostCandidateParams struct {
 	ExpectedServiceTier          sql.NullString
 	ExpectedSourceEventKey       string
 	ExpectedPricingVersion       string
+	ExpectedEstimatedCostNanos   sql.NullInt64
 }
 
 func (q *Queries) UpdateUsageCostCandidate(ctx context.Context, arg UpdateUsageCostCandidateParams) (int64, error) {
@@ -1863,6 +2109,7 @@ func (q *Queries) UpdateUsageCostCandidate(ctx context.Context, arg UpdateUsageC
 		arg.ExpectedServiceTier,
 		arg.ExpectedSourceEventKey,
 		arg.ExpectedPricingVersion,
+		arg.ExpectedEstimatedCostNanos,
 	)
 	var binding_id int64
 	err := row.Scan(&binding_id)

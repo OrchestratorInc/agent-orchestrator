@@ -50,6 +50,11 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 	})
 	repairer := usagepipeline.NewLegacyRepairer(config.Store, manager, usagepipeline.LegacyRepairerConfig{
 		OnError: func(err error) { logger.Warn("legacy usage pricing repair failed", "err", err) },
+		OnTiersFilled: func(ctx context.Context) {
+			if err := backfiller.Rerun(ctx, manager.Snapshot()); err != nil && ctx.Err() == nil {
+				logger.Warn("enqueue usage repricing after tier repair", "err", err)
+			}
+		},
 	})
 	runtime := &usagePricingRuntime{manager: manager, backfiller: backfiller, repairer: repairer, logger: logger}
 	refresher, err := pricing.NewRefresher(pricing.RefreshConfig{

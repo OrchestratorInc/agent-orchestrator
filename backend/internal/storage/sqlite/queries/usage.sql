@@ -522,8 +522,67 @@ WHERE id = sqlc.arg(id)
   AND service_tier IS sqlc.narg(expected_service_tier)
   AND source_event_key = sqlc.arg(expected_source_event_key)
   AND pricing_version = sqlc.arg(expected_pricing_version)
-  AND estimated_cost_nanos IS NULL
+  AND estimated_cost_nanos IS sqlc.narg(expected_estimated_cost_nanos)
+  -- AO's own prices only: an agent's reported cost is never overwritten.
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%')
 RETURNING binding_id;
+
+-- name: ListUsagePricedVersions :many
+-- Versions a provider's priced events carry, read from the partial index
+-- idx_model_usage_events_priced_version. The range is one provider's
+-- 'ao-catalog:<provider>:' prefix.
+SELECT DISTINCT pricing_version
+FROM model_usage_events
+WHERE estimated_cost_nanos IS NOT NULL
+  AND pricing_version >= sqlc.arg(version_from)
+  AND pricing_version < sqlc.arg(version_to)
+ORDER BY pricing_version;
+
+-- name: ListUsageRepriceCandidates :many
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.pricing_version = sqlc.arg(pricing_version)
+  AND event.estimated_cost_nanos IS NOT NULL
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageModelCostCandidates :many
+-- One model's events that AO prices itself, for a price override change.
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.model_id = sqlc.arg(model_id)
+  AND (event.estimated_cost_nanos IS NULL
+       OR event.pricing_version LIKE 'ao-catalog:%'
+       OR event.pricing_version LIKE 'ao-override:%')
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageTierRepairSourceIDs :many
+SELECT usage_source_id FROM usage_tier_repairs ORDER BY usage_source_id;
+
+-- name: DeleteUsageTierRepair :exec
+DELETE FROM usage_tier_repairs WHERE usage_source_id = ?;
+
+-- name: SetUntieredUsageEventTier :execrows
+-- The tier changes the price, so the cost is cleared for the backfiller to
+-- price again at the tier's rates.
+UPDATE model_usage_events
+SET service_tier = sqlc.arg(service_tier),
+    input_cost_nanos = NULL,
+    cached_input_cost_nanos = NULL,
+    output_cost_nanos = NULL,
+    estimated_cost_nanos = NULL,
+    pricing_version = ''
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND service_tier IS NULL
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%');
 
 -- name: ListLegacyUsageSourceIDs :many
 -- Open attribution: never attributed, or attributed only by inference and so

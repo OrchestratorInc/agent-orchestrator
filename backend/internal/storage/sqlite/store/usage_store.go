@@ -552,6 +552,65 @@ func (s *Store) ListUsageCostCandidates(
 	return out, nil
 }
 
+// ListUsagePricedVersions lists the catalog versions that priced a provider's
+// stored events, so a newer version can find the rows an older one priced.
+func (s *Store) ListUsagePricedVersions(ctx context.Context, providerID string) ([]string, error) {
+	prefix := "ao-catalog:" + providerID + ":"
+	versions, err := s.qr.ListUsagePricedVersions(ctx, gen.ListUsagePricedVersionsParams{
+		VersionFrom: prefix,
+		// ';' sorts right after ':', so this bounds exactly the prefix.
+		VersionTo: "ao-catalog:" + providerID + ";",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list %s priced usage versions: %w", providerID, err)
+	}
+	return versions, nil
+}
+
+// ListUsageRepriceCandidates returns the next page of events priced at version.
+func (s *Store) ListUsageRepriceCandidates(ctx context.Context, version string, afterID int64) ([]domain.UsageCostCandidate, error) {
+	rows, err := s.qr.ListUsageRepriceCandidates(ctx, gen.ListUsageRepriceCandidatesParams{PricingVersion: version, AfterID: afterID})
+	if err != nil {
+		return nil, fmt.Errorf("list usage reprice candidates at %s: %w", version, err)
+	}
+	out := make([]domain.UsageCostCandidate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, usageCostCandidate(row.ModelUsageEvent))
+	}
+	return out, nil
+}
+
+// ListUsageModelCostCandidates returns the next page of one model's events
+// that AO prices itself, leaving agent-reported costs out.
+func (s *Store) ListUsageModelCostCandidates(ctx context.Context, modelID string, afterID int64) ([]domain.UsageCostCandidate, error) {
+	rows, err := s.qr.ListUsageModelCostCandidates(ctx, gen.ListUsageModelCostCandidatesParams{ModelID: modelID, AfterID: afterID})
+	if err != nil {
+		return nil, fmt.Errorf("list %s usage cost candidates: %w", modelID, err)
+	}
+	out := make([]domain.UsageCostCandidate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, usageCostCandidate(row.ModelUsageEvent))
+	}
+	return out, nil
+}
+
+func usageCostCandidate(row gen.ModelUsageEvent) domain.UsageCostCandidate {
+	return domain.UsageCostCandidate{
+		ID:                 row.ID,
+		BindingID:          row.BindingID,
+		ProviderID:         domain.UsageProviderID(row.ProviderID),
+		BillingProviderID:  row.BillingProviderID.String,
+		ModelID:            row.ModelID,
+		MeasurementKind:    domain.UsageMeasurementKind(row.UsageMeasurementKind),
+		Tokens:             storedUsageTokens(row.InputTokens, row.CachedInputTokens, row.UncachedInputTokens, row.OutputTokens),
+		ProviderUsageJSON:  row.ProviderUsageJson.String,
+		ServiceTier:        row.ServiceTier.String,
+		PricingVersion:     row.PricingVersion,
+		SourceEventKey:     row.SourceEventKey,
+		EstimatedCostNanos: nullInt64Ptr(row.EstimatedCostNanos),
+	}
+}
+
 // storedUsageTokens rebuilds the canonical token vector from one durable row. A
 // NULL column is an uncollected metric; a stored zero is a known zero.
 func storedUsageTokens(input, cached, uncached, output sql.NullInt64) domain.UsageTokenMetrics {
@@ -605,6 +664,7 @@ func (s *Store) ApplyUsageCostUpdates(
 				ExpectedServiceTier:          stringOrNull(candidate.ServiceTier),
 				ExpectedSourceEventKey:       candidate.SourceEventKey,
 				ExpectedPricingVersion:       candidate.PricingVersion,
+				ExpectedEstimatedCostNanos:   ptrInt64ToNull(candidate.EstimatedCostNanos),
 			})
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
@@ -703,6 +763,65 @@ func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times m
 			filled += int(n)
 		}
 		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return filled, nil
+}
+
+// ListUsageTierRepairSources returns the sources still queued for one reread
+// to fill the service tier their older events were stored without.
+func (s *Store) ListUsageTierRepairSources(ctx context.Context) ([]domain.UsageSourceContext, error) {
+	ids, err := s.qr.ListUsageTierRepairSourceIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list usage tier repair sources: %w", err)
+	}
+	out := make([]domain.UsageSourceContext, 0, len(ids))
+	for _, id := range ids {
+		row, err := s.qr.GetUsageSourceWithBindingAndSession(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get usage tier repair source %d: %w", id, err)
+		}
+		out = append(out, usageSourceContextFromGen(row))
+	}
+	return out, nil
+}
+
+// CompleteUsageTierRepair fills the tiers a source's reread found, by source
+// event key, and takes the source off the queue in the same transaction. A
+// filled event loses its cost so the backfiller prices it at its tier. It
+// returns the events filled.
+func (s *Store) CompleteUsageTierRepair(ctx context.Context, sourceID, bindingID int64, tiers map[string]string) (int, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
+	defer s.writeMu.Unlock()
+	filled := 0
+	err := s.inTx(ctx, "complete usage tier repair", func(q *gen.Queries) error {
+		for key, tier := range tiers {
+			if tier == "" {
+				continue
+			}
+			n, err := q.SetUntieredUsageEventTier(ctx, gen.SetUntieredUsageEventTierParams{
+				ServiceTier:    sql.NullString{String: tier, Valid: true},
+				BindingID:      bindingID,
+				SourceEventKey: key,
+			})
+			if err != nil {
+				return err
+			}
+			filled += int(n)
+		}
+		if filled > 0 {
+			if err := q.TouchUsageBinding(ctx, gen.TouchUsageBindingParams{UpdatedAt: time.Now().UTC(), ID: bindingID}); err != nil {
+				return err
+			}
+		}
+		return q.DeleteUsageTierRepair(ctx, sourceID)
 	})
 	if err != nil {
 		return 0, err

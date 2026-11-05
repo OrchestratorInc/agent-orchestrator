@@ -21,6 +21,8 @@ type legacyRepairStore interface {
 	ApplyLegacyUsageRepairs(context.Context, []domain.LegacyUsageRepair, time.Time) (int, error)
 	ListUsageSourcesWithUntimedEvents(context.Context) ([]domain.UsageSourceContext, error)
 	SetUsageEventTimes(context.Context, int64, map[string]time.Time) (int, error)
+	ListUsageTierRepairSources(context.Context) ([]domain.UsageSourceContext, error)
+	CompleteUsageTierRepair(context.Context, int64, int64, map[string]string) (int, error)
 }
 
 // LegacyRepairerConfig controls bounded replay and lifecycle diagnostics.
@@ -32,6 +34,9 @@ type LegacyRepairerConfig struct {
 	// RaceRetry is the first delay before retrying a pass that lost its cursor
 	// guard to concurrent ingestion. It doubles up to maxRaceRetry.
 	RaceRetry time.Duration
+	// OnTiersFilled runs after the tier repair filled the tier on any event,
+	// whose cost it cleared for repricing.
+	OnTiersFilled func(context.Context)
 	// StartupSettle delays one follow-up pass after the first. Startup
 	// ingestion begins after the repairer does, so the first pass can read the
 	// table before the rows it exists to repair are in it.
@@ -112,6 +117,9 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 		// Times come only from rereading transcripts, and every row that lacks
 		// one was written by an earlier build, so one pass per start suffices.
 		if err := r.repairEventTimes(ctx); err != nil && ctx.Err() == nil {
+			r.config.OnError(err)
+		}
+		if err := r.repairServiceTiers(ctx); err != nil && ctx.Err() == nil {
 			r.config.OnError(err)
 		}
 		retry := r.config.RaceRetry

@@ -994,6 +994,10 @@ type UsageSource struct {
 	UpdatedAt       time.Time
 }
 
+type UsageTierRepair struct {
+	UsageSourceID int64
+}
+
 type WorkspaceRepo struct {
 	ProjectID     domain.ProjectID
 	Name          string

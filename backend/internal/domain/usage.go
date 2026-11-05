@@ -280,6 +280,9 @@ type UsageCostCandidate struct {
 	ServiceTier       string
 	PricingVersion    string
 	SourceEventKey    string
+	// EstimatedCostNanos is the stored total, nil while unpriced. A reprice
+	// swaps it only if it is still this value.
+	EstimatedCostNanos *int64
 }
 
 // UsageCostUpdate carries one candidate's immutable compare-and-swap facts and

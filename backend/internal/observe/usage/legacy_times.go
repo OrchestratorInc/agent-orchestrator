@@ -47,26 +47,79 @@ func (r *LegacyRepairer) repairEventTimes(ctx context.Context) error {
 }
 
 func (r *LegacyRepairer) replayEventTimes(ctx context.Context, source domain.UsageSourceContext) (map[string]time.Time, error) {
+	times := map[string]time.Time{}
+	err := r.replaySource(ctx, source, func(event domain.ModelUsageEvent) {
+		if !event.CreatedAt.IsZero() {
+			times[event.SourceEventKey] = event.CreatedAt
+		}
+	})
+	return times, err
+}
+
+// repairServiceTiers fills the service tier on events stored before the parser
+// recorded one, so a Codex priority or Claude fast turn from then stops pricing
+// at standard rates. Each queued source is reread once and leaves the queue:
+// a NULL tier also means the provider reported none, so the rows alone could
+// never say the reread is done.
+func (r *LegacyRepairer) repairServiceTiers(ctx context.Context) error {
+	sources, err := r.store.ListUsageTierRepairSources(ctx)
+	if err != nil {
+		return err
+	}
+	filled := 0
+	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		tiers := map[string]string{}
+		err := r.replaySource(ctx, source, func(event domain.ModelUsageEvent) {
+			if event.ServiceTier != "" {
+				tiers[event.SourceEventKey] = event.ServiceTier
+			}
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Left queued: a read error may pass, and the next start retries.
+			r.config.OnError(fmt.Errorf("replay tiers for usage source %d: %w", source.Source.ID, err))
+			continue
+		}
+		n, err := r.store.CompleteUsageTierRepair(ctx, source.Source.ID, source.Source.BindingID, tiers)
+		if err != nil {
+			return err
+		}
+		filled += n
+	}
+	// Filled rows lost their cost; the backfiller prices them at their tier.
+	if filled > 0 && r.config.OnTiersFilled != nil {
+		r.config.OnTiersFilled(ctx)
+	}
+	return nil
+}
+
+// replaySource rereads a source from its start and hands visit every event the
+// parser yields. A transcript that is gone, or a kind with no parser, yields
+// nothing.
+func (r *LegacyRepairer) replaySource(ctx context.Context, source domain.UsageSourceContext, visit func(domain.ModelUsageEvent)) error {
 	reader, closeReader, err := openUsageArtifact(source.Source.ArtifactPath)
 	if errors.Is(err, os.ErrNotExist) {
-		// The transcript is gone, and with it every way to learn the times.
-		return nil, nil
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer closeReader()
 
 	state, err := newParserState(source.Source.Kind)
 	if err != nil {
-		return nil, nil
+		return nil
 	}
 	if persisted, err := decodeParserState(source.Source); err == nil && state.Codex != nil && persisted.Codex != nil {
 		state.Codex.NativeSessionID = persisted.Codex.NativeSessionID
 		state.Codex.DirectParentID = persisted.Codex.DirectParentID
 	}
 
-	times := map[string]time.Time{}
 	batch := make([]jsonlRecord, 0, legacyTimeBatch)
 	var offset int64
 	flush := func() error {
@@ -78,9 +131,7 @@ func (r *LegacyRepairer) replayEventTimes(ctx context.Context, source domain.Usa
 			return parsed.err
 		}
 		for _, event := range parsed.Events {
-			if !event.CreatedAt.IsZero() {
-				times[event.SourceEventKey] = event.CreatedAt
-			}
+			visit(event)
 		}
 		batch = batch[:0]
 		return ctx.Err()
@@ -106,20 +157,17 @@ func (r *LegacyRepairer) replayEventTimes(ctx context.Context, source domain.Usa
 		oversized = false
 		if len(batch) >= legacyTimeBatch {
 			if err := flush(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return nil, readErr
+			return readErr
 		}
 	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	return times, nil
+	return flush()
 }
 
 // openUsageArtifact opens a transcript, or the zstd copy Codex leaves in its
