@@ -222,14 +222,16 @@ func (m *Manager) observe(ctx context.Context, handleID string, w *watch, fg por
 	m.mu.Unlock()
 
 	if harness == "" {
-		m.set(handleID, nil)
+		m.setIfCurrent(handleID, w, gen, nil)
 		return
 	}
 	state := StateWorking
 	if !fg.Busy || starting {
 		state = m.quietState(ctx, handleID, harness)
 	}
-	m.set(handleID, &Agent{HandleID: handleID, Harness: harness, State: state})
+	if !m.setIfCurrent(handleID, w, gen, &Agent{HandleID: handleID, Harness: harness, State: state}) {
+		return
+	}
 	recheck := time.Duration(0)
 	switch {
 	case fg.Busy && starting:
@@ -326,19 +328,38 @@ func (m *Manager) quietState(ctx context.Context, handleID string, harness domai
 	return StateIdle
 }
 
+// setIfCurrent applies one observation's result unless a newer reading began
+// while it read the screen, or the terminal stopped being tracked. A recheck
+// runs beside the watch loop, so without this a slow screen read could
+// overwrite a fresher state, or bring back the agent of a closed terminal.
+// It reports whether the result was applied.
+func (m *Manager) setIfCurrent(handleID string, w *watch, gen uint64, next *Agent) bool {
+	m.mu.Lock()
+	if w.gen != gen || m.tracked[handleID] != w {
+		m.mu.Unlock()
+		return false
+	}
+	m.setLocked(handleID, next)
+	m.mu.Unlock()
+	return true
+}
+
 // set records a terminal's agent (nil clears it) and notifies subscribers
 // when anything visible changed.
 func (m *Manager) set(handleID string, next *Agent) {
 	m.mu.Lock()
+	m.setLocked(handleID, next)
+	m.mu.Unlock()
+}
+
+func (m *Manager) setLocked(handleID string, next *Agent) {
 	prev, had := m.current[handleID]
 	switch {
 	case next == nil && !had:
-		m.mu.Unlock()
 		return
 	case next == nil:
 		delete(m.current, handleID)
 	case had && prev.Harness == next.Harness && prev.State == next.State:
-		m.mu.Unlock()
 		return
 	default:
 		next.Since = m.now().UTC()
@@ -352,7 +373,6 @@ func (m *Manager) set(handleID string, next *Agent) {
 		}
 		sub.ch <- snapshot
 	}
-	m.mu.Unlock()
 }
 
 var (
