@@ -3149,12 +3149,10 @@ describe("Sidebar", () => {
 		await user.hover(screen.getByLabelText("Open fix login"));
 		await screen.findByTestId("board-session-card");
 
-		// The pointer never leaves the row: the confirm itself must close the card.
 		await user.click(within(row).getByLabelText("Archive session"));
 		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
 		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
 
-		// Closing hands focus back to Archive: past the first-open delay, no card.
 		await user.click(within(dialog).getByRole("button", { name: "No" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		await waitFor(() => expect(within(row).getByLabelText("Archive session")).toHaveFocus());
@@ -3174,7 +3172,6 @@ describe("Sidebar", () => {
 		fireEvent.contextMenu(row);
 		await user.click(await screen.findByRole("menuitem", { name: "Archive session" }));
 		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
-		// The confirm is a React child of the row: its focus must not count as the row's.
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 
