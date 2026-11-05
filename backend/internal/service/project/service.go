@@ -692,7 +692,7 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		return
 	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_project_added",
+		Name:       "ao.projects.first_added",
 		Source:     "project_service",
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,

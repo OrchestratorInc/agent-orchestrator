@@ -38,7 +38,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -55,8 +55,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.session.spawned" {
-			t.Fatalf("event = %#v, want ao.session.spawned", got)
+		if got := req["event"]; got != "ao.sessions.spawned" {
+			t.Fatalf("event = %#v, want ao.sessions.spawned", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
@@ -124,7 +124,7 @@ func TestLifetimeSessionCountUsesEnqueueTime(t *testing.T) {
 		t.Fatal("first export did not start")
 	}
 	count.Store(2)
-	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.session.spawned", OccurredAt: time.Now()})
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.sessions.spawned", OccurredAt: time.Now()})
 	count.Store(3)
 	close(releaseFirst)
 	if err := sink.Close(context.Background()); err != nil {
@@ -148,7 +148,7 @@ func TestProjectHashIsInstallationScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectID := domain.ProjectID("ao")
-	event := ports.TelemetryEvent{Name: "ao.session.spawned", ProjectID: &projectID}
+	event := ports.TelemetryEvent{Name: "ao.sessions.spawned", ProjectID: &projectID}
 	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
 	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
 	if a == b || a == sha256String(string(projectID)) {
@@ -262,7 +262,7 @@ func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.session.spawned"} {
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.sessions.spawned"} {
 		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
 	}
 	if err := sink.Close(context.Background()); err != nil {
@@ -447,7 +447,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 
 	emit := func(sink *PostHogSink) map[string]any {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.session.spawn_failed",
+			Name:       "ao.sessions.spawn_failed",
 			Source:     "session_service",
 			OccurredAt: time.Unix(1700000000, 0).UTC(),
 			Level:      ports.TelemetryLevelError,
@@ -488,10 +488,10 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "trigger", "rerun"},
-		"ao.review.trigger_failed": {"error_kind", "trigger"},
-		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
-		"ao.review.cancelled":      {"cancelled_runs"},
+		"ao.reviews.triggered":      {"harness", "created_runs", "trigger", "rerun"},
+		"ao.reviews.trigger_failed": {"error_kind", "trigger"},
+		"ao.reviews.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
+		"ao.reviews.cancelled":      {"cancelled_runs"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -531,9 +531,9 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 // would export stripped.
 func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	want := map[string][]string{
-		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
-		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
-		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
+		"ao.harnesses.updated":          {"harness", "level", "live_sessions", "result"},
+		"ao.harness.update_idle_wait":   {"harness", "sessions", "wait_ms"},
+		"ao.harnesses.version_switched": {"harness", "latency_ms", "mode", "result"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -565,7 +565,7 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 	}
 	defer func() { _ = sink.Close(context.Background()) }()
 	event := ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
+		Name:    "ao.sessions.spawned",
 		Source:  "session_service",
 		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
 	}
@@ -600,7 +600,7 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 }
 
 func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
-	got := sanitizeRemotePayload("ao.review.submitted", map[string]any{
+	got := sanitizeRemotePayload("ao.reviews.submitted", map[string]any{
 		"verdict": "changes_requested",
 		"trigger": "auto",
 		"body":    "leaks credentials in src/config/prod.ts",
@@ -636,7 +636,7 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	for range 2 {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:    "ao.session.spawned",
+			Name:    "ao.sessions.spawned",
 			Source:  "session_service",
 			Payload: map[string]any{"github_actor": "octocat"},
 		})

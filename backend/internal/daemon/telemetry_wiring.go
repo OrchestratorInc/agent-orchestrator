@@ -67,7 +67,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	// CLI usage is already one event per command path and error kind. The
 	// minute cap would drop most of that daily burst. The day cap stays.
-	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
+	rateLimited.SkipMinuteWindow("ao.usage.cli_usage_errors")
 	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
@@ -117,7 +117,7 @@ var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minut
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
 // background and stores it on the telemetry identity, so every exported daemon
-// event carries github_actor, not just ao.session.spawned. The provider is
+// event carries github_actor, not just ao.sessions.spawned. The provider is
 // rebuilt per attempt because it reads the token at construction. Only the
 // authenticated GitHub account is used, never git config.
 func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident ports.TelemetryIdentityStore, log *slog.Logger) {

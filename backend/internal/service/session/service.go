@@ -311,7 +311,7 @@ type Deps struct {
 	DataDir   string
 	Telemetry ports.EventSink
 	// Milestones durably records the install's first spawned session, so
-	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
+	// ao.sessions.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
 	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
 	// nil, neither is reported from this service.
@@ -460,7 +460,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 }
 
 // spawnWithTelemetry is the only path from the service into manager.Spawn, so
-// every created session emits ao.session.spawned or ao.session.spawn_failed
+// every created session emits ao.sessions.spawned or ao.sessions.spawn_failed
 // exactly once. Client-request replays return before reaching it.
 func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
 	// CLI and orchestrator workers use this same naming policy as desktop tasks.
@@ -549,7 +549,7 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// firstSessionClaims decides first_for_install on ao.session.spawned. The
+// firstSessionClaims decides first_for_install on ao.sessions.spawned. The
 // prior-session check runs before Spawn, which persists a seed row before
 // provisioning, so a spawn that saw an empty install (eligible) can still be
 // provisioning when a later spawn that saw its row (ineligible) finishes.
@@ -611,7 +611,7 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 		payload["github_actor"] = actor
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
@@ -640,7 +640,7 @@ func (s *Service) githubActor(ctx context.Context) (string, bool) {
 
 // emitFirstSessionSpawned is deprecated: it fires whenever the sessions table is
 // empty, so it repeats after a user clears their sessions. Use
-// ao.session.spawned with first_for_install=true. Kept for dashboard continuity.
+// ao.sessions.spawned with first_for_install=true. Kept for dashboard continuity.
 func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) {
 	if s.telemetry == nil {
 		return
@@ -655,7 +655,7 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 		payload["since_first_project_ms"] = s.now().Sub(project.RegisteredAt).Milliseconds()
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_session_spawned",
+		Name:       "ao.sessions.first_spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
@@ -686,7 +686,7 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 		payload["error_code"] = errorCode
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawn_failed",
+		Name:       "ao.sessions.spawn_failed",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelError,

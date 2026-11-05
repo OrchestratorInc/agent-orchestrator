@@ -29,7 +29,7 @@ func TestDenylistSinkPassesEverythingWhenUnconfigured(t *testing.T) {
 	if sink != ports.EventSink(next) {
 		t.Fatal("empty denylist should return the wrapped sink unchanged")
 	}
-	emitAll(sink, "ao.app.active", "ao.session.spawned")
+	emitAll(sink, "ao.app.active", "ao.sessions.spawned")
 	if len(next.events) != 2 {
 		t.Fatalf("names = %v, want both events forwarded", forwardedNames(next))
 	}
@@ -37,8 +37,8 @@ func TestDenylistSinkPassesEverythingWhenUnconfigured(t *testing.T) {
 
 func TestDenylistSinkDropsNamedEvents(t *testing.T) {
 	next := &recordingSink{}
-	sink := NewDenylistSink(next, []string{"ao.session.spawned"})
-	emitAll(sink, "ao.app.active", "ao.session.spawned", "ao.http.5xx")
+	sink := NewDenylistSink(next, []string{"ao.sessions.spawned"})
+	emitAll(sink, "ao.app.active", "ao.sessions.spawned", "ao.http.5xx")
 	if len(next.events) != 2 || forwardedNames(next)[0] != "ao.app.active" || forwardedNames(next)[1] != "ao.http.5xx" {
 		t.Fatalf("names = %v, want the denied event dropped", forwardedNames(next))
 	}
@@ -47,8 +47,8 @@ func TestDenylistSinkDropsNamedEvents(t *testing.T) {
 func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"ao.sessions.ended", "ao.prs.closed"})
-	emitAll(sink, "ao.sessions.ended", "ao.prs.closed", "ao.session.spawned")
-	if got := forwardedNames(next); len(got) != 1 || got[0] != "ao.session.spawned" {
+	emitAll(sink, "ao.sessions.ended", "ao.prs.closed", "ao.sessions.spawned")
+	if got := forwardedNames(next); len(got) != 1 || got[0] != "ao.sessions.spawned" {
 		t.Fatalf("forwarded = %v", got)
 	}
 }
@@ -69,8 +69,8 @@ func TestDenylistSinkMatchesEitherInternalOrExportedName(t *testing.T) {
 func TestDenylistSinkSupportsPrefixWildcardAndIsCaseInsensitive(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"  AO.RENDERER.*  "})
-	emitAll(sink, "ao.renderer.route_viewed", "ao.renderer.api_error", "ao.session.spawned")
-	if len(next.events) != 1 || forwardedNames(next)[0] != "ao.session.spawned" {
+	emitAll(sink, "ao.renderer.route_viewed", "ao.renderer.api_error", "ao.sessions.spawned")
+	if len(next.events) != 1 || forwardedNames(next)[0] != "ao.sessions.spawned" {
 		t.Fatalf("names = %v, want only the non-renderer event forwarded", forwardedNames(next))
 	}
 }
