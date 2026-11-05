@@ -8,8 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -41,6 +43,15 @@ func startShellTerminals(
 		log.Warn("reaping shell terminals from previous app runs failed", "err", err)
 	}
 	return svc
+}
+
+// shellAgentSource keeps a nil manager a nil interface, so the controller
+// answers 501 instead of calling through a typed nil.
+func shellAgentSource(m *shellagent.Manager) controllers.ShellTerminalAgentSource {
+	if m == nil {
+		return nil
+	}
+	return m
 }
 
 // projectRootLocator adapts the project service to the narrow lookup the shell

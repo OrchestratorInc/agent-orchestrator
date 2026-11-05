@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -25,18 +28,85 @@ type ShellTerminalService interface {
 	CloseShellTerminal(ctx context.Context, handleID string) error
 }
 
+// ShellTerminalAgentSource streams the agents running inside shell terminals.
+// Subscribe delivers the current snapshot at once and each later one.
+type ShellTerminalAgentSource interface {
+	Subscribe() (<-chan []shellagent.Agent, func())
+}
+
 // ShellTerminalsController owns the /shell-terminals routes: standalone shells
 // the user opens by hand, independent of any agent session.
 type ShellTerminalsController struct {
-	Svc ShellTerminalService
+	Svc    ShellTerminalService
+	Agents ShellTerminalAgentSource
 }
 
 // Register mounts the bounded shell terminal REST routes.
 func (c *ShellTerminalsController) Register(r chi.Router) {
 	r.Get("/shell-terminals", c.list)
+	r.Get("/shell-terminals/agents/events", c.agentEvents)
 	r.Post("/shell-terminals", c.open)
 	r.Patch("/shell-terminals/{handleId}", c.rename)
 	r.Delete("/shell-terminals/{handleId}", c.close)
+}
+
+// shellAgentHeartbeat keeps an idle stream moving through intermediaries.
+const shellAgentHeartbeat = 25 * time.Second
+
+// agentEvents streams every shell terminal's detected agent. Each event is the
+// full current set, so a client that reconnects is current after one frame.
+func (c *ShellTerminalsController) agentEvents(w http.ResponseWriter, r *http.Request) {
+	if c.Agents == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/shell-terminals/agents/events")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "SSE_UNSUPPORTED", "Streaming is not supported by this server", nil)
+		return
+	}
+	snapshots, unsubscribe := c.Agents.Subscribe()
+	defer unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+	heartbeat := time.NewTicker(shellAgentHeartbeat)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case agents := <-snapshots:
+			data, err := json.Marshal(shellTerminalAgentsResponse(agents))
+			if err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "event: shell_terminal_agents\ndata: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func shellTerminalAgentsResponse(agents []shellagent.Agent) ShellTerminalAgentsResponse {
+	out := ShellTerminalAgentsResponse{Agents: make([]ShellTerminalAgentResponse, 0, len(agents))}
+	for _, a := range agents {
+		out.Agents = append(out.Agents, ShellTerminalAgentResponse{
+			HandleID: a.HandleID,
+			Harness:  string(a.Harness),
+			State:    string(a.State),
+			Since:    a.Since,
+		})
+	}
+	return out
 }
 
 func (c *ShellTerminalsController) list(w http.ResponseWriter, r *http.Request) {

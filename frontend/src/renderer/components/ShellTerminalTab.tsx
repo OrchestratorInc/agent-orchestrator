@@ -1,10 +1,13 @@
-import { SquareTerminal, X } from "lucide-react";
+import { agentLabel } from "@aoagents/product-ui";
+import { CircleAlert, LoaderCircle, SquareTerminal, X } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
+import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
+import { AgentAvatar } from "./AgentAvatar";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
@@ -45,6 +48,16 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
+	// The local daemon watches its own shells; remote, cloud and not-yet-created
+	// shells keep the plain terminal icon.
+	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
+	useShellAgentStream(tracksAgent);
+	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
+	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
+	const markSeen = useShellAgentStore((state) => state.markSeen);
+	useEffect(() => {
+		if (isActive && unseenDone) markSeen(shell.handleId);
+	}, [isActive, markSeen, shell.handleId, unseenDone]);
 	// Rename gesture per platform: Windows uses right-click (its convention for
 	// tab/file renames); macOS and Linux use double-click.
 	const renameViaRightClick = isWindowsPlatform();
@@ -171,8 +184,15 @@ export function ShellTerminalTab({
 				}}
 				buttonRef={ref}
 				editingContent={editingContent}
-				icon={<SquareTerminal aria-hidden="true" className="size-icon-sm" />}
+				icon={
+					agent ? (
+						<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+					) : (
+						<SquareTerminal aria-hidden="true" className="size-icon-sm" />
+					)
+				}
 				label={title}
+				trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 			/>
 		);
 	}
@@ -235,6 +255,41 @@ export function ShellTerminalTab({
 			>
 				<X aria-hidden="true" className="size-icon-sm" />
 			</Pressable>
+		</span>
+	);
+}
+
+// The agent's state in the tab, in the sidebar's vocabulary: a spinner while
+// it works, the red alert when it is waiting on the user, and the unread dot
+// once it finished a turn the user has not looked at. An idle agent the user
+// has already seen shows nothing beyond its logo.
+function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+	const { t } = useTranslation();
+	const name = agentLabel(agent.harness);
+	if (agent.state === "working") {
+		const label = t("terminal.agentWorking", { agent: name });
+		return (
+			<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="working" title={label}>
+				<LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />
+				<span className="sr-only">{label}</span>
+			</span>
+		);
+	}
+	if (agent.state === "waiting") {
+		const label = t("terminal.agentWaiting", { agent: name });
+		return (
+			<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="waiting" title={label}>
+				<CircleAlert aria-hidden="true" className="size-3 text-destructive" />
+				<span className="sr-only">{label}</span>
+			</span>
+		);
+	}
+	if (!done) return null;
+	const label = t("terminal.agentDone", { agent: name });
+	return (
+		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state="done" title={label}>
+			<span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" />
+			<span className="sr-only">{label}</span>
 		</span>
 	);
 }

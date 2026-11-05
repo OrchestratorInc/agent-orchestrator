@@ -2442,6 +2442,23 @@ type ShellTerminalResponse struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
+// ShellTerminalAgentResponse is the coding agent a user started by hand in a
+// shell terminal, and what it is doing: working (drawing output), idle (at its
+// prompt), or waiting (stopped on a question or permission prompt).
+type ShellTerminalAgentResponse struct {
+	HandleID string    `json:"handleId"`
+	Harness  string    `json:"harness"`
+	State    string    `json:"state" enum:"working,idle,waiting"`
+	Since    time.Time `json:"since"`
+}
+
+// ShellTerminalAgentsResponse is one frame of
+// GET /api/v1/shell-terminals/agents/events: every shell terminal currently
+// running an agent. Each frame replaces the previous one.
+type ShellTerminalAgentsResponse struct {
+	Agents []ShellTerminalAgentResponse `json:"agents"`
+}
+
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.
 type ListShellTerminalsResponse struct {
 	ShellTerminals []ShellTerminalResponse `json:"shellTerminals"`

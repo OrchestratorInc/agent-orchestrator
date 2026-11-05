@@ -577,6 +577,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersShellTerminalResponse":                 "ShellTerminalResponse",
 	"ControllersListShellTerminalsResponse":            "ListShellTerminalsResponse",
 	"ControllersShellTerminalEnvelope":                 "ShellTerminalEnvelope",
+	"ControllersShellTerminalAgentResponse":            "ShellTerminalAgentResponse",
+	"ControllersShellTerminalAgentsResponse":           "ShellTerminalAgentsResponse",
 	"ControllersOpenCodexAccountLoginTerminalResponse": "OpenCodexAccountLoginTerminalResponse",
 	"ControllersCodexAccountLoginTerminalResponse":     "CodexAccountLoginTerminalResponse",
 	// httpd/controllers — project cue wire envelopes
@@ -1801,6 +1803,12 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/shell-terminals/agents/events", id: "streamShellTerminalAgents", tag: "shellTerminals",
+			summary:      "Stream the coding agents running inside shell terminals and their status",
+			resps:        []respUnit{{http.StatusOK, controllers.ShellTerminalAgentsResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/shell-terminals", id: "openShellTerminal", tag: "shellTerminals",

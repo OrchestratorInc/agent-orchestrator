@@ -14,6 +14,8 @@ type TerminalTabFrameProps = {
 	buttonProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 	/** Replaces the label while the tab is renamed. */
 	editingContent?: ReactNode;
+	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
+	trailing?: ReactNode;
 };
 
 /** The control in a tab's icon slot, shared so close buttons and menus match. */
@@ -32,6 +34,7 @@ export function TerminalTabFrame({
 	buttonRef,
 	buttonProps,
 	editingContent,
+	trailing,
 }: TerminalTabFrameProps) {
 	return (
 		<span
@@ -72,6 +75,7 @@ export function TerminalTabFrame({
 						{icon}
 					</span>
 					<span className="truncate">{label}</span>
+					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
 			{action ? (

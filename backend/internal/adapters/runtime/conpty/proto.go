@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 2
+	conPTYHostProtocolVersion         = 3
 	conPTYStyledOutputProtocolVersion = 2
+	// conPTYForegroundProtocolVersion is the first host that answers
+	// MsgWatchForegroundReq. Older hosts ignore the request and would stream
+	// raw output to the watcher instead, so clients check the version first.
+	conPTYForegroundProtocolVersion = 3
 )
 
 // Message type constants. Values must match pty-host.ts MSG_* constants exactly.
@@ -27,6 +31,8 @@ const (
 	MsgKillReq            byte = 0x08 // client -> host: empty
 	MsgGetStyledOutputReq byte = 0x09 // client -> host: JSON {lines}
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
+	MsgWatchForegroundReq byte = 0x0b // client -> host: empty; turns the connection into a foreground watcher
+	MsgForegroundState    byte = 0x0c // host -> watcher: JSON ForegroundPayload, sent on change
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -43,6 +49,18 @@ type StatusPayload struct {
 	PID             int  `json:"pid"`
 	ExitCode        *int `json:"exitCode,omitempty"`
 	ProtocolVersion int  `json:"protocolVersion,omitempty"`
+}
+
+// ForegroundPayload is the JSON body for MsgForegroundState: the terminal's
+// foreground process group and whether a program in it is producing output.
+// PGID is zero when the platform cannot report it. Argv is the group leader's
+// command line, capped (see maxForegroundArgs). Busy is true while the
+// foreground program has drawn output recently that was not an echo of typed
+// input or a redraw after a resize.
+type ForegroundPayload struct {
+	PGID int      `json:"pgid"`
+	Argv []string `json:"argv,omitempty"`
+	Busy bool     `json:"busy"`
 }
 
 // GetOutputReq is the JSON body for MsgGetOutputReq.

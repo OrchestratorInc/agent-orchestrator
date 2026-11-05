@@ -67,7 +67,12 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 }
 
 func newHost(cfg ServeConfig) *host {
+	var fg *foregroundTracker
+	if reader, ok := cfg.PTY.(foregroundReader); ok {
+		fg = newForegroundTracker(reader)
+	}
 	return &host{
+		fg:      fg,
 		cfg:     cfg,
 		clients: make(map[net.Conn]*clientState),
 		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
@@ -85,6 +90,9 @@ func newHost(cfg ServeConfig) *host {
 type clientState struct {
 	cols, rows int
 	sized      bool
+	// watcher marks a connection that asked only for foreground updates
+	// (MsgWatchForegroundReq). It receives no terminal output.
+	watcher bool
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -138,6 +146,9 @@ type host struct {
 	// modeTracker). record updates it together with the ring under mu, so when
 	// handleConn snapshots the ring, the tracker is up to the same chunk.
 	modes *modeTracker
+	// fg follows the terminal's foreground program; nil where the PTY cannot
+	// name it.
+	fg *foregroundTracker
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -192,6 +203,7 @@ func (h *host) applyLargestLocked() {
 func (h *host) run(ctx context.Context) error {
 	// Pump PTY output to ring + broadcast.
 	go h.pumpPTY()
+	go h.fg.run(h.shutdownC, h.publishForeground)
 
 	// Watch for ctx cancellation and trigger shutdown.
 	go func() {
@@ -308,6 +320,31 @@ func (h *host) record(chunk []byte) {
 		h.enqueueAllLocked(frame)
 	}
 	h.mu.Unlock()
+	h.fg.noteOutput(time.Now())
+}
+
+// publishForeground queues a foreground change to the watchers only.
+func (h *host) publishForeground(state ForegroundPayload) {
+	frame, ok := foregroundFrame(state)
+	if !ok {
+		return
+	}
+	h.mu.Lock()
+	for _, client := range h.clients {
+		if client.watcher {
+			client.enqueue(frame)
+		}
+	}
+	h.mu.Unlock()
+}
+
+func foregroundFrame(state ForegroundPayload) ([]byte, bool) {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return nil, false
+	}
+	frame, err := EncodeMessage(MsgForegroundState, b)
+	return frame, err == nil
 }
 
 // broadcast queues msg to all connected clients. Socket writes happen only in
@@ -374,6 +411,9 @@ func (h *host) lockWithRoom() bool {
 // touch the queues while h.mu is held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
+		if client.watcher && msg[0] == MsgTerminalData {
+			continue
+		}
 		client.enqueue(msg)
 	}
 }
@@ -510,6 +550,7 @@ func (h *host) handleConn(conn net.Conn) {
 func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
+		h.fg.noteInput(time.Now())
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			if n, err := h.cfg.PTY.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
@@ -520,6 +561,7 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			var rp ResizePayload
 			if err := json.Unmarshal(payload, &rp); err == nil && rp.Cols > 0 && rp.Rows > 0 {
+				h.fg.noteResize(time.Now())
 				// Record this client's requested grid, then size the shared PTY to
 				// the largest client (see applyLargestLocked) rather than blindly
 				// applying this one — otherwise a small viewer shrinks every viewer.
@@ -564,6 +606,22 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			codePtr = &code
 		}
 		h.sendTo(conn, statusFrame(alive, pid, codePtr))
+
+	case MsgWatchForegroundReq:
+		// From here on this connection hears only foreground changes. It gets
+		// the current state at once so a watcher that attaches to a terminal
+		// already running an agent does not wait for the next change.
+		h.mu.Lock()
+		if cs := h.clients[conn]; cs != nil {
+			cs.watcher = true
+		}
+		h.mu.Unlock()
+		if state, ok := h.fg.current(); ok {
+			if frame, ok := foregroundFrame(state); ok {
+				h.sendTo(conn, frame)
+			}
+		}
+		h.fg.wake()
 
 	case MsgKillReq:
 		// Trigger graceful shutdown; returns immediately (idempotent).
