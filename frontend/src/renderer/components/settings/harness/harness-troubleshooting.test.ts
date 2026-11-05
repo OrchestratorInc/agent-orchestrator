@@ -2,7 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../../lib/api-client";
 import { agentReadiness } from "../../../test/agent-readiness-fixtures";
-import { collectTroubleshootingSnapshot, troubleshootingIssueDraft, troubleshootingPrompt, troubleshootingSnapshot, troubleshootingVerified } from "./harness-troubleshooting";
+import { collectTroubleshootingSnapshot, troubleshootingIssueDraft, troubleshootingNextStep, troubleshootingPrompt, troubleshootingSnapshot, troubleshootingVerified } from "./harness-troubleshooting";
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -32,8 +32,11 @@ describe("harness troubleshooting evidence", () => {
 		expect(troubleshootingVerified(snapshot)).toBe(false);
 		snapshot.installationVerification = "succeeded";
 		expect(troubleshootingVerified(snapshot)).toBe(true);
+		expect(troubleshootingNextStep(snapshot)).toBe("ready");
+		expect(troubleshootingNextStep(snapshot, true)).toBe("incomplete");
 		snapshot.authentication.freshness = "stale";
 		expect(troubleshootingVerified(snapshot)).toBe(false);
+		expect(troubleshootingNextStep(snapshot)).toBe("incomplete");
 	});
 
 	it("keeps observations distinct from evidence and labels a failed latest check", () => {
@@ -48,17 +51,20 @@ describe("harness troubleshooting evidence", () => {
 describe("fresh verification", () => {
 	it("waits for installation verification before probing authentication and taking the snapshot", async () => {
 		vi.useFakeTimers();
+		const onStage = vi.fn();
 		const job = { target: "codex", status: "verifying", startedAt: "2026-10-23T00:00:00Z" };
 		const post = vi.spyOn(apiClient, "POST").mockResolvedValueOnce({ data: job } as never).mockResolvedValueOnce({ data: { supported: true } } as never);
 		vi.spyOn(apiClient, "GET").mockResolvedValueOnce({ data: { jobs: [{ ...job, status: "succeeded" }] } } as never).mockResolvedValueOnce({ data: { agents: [agentReadiness("codex")] } } as never);
-		const pending = collectTroubleshootingSnapshot("codex", new QueryClient(), "0.13.0", "win32");
+		const pending = collectTroubleshootingSnapshot("codex", new QueryClient(), "0.13.0", "win32", onStage);
 		await Promise.resolve();
 		expect(post).toHaveBeenCalledTimes(1);
+		expect(onStage.mock.calls).toEqual([["installation"]]);
 		await vi.advanceTimersByTimeAsync(1000);
 		const result = await pending;
 		expect(post).toHaveBeenNthCalledWith(1, "/api/v1/agents/{agent}/verify", { params: { path: { agent: "codex" } } });
 		expect(post).toHaveBeenNthCalledWith(2, "/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
 		expect(troubleshootingVerified(result)).toBe(true);
+		expect(onStage.mock.calls).toEqual([["installation"], ["authentication"], ["results"]]);
 	});
 
 	it("does not export a stale snapshot when the probe fails", async () => {

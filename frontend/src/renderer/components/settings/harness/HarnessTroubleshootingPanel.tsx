@@ -17,8 +17,8 @@ import { Button } from "../../ui/button";
 import { HarnessStateText } from "./harness-ui";
 import {
 	collectTroubleshootingSnapshot, TROUBLESHOOTING_CLAIMS, TROUBLESHOOTING_HELPERS,
-	troubleshootingIssueDraft, troubleshootingPrompt, troubleshootingVerified,
-	type TroubleshootingClaim, type TroubleshootingHelper, type TroubleshootingSession, type TroubleshootingSnapshot,
+	troubleshootingIssueDraft, troubleshootingNextStep, troubleshootingPrompt,
+	type TroubleshootingCheckStage, type TroubleshootingClaim, type TroubleshootingHelper, type TroubleshootingSession, type TroubleshootingSnapshot,
 } from "./harness-troubleshooting";
 
 type TroubleshootingState = {
@@ -36,6 +36,7 @@ type TroubleshootingState = {
 	// response must not turn a changed claim, helper or snapshot into another launch.
 	launchRequest?: components["schemas"]["SpawnSessionRequest"];
 	verificationFailed?: boolean;
+	checkStage?: TroubleshootingCheckStage;
 };
 // Retain the helper and evidence across harness/tab switches and Settings visits.
 // Memory only: never store diagnostic packages in localStorage.
@@ -46,8 +47,8 @@ function update(agentId: AgentId, patch: Partial<TroubleshootingState>) {
 	} }));
 }
 
-export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy }: {
-	agentId: AgentId; agents: AgentReadinessSnapshot[]; installationBusy: boolean;
+export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy, onOpenAccount }: {
+	agentId: AgentId; agents: AgentReadinessSnapshot[]; installationBusy: boolean; onOpenAccount: (id: AgentId) => void;
 }) {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -78,12 +79,12 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 		update(agentId, { busy: true, operation, claim, error: undefined });
 		try { await action(); }
 		catch (error) { update(agentId, { error: error instanceof Error ? error.message : t("settings.harness.troubleshoot.failed") }); }
-		finally { update(agentId, { busy: false, operation: undefined }); }
+		finally { update(agentId, { busy: false, operation: undefined, checkStage: undefined }); }
 	};
 	const verify = () => run("checking", async () => {
-		update(agentId, { verificationFailed: true });
+		update(agentId, { verificationFailed: true, checkStage: "installation" });
 		const version = await aoBridge.app.getVersion();
-		const snapshot = await collectTroubleshootingSnapshot(agentId, queryClient, version, document.documentElement.dataset.aoPlatform ?? "unknown");
+		const snapshot = await collectTroubleshootingSnapshot(agentId, queryClient, version, document.documentElement.dataset.aoPlatform ?? "unknown", (checkStage) => update(agentId, { checkStage }));
 		const current = useHarnessTroubleshooting.getState().entries[agentId];
 		update(agentId, { ...(current?.before ? { after: snapshot } : { before: snapshot }), verificationFailed: false });
 	});
@@ -124,7 +125,8 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 	};
 	const session = state?.session ? toWorkspaceSession(state.session, { id: STANDALONE_WORKSPACE_ID, name: "" }) : undefined;
 	const checking = state?.operation === "checking";
-	const progress = checking ? t("settings.harness.troubleshoot.checkingProgress") : state?.operation === "starting" ? t("settings.harness.troubleshoot.startingProgress") : state?.operation === "stopping" ? t("settings.harness.troubleshoot.stoppingProgress") : undefined;
+	const progress = checking ? t(`settings.harness.troubleshoot.progress.${state?.checkStage ?? "installation"}`) : state?.operation === "starting" ? t("settings.harness.troubleshoot.startingProgress") : state?.operation === "stopping" ? t("settings.harness.troubleshoot.stoppingProgress") : undefined;
+	const nextStep = latest ? troubleshootingNextStep(latest, state?.verificationFailed) : undefined;
 	const installationOK = latest?.installationVerification === "succeeded" && latest.installation.state === "installed" && latest.installation.freshness === "fresh";
 	const authenticationOK = latest?.authentication.freshness === "fresh" && ["authorized", "not_applicable"].includes(latest.authentication.state);
 	const authState = latest?.authentication.state;
@@ -133,6 +135,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 	const summaryClass = "flex cursor-pointer list-none items-center gap-2 rounded text-xs text-settings-muted outline-none hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden";
 	return <section className="space-y-5 pb-3 text-sm" aria-label={t("settings.harness.troubleshoot.title")}>
 		<p className="max-w-prose text-pretty text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.description")}</p>
+		<p className="flex max-w-prose items-start gap-2 text-xs leading-5 text-settings-muted"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t("settings.harness.troubleshoot.localChecks")}</p>
 		<section className="space-y-3 rounded-lg border border-border bg-(--color-bg-secondary) p-4" aria-label={t("settings.harness.troubleshoot.stepCheck")}>
 			<div className="flex flex-wrap items-center justify-between gap-2"><h3 className="flex items-center gap-2 text-sm font-medium text-settings-label"><span className="grid size-5 shrink-0 place-items-center rounded-full border border-border text-xs text-settings-muted" aria-hidden="true">1</span>{t("settings.harness.troubleshoot.stepCheck")}</h3>
 				{latest && !session ? <Button className={actionClass} size="sm" variant="outline" disabled={busy || installationBusy} onClick={() => void verify()}>{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}{t("settings.harness.troubleshoot.verify")}</Button> : null}
@@ -143,28 +146,33 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 				</select>
 			</label>
 			{!latest ? <Button className={actionClass} size="sm" disabled={busy || installationBusy} onClick={() => void verify()}>{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}{t("settings.harness.troubleshoot.collect")}</Button> : null}
+			{progress && checking ? <p role="status" className="flex items-center gap-2 text-xs text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{progress}</p> : null}
 			{latest ? <>
 				<dl className="grid gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2">
 					<div className="space-y-1"><dt className="text-settings-muted">{t("settings.harness.installation")}</dt><dd><HarnessStateText tone={!state?.verificationFailed && installationOK ? "ok" : "off"}>{t(installationOK ? "settings.harness.installed" : latest.installation.state === "not_installed" ? "settings.harness.notInstalled" : "settings.harness.installationUnknown")}</HarnessStateText></dd></div>
 					<div className="space-y-1"><dt className="text-settings-muted">{t("settings.harness.health.authentication")}</dt><dd><HarnessStateText tone={!state?.verificationFailed && authenticationOK ? "ok" : "off"}>{t(latest.authentication.freshness !== "fresh" ? "settings.harness.loginUnknown" : authState === "authorized" ? "settings.harness.loggedIn" : authState === "not_applicable" ? "settings.harness.troubleshoot.authNotRequired" : authState === "unauthorized" ? "settings.harness.notLoggedIn" : authState === "configured" ? "settings.harness.health.authUnverified" : "settings.harness.loginUnknown")}</HarnessStateText></dd></div>
 				</dl>
 				<p className="text-caption text-settings-muted">{t("settings.harness.health.lastChecked")}: <time dateTime={latest.capturedAt}>{new Date(latest.capturedAt).toLocaleString(i18n.resolvedLanguage, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time></p>
-				{!checking && (state?.after || state?.verificationFailed || !session) ? <p role="status" className={state?.after || state?.verificationFailed ? "text-xs leading-5 text-settings-muted" : "sr-only"}>{state?.verificationFailed ? t("settings.harness.troubleshoot.unresolved") : state?.after ? t(troubleshootingVerified(latest) ? "settings.harness.troubleshoot.verified" : "settings.harness.troubleshoot.unresolved") : t("settings.harness.troubleshoot.initial")}</p> : null}
+				{!checking && nextStep ? <div className="space-y-2 rounded-md border border-border bg-surface p-3" role="status">
+					<p className="font-medium text-settings-label">{t(`settings.harness.troubleshoot.result.${nextStep}`)}</p>
+					<p className="max-w-prose text-xs leading-5 text-settings-muted">{t(`settings.harness.troubleshoot.next.${nextStep}`)}</p>
+					{nextStep === "installation" || nextStep === "login" ? <Button className={actionClass} size="sm" variant="outline" disabled={busy || installationBusy} onClick={() => onOpenAccount(agentId)}>{t("settings.harness.troubleshoot.openSetup", { agent: agentLabel(agentId) })}</Button> : null}
+				</div> : null}
 				<details className="group"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.reviewDiagnostics")}</summary><pre className="mt-3 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-surface p-3 text-xs">{JSON.stringify(latest, null, 2)}</pre></details>
 			</> : null}
 		</section>
-		{progress ? <p role="status" className="flex items-center gap-2 text-xs text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{progress}</p> : null}
-		{state?.error ? <p role="alert" className="rounded-md border border-error/25 bg-error/5 p-3 text-xs leading-5 text-error">{state.error}</p> : null}
+		{progress && !checking ? <p role="status" className="flex items-center gap-2 text-xs text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{progress}</p> : null}
+		{state?.error ? <div role="alert" className="space-y-2 rounded-md border border-error/25 bg-error/5 p-3 text-xs leading-5"><p className="text-error">{t("settings.harness.troubleshoot.failed")}</p><details><summary className={summaryClass}>{t("settings.harness.troubleshoot.reviewDiagnostics")}</summary><p className="mt-2 break-words text-settings-muted">{state.error}</p></details></div> : null}
 		<section className="space-y-3" aria-label={t("settings.harness.troubleshoot.stepHelper")}>
 			<h3 className="flex items-center gap-2 text-sm font-medium text-settings-label"><span className="grid size-5 shrink-0 place-items-center rounded-full border border-border text-xs text-settings-muted" aria-hidden="true">2</span>{t("settings.harness.troubleshoot.stepHelper")}</h3>
 			{!latest ? <p className="rounded-lg border border-dashed border-border p-4 text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.checksFirst")}</p> : <>
 				{!session || state?.stopped ? <div className="space-y-3 rounded-lg border border-border bg-(--color-bg-secondary) p-4">
 					{pendingLaunch ? <div className="space-y-2"><p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.pendingLaunch")}</p><details className="group"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.reviewPrompt")}</summary><pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-surface p-3 text-xs">{pendingLaunch.prompt}</pre></details></div>
 						: helpers.length ? <label className="block space-y-1.5"><span className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.helper")}</span><select className={selectClass} value={helper} disabled={busy} onChange={(event) => setHelperChoice(event.target.value as TroubleshootingHelper)}>{helpers.map((id) => <option key={id} value={id}>{agentLabel(id)}</option>)}</select></label>
-							: <p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.noHelper")}</p>}
+							: <div className="space-y-3"><p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.noHelper")}</p><div className="flex flex-wrap gap-2">{TROUBLESHOOTING_HELPERS.map((id) => <Button key={id} className={actionClass} size="sm" variant="outline" disabled={busy || installationBusy} onClick={() => onOpenAccount(id)}>{t("settings.harness.troubleshoot.openSetup", { agent: agentLabel(id) })}</Button>)}</div><p className="text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.returnAfterSetup")}</p></div>}
 					<p className="flex items-start gap-2 text-xs leading-5 text-settings-muted"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t("settings.harness.troubleshoot.sharingSummary")}</p>
 					<details className="group"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.sharingDetails")}</summary><p className="mt-2 text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.disclosure")}</p></details>
-					<Button className={actionClass} size="sm" disabled={busy || (!pendingLaunch && (!helper || installationBusy || state?.verificationFailed))} onClick={() => void start()}>{state?.operation === "starting" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <TerminalSquare aria-hidden="true" />}{t(pendingLaunch ? "settings.harness.troubleshoot.retryLaunch" : "settings.harness.troubleshoot.start")}</Button>
+					{pendingLaunch || helper ? <Button className={actionClass} size="sm" disabled={busy || (!pendingLaunch && (installationBusy || state?.verificationFailed))} onClick={() => void start()}>{state?.operation === "starting" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <TerminalSquare aria-hidden="true" />}{t(pendingLaunch ? "settings.harness.troubleshoot.retryLaunch" : "settings.harness.troubleshoot.start")}</Button> : null}
 				</div> : null}
 				{session ? <div className="rounded-lg border border-border bg-(--color-bg-secondary)">
 					<div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-t-lg border-b border-border bg-(--color-bg-secondary) px-3 py-2.5" data-testid="helper-controls">
@@ -174,7 +182,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy 
 					<div className="h-[min(540px,55vh)] min-h-80 overflow-hidden rounded-b-lg bg-terminal" data-settings-inline-edit=""><TerminalPane key={session.id} session={session} terminalTarget={{ kind: "worker" }} theme={theme} daemonReady fontSize={12} onTerminalStateChange={(status) => { if (status === "exited" && useHarnessTroubleshooting.getState().entries[agentId]?.session?.id === session.id) update(agentId, { stopped: true }); }} /></div>
 				</div> : null}
 				<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-					<Button className={actionClass} size="sm" variant="ghost" aria-label={t("settings.harness.troubleshoot.copyPrompt")} disabled={busy} onClick={() => void copy("prompt", troubleshootingPrompt(claim, latest))}>{copied === "prompt" ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}<span aria-live="polite">{t(copied === "prompt" ? "settings.harness.troubleshoot.copied" : "settings.harness.troubleshoot.copyPrompt")}</span></Button>
+					<Button className={actionClass} size="sm" variant={!helper && !session && !pendingLaunch ? "primary" : "ghost"} aria-label={t("settings.harness.troubleshoot.copyPrompt")} disabled={busy} onClick={() => void copy("prompt", troubleshootingPrompt(claim, latest))}>{copied === "prompt" ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}<span aria-live="polite">{t(copied === "prompt" ? "settings.harness.troubleshoot.copied" : "settings.harness.troubleshoot.copyPrompt")}</span></Button>
 					{session ? <details className="group max-w-prose"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.sessionDetails")}</summary><p className="mt-2 text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.sessionLifetime")}</p></details> : null}
 				</div>
 			</>}

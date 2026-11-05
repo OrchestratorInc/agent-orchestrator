@@ -933,7 +933,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								/>
 							</TabsContent>
 							{!hostId ? <TabsContent value="troubleshoot" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
-								<HarnessTroubleshootingPanel key={selectedDetails.agentId} agentId={selectedDetails.agentId} agents={agents.data?.agents ?? []} installationBusy={selectedDetails.busy || selectedDetails.authBusy || Boolean(authWorkflow)} />
+								<HarnessTroubleshootingPanel key={selectedDetails.agentId} agentId={selectedDetails.agentId} agents={agents.data?.agents ?? []} installationBusy={selectedDetails.busy || selectedDetails.authBusy || Boolean(authWorkflow)} onOpenAccount={(id) => openDetail(id, "account")} />
 							</TabsContent> : null}
 						</Tabs>
 					</div>

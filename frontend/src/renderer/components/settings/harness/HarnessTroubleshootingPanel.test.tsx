@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { components } from "../../../../api/schema";
 import { apiClient } from "../../../lib/api-client";
@@ -18,15 +18,16 @@ vi.mock("../../../hooks/useWorkspaceQuery", () => ({
 	toWorkspaceSession: (session: { id: string; displayName: string }) => ({ id: session.id, title: session.displayName }),
 }));
 
-beforeEach(() => { useHarnessTroubleshooting.setState({ entries: {} }); terminalCallbacks.length = 0; });
+const openAccount = vi.fn();
+beforeEach(() => { useHarnessTroubleshooting.setState({ entries: {} }); terminalCallbacks.length = 0; openAccount.mockClear(); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function setup(agents = [agentReadiness("claude-code"), agentReadiness("codex")]) {
-	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><HarnessTroubleshootingPanel agentId="codex" agents={agents} installationBusy={false} /></QueryClientProvider>);
+	return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><HarnessTroubleshootingPanel agentId="codex" agents={agents} installationBusy={false} onOpenAccount={openAccount} /></QueryClientProvider>);
 }
 async function collect() {
-	fireEvent.click(screen.getByRole("button", { name: "Collect fresh diagnostics" }));
-	await screen.findByText("Initial checks collected. Review the diagnostics before starting a helper.");
+	fireEvent.click(screen.getByRole("button", { name: "Check installation and sign-in" }));
+	await screen.findByRole("button", { name: "Copy troubleshooting prompt" });
 }
 function mockChecks() {
 	vi.spyOn(aoBridge.app, "getVersion").mockResolvedValue("0.13.0");
@@ -65,7 +66,9 @@ it("provides the prompt fallback and an editable local issue draft without a hel
 	const clipboard = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 	setup([]);
 	await collect();
-	expect(screen.getByRole("button", { name: "Troubleshoot with agent" })).toBeDisabled();
+	expect(screen.queryByRole("button", { name: "Troubleshoot with agent" })).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Open Claude Code setup" }));
+	expect(openAccount).toHaveBeenCalledWith("claude-code");
 	fireEvent.click(screen.getByRole("button", { name: "Copy troubleshooting prompt" }));
 	await waitFor(() => expect(clipboard).toHaveBeenCalledWith(expect.stringContaining("User observation")));
 	fireEvent.click(screen.getByRole("button", { name: "Prepare issue draft" }));
@@ -82,14 +85,14 @@ it("does not retain a success label after a failed recheck, even when another ac
 	setup();
 	await collect();
 	fireEvent.click(screen.getByRole("button", { name: "Verify again" }));
-	await screen.findByText(/AO's latest checks confirm/);
+	await screen.findByText("Your setup checks passed");
 	checks.mockRejectedValueOnce(new Error("Probe unavailable"));
 	fireEvent.click(screen.getByRole("button", { name: "Verify again" }));
 	await screen.findByRole("alert");
 	fireEvent.click(screen.getByRole("button", { name: "Copy troubleshooting prompt" }));
 	await screen.findByText("Copied to clipboard");
-	expect(screen.queryByText(/AO's latest checks confirm/)).not.toBeInTheDocument();
-	expect(screen.getByText(/Verification is unresolved/)).toBeInTheDocument();
+	expect(screen.queryByText("Your setup checks passed")).not.toBeInTheDocument();
+	expect(screen.getByText("We could not finish checking")).toBeInTheDocument();
 });
 
 it("keeps the helper session when the panel is reopened and preserves launch retry identity", async () => {
@@ -120,7 +123,7 @@ it("retries the exact pending payload after rechecks and reopening, even if no h
 	const next = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { authentication: "unauthorized" }), "0.14.0", "linux");
 	checks.mockResolvedValueOnce(next);
 	fireEvent.click(screen.getByRole("button", { name: "Verify again" }));
-	await screen.findByText(/Verification is unresolved/);
+	await screen.findByText("We could not finish checking");
 	view.unmount();
 	setup([]);
 	fireEvent.click(screen.getByRole("button", { name: "Retry helper launch" }));
@@ -156,15 +159,56 @@ it("shows which check is running and keeps old results from appearing unresolved
 	const checks = mockChecks();
 	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex"), "0.13.0", "win32");
 	let finish: (value: typeof snapshot) => void = () => {};
-	checks.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+	let changeStage: ((stage: troubleshooting.TroubleshootingCheckStage) => void) | undefined;
+	checks.mockImplementationOnce((_id, _client, _version, _platform, onStage) => { changeStage = onStage; return new Promise((resolve) => { finish = resolve; }); });
 	setup();
-	fireEvent.click(screen.getByRole("button", { name: "Collect fresh diagnostics" }));
-	await screen.findByText("Checking installation and sign-in…");
-	expect(screen.getByRole("button", { name: "Collect fresh diagnostics" })).toBeDisabled();
-	expect(screen.queryByText(/Verification is unresolved/)).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Check installation and sign-in" }));
+	await screen.findByText("Checking installation…");
+	act(() => changeStage?.("authentication"));
+	await screen.findByText("Checking sign-in…");
+	act(() => changeStage?.("results"));
+	await screen.findByText("Preparing your results…");
+	expect(screen.getByRole("button", { name: "Check installation and sign-in" })).toBeDisabled();
+	expect(screen.queryByText("We could not finish checking")).not.toBeInTheDocument();
 	finish(snapshot);
-	await screen.findByText(/Initial checks collected/);
-	expect(screen.queryByText("Checking installation and sign-in…")).not.toBeInTheDocument();
+	await screen.findByRole("button", { name: "Copy troubleshooting prompt" });
+	expect(screen.queryByText("Preparing your results…")).not.toBeInTheDocument();
+});
+
+it.each(["configured", "unknown"] as const)("explains %s sign-in without claiming the user is signed out", async (authentication) => {
+	const checks = mockChecks();
+	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { authentication }), "0.13.0", "win32");
+	snapshot.installationVerification = "succeeded";
+	checks.mockResolvedValue(snapshot);
+	setup();
+	await collect();
+	expect(screen.getByText("Sign-in is not confirmed")).toBeVisible();
+	expect(screen.getByText(/this does not prove you are signed out/)).toBeVisible();
+	expect(screen.getByText(/keeps this diagnostic report on your computer/)).toBeVisible();
+});
+
+it("offers the target sign-in page when fresh authentication was rejected", async () => {
+	const checks = mockChecks();
+	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { authentication: "unauthorized" }), "0.13.0", "win32");
+	snapshot.installationVerification = "succeeded";
+	checks.mockResolvedValue(snapshot);
+	setup();
+	await collect();
+	expect(screen.getByText("Sign-in was not accepted")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Open Codex setup" }));
+	expect(openAccount).toHaveBeenCalledWith("codex");
+});
+
+it("offers setup when a fresh installation check cannot find the agent", async () => {
+	const checks = mockChecks();
+	const snapshot = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { installation: "not_installed" }), "0.13.0", "win32");
+	snapshot.installationVerification = "failed";
+	checks.mockResolvedValue(snapshot);
+	setup();
+	await collect();
+	expect(screen.getByText("AO cannot find this agent")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Open Codex setup" }));
+	expect(openAccount).toHaveBeenCalledWith("codex");
 });
 
 it("uses the installation symptom for a harness AO cannot find", async () => {

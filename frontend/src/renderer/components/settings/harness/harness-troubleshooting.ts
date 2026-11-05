@@ -49,6 +49,17 @@ export function troubleshootingSnapshot(agent: AgentReadinessSnapshot, version: 
 	};
 }
 export type TroubleshootingSnapshot = ReturnType<typeof troubleshootingSnapshot>;
+export type TroubleshootingCheckStage = "installation" | "authentication" | "results";
+
+/** A next step based on observed checks, never a diagnosis of the root cause. */
+export function troubleshootingNextStep(snapshot: TroubleshootingSnapshot, failed = false) {
+	if (failed || snapshot.installation.freshness !== "fresh") return "incomplete";
+	if (snapshot.installation.state === "not_installed") return "installation";
+	if (snapshot.installationVerification !== "succeeded" || snapshot.installation.state !== "installed" || snapshot.authentication.freshness !== "fresh") return "incomplete";
+	if (snapshot.authentication.state === "unauthorized") return "login";
+	if (troubleshootingVerified(snapshot)) return "ready";
+	return "unverified";
+}
 
 export function troubleshootingVerified(snapshot: TroubleshootingSnapshot): boolean {
 	return snapshot.installationVerification === "succeeded"
@@ -58,7 +69,8 @@ export function troubleshootingVerified(snapshot: TroubleshootingSnapshot): bool
 }
 
 /** Explicit verification, not the coordinator's cached display/launch policy. */
-export async function collectTroubleshootingSnapshot(agentId: AgentId, queryClient: QueryClient, version: string, platform: string): Promise<TroubleshootingSnapshot> {
+export async function collectTroubleshootingSnapshot(agentId: AgentId, queryClient: QueryClient, version: string, platform: string, onStage?: (stage: TroubleshootingCheckStage) => void): Promise<TroubleshootingSnapshot> {
+	onStage?.("installation");
 	const { data, error } = await apiClient.POST("/api/v1/agents/{agent}/verify", { params: { path: { agent: agentId } } });
 	if (error || !data) throw new Error("Installation verification could not start. Try again after any installation finishes.");
 	let job = data;
@@ -72,7 +84,9 @@ export async function collectTroubleshootingSnapshot(agentId: AgentId, queryClie
 		job = next;
 	}
 	if (isActiveInstallJob(job) || job.status === "interrupted") throw new Error("Installation verification did not finish. Run the checks again.");
+	onStage?.("authentication");
 	await probeAgentAuth(agentId);
+	onStage?.("results");
 	const readiness = await apiClient.GET("/api/v1/agents/readiness");
 	if (readiness.error || !readiness.data) throw new Error("Fresh readiness results are unavailable.");
 	cacheAgentReadiness(queryClient, readiness.data);
