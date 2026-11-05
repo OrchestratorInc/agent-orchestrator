@@ -3140,6 +3140,21 @@ describe("Sidebar", () => {
 		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
 	});
 
+	it("closes the preview when the row's archive confirm opens", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.hover(screen.getByLabelText("Open fix login"));
+		await screen.findByTestId("board-session-card");
+
+		// The pointer never leaves the row: the confirm itself must close the card.
+		await user.click(within(row).getByLabelText("Archive session"));
+		await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
 	it("lists sessions that need input above the rest", () => {
 		const at = "2026-06-30T00:00:00Z";
 		renderSidebar({

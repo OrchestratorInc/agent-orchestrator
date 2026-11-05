@@ -2696,9 +2696,11 @@ const SessionRow = memo(function SessionRow({
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const [contextMenuOpen, setContextMenuOpen] = useState(false);
-	// No preview while renaming, dragging, or with the context menu open.
+	// Owned here so both the hover Archive button and the context menu open the same confirm.
+	const [archiveOpen, setArchiveOpen] = useState(false);
+	// No preview while renaming, dragging, or with the context menu or archive confirm open.
 	const preview = useSessionPreviewHover(
-		Boolean(!newSidebarDesign || reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
+		Boolean(!newSidebarDesign || reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen || archiveOpen),
 	);
 	const setSortableNode = reorder?.setNodeRef;
 	const setPreviewRow = preview.rowRef;
@@ -2736,8 +2738,6 @@ const SessionRow = memo(function SessionRow({
 	const beginRename = useCallback(() => {
 		if (renamable) rename.begin();
 	}, [rename.begin, renamable]);
-	// Owned here so both the hover Archive button and the context menu open the same confirm.
-	const [archiveOpen, setArchiveOpen] = useState(false);
 
 	if (rename.isEditing) {
 		return (
