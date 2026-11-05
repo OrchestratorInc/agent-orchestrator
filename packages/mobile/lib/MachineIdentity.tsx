@@ -1,7 +1,7 @@
 import type { StyleProp, ViewStyle } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
-import { machineSymbolNames, type MachineAppearance, type MachineSymbol } from "./machineAppearance";
+import { machineSymbolNames, type MachineAppearance } from "./machineAppearance";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { space, type } from "./tokens";
@@ -19,11 +19,6 @@ export function MachineAvatar({ appearance, size = 22, color }: { appearance: Ma
 			<AppSymbol name={machineSymbolNames[appearance.symbol]} size={glyphSize} color={color ?? t.textSecondary} />
 		</View>
 	);
-}
-
-/** A machine's bare glyph, for a control that sizes and colours it itself. */
-export function MachineGlyph({ symbol, size, color }: { symbol: MachineSymbol; size: number; color: string }) {
-	return <AppSymbol name={machineSymbolNames[symbol]} size={size} color={color} />;
 }
 
 export function MachineIdentity({ name, appearance, style, testID = "machine-identity" }: { name: string; appearance: MachineAppearance; style?: StyleProp<ViewStyle>; testID?: string }) {

@@ -46,7 +46,7 @@ vi.mock("./ThemeProvider", () => ({
 }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./hosts", () => ({ loadHosts: async () => fixtures.hosts }));
-vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}), usePressScale: () => ({ style: {}, onPressIn: () => {}, onPressOut: () => {} }) }));
+vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./RouteErrorBoundary", () => ({ SheetErrorBoundary: () => null }));
 
 type SheetResults = typeof import("./sheetResult");
