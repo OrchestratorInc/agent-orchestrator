@@ -1,4 +1,4 @@
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -110,26 +110,22 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
 	});
 
-	it("offers a refused login as one box with its action, and never the CLI's advice", () => {
-		const onLogin = vi.fn();
-		const onRetry = vi.fn();
-		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry }}
-			onRollback={vi.fn()} durationMs={1000} login={{ agent: "Claude Code", onLogin }} />);
+	it("ends a refused login on one quiet line under the message, and never the CLI's advice", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry: vi.fn() }}
+			onRollback={vi.fn()} durationMs={1000} login={{ status: "queued", align: "end" }} />);
 
-		const box = screen.getByTestId("login-notice");
-		expect(within(box).getByText("You’re not logged in to Claude Code")).toBeInTheDocument();
-		expect(within(box).getByText("Send your message again once you’re in.")).toBeInTheDocument();
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Queued");
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
-		expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
-		// "Log in" is said once: on the button.
-		expect(screen.getAllByText(/log in/i)).toHaveLength(1);
-		fireEvent.click(within(box).getByRole("button", { name: "Log in" }));
-		expect(onLogin).toHaveBeenCalledOnce();
-		// The box is the turn's whole ending: no retry, undo or time row under it.
-		expect(screen.getAllByRole("button")).toHaveLength(1);
+		// The login is offered on the chat box, so the turn has no action of its own.
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
 		expect(document.querySelector("[data-turn-actions]")).toBeNull();
-		expect(onRetry).not.toHaveBeenCalled();
+	});
+
+	it("ends a refused turn that did work on its own last line", () => {
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" login={{ status: "resend", align: "start" }} />);
+		expect(screen.getByTestId("login-status").closest("[data-turn-outcome]")).toBeInTheDocument();
+		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
 	});
 
 	it("shows a refused login with no way to log in as the plain failure", () => {

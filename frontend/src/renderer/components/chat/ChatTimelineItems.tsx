@@ -37,6 +37,7 @@ import {
 	FileDiff,
 	Gauge,
 	History,
+	Hourglass,
 	KeyRound,
 	Keyboard,
 	ListChecks,
@@ -571,7 +572,7 @@ export function TurnOutcome({
 	error?: string;
 	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
-	/** The provider refused the agent's login: offer the login in place of its CLI advice. */
+	/** The provider refused the agent's login: a quiet line in place of its CLI advice. */
 	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
@@ -599,14 +600,13 @@ export function TurnOutcome({
 			</div>
 		);
 	}
-	// A refused login is routine and has one way out, so it reads as a step to take
-	// rather than an alarm. The provider's own advice ("run /login") is for its CLI
-	// and never reaches the reader. The box is the turn's whole ending: logging in
-	// runs it again or leaves the message to send again, so no action row follows.
+	// A refused login is offered on the chat box, where the user was about to
+	// write. The turn keeps one quiet line saying what happens to its message;
+	// the provider's own advice ("run /login") is for its CLI and never shows.
 	if (state === "failed" && failureCode === "auth_required" && login) {
 		return (
-			<div className="flex min-w-0 flex-col" data-turn-outcome={state}>
-				<LoginNotice login={login} />
+			<div data-turn-outcome={state} className="flex min-w-0">
+				<LoginStatusNote status={login.status} />
 			</div>
 		);
 	}
@@ -658,39 +658,40 @@ export function TurnOutcome({
 	);
 }
 
+const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Loader2, resend: undefined, stopped: undefined } as const;
+
 /**
- * The login a refused turn needs, as one box: what is wrong, what happens next,
- * and the one action. "Log in" is said once, on the button.
+ * What happens to a message the agent refused for its login. A message whose
+ * turn did nothing else leads its own row under the bubble with it, before the
+ * time and copy; otherwise it is the turn's last line. While the message waits,
+ * its hourglass turns over now and then.
  */
-function LoginNotice({ login }: { login: TurnOutcomeLogin }) {
+export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"] }) {
 	const { t } = useTranslation();
+	const Icon = LOGIN_STATUS_ICON[status];
 	return (
-		<div data-testid="login-notice" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 rounded-lg bg-surface px-4 py-3">
-			<div className="flex min-w-0 flex-1 basis-64 items-start gap-2.5">
-				<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-				<div className="min-w-0 flex-1">
-					<p className="text-pretty text-sm font-medium leading-5 text-foreground">
-						{login.host ? t("chat.login.titleOnHost", { agent: login.agent, host: login.host }) : t("chat.login.title", { agent: login.agent })}
-					</p>
-					<p className="mt-0.5 text-pretty text-xs leading-5 text-muted-foreground">
-						{login.retriesItself ? t("chat.login.retriesItself") : t("chat.login.thenResend")}
-					</p>
-				</div>
-			</div>
-			<Button type="button" variant="primary" onClick={login.onLogin} className="ml-auto">{t("chat.login.action")}</Button>
+		<div
+			data-testid="login-status"
+			data-login-status={status}
+			className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
+		>
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" ? "animate-spin" : "chat-login-hourglass")} /> : null}
+			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
 		</div>
 	);
 }
 
-/** How a turn whose login was refused offers the login. */
+/** How a message the agent refused for its login reads in the timeline. */
 export interface TurnOutcomeLogin {
-	/** The agent's display name. */
-	agent: string;
-	/** The remote host whose login it is; omitted for this computer. */
-	host?: string;
-	onLogin: () => void;
-	/** Logging in from the chat runs the turn again by itself. */
-	retriesItself?: boolean;
+	/**
+	 * queued: sends again by itself once the user logs in. waiting: the Agents
+	 * page was opened and the login has not taken yet. sending: logged in, sending
+	 * it again. resend: the user sends it again (it did work, or nothing watches
+	 * the login). stopped: an earlier refusal, since sent again or moved past.
+	 */
+	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
+	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
+	align: "end" | "start";
 }
 
 interface TurnActionsProps {
@@ -1010,6 +1011,7 @@ export function HumanMessage({
 	activateBranchPending = false,
 	activateBranchError,
 	onSelectAnnotation,
+	status,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
@@ -1038,6 +1040,11 @@ export function HumanMessage({
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/**
+	 * Where the message stands (a refused login's). It leads the row under the
+	 * bubble, and the row then stays in place with its time and actions in view.
+	 */
+	status?: ReactNode;
 }) {
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
@@ -1123,8 +1130,11 @@ export function HumanMessage({
 			{editing ? null : (
 				// Hover-only actions float under the bubble instead of reserving a blank row;
 				// a branch navigator is always visible, so it keeps its place in the flow.
-				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
-					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+				// So does a status: it leads the row, and the time and actions follow it in
+				// view, one line under the bubble.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10")}>
+					{status ? <div className="mr-1 flex items-center">{status}</div> : null}
+					<div className={cn("flex items-center gap-1", !status && "opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none")}>
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Button

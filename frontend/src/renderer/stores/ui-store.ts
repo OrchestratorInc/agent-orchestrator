@@ -155,20 +155,19 @@ export type ChatMessageFocusRequest = {
 };
 
 /**
- * A chat turn that failed because the agent's login was refused, waiting while
- * the user logs in from the Agents page. A login that takes there closes the
- * page and, when the turn did no work, runs it again.
+ * A chat whose agent refused its login, waiting while the user logs in from the
+ * Agents page. A login that takes there closes the page; the chat then sends
+ * its refused message again when that is safe, or says the user is in.
  */
 export type LoginReturn = {
 	sessionId: string;
-	turnId: string;
 	agentId: string;
 	/** The remote host whose login is being fixed; omitted for this computer. */
 	hostId?: string;
-	/** The turn did no work, so running it again cannot repeat any. */
-	autoRetry: boolean;
 	/** When the login took. */
 	loggedInAt?: number;
+	/** The chat has seen the login and sent nothing again: it says the user is in. */
+	settled?: boolean;
 };
 
 // Selection (which project/session is open) now lives in the URL — the router
@@ -286,12 +285,14 @@ export type UiState = {
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
-	/** Remember a failed chat turn while its agent's login is fixed. */
-	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt">) => void;
-	/** A login on the Agents page took: return to the waiting chat turn, if this agent's. */
+	/** Remember a chat whose agent refused its login while that login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled">) => void;
+	/** A login on the Agents page took: return to the waiting chat, if this agent's. */
 	completeLoginReturn: (agentId: string, hostId?: string) => void;
-	/** Drop the waiting turn, or only when it is this one. */
-	clearLoginReturn: (turnId?: string) => void;
+	/** The waiting chat saw the login and sent nothing again. */
+	settleLoginReturn: (sessionId: string) => void;
+	/** Drop the waiting chat, or only when it is this session's. */
+	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -595,8 +596,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
 		};
 	}),
-	clearLoginReturn: (turnId) => set((state) =>
-		!state.loginReturn || (turnId !== undefined && state.loginReturn.turnId !== turnId) ? {} : { loginReturn: null }),
+	settleLoginReturn: (sessionId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
+			? { loginReturn: { ...state.loginReturn, settled: true } }
+			: {}),
+	clearLoginReturn: (sessionId) => set((state) =>
+		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;

@@ -1,10 +1,11 @@
 /**
- * A turn the provider refused for a missing or expired login.
+ * A message the provider refused for a missing or expired login.
  *
  * The provider's advice ("Please run /login") is for its own CLI and means
- * nothing in Chat, so the turn offers the login instead: the Agents page opens
- * on it, and a login that takes there brings the user back and, when the turn
- * did no work, runs it again.
+ * nothing in Chat. The login is offered on a band over the chat box instead,
+ * the message keeps one quiet line saying what happens to it, and a login that
+ * takes on the Harness page brings the user back and, when the message did no
+ * work, sends it again.
  */
 
 import { act, screen, within } from "@testing-library/react";
@@ -18,7 +19,7 @@ import { useUiStore } from "../../stores/ui-store";
 
 const CLI_ADVICE = "Not logged in · Please run /login";
 
-/** turn-1 failed on a refused login. With `didWork` it also ran commands and changed files first. */
+/** turn-1 was refused for its login. With `didWork` it also ran commands and changed files first. */
 function signedOutSnapshot({ didWork }: { didWork: boolean }): ConversationSnapshot {
 	const failed = {
 		...chatFixture.turns[0]!,
@@ -39,36 +40,50 @@ function signedOutSnapshot({ didWork }: { didWork: boolean }): ConversationSnaps
 	};
 }
 
+const band = () => screen.getByTestId("login-band");
+/** The refused messages' lines, in timeline order. */
+const statusLines = () => screen.getAllByTestId("login-status");
+
 afterEach(() => {
 	act(() => useUiStore.setState({ settingsModal: null, loginReturn: null }));
 });
 
 describe("ChatWorkspace refused login", () => {
-	it("offers a login in place of the provider's CLI advice, and only once", () => {
+	it("moves the login onto the chat box and leaves a queued line under the message", () => {
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry: vi.fn() }} />);
 
-		const box = screen.getByTestId("login-notice");
-		expect(within(box).getByText("You’re not logged in to Claude Code")).toBeInTheDocument();
-		expect(within(box).getByText("This turn runs again once you’re in.")).toBeInTheDocument();
-		expect(within(box).getByRole("button", { name: "Log in" })).toBeInTheDocument();
-		// The CLI's advice means nothing here, so it is not shown at all.
+		expect(band()).toHaveTextContent("Claude Code is signed out · your message sends once you’re in");
+		expect(band().closest("[data-composer-tray]")).toBeInTheDocument();
+		expect(within(band()).getByRole("button", { name: "Log in" })).toBeInTheDocument();
+		// The status is the message's own: it leads one row under the bubble, with the
+		// time and the copy button after it, rather than a line the actions cover.
+		const line = screen.getByTestId("login-status");
+		expect(line).toHaveTextContent("Queued");
+		expect(line.closest("[data-chat-message-id]")).toBeInTheDocument();
+		expect(line.closest("[data-turn-outcome]")).toBeNull();
+		const row = line.parentElement!.parentElement!;
+		expect(row).toContainElement(screen.getByRole("button", { name: "Copy user message" }));
+		expect(within(row).getByLabelText(/^Sent /)).toBeInTheDocument();
+		// The CLI's advice means nothing here, so it is not shown at all, and the
+		// turn has no failure card, no retry row and no banner repeating the login.
 		expect(screen.queryByText(CLI_ADVICE)).toBeNull();
-		expect(screen.queryByText("Technical details")).toBeNull();
 		expect(screen.queryByText("The agent ran into a problem")).toBeNull();
-		// The card already offers the login, so the banner does not repeat it.
-		expect(screen.queryByRole("button", { name: "Log in again" })).toBeNull();
-		// The box is the turn's whole ending: no retry or undo row under it.
 		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Log in again" })).toBeNull();
 	});
 
-	it("opens the Agents page on the login, then returns and runs a turn that did no work again", async () => {
+	it("opens the Harness page on the login, then sends the message again once it takes", async () => {
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
 		expect(useUiStore.getState().settingsModal).toMatchObject({
 			scope: "global", section: "harness", focusAgentId: "claude-code", harnessView: "local", startLogin: true,
 		});
+		// Back in the chat before the login took, the band says what is pending.
+		expect(band()).toHaveTextContent("Finish logging in on the Harness page · your message is waiting");
+		expect(within(band()).getByRole("button", { name: "Open again" })).toBeInTheDocument();
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Waiting for login");
 		expect(retry).not.toHaveBeenCalled();
 
 		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
@@ -79,24 +94,27 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().loginReturn).toBeNull();
 	});
 
-	it("returns without running a turn again that already ran commands", async () => {
+	it("says the user is in and leaves a message that did work for them to send again", async () => {
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: true })} retryControl={{ retry }} />);
-		expect(screen.getByText("Send your message again once you’re in.")).toBeInTheDocument();
+		expect(band()).toHaveTextContent("Claude Code is signed out · send your message again once you’re in");
+		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
 		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
 
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).not.toHaveBeenCalled();
+		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
+		expect(within(band()).queryByRole("button")).toBeNull();
 	});
 
 	it("waits for the login on the session's own host", async () => {
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} remoteHostId="host-a" retryControl={{ retry }} />);
-		expect(screen.getByText("You’re not logged in to Claude Code on host-a")).toBeInTheDocument();
+		expect(band()).toHaveTextContent("Claude Code is signed out on host-a");
 
-		await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
 		expect(useUiStore.getState().settingsModal).toMatchObject({ hostId: "host-a", startLogin: true });
 
 		// A login on this computer, or for another agent, does not fix that host's.
@@ -110,13 +128,42 @@ describe("ChatWorkspace refused login", () => {
 		expect(retry).toHaveBeenCalledWith("turn-1");
 	});
 
+	it("offers only the latest refused message, so a message sent while signed out is the one that queues", () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const first = snapshot.turns[0]!;
+		const firstPrompt = snapshot.items[0]!;
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2" }];
+		snapshot.items = [firstPrompt, { ...firstPrompt, id: "user-2", turnId: "turn-2", sequence: firstPrompt.sequence + 1 } as typeof firstPrompt];
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+
+		const [earlier, latest] = statusLines();
+		expect(earlier).toHaveTextContent("Not sent");
+		expect(latest).toHaveTextContent("Queued");
+		expect(screen.getAllByTestId("login-band")).toHaveLength(1);
+	});
+
+	it("runs the queued message itself once it is sent again: one message, no band", () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items[0]!;
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", state: "running", failureCode: undefined, errorMessage: undefined, completedAt: undefined, retryOfTurnId: "turn-1" }];
+		snapshot.items = [prompt, { ...prompt, id: "user-retry", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt];
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+
+		expect(screen.queryByTestId("login-band")).toBeNull();
+		// The copy the retry sent is that message, so the refused original is not drawn beside it.
+		expect(document.querySelectorAll("[data-chat-message-role=user]")).toHaveLength(1);
+		expect(document.querySelector('[data-chat-message-id="user-retry"]')).toBeInTheDocument();
+		expect(screen.queryByTestId("login-status")).toBeNull();
+	});
+
 	it("keeps the banner when the latest turn did not fail on the login", () => {
 		const snapshot = signedOutSnapshot({ didWork: false });
 		snapshot.turns = [{ ...snapshot.turns[0]!, failureCode: undefined, errorMessage: "stream disconnected" }];
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
 
 		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Log in" })).toBeNull();
+		expect(screen.queryByTestId("login-band")).toBeNull();
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
 	});
 });

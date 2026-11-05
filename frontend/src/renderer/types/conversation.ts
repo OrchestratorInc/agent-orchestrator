@@ -1004,11 +1004,15 @@ export function isUserQueuePrompt(item: ConversationItem): item is ConversationM
 }
 
 /**
- * Turn ids whose user prompt is represented in the queue dock instead.
+ * Turn ids the timeline does not draw, because their message shows elsewhere.
  *
  * The user's prompts for queued turns live in the dock until dispatch. Other
  * automation messages have no dock row, so their queued feedback stays visible
  * in the timeline. Turns cancelled from the dock must not reappear after refresh.
+ *
+ * A message the agent refused for its login waited for the login, and once it
+ * is sent again its copy is that message: the refused original is not drawn
+ * beside it.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
@@ -1017,12 +1021,13 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
+	const resent = new Set(snapshot.turns.flatMap((turn) => turn.retryOfTurnId && !turn.rolledBack ? [turn.retryOfTurnId] : []));
 	return new Set(
 		snapshot.turns
 			.filter(
 				(turn) =>
-					(turn.state === "queued" || turn.state === "cancelled") &&
-					humanPromptTurnIds.has(turn.id),
+					((turn.state === "queued" || turn.state === "cancelled") && humanPromptTurnIds.has(turn.id)) ||
+					(turn.state === "failed" && turn.failureCode === "auth_required" && resent.has(turn.id)),
 			)
 			.map((turn) => turn.id),
 	);

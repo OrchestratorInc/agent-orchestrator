@@ -104,7 +104,7 @@ it("returns to the chat turn waiting on a Claude login once an account signs in"
 	const user = userEvent.setup();
 	useUiStore.setState({
 		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
-		loginReturn: { sessionId: "s1", turnId: "turn-1", agentId: "claude-code", autoRetry: true },
+		loginReturn: { sessionId: "s1", agentId: "claude-code" },
 	});
 	postMock.mockImplementation((path: string) => {
 		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });

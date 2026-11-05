@@ -131,6 +131,7 @@ import {
 	TurnActions,
 	TurnChangedFiles,
 	TurnOutcome,
+	LoginStatusNote,
 	LiveResponseStatus,
 	liveTaskLabel,
 	reconnectCopy,
@@ -173,6 +174,7 @@ import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
+import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -852,10 +854,13 @@ function ChatWorkspaceContent({
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
-	// The failed turn's own card offers the login, right above the composer, so the
-	// banner would only say it twice.
-	const loginCardShowing = latestSettledTurn?.state === "failed" && latestSettledTurn.failureCode === "auth_required" &&
-		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id);
+	const chatLogin = useChatLogin({
+		snapshot,
+		retryControl,
+		hostId: activeRemoteHostId,
+		cloud: Boolean(session?.cloud),
+		newWorkDisabled: Boolean(newWorkDisabled),
+	});
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
@@ -1880,7 +1885,8 @@ function ChatWorkspaceContent({
 					role="tabpanel"
 				>
 				<HoldWhileHidden hidden={reviewerActive || shellActive}>
-					{snapshot.account && !loginCardShowing ? (
+					{/* The band on the chat box already offers the login; the banner would say it twice. */}
+					{snapshot.account && !chatLogin.band ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
 							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
@@ -1936,7 +1942,7 @@ function ChatWorkspaceContent({
 									snapshot={snapshot}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
-									cloud={Boolean(session?.cloud)}
+									loginLines={chatLogin.lines}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2021,6 +2027,7 @@ function ChatWorkspaceContent({
 									/>
 									<ChatComposer
 										notice={composerNotice}
+										trayBand={chatLogin.band ? <ChatLoginBand {...chatLogin.band} /> : undefined}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -2713,7 +2720,7 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
-	cloud = false,
+	loginLines,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2759,8 +2766,8 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
-	/** The session runs in the cloud, so its login is the cloud connection's. */
-	cloud?: boolean;
+	/** The line under each message the agent refused for its login. */
+	loginLines?: ReadonlyMap<string, TurnOutcomeLogin>;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3244,65 +3251,7 @@ export function Timeline({
 		});
 	}, [minimapEnabled, uiSessionId]);
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(() => {
-		// A steer can split one logical turn into several visual groups. Its prompt
-		// still makes the final failed group retryable, even when it is in an earlier one.
-		const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
-			item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
-				? [item.turnId]
-				: [],
-		));
-		return new Map(
-			snapshot.turns
-				.filter(
-					(turn) =>
-						turn.state === "failed" &&
-						Boolean(turn.providerTurnId) &&
-						!consumedRetrySources.has(turn.id) &&
-						(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
-				)
-				.map((turn) => [turn.id, turn]),
-		);
-	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
-	const loginHostId = useContext(ChatHostId);
-	// A turn that ran no tool and changed nothing can run again on its own once the
-	// login takes: there is nothing it could do twice. Any other turn, and every
-	// cloud one (the cloud connection's login is not watched from here), asks the
-	// user to send the message again.
-	const retriesAfterLogin = useCallback((turnId: string) => !cloud && Boolean(retryControl) && retryableTurns.has(turnId) &&
-		!snapshot.turns.find((entry) => entry.id === turnId)?.diff?.files.length &&
-		!snapshot.items.some((item) => item.turnId === turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)),
-	[cloud, retryControl, retryableTurns, snapshot.items, snapshot.turns]);
-	const logIn = useStableCallback((turnId: string) => {
-		const ui = useUiStore.getState();
-		ui.startLoginReturn({
-			sessionId: snapshot.sessionId,
-			turnId,
-			agentId: snapshot.harness,
-			...(loginHostId ? { hostId: loginHostId } : {}),
-			autoRetry: retriesAfterLogin(turnId),
-		});
-		ui.openGlobalSettings("harness", {
-			focusAgentId: snapshot.harness,
-			...(loginHostId ? { hostId: loginHostId } : {}),
-			harnessView: cloud ? "cloud" : "local",
-			startLogin: true,
-			preserveProject: true,
-		});
-	});
-	const loginReturn = useUiStore((state) => state.loginReturn);
-	useEffect(() => {
-		if (!loginReturn?.loggedInAt || loginReturn.sessionId !== snapshot.sessionId) return;
-		const { turnId, autoRetry, loggedInAt } = loginReturn;
-		// Another conversation of this session (a side chat) leaves it to its own.
-		if (!snapshot.turns.some((entry) => entry.id === turnId)) return;
-		useUiStore.getState().clearLoginReturn(turnId);
-		// A login that took long ago, or a turn something else has moved past, is
-		// left for the user to send again.
-		if (!autoRetry || Date.now() - loggedInAt > LOGIN_RETRY_WINDOW_MS) return;
-		if (!retryableTurns.has(turnId) || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) return;
-		void Promise.resolve(retryTurn(turnId)).catch(() => undefined);
-	}, [loginReturn, newWorkDisabled, retryControl?.pending, retryTurn, retryableTurns, snapshot]);
+	const retryableTurns = useMemo(() => retryableFailedTurns(snapshot, consumedRetrySources), [snapshot, consumedRetrySources]);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -4514,12 +4463,7 @@ export function Timeline({
 									group={group}
 									harness={snapshot.harness}
 									login={group.turnId && group.outcome?.state === "failed" && group.outcome.failureCode === "auth_required"
-										? {
-												agent: agentLabel(snapshot.harness),
-												...(loginHostId ? { host: labelForHost(loginHostId) ?? loginHostId } : {}),
-												onLogin: () => logIn(group.turnId as string),
-												retriesItself: retriesAfterLogin(group.turnId),
-											}
+										? loginLines?.get(group.turnId)
 										: undefined}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
@@ -4859,6 +4803,11 @@ const TurnGroup = memo(function TurnGroup({
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
 	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A message refused for its login, in a turn that did nothing else, says what
+	// happens to it under its own bubble, so the turn needs no outcome of its own.
+	const loginNoteMessageId = login?.align === "end"
+		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
+		: undefined;
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -4964,6 +4913,7 @@ const TurnGroup = memo(function TurnGroup({
 				}
 				rollbackDisabled={rollbackDisabled}
 				onSelectAnnotation={onSelectAnnotation}
+				status={run.items[0]?.id === loginNoteMessageId && login ? <LoginStatusNote status={login.status} /> : undefined}
 			/>
 		);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -5108,7 +5058,7 @@ const TurnGroup = memo(function TurnGroup({
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -5171,6 +5121,7 @@ function TimelineItem({
 	onRollback,
 	rollbackDisabled,
 	onSelectAnnotation,
+	status,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -5212,6 +5163,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
+	/** Where a human message stands, leading the row under its bubble. */
+	status?: ReactNode;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -5262,6 +5215,7 @@ function TimelineItem({
 					activateBranchPending={activateBranchPending}
 					activateBranchError={activateBranchError}
 					onSelectAnnotation={onSelectAnnotation}
+					status={status}
 				/>
 			);
 		}
@@ -5574,6 +5528,125 @@ function settledTurnDuration(turn: ConversationTurn): number | undefined {
 	// Match the live label's start fallback and whole-second minimum so completion
 	// cannot make a visible timer disappear or jump backward.
 	return Math.max(1_000, completedAt - startedAt);
+}
+
+/** The failed turns a retry can still pick up, by id. */
+function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: ReadonlySet<string>): Map<string, ConversationTurn> {
+	// A steer can split one logical turn into several visual groups. Its prompt
+	// still makes the final failed group retryable, even when it is in an earlier one.
+	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
+		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
+			? [item.turnId]
+			: [],
+	));
+	return new Map(
+		snapshot.turns
+			.filter(
+				(turn) =>
+					turn.state === "failed" &&
+					Boolean(turn.providerTurnId) &&
+					!consumed.has(turn.id) &&
+					(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
+			)
+			.map((turn) => [turn.id, turn]),
+	);
+}
+
+/** The turn ran a tool or changed a file, so sending it again could repeat that. */
+function turnDidWork(snapshot: ConversationSnapshot, turnId: string): boolean {
+	return Boolean(snapshot.turns.find((entry) => entry.id === turnId)?.diff?.files.length) ||
+		snapshot.items.some((item) => item.turnId === turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind));
+}
+
+/**
+ * A refused login, for the whole chat: the band on the chat box, the line under
+ * each refused message, and sending the latest one again once the login takes.
+ *
+ * Only the latest refused message is offered. A message sent while signed out is
+ * refused the same way and becomes the latest, so it is the one sent again after
+ * the login: that is how it queues.
+ */
+function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }: {
+	snapshot: ConversationSnapshot;
+	retryControl?: ChatRetryControl;
+	hostId?: string;
+	cloud: boolean;
+	newWorkDisabled: boolean;
+}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin> } {
+	const retryable = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
+	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
+	const refused = latest?.state === "failed" && latest.failureCode === "auth_required" &&
+		!snapshot.turns.some((entry) => entry.retryOfTurnId === latest.id)
+		? latest
+		: undefined;
+	const refusedId = refused?.id;
+	// A message that ran no tool and changed nothing can be sent again on its own
+	// once the login takes: there is nothing it could do twice. Any other, and every
+	// cloud one (the cloud connection's login is not watched from here), is the
+	// user's to send again.
+	const queued = Boolean(refusedId && !cloud && retryControl && retryable.has(refusedId) && !turnDidWork(snapshot, refusedId));
+	const stored = useUiStore((state) => state.loginReturn);
+	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
+	const sending = Boolean(refusedId && retryControl?.pending && (!retryControl.turnId || retryControl.turnId === refusedId));
+	const state: ChatLoginBandProps["state"] = sending
+		? "sending"
+		: loginReturn?.loggedInAt !== undefined
+			? loginReturn.settled ? "loggedIn" : "sending"
+			: loginReturn ? "waiting" : "signedOut";
+	const retryTurn = useStableCallback(retryControl?.retry);
+	const logIn = useStableCallback(() => {
+		const ui = useUiStore.getState();
+		ui.startLoginReturn({ sessionId: snapshot.sessionId, agentId: snapshot.harness, ...(hostId ? { hostId } : {}) });
+		ui.openGlobalSettings("harness", {
+			focusAgentId: snapshot.harness,
+			...(hostId ? { hostId } : {}),
+			harnessView: cloud ? "cloud" : "local",
+			startLogin: true,
+			preserveProject: true,
+		});
+	});
+	useEffect(() => {
+		if (!loginReturn) return;
+		const ui = useUiStore.getState();
+		// Sent again, or moved past with a new message: nothing waits on this login.
+		if (!refusedId) {
+			ui.clearLoginReturn(snapshot.sessionId);
+			return;
+		}
+		if (loginReturn.loggedInAt === undefined || loginReturn.settled) return;
+		// A login that took long ago, or a chat busy with something else, leaves the
+		// message for the user to send again.
+		if (!queued || Date.now() - loginReturn.loggedInAt > LOGIN_RETRY_WINDOW_MS || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) {
+			ui.settleLoginReturn(snapshot.sessionId);
+			return;
+		}
+		ui.clearLoginReturn(snapshot.sessionId);
+		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
+	}, [loginReturn, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, snapshot]);
+	const lines = useMemo(() => {
+		const map = new Map<string, TurnOutcomeLogin>();
+		for (const turn of snapshot.turns) {
+			if (turn.state !== "failed" || turn.failureCode !== "auth_required" || turn.rolledBack) continue;
+			const status: TurnOutcomeLogin["status"] = turn.id !== refusedId
+				? "stopped"
+				: state === "sending" ? "sending" : !queued || state === "loggedIn" ? "resend" : state === "waiting" ? "waiting" : "queued";
+			map.set(turn.id, { status, align: turnDidWork(snapshot, turn.id) ? "start" : "end" });
+		}
+		return map;
+	}, [queued, refusedId, snapshot, state]);
+	return {
+		lines,
+		...(refused ? {
+			band: {
+				harness: snapshot.harness,
+				agent: agentLabel(snapshot.harness),
+				...(hostId ? { host: labelForHost(hostId) ?? hostId } : {}),
+				state,
+				queued,
+				onLogin: logIn,
+			},
+		} : {}),
+	};
 }
 
 // Retry correlation is daemon-owned rather than inferred from repeated text.

@@ -1869,7 +1869,7 @@ describe("HarnessSettingsSection", () => {
 	it("returns to the chat turn waiting on this agent's login once it takes", async () => {
 		act(() => useUiStore.setState({
 			settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
-			loginReturn: { sessionId: "s1", turnId: "turn-1", agentId: "claude-code", autoRetry: true },
+			loginReturn: { sessionId: "s1", agentId: "claude-code" },
 		}));
 		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
 		expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();

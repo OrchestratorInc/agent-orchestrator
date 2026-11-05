@@ -239,6 +239,7 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery,
 	commandError,
 	notice,
+	trayBand,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -375,6 +376,8 @@ export const ChatComposer = memo(function ChatComposer({
 	commandError?: string;
 	/** A notice attached to the form, below queued messages and input requests. */
 	notice?: ReactNode;
+	/** A band the chat box sits under, the two wrapped in one tray (a refused login's). */
+	trayBand?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -1875,8 +1878,18 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
-				{notice}
-				{form}
+				{trayBand ? (
+					<div className="chat-composer-band-tray" data-composer-tray="">
+						{trayBand}
+						{notice}
+						{form}
+					</div>
+				) : (
+					<>
+						{notice}
+						{form}
+					</>
+				)}
 			</div>
 		);
 

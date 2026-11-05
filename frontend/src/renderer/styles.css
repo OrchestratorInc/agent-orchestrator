@@ -2765,6 +2765,32 @@ html.sidebar-reordering * {
 	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
+/* A band over the composer, the two in one tray: the New Chat tray's inset,
+   wrapped round the composer instead of hung under it, and a step more tint
+   because the band carries text and an action. Concentric with the composer. */
+.chat-composer-band-tray {
+	--tray-inset: 0.375rem;
+
+	padding: var(--tray-inset);
+	border-radius: calc(var(--radius-chat-composer) + var(--tray-inset));
+	background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+/* A message waiting on a login: its hourglass turns over now and then. The icon
+   is symmetric, so the turn back to the start at each loop does not show. */
+.chat-login-hourglass {
+	animation: chat-login-hourglass 3.2s ease-in-out infinite;
+}
+
+@keyframes chat-login-hourglass {
+	0%, 78% { transform: rotate(0deg); }
+	92%, 100% { transform: rotate(180deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-login-hourglass { animation: none; }
+}
+
 .chat-composer-startup-shimmer {
 	position: absolute;
 	inset: 0;
