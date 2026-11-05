@@ -19,7 +19,6 @@ const TELEMETRY_SCHEMA_VERSION = 2;
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
-const ONBOARDING_MILESTONES_KEY = "ao.telemetry.onboardingMilestones";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
@@ -654,19 +653,6 @@ export function telemetryStorage(): DailyActiveStorage | undefined {
 		return window.localStorage;
 	} catch {
 		return undefined;
-	}
-}
-
-function claimOnboardingMilestone(storage: DailyActiveStorage | undefined, milestone: string): boolean {
-	if (!storage) return false;
-	try {
-		const value = JSON.parse(storage.getItem(ONBOARDING_MILESTONES_KEY) ?? "[]") as unknown;
-		const claimed = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-		if (claimed.includes(milestone)) return false;
-		storage.setItem(ONBOARDING_MILESTONES_KEY, JSON.stringify([...claimed, milestone]));
-		return true;
-	} catch {
-		return false;
 	}
 }
 
@@ -1340,7 +1326,8 @@ export async function initTelemetry(): Promise<boolean> {
 		});
 		bindRendererErrorHandlers();
 		const storage = telemetryStorage();
-		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.app.first_opened") && claimOnboardingMilestone(storage, "app_opened")) {
+		// Main claimed this durably for a fresh install (claimFirstOpen).
+		if (bootstrap.firstOpen && !isDeniedEvent("ao.app.first_opened")) {
 			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
 		}
 		startDailyActiveHeartbeat({

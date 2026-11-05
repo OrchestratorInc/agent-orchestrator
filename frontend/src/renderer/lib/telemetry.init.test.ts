@@ -264,21 +264,22 @@ describe("PostHog identity and opt-out", () => {
 		vi.clearAllMocks();
 	});
 
-	it("reserves app open once across renderer restarts and never sends a next-day event", async () => {
+	it("sends app open only for the bootstrap that claimed it and never a next-day event", async () => {
 		localStorage.clear();
 		vi.useFakeTimers();
 		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0, firstOpen: true }));
 			const first = await import("./telemetry");
 			await first.initTelemetry();
 			const names = posthogStub.capture.mock.calls.map(([name]) => name);
 			expect(names.filter((name) => name === "ao.app.first_opened")).toHaveLength(1);
-			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
+			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 0, days_since_install: 0 }));
 			vi.resetModules();
 			posthogStub.capture.mockClear();
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			// Main hands out the durable claim once; later bootstraps omit it.
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0 }));
 			const restarted = await import("./telemetry");
 			await restarted.initTelemetry();
 			vi.resetModules();
