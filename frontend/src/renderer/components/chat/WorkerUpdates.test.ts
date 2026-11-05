@@ -155,7 +155,7 @@ describe("placeBatchedReports", () => {
 
 	it("puts a steered report under the steer that carried it, not the turn's prompt", () => {
 		const steer: ConversationActivity = {
-			kind: "activity", id: "steer-1", sequence: 9, revision: 0, activityKind: "steer", status: "completed", summary: "go",
+			kind: "activity", id: "steer-1", sequence: 9, revision: 0, activityKind: "system", status: "completed", summary: "go",
 			detail: { event: "steer", providerInputSourceTurnIds: ["t-report"] }, createdAt, turnId: "running",
 		};
 		const placed = placeBatchedReports(
