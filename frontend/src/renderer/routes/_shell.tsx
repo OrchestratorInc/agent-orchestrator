@@ -71,7 +71,7 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
+import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -301,6 +301,7 @@ const ShellCenter = memo(function ShellCenter({
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
+	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();

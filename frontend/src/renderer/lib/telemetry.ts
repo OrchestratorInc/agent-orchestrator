@@ -995,6 +995,19 @@ export async function sanitizeRendererProperties(
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
 			break;
+		case "ao.setup.checked":
+			for (const key of ["git", "tmux", "gh", "gh_signed_in"] as const) {
+				if (typeof properties?.[key] === "boolean") safe[key] = properties[key];
+			}
+			for (const key of ["agents_installed", "agents_signed_in"] as const) {
+				const value = properties?.[key];
+				if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100) safe[key] = value;
+			}
+			for (const key of ["agents_installed_ids", "agents_signed_in_ids"] as const) {
+				const value = properties?.[key];
+				if (typeof value === "string" && value.length <= 200 && /^(?:[a-z][a-z0-9-]{0,39}(?:,[a-z][a-z0-9-]{0,39})*)?$/.test(value)) safe[key] = value;
+			}
+			break;
 		case "ao.agents.install_clicked":
 			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
 			break;

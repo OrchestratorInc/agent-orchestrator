@@ -725,6 +725,18 @@ describe("telemetry sanitizers", () => {
 		expect(Object.keys(props)).toEqual(["project_id_hash"]);
 	});
 
+	it("allowlists ao.setup.checked to booleans, bounded counts and registry ids", async () => {
+		expect(await sanitizeRendererProperties("ao.setup.checked", {
+			git: true, tmux: false, gh: true, gh_signed_in: false, agents_installed: 2, agents_signed_in: 1,
+			agents_installed_ids: "claude-code,codex", agents_signed_in_ids: "claude-code",
+			detail: "/Users/someone/bin/git", github_login: "someone",
+		})).toEqual({
+			git: true, tmux: false, gh: true, gh_signed_in: false, agents_installed: 2, agents_signed_in: 1,
+			agents_installed_ids: "claude-code,codex", agents_signed_in_ids: "claude-code",
+		});
+		expect(await sanitizeRendererProperties("ao.setup.checked", { git: "yes", agents_installed: -1, agents_installed_ids: "../../etc,Claude Code" })).toEqual({});
+	});
+
 	it("keeps only a stable error code on request failures", async () => {
 		expect(await sanitizeRendererProperties("ao.requests.failed", { operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND", message: "Session workspace not found" })).toEqual({
 			operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND",
