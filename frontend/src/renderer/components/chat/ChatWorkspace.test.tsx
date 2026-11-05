@@ -1221,7 +1221,8 @@ describe("ChatWorkspace timeline", () => {
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getAllByText("Ran command")).toHaveLength(2);
+		expect(screen.getByText("Built project")).toBeInTheDocument();
+		expect(screen.getByText("Ran lint")).toBeInTheDocument();
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {

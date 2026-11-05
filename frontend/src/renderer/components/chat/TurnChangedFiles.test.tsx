@@ -485,7 +485,8 @@ describe("ActivityRow command labels", () => {
 				)}
 			/>,
 		);
-		expect(screen.getByText("Read files")).toBeInTheDocument();
+		expect(screen.getByText("Read 2 files")).toBeInTheDocument();
+		expect(screen.getByText("SKILL.md, SKILL.md")).toBeInTheDocument();
 		expect(screen.queryByText(/sed -n/)).not.toBeInTheDocument();
 	});
 
@@ -496,10 +497,10 @@ describe("ActivityRow command labels", () => {
 				activity={commandActivity({ command: "go test ./...", output: "ok" }, "completed")}
 			/>,
 		);
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
+		expect(screen.getByText("Ran tests")).toBeInTheDocument();
 		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: /Ran command/ }));
+		await user.click(screen.getByRole("button", { name: /Ran tests/ }));
 		expect(screen.getByText("go test ./...")).toBeInTheDocument();
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
@@ -512,7 +513,7 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 
-		const row = screen.getByRole("button", { name: /Ran command/ });
+		const row = screen.getByRole("button", { name: /Ran printf/ });
 		expect(row).toBeEnabled();
 		expect(screen.queryByText(`printf "%s" "hello world"`)).not.toBeInTheDocument();
 
@@ -531,16 +532,18 @@ describe("ActivityRow command labels", () => {
 		);
 		const row = screen.getByRole("button");
 		expect(row).toHaveClass("py-0.5", "gap-1.5", "select-none");
-		expect(screen.getByText("Checked repository")).toHaveClass(
+		expect(screen.getByText("Checked git status")).toHaveClass(
 			"text-xs",
 			"font-normal",
 			"text-muted-foreground",
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
+		// One small mark for what the step did, not the bordered rows' icon column.
+		expect(container.querySelector(".lucide-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
 		expect(container.querySelector(".lucide-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
-		expect(row.textContent).toMatch(/^Checked repositoryexit 1/);
+		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
 	});
 
 	it("keeps command failures without exit metadata destructive", () => {

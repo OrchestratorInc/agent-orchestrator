@@ -26,33 +26,80 @@ import {
 	AlertTriangle,
 	Bot,
 	ArrowRight,
+	ArrowRightLeft,
 	Brain,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	CircleCheck,
+	CircleDot,
 	CircleStop,
+	Clock,
+	Copy,
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
 	FileDiff,
+	FilePen,
+	FilePlus,
+	FileSearch,
+	FileText,
+	FlaskConical,
+	FolderOpen,
+	FolderPlus,
 	Gauge,
+	GitBranch,
+	GitCommitHorizontal,
+	GitPullRequest,
+	Globe,
+	Hammer,
 	History,
 	KeyRound,
 	Keyboard,
 	ListChecks,
 	Loader2,
+	Package,
+	Paintbrush,
 	Pencil,
 	Plug,
 	RotateCw,
+	Search,
 	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
 	SquareTerminal,
+	Trash2,
 	Undo2,
 	User,
 	X,
 } from "lucide-react";
+
+/** The mark beside a command or file-edit step, by what the step did. */
+const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
+	list: FolderOpen,
+	read: FileText,
+	search: Search,
+	find: FileSearch,
+	git: GitBranch,
+	commit: GitCommitHorizontal,
+	pr: GitPullRequest,
+	issue: CircleDot,
+	web: Globe,
+	"folder-new": FolderPlus,
+	"file-new": FilePlus,
+	write: FilePen,
+	move: ArrowRightLeft,
+	copy: Copy,
+	delete: Trash2,
+	test: FlaskConical,
+	install: Package,
+	build: Hammer,
+	check: CircleCheck,
+	format: Paintbrush,
+	wait: Clock,
+	run: SquareTerminal,
+};
 
 /** Fixed icon column, matching the prototype's row anatomy. */
 const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
@@ -88,10 +135,9 @@ import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
-	commandCategory,
-	exploredFileCount,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { activityCommandStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -1230,7 +1276,9 @@ export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
 	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
-	return splitSummary(activity).label;
+	// The live row only ever names a step in progress, so it is always "Reading", never "Read".
+	const { label, path } = splitSummary(activity, "live");
+	return path ? `${label} ${path}` : label;
 }
 
 /**
@@ -1544,10 +1592,11 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
-	const { label, path } = splitSummary(activity);
-	// Commands and file edits share the explore-style summary line: muted label,
-	// no icon column, always-visible chevron. Everything else keeps the denser
-	// bordered activity row.
+	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
+	const StepMark = stepIcon[stepIconName ?? "run"];
+	// Commands and file edits share the explore-style summary line: a small mark for
+	// what the step did, muted label, always-visible chevron. Everything else keeps
+	// the denser bordered activity row.
 	const compactSummary =
 		activity.activityKind === "command" || activity.activityKind === "file_change";
 	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
@@ -1591,7 +1640,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				{compactSummary ? null : (
+				{compactSummary ? (
+					<StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+				) : (
 					<Icon
 						aria-hidden="true"
 						className={cn(
@@ -1604,7 +1655,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<span className="shrink-0 text-muted-foreground">
-							{fileChangeVerb(singleEdit.status ?? "modified")}
+							{activity.status === "running"
+								? liveFileChangeVerb(singleEdit.status ?? "modified")
+								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
 						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
 						{singleEdit.additions > 0 ? (
@@ -1617,6 +1670,17 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
+					</span>
+				) : compactSummary && path ? (
+					// Verb and target sit as close together as a file edit's verb and name.
+					// The space is not drawn in the flex row, but it keeps the accessible
+					// name "Read README.md" rather than "ReadREADME.md".
+					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+						<strong className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground">
+							<ActivityTitle text={label} />
+						</strong>
+						{" "}
+						<StepTarget text={path} title={pathTitle} />
 					</span>
 				) : (
 					<strong
@@ -1640,7 +1704,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
 						{noticeDetail}
 					</span>
-				) : path && !singleEdit ? (
+				) : path && !singleEdit && !compactSummary ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}
@@ -1909,28 +1973,29 @@ function commandOutputText(raw: unknown): string {
 }
 
 /**
- * Split a summary into a bold action and a muted target, which is how the row
- * scans: what happened, then what it happened to. A command becomes its binary
- * plus its arguments; anything without a natural split keeps its whole label.
+ * Split a summary into an action and a muted target, which is how the row scans:
+ * what happened, then what it happened to ("Read" README.md, "Searched for" TODO).
+ * A step still running says it in the present tense ("Reading"). Anything without
+ * a natural split keeps its whole label.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string } {
+function splitSummary(
+	activity: ConversationActivity,
+	tense: "done" | "live" = activity.status === "running" ? "live" : "done",
+): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
 	if (activity.activityKind === "command") {
-		const rawCommand = activity.detail?.command ?? activity.summary;
-		const category = commandCategory(rawCommand);
-		if (category === "read" || category === "search") {
-			const count = exploredFileCount(rawCommand);
-			if (category === "search") return { label: "Search" };
-			return { label: count && count > 1 ? "Read files" : "Read file" };
-		}
-		return { label: category === "vcs" ? "Checked repository" : "Ran command" };
+		const step = activityCommandStep(activity);
+		return { label: step[tense], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
 	}
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
+		const status = files[0]!.status ?? "modified";
 		// Basename sits in the chip next to the status verb; the full path is the hover.
 		return {
-			label: `${fileChangeVerb(files[0]!.status ?? "modified")} ${fileBasename(files[0]!.path)}`,
+			label: `${tense === "live" ? liveFileChangeVerb(status) : fileChangeVerb(status)} ${fileBasename(files[0]!.path)}`,
+			icon: fileChangeIcon(status),
 		};
 	}
+	if (activity.activityKind === "file_change") return { label: activity.summary, icon: "write" };
 	return { label: activity.summary };
 }
 
@@ -3343,6 +3408,32 @@ function fileChangeVerb(status: DiffStatus): string {
 	}
 }
 
+function liveFileChangeVerb(status: DiffStatus): string {
+	switch (status) {
+		case "added":
+			return "Creating";
+		case "deleted":
+			return "Deleting";
+		case "renamed":
+			return "Renaming";
+		default:
+			return "Editing";
+	}
+}
+
+function fileChangeIcon(status: DiffStatus): StepIcon {
+	switch (status) {
+		case "added":
+			return "file-new";
+		case "deleted":
+			return "delete";
+		case "renamed":
+			return "move";
+		default:
+			return "write";
+	}
+}
+
 /**
  * What a turn changed on disk.
  *
@@ -3553,6 +3644,24 @@ function FileLocationLabel({
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
 				{location}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+/**
+ * What a command step acted on, after its verb: a file, a pattern, a PR number.
+ * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
+ */
+function StepTarget({ text, title }: { text: string; title?: string }) {
+	const label = <span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>;
+	// A short target that is shown whole needs no tooltip repeating it.
+	if ((!title || title === text) && text.length <= 48) return label;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{label}</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
+				{shortenPaths(title ?? text)}
 			</TooltipContent>
 		</Tooltip>
 	);
