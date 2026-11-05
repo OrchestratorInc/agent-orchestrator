@@ -4733,6 +4733,9 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	if row.RetryOfTurnID.Valid {
 		turn.RetryOfTurnID = row.RetryOfTurnID.String
 	}
+	if row.BatchedInput != 0 && row.PromotedToTurnID.Valid {
+		turn.DeliveredWithTurnID = row.PromotedToTurnID.String
+	}
 	if row.StartedAt.Valid {
 		started := row.StartedAt.Time
 		turn.StartedAt = &started

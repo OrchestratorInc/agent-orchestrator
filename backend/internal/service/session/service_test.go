@@ -89,6 +89,7 @@ type fakeStore struct {
 	num                 int
 	conversations       map[domain.SessionID]domain.ConversationRecord
 	activities          []domain.ConversationActivity
+	runningTurns        map[string][]string
 
 	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
 	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
@@ -149,7 +150,11 @@ func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversation
 	return "", false, nil
 }
 
-func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+func (f *fakeStore) ListVisibleRunningTurnProviderIDs(_ context.Context, conversationID string) ([]string, error) {
+	return f.runningTurns[conversationID], nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error {
 	if activity.ProviderItemID != "" {
 		for i, existing := range f.activities {
 			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
@@ -172,6 +177,7 @@ func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, 
 		}
 	}
 	activity.ConversationID = conversationID
+	activity.TurnID = providerTurnID
 	activity.Sequence = int64(len(f.activities) + 1)
 	activity.Revision = 1
 	activity.CreatedAt = now

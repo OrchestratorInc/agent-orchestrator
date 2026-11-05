@@ -128,6 +128,8 @@ export interface ConversationTurn {
 	providerTurnId?: string;
 	/** Failed source whose durable prompt created this retry attempt. */
 	retryOfTurnId?: string;
+	/** The turn whose provider input carried this queued turn's messages (a queue drain or a steer). */
+	deliveredWithTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
@@ -554,6 +556,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the queued turns whose messages this steer carried into the running turn. */
+	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
 		type: string;

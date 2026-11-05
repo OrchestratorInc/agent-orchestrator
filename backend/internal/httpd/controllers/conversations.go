@@ -1437,21 +1437,22 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 
 	for _, turn := range s.Turns {
 		out.Turns = append(out.Turns, ConversationTurnResponse{
-			ID:              turn.ID,
-			State:           string(turn.State),
-			ProviderTurnID:  turn.ProviderTurnID,
-			RetryOfTurnID:   turn.RetryOfTurnID,
-			HasRetryAttempt: turn.HasRetryAttempt,
-			HasHumanPrompt:  turn.HasHumanPrompt,
-			ErrorMessage:    turn.ErrorMessage,
-			FailureCode:     string(turn.FailureCode),
-			UsageLimit:      usageLimitPayload(turn.UsageLimit),
-			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
-			StartedAt:       optionalTimestamp(turn.StartedAt),
-			CompletedAt:     optionalTimestamp(turn.CompletedAt),
-			Diff:            turnDiffPayload(turn.Diff),
-			Plan:            turnPlanPayload(turn.Plan),
-			RolledBack:      turn.RolledBackAt != nil,
+			ID:                  turn.ID,
+			State:               string(turn.State),
+			ProviderTurnID:      turn.ProviderTurnID,
+			RetryOfTurnID:       turn.RetryOfTurnID,
+			DeliveredWithTurnID: turn.DeliveredWithTurnID,
+			HasRetryAttempt:     turn.HasRetryAttempt,
+			HasHumanPrompt:      turn.HasHumanPrompt,
+			ErrorMessage:        turn.ErrorMessage,
+			FailureCode:         string(turn.FailureCode),
+			UsageLimit:          usageLimitPayload(turn.UsageLimit),
+			RequestedAt:         turn.RequestedAt.UTC().Format(time.RFC3339),
+			StartedAt:           optionalTimestamp(turn.StartedAt),
+			CompletedAt:         optionalTimestamp(turn.CompletedAt),
+			Diff:                turnDiffPayload(turn.Diff),
+			Plan:                turnPlanPayload(turn.Plan),
+			RolledBack:          turn.RolledBackAt != nil,
 		})
 	}
 
