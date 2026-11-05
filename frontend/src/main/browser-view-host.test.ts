@@ -1499,7 +1499,10 @@ function fakeBrowserProfileStore(
 	const profiles = Array.isArray(profile) ? profile : [profile];
 	return {
 		profiles,
-		getProfile: (profileId: string) => profiles.find((candidate) => candidate.id === profileId),
+		getProfile: (profileId: string) => {
+			const found = profiles.find((candidate) => candidate.id === profileId);
+			return found ? { ...found } : undefined;
+		},
 		getSessionProfileId: (sessionId: string) => bindings[sessionId],
 		getDefaultProfileId: () => defaultProfileId,
 		// A binding of `null` is an explicit, durable choice of Temporary and
@@ -2736,9 +2739,9 @@ describe("browser profile partitions and replacement", () => {
 		});
 	});
 
-	it.each([false, true])("preserves explicit Temporary across reconstruction with a configured default: %s", async (hasDefault) => {
+	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
 		const bindings: Record<string, string | null> = {};
-		const store = fakeBrowserProfileStore(profile, bindings, hasDefault ? profile.id : null);
+		const store = fakeBrowserProfileStore(profile, bindings, profile.id);
 		const firstHost = setupTabHost(store);
 		const ensured = (await firstHost.invoke("browser:ensure", "worker-1")) as BrowserNavState;
 		expect(firstHost.host.getProfileState(ensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
@@ -3128,19 +3131,10 @@ describe("browser profile partitions and replacement", () => {
 		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://second.example/");
 	});
 
-	it("starts an unbound worker in the first saved profile when no default is configured", async () => {
+	it("starts an unbound worker in Temporary when no default profile is set, even with saved profiles", async () => {
 		const bindings: Record<string, string | null> = {};
-		const secondProfile = { ...profile, id: "33333333-3333-4333-8333-333333333333", name: "Personal" };
-		const store = fakeBrowserProfileStore([profile, secondProfile], bindings);
-		const { host, invoke, constructorOptions } = setupTabHost(store);
-		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
-		expect(constructorOptions[0]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
-		expect(store.bindSession).not.toHaveBeenCalled();
-	});
-
-	it("starts an unbound worker in Temporary when no profiles are saved", async () => {
-		const { host, invoke } = setupTabHost(fakeBrowserProfileStore([], {}));
+		const store = fakeBrowserProfileStore(profile, bindings);
+		const { host, invoke } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
 		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});

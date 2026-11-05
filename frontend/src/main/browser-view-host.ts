@@ -968,8 +968,9 @@ export function createBrowserViewHost(
   // Workers whose human explicitly picked the temporary profile this run.
   const explicitTemporarySessionIds = new Set<string>();
 
-  // Prefer the worker's choice, then the global default, then the first saved
-  // profile. An explicit Temporary choice must bypass both fallbacks.
+  // Prefer the worker's choice, then the global default, then Temporary. The
+  // store makes the first profile the default; an explicit Temporary choice
+  // bypasses it.
   const initialProfileIdForSession = (
     sessionId: string,
   ): BrowserProfileId | null => {
@@ -982,7 +983,7 @@ export function createBrowserViewHost(
     const defaultProfileId = store.getDefaultProfileId();
     if (defaultProfileId && store.getProfile(defaultProfileId))
       return defaultProfileId;
-    return store.profiles[0]?.id ?? null;
+    return null;
   };
   const ipcDisposers: Array<() => void> = [];
   let disposePromise: Promise<void> | null = null;
