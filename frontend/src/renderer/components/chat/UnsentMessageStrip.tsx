@@ -16,6 +16,8 @@ export function UnsentMessageStrip(props:
 		attachmentCount: number;
 		/** The retry is in flight. */
 		sending: boolean;
+		/** Still unsent, and the composer keeps retrying it by itself. */
+		retrying?: boolean;
 		retryDisabled: boolean;
 		onRetry: () => void;
 		onDiscard: () => void;
@@ -37,23 +39,25 @@ export function UnsentMessageStrip(props:
 		);
 	}
 
-	const { text, attachmentCount, sending, retryDisabled, onRetry, onDiscard } = props;
+	const { text, attachmentCount, sending, retrying = false, retryDisabled, onRetry, onDiscard } = props;
+	// An automatic retry keeps one steady row, during an attempt and between them.
+	const oneShot = sending && !retrying;
 	const preview = text.replace(/\s+/g, " ").trim() || t("chat.unsent.attachmentsOnly");
 	return (
 		<div className="overflow-hidden rounded-[var(--radius-chat-composer)] border border-border bg-surface" data-testid="unsent-message-strip">
 			<div className="flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden pl-3 pr-1.5">
-				{sending ? (
+				{sending || retrying ? (
 					<Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" strokeWidth={2} />
 				) : (
 					<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-status-needs-you" strokeWidth={2} />
 				)}
-				<span className={cn("shrink-0 text-xs font-medium", sending ? "text-muted-foreground" : "text-status-needs-you")}>
-					{t(sending ? "chat.unsent.sending" : "chat.unsent.label")}
+				<span className={cn("shrink-0 text-xs font-medium", oneShot ? "text-muted-foreground" : "text-status-needs-you")}>
+					{t(retrying ? "chat.unsent.retrying" : sending ? "chat.unsent.sending" : "chat.unsent.label")}
 				</span>
-				<p className={cn("min-w-0 flex-1 truncate text-xs leading-relaxed", sending ? "text-muted-foreground" : "text-foreground")} title={expanded ? undefined : text}>
+				<p className={cn("min-w-0 flex-1 truncate text-xs leading-relaxed", oneShot ? "text-muted-foreground" : "text-foreground")} title={expanded ? undefined : text}>
 					{expanded ? t("chat.unsent.retryHint") : preview}
 				</p>
-				{sending ? null : (
+				{oneShot ? null : (
 					<div className="flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 						<Button
 							type="button"
@@ -74,6 +78,7 @@ export function UnsentMessageStrip(props:
 							type="button"
 							variant="destructive-ghost"
 							size="icon-sm"
+							disabled={sending}
 							onClick={onDiscard}
 							aria-label={t("chat.unsent.discard")}
 							title={t("chat.unsent.discard")}
@@ -83,7 +88,7 @@ export function UnsentMessageStrip(props:
 					</div>
 				)}
 			</div>
-			{expanded && !sending ? (
+			{expanded && !oneShot ? (
 				<div className="border-t border-border">
 					<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">{text}</pre>
 					<div className="flex items-center justify-between px-3 pb-2 text-xs text-muted-foreground">

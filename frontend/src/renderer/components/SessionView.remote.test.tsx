@@ -115,7 +115,7 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
+it("keeps a remote chat mounted while its host reconnects, without falling back to local", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -133,13 +133,14 @@ it("removes remote chat actions when its host disconnects, without falling back 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	// A tunnel blip must not tear down the chat and any send in flight.
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
+	expect(screen.queryByText("Host is offline. Check its address and password.")).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("hides stale chat controls when the upstream daemon fails but its proxy remains connected", async () => {
+it("keeps the chat when the upstream daemon fails but its proxy remains connected", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -163,10 +164,10 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+	await waitFor(() => expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error"));
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
+	expect(screen.queryByText("Host is offline. Check its address and password.")).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -587,7 +588,7 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 	await waitFor(() => expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001/new"));
 });
 
-it("reuses a Chat delivery ID when a lost response is retried", async () => {
+it("retries a lost Chat response by itself with the same delivery ID once the host is back", async () => {
 	const deliveryIds: string[] = [];
 	const posts: string[] = [];
 	localGet.mockReset();
@@ -606,7 +607,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 		else if (new URL(request.url).pathname.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (request.url.includes(":4000")) throw new TypeError("response lost after acceptance");
 			status = 202;
 			body = { state: "accepted", turnId: "turn-1" };
 		} else throw new Error(`Unexpected request ${request.url}`);
@@ -622,16 +623,11 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
-	expect(deliveryIds[1]).toBe(deliveryIds[0]);
-	expect(posts).toEqual([
-		"http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages",
-		"http://127.0.0.1:4002/api/v1/sessions/session-1/conversation/messages",
-	]);
+	await waitFor(() => expect(posts.at(-1)).toBe("http://127.0.0.1:4002/api/v1/sessions/session-1/conversation/messages"), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+	expect(new Set(deliveryIds).size).toBe(1);
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -698,7 +694,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 		if (path.endsWith("/reviews/review-1/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (request.url.includes(":4001")) throw new TypeError("response lost after acceptance");
 			return Response.json({ state: "accepted", turnId: "review-turn" }, { status: 202 });
 		}
 		if (path.endsWith("/sessions/session-1/conversation")) return Response.json(conversationBody());
@@ -717,16 +713,11 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
-	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
-	expect(deliveryIds[1]).toBe(deliveryIds[0]);
-	expect(posts).toEqual([
-		"http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages",
-		"http://127.0.0.1:4002/api/v1/reviews/review-1/conversation/messages",
-	]);
+	await waitFor(() => expect(posts.at(-1)).toBe("http://127.0.0.1:4002/api/v1/reviews/review-1/conversation/messages"), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
+	expect(new Set(deliveryIds).size).toBe(1);
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1"))).toBe("local-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-a"))).toBe("box-a-sentinel");
 	expect(queryClient.getQueryData(reviewerConversationQueryKey("review-1", "box-b"))).toBeDefined();
