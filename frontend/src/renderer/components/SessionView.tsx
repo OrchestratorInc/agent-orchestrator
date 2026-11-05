@@ -2650,6 +2650,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
+							{/* Panes other than the focused one rest under a light veil, so
+							    the one taking keys stands out; the veil never takes the pointer. */}
+							{shownGroup && shownLayout
+								? [...shownLayout.leaves.keys()].map((key) => (
+									<div
+										aria-hidden="true"
+										className="pane-split-dim"
+										data-dimmed={key === selectedTabKey ? undefined : ""}
+										key={`dim:${key}`}
+										style={paneStyle(key)}
+									/>
+								))
+								: null}
 							{shownGroup && shownLayout
 								? shownLayout.dividers.map((divider) => (
 									<SplitDivider
