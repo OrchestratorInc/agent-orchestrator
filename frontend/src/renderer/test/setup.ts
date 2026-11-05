@@ -228,6 +228,7 @@ if (typeof window !== "undefined") {
 		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
+			pathAction: async () => undefined,
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },

@@ -1913,6 +1913,7 @@ function ChatWorkspaceContent({
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
+							sessionId={snapshot.sessionId}
 							onLinkOpen={onLinkOpen}
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}
@@ -3163,15 +3164,9 @@ export function Timeline({
 			)?.turnId,
 		[snapshot.items],
 	);
-	const { editableTurns: editableTurnsNow, reconstructedTurns } = useMemo(() => {
+	const editableTurnsNow = useMemo(() => {
 		const editable = new Set<string>();
-		const reconstructed = new Set<string>();
-		if (snapshot.controller.state !== "ready") {
-			return {
-				editableTurns: editable,
-				reconstructedTurns: reconstructed,
-			};
-		}
+		if (snapshot.controller.state !== "ready") return editable;
 		const accepted = new Set(
 			snapshot.turns
 				.filter(
@@ -3201,10 +3196,9 @@ export function Timeline({
 				(firstPromptInBinding || canNativeFork || canReconstructHistoricalContext)
 			) {
 				editable.add(item.turnId);
-				if (!firstPromptInBinding && !canNativeFork) reconstructed.add(item.turnId);
 			}
 		}
-		return { editableTurns: editable, reconstructedTurns: reconstructed };
+		return editable;
 	}, [
 		canForkHistoricalContext,
 		canReconstructHistoricalContext,
@@ -3401,7 +3395,6 @@ export function Timeline({
 			turnId: message.turnId,
 			text: message.text,
 			content: message.content ?? [],
-			reconstructedContext: reconstructedTurns.has(message.turnId),
 		});
 		const next = result.draft.inlineEdit;
 		if (!next) return;
@@ -3414,7 +3407,7 @@ export function Timeline({
 				? undefined
 				: "chat.draft.editSaveFailed",
 		);
-	}, [draftScope, inlineEditLocked, reconstructedTurns]);
+	}, [draftScope, inlineEditLocked]);
 	const updateMessageEdit = useCallback((text: string) => {
 		if (inlineEditLocked) return;
 		const current = messageEditRef.current;
@@ -3423,7 +3416,6 @@ export function Timeline({
 			turnId: current.turnId,
 			text,
 			content: current.content,
-			reconstructedContext: current.reconstructedContext,
 		});
 		const next = result.draft.inlineEdit;
 		if (!next) return;
@@ -3466,7 +3458,6 @@ export function Timeline({
 					turnId: current.turnId,
 					text,
 					content: current.content,
-					reconstructedContext: current.reconstructedContext,
 					clientMessageId:
 					durableInlineEditDelivery?.clientMessageId ?? crypto.randomUUID(),
 			});
@@ -4656,7 +4647,6 @@ export function Timeline({
 									draftPersistenceError ??
 									inlineEditRecoveryNotice ??
 									inlineEditOutcomeNotice)}
-								reconstructedContext={messageEdit.reconstructedContext}
 								onDraftChange={updateMessageEdit}
 								onCancel={cancelMessageEdit}
 								onAbandonRecovery={
@@ -5308,7 +5298,6 @@ function TimelineItem({
 					onEdit={editAvailable ? (_turnID, text) => onSubmitMessageEdit(text) : undefined}
 					editing={editing}
 					editText={editing ? messageEdit?.text : undefined}
-					editReconstructedContext={editing && messageEdit?.reconstructedContext}
 					onEditStart={editAvailable ? () => onStartMessageEdit(item) : undefined}
 					onEditDraftChange={onUpdateMessageEdit}
 					onEditCancel={onCancelMessageEdit}
