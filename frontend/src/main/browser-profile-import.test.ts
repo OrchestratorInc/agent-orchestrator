@@ -912,6 +912,56 @@ describe("BrowserProfileImportService", () => {
 		expect(result.entries[0]!.warnings).toContainEqual({ code: "cookie-attributes-defaulted", count: 1 });
 	});
 
+	it("leaves anti-bot cookies behind, since they only work in the browser that earned them", async () => {
+		const root = await fixtureRoot();
+		const appData = path.join(root, "roaming");
+		const profileRoot = path.join(appData, "Mozilla", "Firefox", "Profiles", "legacy.default-release");
+		await mkdir(profileRoot, { recursive: true });
+		const database = new Database(path.join(profileRoot, "cookies.sqlite"));
+		database.exec(`
+			CREATE TABLE moz_cookies (
+				host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER,
+				isSecure INTEGER, isHttpOnly INTEGER, originAttributes TEXT,
+				lastAccessed INTEGER, creationTime INTEGER
+			);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'session', 'keep', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'cf_clearance', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', '__cf_bm', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', 'datadome', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+			INSERT INTO moz_cookies VALUES ('.example.com', '_abck', 'drop', '/', 1893456000, 1, 1, '', 2, 1);
+		`);
+		database.close();
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const setCookie = vi.fn(async (_details: Electron.CookiesSetDetails) => undefined);
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { APPDATA: appData },
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+			fromPartition: () => ({
+				cookies: { set: setCookie },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		});
+		const source = (await service.discover()).sources[0]!;
+		await service.import({
+			requestId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge", name: "Anti-bot" },
+		}, vi.fn());
+
+		expect(setCookie.mock.calls.map(([details]) => details.name)).toEqual(["session"]);
+	});
+
 	it.each([0, 2, 5_000, 5_002])("imports only visited Firefox places and counts truncation with %i visited URLs", async (visitedCount) => {
 		const root = await fixtureRoot();
 		const profileRoot = path.join(root, ".mozilla", "firefox", "fixture.default-release");

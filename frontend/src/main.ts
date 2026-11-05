@@ -91,7 +91,8 @@ import {
 	slowDaemonStartupStatus,
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
-import { acceptLanguages, applyBrowserIdentity } from "./main/browser-identity";
+import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
+import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
@@ -183,6 +184,8 @@ import {
 	type BrowserRuntimeState,
 } from "./main/browser-view-host";
 import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
+import { repairBrowserProfileCookies } from "./main/browser-cookie-repair";
+import { browserProfilePartition } from "./shared/browser-profiles";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
@@ -846,6 +849,15 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	// In the background: this must never hold up the window.
+	void repairBrowserProfileCookies({
+		stateDir: browserProfileStateDir(),
+		profileIds: browserProfileStore.profiles.map((profile) => profile.id),
+		fromProfile: (profileId) => session.fromPartition(browserProfilePartition(profileId)),
+		cookieDatabase: (profileId) =>
+			path.join(app.getPath("userData"), "Partitions", browserProfilePartition(profileId).replace(/^persist:/, ""), "Cookies"),
+		log: (message) => console.info(message),
+	});
 	const browserHistoryStore = new BrowserHistoryStore({ stateDir: browserProfileStateDir() });
 	const profileImporter = new BrowserProfileImportService({
 		stateDir: browserProfileStateDir(),
@@ -2840,6 +2852,9 @@ const dictation = registerDictationIpc(
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
 });
+ipcMain.handle("app:openChromeExtensions", () =>
+	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
+);
 
 ipcMain.handle("window:getZoomFactor", () => {
 	const shell = getShellWebContents();
@@ -3831,6 +3846,7 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	if (app.isPackaged) {

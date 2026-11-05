@@ -223,6 +223,7 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
 		checkAncestorRepo: (path: string) =>
