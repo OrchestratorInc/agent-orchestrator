@@ -85,16 +85,19 @@ func (c *darwinPTYConn) Close() error {
 			select {
 			case <-c.doneC:
 			default:
-				// The PTY child is a session leader. Signal its process group so
-				// descendants cannot outlive a terminal AO explicitly destroys.
-				// SIGHUP first, as a closing terminal would: an interactive shell
-				// ignores SIGTERM, so without it every close waited out the full
-				// grace before SIGKILL.
-				pgid := c.cmd.Process.Pid
-				_ = syscall.Kill(-pgid, syscall.SIGHUP)
-				_ = syscall.Kill(-pgid, syscall.SIGTERM)
-				if !waitForDarwinProcessGroupExit(pgid, darwinPTYCloseGrace) {
-					_ = syscall.Kill(-pgid, syscall.SIGKILL)
+				// The PTY child is a session leader. Signal every process group
+				// in its session so descendants, including jobs the shell runs
+				// in their own groups, cannot outlive a terminal AO explicitly
+				// destroys. SIGHUP first, as a closing terminal would: an
+				// interactive shell ignores SIGTERM, so without it every close
+				// waited out the full grace before SIGKILL.
+				leader := c.cmd.Process.Pid
+				groups := darwinSessionGroups(leader)
+				signalDarwinGroups(groups, syscall.SIGHUP)
+				signalDarwinGroups(groups, syscall.SIGTERM)
+				if !waitForDarwinGroupsExit(groups, darwinPTYCloseGrace) {
+					// Rediscover too: a trap handler may have started new groups.
+					signalDarwinGroups(mergeGroups(groups, darwinSessionGroups(leader)), syscall.SIGKILL)
 					select {
 					case <-c.doneC:
 					case <-time.After(darwinPTYCloseGrace):
@@ -105,23 +108,6 @@ func (c *darwinPTYConn) Close() error {
 		closeErr = c.pty.Close()
 	})
 	return closeErr
-}
-
-func waitForDarwinProcessGroupExit(pgid int, timeout time.Duration) bool {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if !darwinProcessGroupAlive(pgid) {
-			return true
-		}
-		select {
-		case <-deadline.C:
-			return !darwinProcessGroupAlive(pgid)
-		case <-ticker.C:
-		}
-	}
 }
 
 func darwinProcessGroupAlive(pgid int) bool {
