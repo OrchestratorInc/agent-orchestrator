@@ -63,14 +63,16 @@ export function useTerminalMux(args: {
 		xtermRef.current.write(bytes);
 	}, [xtermRef]);
 
-	/** Opens the PTY on the current socket, at most once per socket. */
+	/**
+	 * Opens the PTY on the current socket, at most once per socket, at the last
+	 * grid the WebView reported. The size rides on the open itself: it is sent
+	 * when the socket opens, so it survives being asked for while connecting.
+	 */
 	const openTerminal = useCallback(() => {
 		const mux = muxRef.current;
 		if (!mux || openedRef.current) return;
 		openedRef.current = true;
-		mux.openTerminal(terminalHandleId, projectId);
-		const dims = lastDimsRef.current;
-		if (dims) mux.resize(terminalHandleId, dims.cols, dims.rows, projectId);
+		mux.openTerminal(terminalHandleId, projectId, lastDimsRef.current ?? undefined);
 	}, [terminalHandleId, projectId]);
 
 	/** The WebView's xterm is up: drain what arrived early and attach. */
