@@ -3160,6 +3160,18 @@ describe("Sidebar", () => {
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 	});
 
+	it("closes the row's archive confirm on the first Escape", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		const row = screen.getByLabelText("Open fix login").closest<HTMLElement>("[data-session-row]")!;
+		await user.click(within(row).getByLabelText("Archive session"));
+		await screen.findByRole("dialog");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
 	it("keeps the preview closed through the archive confirm opened from the context menu", async () => {
 		const user = userEvent.setup();
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
