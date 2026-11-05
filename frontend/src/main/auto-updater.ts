@@ -358,6 +358,24 @@ function reprobeStagingDisk(): void {
 // deterministically. A fresh module import restores the defaults.
 let readStagingBytes: (dir: string | undefined) => number | undefined = shipItStagingBytes;
 let stagingDiskIsFull: (requiredBytes: number) => boolean = insufficientDiskForStaging;
+function nativeStagingFilesPresent(): boolean {
+  // Test and unpackaged processes have no Squirrel staging area.
+  const bundle = path.resolve(process.execPath, "..", "..", "..");
+  if (!app.isPackaged || !bundle.endsWith(".app")) return true;
+  const directory = macShipItDir();
+  if (!directory || !existsSync(path.join(directory, "ShipItState.plist"))) return false;
+  try {
+    return readdirSync(directory, { withFileTypes: true }).some(update => {
+      if (!update.isDirectory() || !/^update\.[^/]+$/.test(update.name)) return false;
+      try {
+        // Finder can rename the running app, but ShipIt extracts the zip's bundle name.
+        return readdirSync(path.join(directory, update.name), { withFileTypes: true }).some(candidate =>
+          candidate.isDirectory() && candidate.name.endsWith(".app") &&
+          existsSync(path.join(directory, update.name, candidate.name, "Contents", "Info.plist")));
+      } catch { return false; }
+    });
+  } catch { return false; }
+}
 export function __setStagingProbesForTesting(probes: {
   readStagingBytes?: (dir: string | undefined) => number | undefined;
   stagingDiskIsFull?: (requiredBytes: number) => boolean;
@@ -506,6 +524,28 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
 
 function isNativeInstallReady(): boolean {
   return process.platform !== "darwin" || (stagedInCurrentProcess && nativeReadyVersion !== undefined && nativeReadyVersion === stagedVersion);
+}
+
+function nativeStagingWasLost(): boolean {
+  return process.platform === "darwin" && isNativeInstallReady() &&
+    !nativeStagingFilesPresent();
+}
+
+function discardLostNativeStaging(): boolean {
+  if (!nativeStagingWasLost()) return false;
+  recordUpdateDiagnostic("native-staging-lost", { version: stagedVersion });
+  const failure = new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  const restartWasRequested = updateRestartRequested;
+  discardStagedBuild();
+  updateRestartRequested = false;
+  macRestartPreparation = undefined;
+  if (activeUpdaterOperation === "manual-install") rejectNativeOperation?.(failure);
+  void macRestartProgress?.fail(failure.message).catch(() => undefined);
+  macRestartProgress = undefined;
+  if (restartWasRequested) restartFailureHandler?.();
+  applyInstallOnQuitPolicy();
+  broadcastUpdaterStatus({ state: "checking" });
+  return true;
 }
 // Sanitized release notes for the build currently on offer.
 let offeredReleaseNotes: string | undefined;
@@ -1038,7 +1078,7 @@ function stagedStamp(): Pick<UpdateStatus, "staged"> {
       ...(stagedVersion === undefined ? {} : { version: stagedVersion }),
       stagedAt: stagedAtMs,
       escalated: stagedEscalated,
-      ...(isNativeInstallReady() ? {} : { ready: false }),
+      ...(isNativeInstallReady() && nativeStagingFilesPresent() ? {} : { ready: false }),
       ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
     },
   };
@@ -2450,6 +2490,7 @@ async function runAutomaticUpdateCheck(
       // downloading is off, or quitting installs the build they moved away from.
       const staleStaged = stagedBuildIsStale(settings);
       if (staleStaged) discardStagedBuild();
+      else discardLostNativeStaging();
       // automaticRecoveryExhausted() breaks the re-download loop: without it a
       // build that keeps failing verification is fetched and re-prepared on
       // every check, forever. A stale staged build still overrides, because
@@ -2565,6 +2606,9 @@ function reconcileAutomaticUpdateSchedule(
 async function requestAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number | undefined> {
+  // This preflight must run before the queue and the in-flight guard: a lost
+  // native stage can leave a manual install pending ahead of every check.
+  discardLostNativeStaging();
   if (automaticCheckInFlight) return undefined;
   automaticCheckInFlight = true;
   try {
@@ -3024,13 +3068,17 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     }
     return;
   }
+  if (discardLostNativeStaging()) {
+    if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
+    throw new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  }
   if (macRestartPreparation) return macRestartPreparation;
   let confirmation: UpdateInstallResult;
   // Promise.race releases the queue on a native timeout, but the underlying
   // cache transfer has no cancellation guarantee. Never let its late resolution
   // continue an install request whose caller already received a failure.
   let installAbandoned = false;
-  macRestartPreparation = runSerializedUpdaterOperation("manual-install", async () => {
+  const preparation = runSerializedUpdaterOperation("manual-install", async () => {
     const previousPreparationError = nativePreparationError;
     const assertInstallActive = () => {
       if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
@@ -3108,7 +3156,8 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       broadcast({ state: "error", ...failureFields(failure) });
     }
     throw userFacingInstallError(err);
-  }).finally(() => { if (!updateRestartRequested) macRestartPreparation = undefined; });
+  }).finally(() => { if (!updateRestartRequested && macRestartPreparation === preparation) macRestartPreparation = undefined; });
+  macRestartPreparation = preparation;
   return macRestartPreparation;
 }
 

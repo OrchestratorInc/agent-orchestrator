@@ -3718,6 +3718,18 @@ describe("Sidebar", () => {
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
 	});
 
+	it("keeps restart available for a stalled native stage", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "downloaded",
+			version: "9.9.9",
+			staged: { version: "9.9.9", stagedAt: Date.now(), escalated: false, ready: false },
+		});
+		renderSidebar();
+
+		expect(await screen.findByTestId("sidebar-update-ready")).toBeVisible();
+		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
+	});
+
 	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
