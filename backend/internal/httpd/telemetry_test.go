@@ -51,8 +51,8 @@ func TestCLIInvokedRouteEmitsTelemetryForUserCommands(t *testing.T) {
 	if got := sink.events[0].Payload["actor_type"]; got != "user" {
 		t.Fatalf("actor_type = %#v, want user", got)
 	}
-	if sink.events[1].Name != "ao.app.active" {
-		t.Fatalf("second event name = %q, want ao.app.active", sink.events[1].Name)
+	if sink.events[1].Name != "ao.cli.active" {
+		t.Fatalf("second event name = %q, want ao.cli.active", sink.events[1].Name)
 	}
 	if got := sink.events[1].Payload["channel"]; got != "cli" {
 		t.Fatalf("channel = %#v, want cli", got)
@@ -199,8 +199,8 @@ func TestCLIInvokedRouteDedupeIncludesActorType(t *testing.T) {
 	if sink.events[1].Name != "ao.cli.invoked" || sink.events[1].Payload["actor_type"] != "user" {
 		t.Fatalf("second emitted event = %#v, want user ao.cli.invoked", sink.events[1])
 	}
-	if sink.events[2].Name != "ao.app.active" {
-		t.Fatalf("third emitted event = %#v, want ao.app.active", sink.events[2])
+	if sink.events[2].Name != "ao.cli.active" {
+		t.Fatalf("third emitted event = %#v, want ao.cli.active", sink.events[2])
 	}
 }
 
