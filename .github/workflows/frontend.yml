@@ -352,14 +352,17 @@ jobs:
 
   # Keep the existing check name as the gate for the split frontend jobs.
   test:
-    if: ${{ always() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
+    # `always()` reports a genuine failed prerequisite, but a concurrency-
+    # cancelled workflow must not leave a failed gate behind its replacement.
+    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
     needs: [policy, checks, typecheck, vitest, mac-update-helper, mac-dmg-layout]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check frontend results
         run: |
-          # A failed policy must not turn native coverage into a successful skip.
+          # A failed policy must not turn native coverage into a successful skip;
+          # cancellation is handled by the job-level condition above.
           test '${{ needs.policy.result }}' = success
           test '${{ needs.checks.result }}' = success
           test '${{ needs.typecheck.result }}' = success
