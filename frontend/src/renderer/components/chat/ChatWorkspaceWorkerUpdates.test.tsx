@@ -88,6 +88,8 @@ describe("orchestrator worker updates", () => {
 		};
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
 
+		// The agents a turn spawned fold with its work.
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
 		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
 		expect(group).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
@@ -123,7 +125,7 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("keeps a distinct structured spawn next to the command spawn group", () => {
+	it("keeps a distinct structured spawn next to the command spawn group", async () => {
 		const spawn = {
 			...command("t1", 1, "ao spawn --project proj"),
 			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
@@ -134,6 +136,7 @@ describe("orchestrator worker updates", () => {
 			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
 		};
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
 		expect(screen.getByRole("button", { name: "Spawned 1 agent" })).toBeInTheDocument();
 		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
 	});
@@ -162,18 +165,23 @@ describe("orchestrator worker updates", () => {
 			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
 		};
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Spawned 1 agent" }));
 		const line = screen.getByText(label).parentElement;
 		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
 	});
 
-	it("draws a report as a row and an answer that asks nothing as one line that keeps copy and rollback", async () => {
+	it("draws a report batch as one line that opens to its rows, and an answer that asks nothing as one line that keeps copy and rollback", async () => {
 		const onRollback = renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
 			command("t1", 1, "gh pr merge 7054"),
 			reply("t1", 2, "Merged [#7054](https://github.com/o/r/pull/7054)."),
 		]);
 
+		const line = screen.getByRole("button", { name: "1 Agent Report" });
+		expect(line).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
+		await userEvent.click(line);
 		const row = screen.getByTestId("worker-update");
 		expect(row).toHaveTextContent("Check regressions");
 		expect(row).toHaveTextContent("One strong candidate: #7043");
@@ -234,12 +242,34 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
-	it("still shows the work of a turn that answered with tools only", () => {
+	it("collapses reports sent with a human message into one line under it that keeps needs-you visible", async () => {
+		const envelope = [
+			"Reports since your previous turn:", "",
+			"[needs_input] [iOS pages](ao://sessions/proj/proj-286)", "Tunnel or loopback?", "",
+			"[done] [Menus](ao://sessions/proj/proj-285)", "Menus render.",
+		].join("\n");
+		const human: ConversationMessage = {
+			kind: "message", id: "t1-human", turnId: "t1", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: `How is it going?\n\n<ao-worker-reports>\n${envelope}\n</ao-worker-reports>`,
+		};
+		renderOrchestrator([human, reply("t1", 2, "Both moved.")]);
+
+		const line = screen.getByRole("button", { name: /2 Agent Reports sent with this message/ });
+		expect(line).toHaveTextContent("1 needs you");
+		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
+		// The line sits under the message it travelled with, not above it.
+		expect(screen.getByText("How is it going?").compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		await userEvent.click(line);
+		expect(screen.getAllByTestId("worker-update")).toHaveLength(2);
+	});
+
+	it("still shows the work of a turn that answered with tools only", async () => {
 		renderOrchestrator([
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser"),
 			command("t1", 1, "gh pr merge 7054"),
 		]);
 
+		await userEvent.click(screen.getByRole("button", { name: "1 Agent Report" }));
 		expect(screen.getByTestId("worker-update")).toHaveTextContent("Menus");
 		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
