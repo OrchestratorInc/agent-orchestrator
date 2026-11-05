@@ -1579,6 +1579,30 @@ export interface CloudCpCreateGitHubProjectRequest {
 	config?: Record<string, unknown>;
 }
 
+/**
+ * POST /orgs/{orgId}/github/repositories: an empty private repository for a
+ * local folder, made in an account the org's GitHub App installation covers,
+ * and granted to the org. `owner` picks the account when several are
+ * connected (422 repository_owner_required without it).
+ */
+export interface CloudCpCreateGitHubRepositoryRequest {
+	name: string;
+	owner?: string;
+	description?: string;
+}
+
+export interface CloudCpCreateGitHubRepositoryResponse {
+	repository: CloudCpGitHubAppRepository;
+	/** False when an empty repository with that name already existed and was connected. */
+	created: boolean;
+	/**
+	 * The repository's push-only git endpoint, relative to the control plane
+	 * (/api/cloud/v1/orgs/{orgId}/github/git/<owner>/<name>.git). It takes only
+	 * pushes that create branches; the desktop pushes from the main process.
+	 */
+	pushPath: string;
+}
+
 /** A billing plan's limits, from the plan's Stripe product metadata. */
 export interface CloudCpPlanLimits {
 	plan: string;

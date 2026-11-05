@@ -8,7 +8,12 @@ import {
 	serializeLocalScriptStep,
 	timedScriptCommand,
 	additionalReposProblem,
+	gitHubRepositoryNameFromFolder,
+	isCloudWorkspaceProject,
+	isValidGitHubRepositoryName,
 	isStandaloneCloudProject,
+	projectRepositoryUrls,
+	workspaceRepositoriesProblem,
 	normalizeWorkingDirectory,
 	parseRepoScriptCommand,
 	parseScriptSteps,
@@ -128,5 +133,33 @@ describe("cloud project repositories", () => {
 		expect(isStandaloneCloudProject({ repositoryUrl: "https://github.com/acme/alice", config: {} })).toBe(false);
 		expect(projectAgentStartsIn({ agentStartsIn: "parent" })).toBe("parent");
 		expect(projectAgentStartsIn({ agentStartsIn: "elsewhere" })).toBe("repository");
+	});
+});
+
+describe("cloud workspaces", () => {
+	it("recognizes the workspace layout and lists every repository", () => {
+		const workspace = { repositoryUrl: "https://github.com/acme/api", config: { layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] } };
+		expect(isCloudWorkspaceProject(workspace as never)).toBe(true);
+		expect(isCloudWorkspaceProject({ config: { repos: [] } } as never)).toBe(false);
+		expect(projectRepositoryUrls(workspace as never)).toEqual(["https://github.com/acme/api", "https://github.com/acme/web"]);
+	});
+
+	it("names a folder's repository the way GitHub would take it", () => {
+		expect(gitHubRepositoryNameFromFolder("My Notes")).toBe("My-Notes");
+		expect(gitHubRepositoryNameFromFolder(".dotfiles")).toBe("dotfiles");
+		expect(gitHubRepositoryNameFromFolder("café & co")).toBe("caf-co");
+		expect(gitHubRepositoryNameFromFolder("...")).toBe("repo");
+		expect(gitHubRepositoryNameFromFolder("a".repeat(120))).toHaveLength(100);
+		expect(isValidGitHubRepositoryName("api-v2.1_x")).toBe(true);
+		for (const name of ["", ".hidden", "a b", "a/b", "x".repeat(101)]) expect(isValidGitHubRepositoryName(name), name).toBe(false);
+	});
+
+	it("checks a workspace's repositories as equals", () => {
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/acme/web"])).toBeUndefined();
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/acme/api"])).toMatchObject({ kind: "duplicate" });
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/other/api"])).toMatchObject({ kind: "folder", folder: "api" });
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/repository"])).toMatchObject({ kind: "reserved" });
+		expect(workspaceRepositoriesProblem(Array.from({ length: 12 }, (_, i) => `https://github.com/acme/r${i}`))).toMatchObject({ kind: "limit" });
+		expect(workspaceRepositoriesProblem(Array.from({ length: 11 }, (_, i) => `https://github.com/acme/r${i}`))).toBeUndefined();
 	});
 });

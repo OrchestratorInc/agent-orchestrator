@@ -484,6 +484,7 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),

@@ -50,7 +50,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, toCloudWorkspace, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { forgetSharedSessions, sessionWasSharedWithYou } from "../lib/shared-session-memory";
 
 it("preserves the existing local and remote workspace cache keys", () => {
@@ -1094,5 +1094,27 @@ describe("refreshCloudSessionLifecycle", () => {
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
 		// A shared session reads as connected from its own list, polled every 15 s.
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
+	});
+});
+
+describe("toCloudWorkspace", () => {
+	const project = (config: Record<string, unknown>) => ({
+		id: "p-1", orgId: "org-1", displayName: "Platform", repositoryUrl: "https://github.com/acme/api", defaultBranch: "main",
+		config, createdAt: "", updatedAt: "",
+	});
+
+	it("marks a workspace and lists every repository as its own", () => {
+		const workspace = toCloudWorkspace(project({ layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] }) as never, [], "org-1");
+		expect(workspace).toMatchObject({ kind: "cloud", cloudLayout: "workspace" });
+		expect(workspace.workspaceRepos).toEqual([
+			{ name: "api", relativePath: "api", repo: "https://github.com/acme/api" },
+			{ name: "web", relativePath: "web", repo: "https://github.com/acme/web" },
+		]);
+	});
+
+	it("leaves a project with additional repositories unmarked", () => {
+		const workspace = toCloudWorkspace(project({ repos: [{ url: "https://github.com/acme/web" }] }) as never, [], "org-1");
+		expect(workspace.cloudLayout).toBeUndefined();
+		expect(workspace.workspaceRepos).toBeUndefined();
 	});
 });

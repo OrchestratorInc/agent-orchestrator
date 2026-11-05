@@ -3,19 +3,21 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
+import { aoBridge } from "../lib/bridge";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 
 const mocks = vi.hoisted(() => ({
 	get: vi.fn(),
 	patch: vi.fn(),
 	listRepos: vi.fn(),
+	createRepository: vi.fn(),
 	orgCoderConfig: null as Record<string, unknown> | null,
 	org: { id: "org-1", role: "admin" } as { id: string; role?: string },
 	workerWorkingFolder: undefined as boolean | undefined,
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listGitHubRepositories: mocks.listRepos },
+		client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listGitHubRepositories: mocks.listRepos, createGitHubRepository: mocks.createRepository },
 		ready: true,
 		baseUrl: "https://cloud.test",
 	}),
@@ -218,4 +220,67 @@ it("shows the working folder in the app's language", async () => {
 	} finally {
 		await act(() => appI18n.changeLanguage("en"));
 	}
+});
+
+it("lists a workspace's repositories as its own, without an agent start choice, and adds a local folder", async () => {
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }] }) });
+	mocks.createRepository.mockResolvedValue({
+		repository: repository("9", "notes"),
+		created: true,
+		pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git",
+	});
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	expect(await screen.findByText("Workspace repositories")).toBeInTheDocument();
+	expect(screen.queryByText("Agent starts in")).toBeNull();
+	await userEvent.click(screen.getByRole("button", { name: "Add a local folder" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
+
+	await waitFor(() => expect(push).toHaveBeenCalledWith({ folder: "/Users/me/notes", pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git", branch: "main" }));
+	// The new repository goes in the workspace's own GitHub account.
+	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from AO" });
+	expect(await screen.findByText("../notes")).toBeInTheDocument();
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2]).toEqual({
+		config: { repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/notes" }] },
+	});
+	choose.mockRestore();
+});
+
+it("names a folder's repository before uploading it, and retries without making it again", async () => {
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	mocks.createRepository.mockReset().mockResolvedValue({
+		repository: repository("9", "notes-app"),
+		created: true,
+		pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes-app.git",
+	});
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockClear()
+		.mockResolvedValueOnce({ status: "error", code: "push_failed", message: "Could not upload notes: remote hung up" })
+		.mockResolvedValueOnce({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	const name = await screen.findByLabelText("Repository name for /Users/me/notes");
+	await userEvent.clear(name);
+	await userEvent.type(name, "bad name");
+	expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+	await userEvent.clear(name);
+	await userEvent.type(name, "notes-app");
+	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+
+	expect(await screen.findByText("Could not upload notes: remote hung up")).toBeInTheDocument();
+	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes-app", owner: "acme", description: "Uploaded from AO" });
+	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+
+	expect(await screen.findByText("../notes-app")).toBeInTheDocument();
+	expect(mocks.createRepository).toHaveBeenCalledOnce();
+	expect(push).toHaveBeenCalledTimes(2);
+	choose.mockRestore();
+	push.mockRestore();
 });

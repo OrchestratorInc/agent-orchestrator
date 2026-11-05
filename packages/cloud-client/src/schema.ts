@@ -507,7 +507,8 @@ export interface paths {
         };
         get: operations["listGitHubRepositories"];
         put?: never;
-        post?: never;
+        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty repository of that name that already exists is connected instead (200, created false). Push the folder to pushPath, relative to the control plane, with the same bearer token; that endpoint only accepts pushes that create branches. */
+        post: operations["createGitHubRepository"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2762,9 +2763,15 @@ export interface components {
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
+            layout?: components["schemas"]["ProjectLayout"];
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value.
+         * @enum {string}
+         */
+        ProjectLayout: "workspace";
         /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
         ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
         ProjectRepository: {
@@ -3185,6 +3192,18 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+        };
+        CreateGitHubRepositoryInput: {
+            name: string;
+            /** @description The GitHub account login to create the repository in. */
+            owner?: string;
+            description?: string;
+        };
+        CreateGitHubRepositoryResponse: {
+            repository: components["schemas"]["GitHubRepository"];
+            created: boolean;
+            /** @description The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git). */
+            pushPath: string;
         };
         CreateGitHubScratchProjectInput: {
             displayName: string;
@@ -5878,6 +5897,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubRepositoryPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createGitHubRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateGitHubRepositoryInput"];
+            };
+        };
+        responses: {
+            /** @description An existing empty repository was connected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
+                };
+            };
+            /** @description The repository was created and granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
                 };
             };
             default: components["responses"]["Error"];
