@@ -2254,6 +2254,7 @@
 	"terminal.shellAria": "Shell 终端",
 	"terminal.startingSession": "正在启动会话",
 	"terminal.tabsAria": "打开的终端",
+	"splitPane.group": "拆分：{{names}}",
 	"splitPane.label": "拆分窗格",
 	"splitPane.resize": "调整拆分大小",
 	"terminal.unableRestore": "无法恢复会话",

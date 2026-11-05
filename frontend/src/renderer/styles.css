@@ -6687,20 +6687,6 @@ body.is-pane-dragging webview {
 	transition: none;
 }
 
-/* The side pane fades in where the preview stood, without moving. */
-@keyframes pane-split-enter {
-	from {
-		opacity: 0;
-	}
-	to {
-		opacity: 1;
-	}
-}
-
-.pane-split-enter {
-	animation: pane-split-enter var(--duration-normal) ease-out;
-}
-
 /* Divider between the panes: a hairline, with the shared hover-only grip line. */
 .pane-split-divider {
 	position: absolute;
@@ -6783,8 +6769,5 @@ body.is-pane-dragging webview {
 	}
 	.pane-drag-ghost[data-lifted] {
 		scale: 1;
-	}
-	.pane-split-enter {
-		animation: none;
 	}
 }

@@ -2230,6 +2230,7 @@
 	"terminal.shellAria": "Terminal do shell",
 	"terminal.startingSession": "Iniciando sessão",
 	"terminal.tabsAria": "Terminais abertos",
+	"splitPane.group": "Dividido: {{names}}",
 	"splitPane.label": "Painel dividido",
 	"splitPane.resize": "Redimensionar divisão",
 	"terminal.unableRestore": "Não foi possível restaurar a sessão",

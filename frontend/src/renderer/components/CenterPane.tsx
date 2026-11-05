@@ -115,6 +115,17 @@ export function startSessionTabPaneDrag(event: PointerEvent<HTMLElement>) {
 	beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
 }
 
+// The strip's slot for the session's own tab. It drags out like any tab, and
+// it is left out while the tab is shown in a split group's tab.
+export function SessionTabSlot({ children }: { children: ReactNode }) {
+	if (useSplitHiddenTabKeys().has(SESSION_TAB_KEY)) return null;
+	return (
+		<div className="flex shrink-0 self-stretch" data-terminal-tab-key={SESSION_TAB_KEY} onPointerDown={startSessionTabPaneDrag}>
+			{children}
+		</div>
+	);
+}
+
 // A reorderable strip tab. It stays inside its group, so it never covers the
 // pinned session tab or the toolbar, and keeps its hover look while dragged.
 // Pulled out of the strip vertically, it hands over to the split-pane drag.
@@ -555,7 +566,7 @@ export function CenterPane({
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									<div className="flex shrink-0 self-stretch" onPointerDown={startSessionTabPaneDrag}>
+									<SessionTabSlot>
 										{session ? (
 											<SessionPaneTab
 												isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
@@ -569,7 +580,7 @@ export function CenterPane({
 										) : (
 											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
 										)}
-									</div>
+									</SessionTabSlot>
 									<Reorder.Group
 										as="div"
 										axis="x"

@@ -2195,6 +2195,7 @@
 	"terminal.shellAria": "シェルターミナル",
 	"terminal.startingSession": "セッションを開始中",
 	"terminal.tabsAria": "開いているターミナル",
+	"splitPane.group": "分割: {{names}}",
 	"splitPane.label": "分割ペイン",
 	"splitPane.resize": "分割サイズを変更",
 	"terminal.unableRestore": "セッションを復元できません",

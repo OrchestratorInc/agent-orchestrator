@@ -2195,6 +2195,7 @@
 	"terminal.shellAria": "Shell-Terminal",
 	"terminal.startingSession": "Sitzung wird gestartet",
 	"terminal.tabsAria": "Offene Terminals",
+	"splitPane.group": "Geteilt: {{names}}",
 	"splitPane.label": "Geteilter Bereich",
 	"splitPane.resize": "Teilung anpassen",
 	"terminal.unableRestore": "Sitzung konnte nicht wiederhergestellt werden",

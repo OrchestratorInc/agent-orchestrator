@@ -110,7 +110,7 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { DraggableWorkspaceTab, SessionPaneTab, startSessionTabPaneDrag } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
 import { useSplitHiddenTabKeys } from "../split-pane-context";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -2434,7 +2434,7 @@ function ChatHeader({
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
-								<div className="flex shrink-0 self-stretch" onPointerDown={startSessionTabPaneDrag}>
+								<SessionTabSlot>
 									{session ? (
 										<SessionPaneTab
 											isActive={timelineActive}
@@ -2454,7 +2454,7 @@ function ChatHeader({
 											title={label}
 										/>
 									)}
-								</div>
+								</SessionTabSlot>
 								<Reorder.Group
 									as="div"
 									axis="x"

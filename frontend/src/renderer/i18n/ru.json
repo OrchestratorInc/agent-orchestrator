@@ -2687,6 +2687,7 @@
 	"terminal.shellAria": "Терминал оболочки",
 	"terminal.startingSession": "Запуск сессии",
 	"terminal.tabsAria": "Открытые терминалы",
+	"splitPane.group": "Разделено: {{names}}",
 	"splitPane.label": "Разделённая панель",
 	"splitPane.resize": "Изменить размер разделения",
 	"terminal.unableRestore": "Не удалось восстановить сессию",

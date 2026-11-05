@@ -2599,6 +2599,7 @@
 	"terminal.shellAria": "Shell terminal",
 	"terminal.startingSession": "Starting session",
 	"terminal.tabsAria": "Open terminals",
+	"splitPane.group": "Split: {{names}}",
 	"splitPane.label": "Split pane",
 	"splitPane.resize": "Resize split",
 	"terminal.unableRestore": "Unable to restore session",

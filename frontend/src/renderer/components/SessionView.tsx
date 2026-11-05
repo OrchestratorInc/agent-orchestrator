@@ -2,7 +2,7 @@ import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, PanelRight, Plus } from "lucide-react";
+import { Loader2, PanelRight, Plus, SquareTerminal } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -23,19 +23,28 @@ import { CenterPane, SessionPaneTab } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { SplitHiddenTabKeysContext } from "./split-pane-context";
-import { SPLIT_SIDE_STRIP_HEIGHT, SplitDivider, SplitSidePane, SplitSideTerminal, type SplitSideTab } from "./SplitSidePane";
+import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
+import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
-	clampSplitSize,
 	containsPoint,
 	edgeAt,
-	oppositeSide,
-	paneBox,
-	paneClientRect,
-	reconcileSplit,
+	GROUP_KEY_PREFIX,
+	groupContaining,
+	groupTabKey,
+	halfOf,
+	insertBeside,
+	layoutBoxes,
+	layoutCss,
+	leafKeys,
+	reconcileGroups,
+	removeLeaf,
 	SESSION_TAB_KEY,
-	SPLIT_SIZE_VAR,
-	type SplitLayout,
+	setRatioAt,
+	toClientRect,
+	type ClientRect,
+	type SplitNode,
+	type TabGroup,
 } from "../lib/pane-split";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
@@ -964,56 +973,82 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		});
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 
-	// The center can split in two: the main pane keeps the session tab and the
-	// topbar strip, the side pane holds tabs dragged out of it. Every view stays
-	// mounted where it is and is only placed into its pane, so terminals, chats
-	// and editors survive a move between panes.
-	const [splitBySession, setSplitBySession] = useState<Record<string, SplitLayout>>({});
-	const storedSplit = splitBySession[uiSessionId] ?? null;
-	// A Cloud session shows one file view at a time, so its files stay in the main pane.
+	// Tabs can be shown together: they merge into one group tab in the strip and
+	// the screen splits into one pane per member, where any pane can split
+	// again. Every view stays mounted where it is and is only placed into its
+	// pane, so terminals, chats and editors survive each move.
+	const [groupsBySession, setGroupsBySession] = useState<Record<string, TabGroup[]>>({});
+	const storedGroups = groupsBySession[uiSessionId] ?? EMPTY_TAB_GROUPS;
+	// A Cloud session shows one file view at a time, so its files are never split.
 	const splittableKeys = useMemo(
-		() => new Set(resolvedAuxiliaryTabOrder.filter((key) => !(session?.cloud && key.startsWith("file:")))),
+		() => new Set([SESSION_TAB_KEY, ...resolvedAuxiliaryTabOrder.filter((key) => !(session?.cloud && key.startsWith("file:")))]),
 		[resolvedAuxiliaryTabOrder, session?.cloud],
 	);
 	// Until the shell list loads, an absent shell is unknown rather than closed.
 	const shellListKnown = shellTerminalsQuery.data !== undefined;
-	const split = useMemo(
-		() => (shellListKnown ? reconcileSplit(storedSplit, splittableKeys) : storedSplit),
-		[shellListKnown, splittableKeys, storedSplit],
+	const groups = useMemo(
+		() => (shellListKnown ? reconcileGroups(storedGroups, splittableKeys) : storedGroups),
+		[shellListKnown, splittableKeys, storedGroups],
 	);
-	const updateSplit = useCallback(
-		(update: (current: SplitLayout | null) => SplitLayout | null) => {
-			setSplitBySession((current) => {
-				const previous = current[uiSessionId] ?? null;
+	const updateGroups = useCallback(
+		(update: (current: TabGroup[]) => TabGroup[]) => {
+			setGroupsBySession((current) => {
+				const previous = current[uiSessionId] ?? EMPTY_TAB_GROUPS;
 				const next = update(previous);
 				if (next === previous) return current;
 				const { [uiSessionId]: _removed, ...rest } = current;
-				return next ? { ...rest, [uiSessionId]: next } : rest;
+				return next.length ? { ...rest, [uiSessionId]: next } : rest;
 			});
 		},
 		[uiSessionId],
 	);
-	// Closing the side pane's last tab collapses the split.
+	// A closed member leaves its group; a group of one becomes a plain tab.
 	useEffect(() => {
-		if (split !== storedSplit) updateSplit(() => split);
-	}, [split, storedSplit, updateSplit]);
-	const sideKeysSignature = split?.keys.join("\n") ?? "";
-	const sideKeySet = useMemo<ReadonlySet<string>>(
-		() => new Set(sideKeysSignature ? sideKeysSignature.split("\n") : []),
-		[sideKeysSignature],
+		if (groups !== storedGroups) updateGroups(() => groups);
+	}, [groups, storedGroups, updateGroups]);
+	const groupedKeysSignature = groups.flatMap((group) => leafKeys(group.root)).join("\n");
+	const groupedKeySet = useMemo<ReadonlySet<string>>(
+		() => new Set(groupedKeysSignature ? groupedKeysSignature.split("\n") : []),
+		[groupedKeysSignature],
 	);
-	const mainAuxiliaryTabOrder = useMemo(
-		() => resolvedAuxiliaryTabOrder.filter((key) => !sideKeySet.has(key)),
-		[resolvedAuxiliaryTabOrder, sideKeySet],
+	// The tab the selection points at. A grouped tab shows its whole group,
+	// with its own pane focused.
+	const selectedTabKey = fileTabs.activePath
+		? `file:${fileTabs.activePath}`
+		: reviewerChatId
+			? `reviewer-chat:${reviewerChatId}`
+			: terminalTargetBelongsToSession(terminalTarget, sessionId)
+				? terminalTabKey(terminalTarget)
+				: SESSION_TAB_KEY;
+	const shownGroup = groupContaining(groups, selectedTabKey);
+	const singleAuxiliaryTabOrder = useMemo(
+		() => resolvedAuxiliaryTabOrder.filter((key) => !groupedKeySet.has(key)),
+		[groupedKeySet, resolvedAuxiliaryTabOrder],
 	);
-	// What the main pane shows. A tab that lives in the side pane never shows in
-	// the main pane too, even for the frame before the selection is handed over.
-	const mainActiveFilePath = fileTabs.activePath && !sideKeySet.has(`file:${fileTabs.activePath}`)
-		? fileTabs.activePath
-		: null;
-	const mainReviewerChatId = reviewerChatId && !sideKeySet.has(`reviewer-chat:${reviewerChatId}`)
-		? reviewerChatId
-		: null;
+	// Strip order: a group stands where its first member stood, or first when
+	// it holds the session's own tab.
+	const mainAuxiliaryTabOrder = useMemo(() => {
+		if (groups.length === 0) return resolvedAuxiliaryTabOrder;
+		const placed = new Set<string>();
+		const order: string[] = [];
+		const place = (group: TabGroup) => {
+			if (placed.has(group.id)) return;
+			placed.add(group.id);
+			order.push(groupTabKey(group));
+		};
+		for (const group of groups) if (leafKeys(group.root).includes(SESSION_TAB_KEY)) place(group);
+		for (const key of resolvedAuxiliaryTabOrder) {
+			const group = groupedKeySet.has(key) ? groupContaining(groups, key) : undefined;
+			if (group) place(group);
+			else order.push(key);
+		}
+		for (const group of groups) place(group);
+		return order;
+	}, [groupedKeySet, groups, resolvedAuxiliaryTabOrder]);
+	// While a group is on screen, the session's own surface shows its own view
+	// (chat or agent terminal); the other members have panes of their own.
+	const mainActiveFilePath = shownGroup || !fileTabs.activePath ? null : fileTabs.activePath;
+	const mainReviewerChatId = shownGroup ? null : reviewerChatId;
 	const reviewerChatContent = mainReviewerChatId ? renderReviewerChat(mainReviewerChatId) : undefined;
 	const openShellTerminal = useOpenShellTerminal(hostId);
 	const closeShellTerminal = useCloseShellTerminal(hostId);
@@ -1117,11 +1152,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 	const adjacentAuxiliaryTab = useCallback(
 		(closingKey: string) => {
-			const closingIndex = mainAuxiliaryTabOrder.indexOf(closingKey);
+			const closingIndex = singleAuxiliaryTabOrder.indexOf(closingKey);
 			if (closingIndex < 0) return undefined;
-			return mainAuxiliaryTabOrder[closingIndex - 1] ?? mainAuxiliaryTabOrder[closingIndex + 1];
+			return singleAuxiliaryTabOrder[closingIndex - 1] ?? singleAuxiliaryTabOrder[closingIndex + 1];
 		},
-		[mainAuxiliaryTabOrder],
+		[singleAuxiliaryTabOrder],
 	);
 
 	const selectShellTerminal = useCallback(
@@ -1516,7 +1551,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
 	);
 
-	const activeWorkspaceTabKey = mainActiveFilePath ? `file:${mainActiveFilePath}` : undefined;
+	// A group without the session's tab is selected like a workspace tab. With
+	// it, the session surface is on screen and stays the selected tab there.
+	const activeWorkspaceTabKey = mainActiveFilePath
+		? `file:${mainActiveFilePath}`
+		: shownGroup && !leafKeys(shownGroup.root).includes(SESSION_TAB_KEY)
+			? groupTabKey(shownGroup)
+			: undefined;
 	const previewUrl = session?.previewUrl?.trim() || undefined;
 	const previewRevision = session?.previewRevision;
 	const browserSlotVisible = Boolean(
@@ -1588,8 +1629,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
-	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId) &&
-		!sideKeySet.has(terminalTabKey(terminalTarget))
+	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId) && !shownGroup
 		? terminalTarget
 		: ({ kind: "worker" } satisfies TerminalTarget);
 	// Chat surface stays mounted in chat mode for worker, reviewer, and shell
@@ -1612,161 +1652,109 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!mainReviewerChatId &&
 		!mainActiveFilePath;
 
-	const mainSelectionKey = mainActiveFilePath
-		? `file:${mainActiveFilePath}`
-		: mainReviewerChatId
-			? `reviewer-chat:${mainReviewerChatId}`
-			: terminalTabKey(routedTerminalTarget);
-	// Drops the main pane's selection of a tab that is moving to the side pane.
-	const releaseMainTab = useCallback((key: string) => {
-		if (fileTabs.activePath && key === `file:${fileTabs.activePath}`) {
-			setFileTabsBySession((current) => ({
-				...current,
-				[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
-			}));
-		}
-		if (reviewerChatId && key === `reviewer-chat:${reviewerChatId}`) setReviewerChatId(null);
-		if (activeShellTerminalHandleId === key) setActiveShellTerminal(null);
-		if (key !== SESSION_TAB_KEY && key === terminalTabKey(terminalTarget)) setTerminalTarget({ kind: "worker" });
-	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, setActiveShellTerminal, terminalTarget, uiSessionId]);
-	// Something asked the main pane for a tab that lives in the side pane (the
-	// inspector, a file link, a shortcut): bring it forward there instead.
-	const claimedSideKeys = [
-		fileTabs.activePath ? `file:${fileTabs.activePath}` : "",
-		reviewerChatId ? `reviewer-chat:${reviewerChatId}` : "",
-		terminalTabKey(terminalTarget),
-	].filter((key) => key && sideKeySet.has(key)).join("\n");
-	useEffect(() => {
-		if (!claimedSideKeys) return;
-		const keys = claimedSideKeys.split("\n");
-		const first = keys[0]!;
-		updateSplit((current) => current && current.active !== first && current.keys.includes(first) ? { ...current, active: first } : current);
-		for (const key of keys) releaseMainTab(key);
-	}, [claimedSideKeys, releaseMainTab, updateSplit]);
-
-	const splitAreaRef = useRef<HTMLDivElement | null>(null);
+	// Routes the selection to a tab; a grouped tab brings its group with it.
+	const selectTab = useCallback(
+		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
+		[activateAuxiliaryTab, selectSessionTerminal],
+	);
+	// Clicking into a pane focuses its member, as clicking its name does.
+	const focusPane = (key: string) => {
+		if (key !== selectedTabKey) selectTab(key);
+	};
+	const splitScreenRef = useRef<HTMLDivElement | null>(null);
 	const centerColumnRef = useRef<HTMLDivElement | null>(null);
 	const splitDropStateRef = useRef<SplitDropState | null>(null);
-	splitDropStateRef.current = {
-		split,
-		splittableKeys,
-		mainAuxiliaryTabOrder,
-		mainSelectionKey,
-		releaseMainTab,
-		activateAuxiliaryTab,
-		updateSplit,
-	};
+	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups };
 	useEffect(
 		() =>
 			registerPaneDropTarget({
-				canDrag: (key) => {
-					const state = splitDropStateRef.current;
-					if (!state || !splitAreaRef.current) return false;
-					return key === SESSION_TAB_KEY
-						? Boolean(state.split) || sessionDropPartner(state) !== undefined
-						: state.splittableKeys.has(key);
-				},
+				canDrag: (key) => Boolean(splitScreenRef.current && splitDropStateRef.current?.splittableKeys.has(key)),
 				resolve: (key, x, y) => {
 					const state = splitDropStateRef.current;
-					return state ? resolveSplitDrop(state, splitAreaRef.current, centerColumnRef.current, key, x, y) : null;
+					return state ? resolveSplitDrop(state, splitScreenRef.current, centerColumnRef.current, key, x, y) : null;
 				},
 			}),
 		[],
 	);
-	const selectSideTab = useCallback(
-		(key: string) => updateSplit((current) => (current && current.active !== key ? { ...current, active: key } : current)),
-		[updateSplit],
-	);
-	const reorderSideTabs = useCallback(
-		(keys: string[]) => updateSplit((current) => current && { ...current, keys: keys.filter((key) => current.keys.includes(key)) }),
-		[updateSplit],
-	);
+	const shownGroupId = shownGroup?.id;
 	const resizeSplit = useCallback(
-		(size: number) => updateSplit((current) => (current && current.size !== size ? { ...current, size: clampSplitSize(size) } : current)),
-		[updateSplit],
+		(path: string, ratio: number) => {
+			if (!shownGroupId) return;
+			updateGroups((current) => {
+				let changed = false;
+				const next = current.map((group) => {
+					if (group.id !== shownGroupId) return group;
+					const root = setRatioAt(group.root, path, ratio);
+					if (root === group.root) return group;
+					changed = true;
+					return { ...group, root };
+				});
+				return changed ? next : current;
+			});
+		},
+		[shownGroupId, updateGroups],
 	);
-	const sideCreateMux = useMemo(
+	const shownLayout = useMemo(() => (shownGroup ? layoutCss(shownGroup.root) : null), [shownGroup]);
+	const paneStyle = (key: string): CSSProperties => {
+		const box = shownLayout?.leaves.get(key);
+		return box ? { position: "absolute", ...box } : FULL_PANE_STYLE;
+	};
+	const sessionPaneHidden = Boolean(shownLayout && !shownLayout.leaves.has(SESSION_TAB_KEY));
+	const paneCreateMux = useMemo(
 		() => (remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined),
 		[remoteBase],
 	);
-	const sideDaemonReady = hostId ? Boolean(remoteBase) : daemonStatus.state === "ready";
-	const sideTerminal = (target: TerminalTarget) =>
-		hostId && !remoteBase ? null : (
-			<SplitSideTerminal
-				createMux={hostId ? sideCreateMux : undefined}
-				daemonReady={sideDaemonReady}
-				session={session}
-				target={target}
-				theme={theme}
-			/>
-		);
-	const sideTabs: SplitSideTab[] = !split ? [] : split.keys.flatMap((key): SplitSideTab[] => {
-		const active = split.active === key;
-		const select = () => selectSideTab(key);
+	const paneDaemonReady = hostId ? Boolean(remoteBase) : daemonStatus.state === "ready";
+	const paneTerminalTarget = (key: string): TerminalTarget | undefined => {
+		if (reviewerTerminal && key === `reviewer:${reviewerTerminal.handleId}`) {
+			return { kind: "reviewer", handleId: reviewerTerminal.handleId, harness: reviewerTerminal.harness, sessionId };
+		}
+		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
+		return shell
+			? { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, sessionId, title: shell.title }
+			: undefined;
+	};
+	const groupMember = (key: string): SplitGroupMember => {
+		const onSelect = () => selectTab(key);
+		if (key === SESSION_TAB_KEY) {
+			return {
+				key,
+				onSelect,
+				label: session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession"),
+				icon: session ? <AgentAvatar className="size-icon-sm!" decorative provider={session.provider} /> : null,
+			};
+		}
 		if (key.startsWith("file:")) {
 			const path = key.slice("file:".length);
 			const request = centerFileRequestsBySession[uiSessionId]?.[path];
-			return [{
-				key,
-				tab: (
-					<SessionFileTab
-						active={active}
-						dirty={Boolean(dirtyFiles[path])}
-						onActivate={select}
-						onClose={() => closeCenterFile(path)}
-						path={request?.path ?? path}
-						sourceLabel={request?.source?.kind === "snapshot" ? (request.source as { label?: string }).label : undefined}
-					/>
-				),
-			}];
+			const sourceLabel = request?.source?.kind === "snapshot" ? (request.source as { label?: string }).label : undefined;
+			const name = `${(request?.path ?? path).split("/").pop() || path}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
+			return { key, onSelect, label: name, icon: <WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} /> };
 		}
-		if (reviewerTerminal && key === `reviewer:${reviewerTerminal.handleId}`) {
-			return [{
+		if (key.startsWith("reviewer")) {
+			const harness = reviewerTerminal?.harness ?? reviewerChat?.harness;
+			return {
 				key,
-				tab: (
-					<SessionPaneTab
-						icon={<AgentAvatar className="size-icon-sm!" decorative provider={reviewerTerminal.harness} />}
-						isActive={active}
-						label={t("terminal.reviewer")}
-						onSelect={select}
-						title={reviewerTerminal.harness}
-					/>
-				),
-				body: sideTerminal({ kind: "reviewer", handleId: reviewerTerminal.handleId, harness: reviewerTerminal.harness, sessionId }),
-			}];
-		}
-		if (reviewerChat && key === `reviewer-chat:${reviewerChat.reviewId}`) {
-			return [{
-				key,
-				tab: (
-					<SessionPaneTab
-						icon={<AgentAvatar className="size-icon-sm!" decorative provider={reviewerChat.harness} />}
-						isActive={active}
-						label={t("terminal.reviewer")}
-						onSelect={select}
-						title={reviewerChat.harness}
-					/>
-				),
-				body: renderReviewerChat(reviewerChat.reviewId),
-			}];
+				onSelect,
+				label: t("terminal.reviewer"),
+				icon: harness ? <AgentAvatar className="size-icon-sm!" decorative provider={harness} /> : null,
+			};
 		}
 		const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-		if (!shell) return [];
-		return [{
-			key,
-			tab: (
-				<ShellTerminalTab
-					appearance="connected"
-					isActive={active}
-					onClose={() => closeShellTerminalByHandle(shell.handleId)}
-					onRename={(title) => renameShellTerminalByHandle(shell.handleId, title)}
-					onSelect={select}
-					shell={shell}
-				/>
-			),
-			body: sideTerminal({ kind: "shell", handleId: shell.handleId, generation: shell.createdAt, sessionId, title: shell.title }),
-		}];
-	});
+		return { key, onSelect, label: shell?.title ?? key, icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" /> };
+	};
+	const groupWorkspaceTabs = groups.map((group) => ({
+		key: groupTabKey(group),
+		content: (
+			<SplitGroupTab
+				active={group === shownGroup}
+				focusedKey={selectedTabKey}
+				members={leafKeys(group.root).map(groupMember)}
+			/>
+		),
+		onSelect: () => selectTab(leafKeys(group.root)[0]!),
+	}));
+	const mainWorkspaceTabs = groups.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs;
 	useEffect(() => {
 		if (!chatViewActive) return;
 		const viewId = crypto.randomUUID();
@@ -2305,10 +2293,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						/>
 						<div
 							className="relative min-h-0 flex-1"
-							data-split-side={split?.side}
+							data-split-group={shownGroup?.id}
 							data-testid="center-split-area"
-							ref={splitAreaRef}
-							style={{ [SPLIT_SIZE_VAR]: split?.size ?? 0.5 } as CSSProperties}
+							ref={splitScreenRef}
+							style={shownLayout?.vars as CSSProperties | undefined}
 						>
 							{isOrchestrator && session?.cloud && routedWorkspace ? (
 								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
@@ -2320,12 +2308,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							) : null}
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
-							<SplitHiddenTabKeysContext.Provider value={sideKeySet}>
+							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<div
-								className={cn("min-h-0 min-w-0", mainActiveFilePath && "invisible pointer-events-none")}
-								data-split-pane="main"
-								inert={mainActiveFilePath ? true : undefined}
-								style={paneBox("main", split?.side ?? null)}
+								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || sessionPaneHidden) && "invisible pointer-events-none")}
+								data-split-pane={SESSION_TAB_KEY}
+								inert={mainActiveFilePath || sessionPaneHidden ? true : undefined}
+								onPointerDownCapture={shownGroup ? () => focusPane(SESSION_TAB_KEY) : undefined}
+								style={paneStyle(SESSION_TAB_KEY)}
 							>
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
 							    asks this machine's daemon, which has never heard of a Cloud
@@ -2353,7 +2342,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
 									tabStripAction={newShellTerminalAction}
-									workspaceTabs={centerFileTabs}
+									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
@@ -2395,7 +2384,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									sessionTabAction={sessionTabActions}
 									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
-									workspaceTabs={centerFileTabs}
+									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
@@ -2456,7 +2445,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									sessionTabAction={sessionTabActions}
 									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
-									workspaceTabs={centerFileTabs}
+									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
@@ -2464,11 +2453,41 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							)}
 							</div>
 							</SplitHiddenTabKeysContext.Provider>
-							{split ? <SplitSidePane layout={split} onReorder={reorderSideTabs} tabs={sideTabs} /> : null}
+							{shownGroup
+								? leafKeys(shownGroup.root)
+									.filter((key) => key !== SESSION_TAB_KEY && !key.startsWith("file:"))
+									.map((key) => {
+										const target = paneTerminalTarget(key);
+										return (
+											<div
+												className="min-h-0 min-w-0 overflow-hidden bg-background"
+												data-split-pane={key}
+												key={key}
+												onPointerDownCapture={() => focusPane(key)}
+												style={paneStyle(key)}
+											>
+												{target ? (
+													hostId && !remoteBase ? null : (
+														<SplitPaneTerminal
+															createMux={hostId ? paneCreateMux : undefined}
+															daemonReady={paneDaemonReady}
+															focusRequested={selectedTabKey === key}
+															session={session}
+															target={target}
+															theme={theme}
+														/>
+													)
+												) : reviewerChat && key === `reviewer-chat:${reviewerChat.reviewId}` ? (
+													renderReviewerChat(reviewerChat.reviewId)
+												) : null}
+											</div>
+										);
+									})
+								: null}
 							{(session?.cloud ? Boolean(mainActiveFilePath) : fileTabs.openPaths.length > 0) ? (
 								<div className="pointer-events-none absolute inset-0">
 					{session?.cloud ? (
-						<div className="pointer-events-auto" style={paneBox("main", split?.side ?? null)}>
+						<div className="pointer-events-auto" style={FULL_PANE_STYLE}>
 						<CloudFileContentPane
 							annotation={fileAnnotation}
 							commitSha={activeCenterFileRequest?.commitSha}
@@ -2490,17 +2509,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
 												const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
 												// A file view stays mounted here and is only placed over its pane.
-												const inSidePane = Boolean(split && sideKeySet.has(`file:${fileKey}`));
-												const visible = inSidePane ? split?.active === `file:${fileKey}` : mainActiveFilePath === fileKey;
+												const paneKey = `file:${fileKey}`;
+												const inPane = Boolean(shownLayout?.leaves.has(paneKey));
+												const visible = inPane || mainActiveFilePath === fileKey;
 												return (
 													<div
 														key={fileKey}
-														className={cn(visible ? "pointer-events-auto" : "invisible pointer-events-none [content-visibility:hidden]")}
-														data-split-pane={inSidePane ? "side" : "main"}
+														className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
+														data-split-pane={inPane ? paneKey : undefined}
 														inert={!visible ? true : undefined}
-														style={inSidePane && split
-															? paneBox("side", split.side, SPLIT_SIDE_STRIP_HEIGHT)
-															: paneBox("main", split?.side ?? null)}
+														onPointerDownCapture={inPane ? () => focusPane(paneKey) : undefined}
+														style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
 													>
 														<SessionFileWorkspace
 															active={visible && !filesPoppedOut}
@@ -2528,7 +2547,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										</>									)}
 								</div>
 							) : null}
-							{split ? <SplitDivider areaRef={splitAreaRef} onResize={resizeSplit} side={split.side} size={split.size} /> : null}
+							{shownGroup && shownLayout
+								? shownLayout.dividers.map((divider) => (
+									<SplitDivider
+										divider={divider}
+										key={`${shownGroup.id}:${divider.path}`}
+										onResize={resizeSplit}
+										screenRef={splitScreenRef}
+									/>
+								))
+								: null}
 							{interfaceUi.notice}
 						</div>
 					</div>
@@ -2706,97 +2734,158 @@ function terminalTabKey(target: TerminalTarget): string {
 	return SESSION_TAB_KEY;
 }
 
+const EMPTY_TAB_GROUPS: TabGroup[] = [];
+const FULL_PANE_STYLE: CSSProperties = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
+
 type SplitDropState = {
-	split: SplitLayout | null;
+	groups: TabGroup[];
+	shownGroup: TabGroup | undefined;
+	selectedTabKey: string;
 	splittableKeys: ReadonlySet<string>;
-	mainAuxiliaryTabOrder: string[];
-	mainSelectionKey: string;
-	releaseMainTab: (key: string) => void;
-	activateAuxiliaryTab: (key?: string) => void;
-	updateSplit: (update: (current: SplitLayout | null) => SplitLayout | null) => void;
+	selectTab: (key: string) => void;
+	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
 };
 
-/**
- * Dragging the session's own tab to an edge puts the session there and the
- * main pane's other tab (the one on screen, else the first) opposite it.
- */
-function sessionDropPartner(state: SplitDropState): string | undefined {
-	if (state.mainSelectionKey !== SESSION_TAB_KEY && state.splittableKeys.has(state.mainSelectionKey)) {
-		return state.mainSelectionKey;
-	}
-	return state.mainAuxiliaryTabOrder.find((key) => state.splittableKeys.has(key));
+let groupSequence = 0;
+function newGroupId(): string {
+	groupSequence += 1;
+	return `${Date.now().toString(36)}-${groupSequence}`;
+}
+
+/** The groups with one tab taken out; a group left with one tab dissolves. */
+function withoutTab(groups: TabGroup[], key: string): TabGroup[] {
+	let changed = false;
+	const next = groups.flatMap((group) => {
+		if (!leafKeys(group.root).includes(key)) return [group];
+		changed = true;
+		const root = removeLeaf(group.root, key);
+		return root?.type === "split" ? [{ ...group, root }] : [];
+	});
+	return changed ? next : groups;
+}
+
+/** Rebuilds one group's layout, taking the tab out of wherever it was before. */
+function placeInGroup(
+	groups: TabGroup[],
+	group: TabGroup,
+	key: string,
+	build: (root: SplitNode) => SplitNode,
+): TabGroup[] {
+	const latest = groups.find((candidate) => candidate.id === group.id) ?? group;
+	const others = withoutTab(groups.filter((candidate) => candidate.id !== latest.id), key);
+	const base = removeLeaf(latest.root, key) ?? latest.root;
+	return [...others, { ...latest, root: build(base) }];
 }
 
 /**
- * Where a dragged tab would land. Unsplit, the pointer's edge of the area picks
- * the side; split, the pane under the pointer (or the main strip) takes it.
+ * Where a dragged tab would land. Over the screen: beside the pane under the
+ * pointer, on the edge it points at (an ungrouped screen counts as one pane).
+ * Over the strip: onto another tab to show both together, or off its group
+ * to make it a tab of its own again.
  */
 function resolveSplitDrop(
 	state: SplitDropState,
-	area: HTMLElement | null,
+	screen: HTMLElement | null,
 	column: HTMLElement | null,
 	key: string,
 	x: number,
 	y: number,
 ): PaneDropResolution | null {
-	if (!area) return null;
-	const rect = area.getBoundingClientRect();
-	const { split } = state;
-	if (!split) {
+	if (!screen) return null;
+	const rect = screen.getBoundingClientRect();
+	if (y < rect.top) return resolveStripDrop(state, column, rect, key, x, y);
+	if (!containsPoint(rect, x, y)) return null;
+	const shown = state.shownGroup;
+	if (!shown) {
+		const target = state.selectedTabKey;
+		if (target === key || !state.splittableKeys.has(target)) return null;
 		const edge = edgeAt(rect, x, y);
 		if (!edge) return null;
-		const sessionTab = key === SESSION_TAB_KEY;
-		const tabKey = sessionTab ? sessionDropPartner(state) : key;
-		if (!tabKey || !state.splittableKeys.has(tabKey)) return null;
-		const side = sessionTab ? oppositeSide(edge) : edge;
 		return {
-			rect: paneClientRect(rect, sessionTab ? "main" : "side", side, 0.5),
+			rect: halfOf(rect, edge),
 			commit: () => {
-				state.releaseMainTab(tabKey);
-				state.updateSplit(() => ({ side, size: 0.5, keys: [tabKey], active: tabKey }));
+				state.updateGroups((current) => [
+					...withoutTab(current, key),
+					{ id: newGroupId(), root: insertBeside({ type: "leaf", key: target }, target, key, edge) },
+				]);
+				state.selectTab(key);
 			},
 		};
 	}
-	const sideRect = paneClientRect(rect, "side", split.side, split.size);
-	const mainRect = paneClientRect(rect, "main", split.side, split.size);
-	const columnRect = column?.getBoundingClientRect();
-	const overMainStrip = Boolean(columnRect && y < rect.top && containsPoint(columnRect, x, y));
-	const pane = containsPoint(sideRect, x, y) ? "side" : containsPoint(mainRect, x, y) || overMainStrip ? "main" : null;
-	if (key === SESSION_TAB_KEY) {
-		if (pane !== "side") return null;
-		// The session takes the side pane's place; the side pane takes the session's.
+	for (const [paneKey, box] of layoutBoxes(shown.root).leaves) {
+		const paneRect = toClientRect(rect, box);
+		if (!containsPoint(paneRect, x, y)) continue;
+		if (paneKey === key) return null;
+		const edge = edgeAt(paneRect, x, y);
+		if (!edge) return null;
 		return {
-			rect: sideRect,
-			commit: () =>
-				state.updateSplit((current) =>
-					current && { ...current, side: oppositeSide(current.side), size: clampSplitSize(1 - current.size) },
-				),
-		};
-	}
-	if (split.keys.includes(key)) {
-		if (pane !== "main") return null;
-		return {
-			rect: mainRect,
+			rect: halfOf(paneRect, edge),
 			commit: () => {
-				state.updateSplit((current) => {
-					if (!current) return current;
-					const keys = current.keys.filter((candidate) => candidate !== key);
-					return keys.length ? { ...current, keys, active: current.active === key ? keys[0]! : current.active } : null;
-				});
-				state.activateAuxiliaryTab(key);
+				state.updateGroups((current) => placeInGroup(current, shown, key, (root) => insertBeside(root, paneKey, key, edge)));
+				state.selectTab(key);
 			},
 		};
 	}
-	if (pane !== "side" || !state.splittableKeys.has(key)) return null;
+	return null;
+}
+
+function resolveStripDrop(
+	state: SplitDropState,
+	column: HTMLElement | null,
+	screen: ClientRect,
+	key: string,
+	x: number,
+	y: number,
+): PaneDropResolution | null {
+	if (!column || !containsPoint(column.getBoundingClientRect(), x, y)) return null;
+	let over: { key: string; rect: ClientRect } | undefined;
+	column.querySelectorAll<HTMLElement>("[data-terminal-tab-key]").forEach((element) => {
+		const box = element.getBoundingClientRect();
+		if (!over && element.dataset.terminalTabKey && containsPoint(box, x, y)) {
+			over = { key: element.dataset.terminalTabKey, rect: box };
+		}
+	});
+	const sourceGroup = groupContaining(state.groups, key);
+	const targetGroup = over?.key.startsWith(GROUP_KEY_PREFIX)
+		? state.groups.find((group) => groupTabKey(group) === over?.key)
+		: undefined;
+	if (sourceGroup && (!over || targetGroup === sourceGroup)) {
+		// Off its group: the tab stands alone again and the rest stays on screen.
+		const remaining = leafKeys(sourceGroup.root).find((candidate) => candidate !== key);
+		return {
+			rect: screen,
+			commit: () => {
+				state.updateGroups((current) => withoutTab(current, key));
+				if (remaining && state.selectedTabKey === key) state.selectTab(remaining);
+			},
+		};
+	}
+	if (!over || over.key === key) return null;
+	if (targetGroup) {
+		// Joining a group adds the tab as a new column beside its layout.
+		return {
+			rect: over.rect,
+			commit: () => {
+				state.updateGroups((current) =>
+					placeInGroup(current, targetGroup, key, (root) => {
+						const count = leafKeys(root).length;
+						return { type: "split", dir: "row", ratio: count / (count + 1), a: root, b: { type: "leaf", key } };
+					}),
+				);
+				state.selectTab(key);
+			},
+		};
+	}
+	const target = over.key;
+	if (!state.splittableKeys.has(target)) return null;
 	return {
-		rect: sideRect,
+		rect: over.rect,
 		commit: () => {
-			state.releaseMainTab(key);
-			state.updateSplit((current) => {
-				if (!current) return current;
-				const at = current.keys.indexOf(current.active) + 1;
-				return { ...current, keys: [...current.keys.slice(0, at), key, ...current.keys.slice(at)], active: key };
-			});
+			state.updateGroups((current) => [
+				...withoutTab(current, key),
+				{ id: newGroupId(), root: { type: "split", dir: "row", ratio: 0.5, a: { type: "leaf", key: target }, b: { type: "leaf", key } } },
+			]);
+			state.selectTab(key);
 		},
 	};
 }

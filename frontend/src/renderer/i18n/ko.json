@@ -2195,6 +2195,7 @@
 	"terminal.shellAria": "셸 터미널",
 	"terminal.startingSession": "세션 시작 중",
 	"terminal.tabsAria": "열린 터미널",
+	"splitPane.group": "분할: {{names}}",
 	"splitPane.label": "분할 창",
 	"splitPane.resize": "분할 크기 조정",
 	"terminal.unableRestore": "세션을 복원할 수 없습니다",
