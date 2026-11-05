@@ -21,7 +21,7 @@ type asyncCommander struct {
 	clock    *fakeClock
 	answerIn time.Duration
 	// settleDuringSpawn settles the start before Spawn answers (a fast start).
-	settleDuringSpawn domain.SessionProvisionState
+	settleDuringSpawn  domain.SessionProvisionState
 	spawnErrAfterAsync error
 }
 

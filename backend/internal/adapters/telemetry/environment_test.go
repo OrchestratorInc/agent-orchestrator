@@ -220,4 +220,3 @@ func TestMilestonesClaimOnce(t *testing.T) {
 		t.Fatalf("unwritable claim = %t, %t", first, known)
 	}
 }
-
