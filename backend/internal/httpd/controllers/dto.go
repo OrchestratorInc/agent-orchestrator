@@ -542,6 +542,9 @@ type SpawnSessionRequest struct {
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes"`
 	Branch          string                 `json:"branch,omitempty"`
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, to stack its work on another pull request.
+	BaseBranch string `json:"baseBranch,omitempty" maxLength:"255"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
 	// Omitted resolves to the daemon-owned preference, which defaults to Chat for
@@ -1301,11 +1304,14 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
-	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
-	ProjectID       domain.ProjectID    `json:"projectId"`
-	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
-	Model           string              `json:"model,omitempty" maxLength:"256"`
+	ClientRequestID string           `json:"clientRequestId,omitempty" maxLength:"128"`
+	ProjectID       domain.ProjectID `json:"projectId"`
+	Brief           string           `json:"brief" maxLength:"16384"`
+	// BaseBranch starts the worker from this branch instead of the project's
+	// default, to stack its work on another pull request.
+	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
+	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
@@ -2679,6 +2685,80 @@ type ChangePRStateResponse struct {
 	PRNumber       int            `json:"prNumber"`
 	State          domain.PRState `json:"state" enum:"open,draft,closed"`
 	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// PRStackLayerResponse is one pull request of a stack.
+type PRStackLayerResponse struct {
+	Number         int            `json:"number"`
+	Title          string         `json:"title"`
+	URL            string         `json:"url"`
+	State          domain.PRState `json:"state" enum:"draft,open,merged,closed"`
+	HeadBranch     string         `json:"headBranch"`
+	HeadSHA        string         `json:"headSha"`
+	CI             string         `json:"ci,omitempty"`
+	ReviewDecision string         `json:"reviewDecision,omitempty"`
+	Mergeability   string         `json:"mergeability,omitempty"`
+	// SessionID is the AO session tracking this layer, when one does.
+	SessionID domain.SessionID `json:"sessionId,omitempty"`
+}
+
+// PRStackResponse is a provider-native stack, bottom layer first.
+type PRStackResponse struct {
+	Number     int                    `json:"number"`
+	URL        string                 `json:"url"`
+	BaseBranch string                 `json:"baseBranch"`
+	Open       bool                   `json:"open"`
+	Layers     []PRStackLayerResponse `json:"layers"`
+}
+
+// PRStackParentResponse is the open pull request a PR could be stacked on.
+type PRStackParentResponse struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+// PRStackQuery is the query of GET /api/v1/prs/{id}/stack.
+type PRStackQuery struct {
+	PRURL string `query:"prUrl" description:"The pull request's URL."`
+}
+
+// GetPRStackResponse is the body of GET and POST /api/v1/prs/{id}/stack. Neither
+// field is set for a pull request with no stack and nothing to stack on.
+type GetPRStackResponse struct {
+	Stack  *PRStackResponse       `json:"stack,omitempty"`
+	Parent *PRStackParentResponse `json:"parent,omitempty"`
+}
+
+// AddPRToStackRequest is the body of POST /api/v1/prs/{id}/stack.
+type AddPRToStackRequest struct {
+	PRURL string `json:"prUrl" minLength:"1"`
+}
+
+// PRStackHead pins one layer to the commit the user saw.
+type PRStackHead struct {
+	Number  int    `json:"number"`
+	HeadSHA string `json:"headSha" minLength:"40"`
+}
+
+// MergePRStackRequest is the body of POST /api/v1/prs/{id}/stack/merge. It names
+// every unmerged layer up to this pull request, so a change stops the merge.
+type MergePRStackRequest struct {
+	PRURL         string        `json:"prUrl" minLength:"1"`
+	ExpectedHeads []PRStackHead `json:"expectedHeads" minItems:"1"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+}
+
+// MergePRStackResponse is the body of POST /api/v1/prs/{id}/stack/merge (200).
+type MergePRStackResponse struct {
+	OK       bool   `json:"ok"`
+	PRNumber int    `json:"prNumber"`
+	Numbers  []int  `json:"numbers"`
+	Method   string `json:"method"`
+	// Status says whether the layers landed, joined the merge queue, or are
+	// still landing on the provider.
+	Status         string    `json:"status" enum:"merged,enqueued,pending"`
+	StateChangedAt time.Time `json:"stateChangedAt"`
 }
 
 // PostPRCommentRequest is the body of POST /api/v1/prs/{id}/comments. Without

@@ -12181,3 +12181,33 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
 }
+
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
+	}
+}

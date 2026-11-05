@@ -854,6 +854,7 @@ func Run(buildVersion string) error {
 			CommentWriter: store,
 			Refresher:     reviewRefresher,
 			Uploader:      prReader,
+			Stacker:       prReader,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,
 		})

@@ -244,6 +244,58 @@ func (m *Provider) ChangePullRequestState(ctx context.Context, request ports.SCM
 	return changer.ChangePullRequestState(ctx, request)
 }
 
+// stacker returns the sub-provider for name when it supports stacks.
+func (m *Provider) stacker(name string) (ports.SCMStacker, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: stack provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	stacker, ok := p.(ports.SCMStacker)
+	if !ok {
+		return nil, fmt.Errorf("%w: stacks for provider %q", ports.ErrSCMUnsupported, name)
+	}
+	return stacker, nil
+}
+
+// PullRequestStack delegates to the sub-provider matching ref.Repo.Provider.
+func (m *Provider) PullRequestStack(ctx context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
+	stacker, err := m.stacker(ref.Repo.Provider)
+	if err != nil {
+		return ports.SCMStack{}, false, err
+	}
+	return stacker.PullRequestStack(ctx, ref)
+}
+
+// FindOpenPullRequest delegates to the sub-provider matching repo.Provider.
+func (m *Provider) FindOpenPullRequest(ctx context.Context, repo ports.SCMRepo, branch string) (ports.SCMPRRef, bool, error) {
+	stacker, err := m.stacker(repo.Provider)
+	if err != nil {
+		return ports.SCMPRRef{}, false, err
+	}
+	return stacker.FindOpenPullRequest(ctx, repo, branch)
+}
+
+// RegisterStacked delegates to the sub-provider matching request.Repo.Provider.
+func (m *Provider) RegisterStacked(ctx context.Context, request ports.SCMStackRegisterRequest) (ports.SCMStack, error) {
+	stacker, err := m.stacker(request.Repo.Provider)
+	if err != nil {
+		return ports.SCMStack{}, err
+	}
+	return stacker.RegisterStacked(ctx, request)
+}
+
+// MergeStack delegates to the sub-provider matching request.PR.Repo.Provider.
+func (m *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRequest) (ports.SCMStackMergeStatus, error) {
+	stacker, err := m.stacker(request.PR.Repo.Provider)
+	if err != nil {
+		return "", err
+	}
+	return stacker.MergeStack(ctx, request)
+}
+
 // PostComment delegates to the sub-provider matching request.PR.Repo.Provider
 // when that provider supports posting comments.
 func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {

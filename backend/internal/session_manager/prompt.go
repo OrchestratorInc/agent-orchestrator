@@ -30,6 +30,8 @@ type taskPromptConfig struct {
 	Prompt       string
 	IssueID      string
 	IssueContext string
+	// BaseBranch is set for a task stacked on another pull request.
+	BaseBranch string
 }
 
 type systemPromptConfig struct {
@@ -49,6 +51,17 @@ type projectRulesConfig struct {
 }
 
 func buildTaskPrompt(cfg taskPromptConfig) string {
+	prompt := issueTaskPrompt(cfg)
+	base := strings.TrimSpace(cfg.BaseBranch)
+	if base == "" || prompt == "" {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n" + fmt.Sprintf(
+		"This task is stacked on another pull request: your branch starts from `%s`. Open your pull request against `%s`, not the default branch, and don't merge either one.",
+		base, base)
+}
+
+func issueTaskPrompt(cfg taskPromptConfig) string {
 	issueContext := strings.TrimSpace(cfg.IssueContext)
 	if cfg.Prompt != "" {
 		if cfg.Role == sessionPromptRoleWorker && issueContext != "" {

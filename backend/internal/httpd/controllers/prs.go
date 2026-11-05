@@ -29,6 +29,125 @@ func (c *PRsController) Register(r chi.Router) {
 	r.Post("/prs/{id}/state", c.changeState)
 	r.Post("/prs/{id}/comments", c.postComment)
 	r.Post("/prs/{id}/attachments", c.uploadAttachment)
+	r.Get("/prs/{id}/stack", c.stack)
+	r.Post("/prs/{id}/stack", c.addToStack)
+	r.Post("/prs/{id}/stack/merge", c.mergeStack)
+}
+
+func writeStackResult(w http.ResponseWriter, res prsvc.StackResult) {
+	out := GetPRStackResponse{}
+	if res.Stack != nil {
+		stack := PRStackResponse{Number: res.Stack.Number, URL: res.Stack.URL, BaseBranch: res.Stack.BaseBranch, Open: res.Stack.Open, Layers: []PRStackLayerResponse{}}
+		for _, layer := range res.Stack.Layers {
+			stack.Layers = append(stack.Layers, PRStackLayerResponse{
+				Number:         layer.Number,
+				Title:          layer.Title,
+				URL:            layer.URL,
+				State:          layer.State,
+				HeadBranch:     layer.HeadBranch,
+				HeadSHA:        layer.HeadSHA,
+				CI:             layer.CI,
+				ReviewDecision: layer.ReviewDecision,
+				Mergeability:   layer.Mergeability,
+				SessionID:      layer.SessionID,
+			})
+		}
+		out.Stack = &stack
+	}
+	if res.Parent != nil {
+		out.Parent = &PRStackParentResponse{Number: res.Parent.Number, URL: res.Parent.URL}
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
+}
+
+func (c *PRsController) stack(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/prs/{id}/stack")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	prURL := strings.TrimSpace(r.URL.Query().Get("prUrl"))
+	if !prIDPattern.MatchString(prID) || prURL == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR number and URL are required", nil)
+		return
+	}
+	res, err := c.Svc.Stack(r.Context(), prID, prURL)
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	writeStackResult(w, res)
+}
+
+func (c *PRsController) addToStack(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/stack")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	var in AddPRToStackRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PRURL) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
+		return
+	}
+	res, err := c.Svc.AddToStack(r.Context(), prID, in.PRURL)
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	writeStackResult(w, res)
+}
+
+func (c *PRsController) mergeStack(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/stack/merge")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	var in MergePRStackRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PRURL) == "" || len(in.ExpectedHeads) == 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL and expected heads are required", nil)
+		return
+	}
+	switch in.Method {
+	case "", "squash", "merge", "rebase":
+	default:
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ACTION", "Merge method must be squash, merge, or rebase", nil)
+		return
+	}
+	heads := make([]prsvc.StackHead, 0, len(in.ExpectedHeads))
+	for _, head := range in.ExpectedHeads {
+		heads = append(heads, prsvc.StackHead{Number: head.Number, HeadSHA: head.HeadSHA})
+	}
+	res, err := c.Svc.MergeStack(r.Context(), prsvc.StackMergeRequest{PRID: prID, PRURL: in.PRURL, Method: in.Method, ExpectedHeads: heads})
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, MergePRStackResponse{
+		OK:             true,
+		PRNumber:       res.PRNumber,
+		Numbers:        res.Numbers,
+		Method:         res.Method,
+		Status:         res.Status,
+		StateChangedAt: res.StateChangedAt,
+	})
 }
 
 func (c *PRsController) merge(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +371,8 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_THREAD_NOT_FOUND", "Review thread is not part of this PR", nil)
 	case errors.Is(err, prsvc.ErrPRNotFound):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PR_NOT_FOUND", "Unknown PR", nil)
+	case errors.Is(err, prsvc.ErrPRStacked):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_STACKED", "This pull request has unmerged layers below it; merge the stack instead", nil)
 	case errors.Is(err, prsvc.ErrPRNotMergeable):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_NOT_MERGEABLE", "PR is not mergeable", nil)
 	case errors.Is(err, prsvc.ErrPRHeadChanged):

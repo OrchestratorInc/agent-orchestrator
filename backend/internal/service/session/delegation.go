@@ -29,6 +29,7 @@ const (
 type DelegateTaskInput struct {
 	ProjectID         domain.ProjectID
 	Brief             string
+	BaseBranch        string
 	RequestedAgent    domain.AgentHarness
 	Model             string
 	Effort            *string
@@ -94,6 +95,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		ProjectID:         in.ProjectID,
 		Kind:              domain.KindWorker,
 		Harness:           in.RequestedAgent,
+		BaseBranch:        in.BaseBranch,
 		Prompt:            prompt,
 		DisplayName:       delegatedTaskDisplayName(in.Brief),
 		NameFromPrompt:    prompt != "" && project.Kind.WithDefault() != domain.ProjectKindScratch,

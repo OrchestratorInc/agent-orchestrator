@@ -91,6 +91,8 @@ type ActionDeps struct {
 	CommentWriter CommentWriter
 	Refresher     ReviewRefresher
 	Uploader      ports.SCMAttachmentUploader
+	// Stacker is nil where no provider supports stacks.
+	Stacker ports.SCMStacker
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -113,6 +115,7 @@ type ActionService struct {
 	commentWriter CommentWriter
 	refresher     ReviewRefresher
 	uploader      ports.SCMAttachmentUploader
+	stacker       ports.SCMStacker
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -154,6 +157,7 @@ func NewActionService(deps ActionDeps) *ActionService {
 		commentWriter: deps.CommentWriter,
 		refresher:     deps.Refresher,
 		uploader:      deps.Uploader,
+		stacker:       deps.Stacker,
 	}
 }
 
@@ -202,6 +206,9 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 		return MergeResult{}, fmt.Errorf("%w: pull request repository is unknown", ErrPRPreconditions)
 	}
 	ref := ports.SCMPRRef{Repo: repo, Number: tracked.Number, URL: tracked.URL}
+	if err := s.guardStackedMerge(ctx, ref); err != nil {
+		return MergeResult{}, err
+	}
 	fresh, review, err := s.fetchMergeReadiness(ctx, ref)
 	if err != nil {
 		return MergeResult{}, err

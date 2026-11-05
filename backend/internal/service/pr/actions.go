@@ -14,6 +14,9 @@ type ActionManager interface {
 	ChangeState(ctx context.Context, request StateRequest) (StateResult, error)
 	PostComment(ctx context.Context, request CommentRequest) (CommentResult, error)
 	UploadAttachment(ctx context.Context, request AttachmentRequest) (AttachmentResult, error)
+	Stack(ctx context.Context, prID, prURL string) (StackResult, error)
+	AddToStack(ctx context.Context, prID, prURL string) (StackResult, error)
+	MergeStack(ctx context.Context, request StackMergeRequest) (StackMergeResult, error)
 }
 
 // MergeRequest identifies the tracked PR and pins the mutation to the exact

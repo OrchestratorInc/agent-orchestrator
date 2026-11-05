@@ -2,10 +2,12 @@ package controllers_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,12 +35,32 @@ type fakePRService struct {
 	attachErr     error
 	attachReq     prsvc.AttachmentRequest
 	attachCalls   int
+	stackResult   prsvc.StackResult
+	stackMerge    prsvc.StackMergeResult
+	stackMergeReq prsvc.StackMergeRequest
+	stackErr      error
+	stackCalls    []string
 }
 
 func (f *fakePRService) UploadAttachment(_ context.Context, request prsvc.AttachmentRequest) (prsvc.AttachmentResult, error) {
 	f.attachCalls++
 	f.attachReq = request
 	return f.attachResult, f.attachErr
+}
+
+func (f *fakePRService) Stack(_ context.Context, prID, prURL string) (prsvc.StackResult, error) {
+	f.stackCalls = append(f.stackCalls, prID+" "+prURL)
+	return f.stackResult, f.stackErr
+}
+
+func (f *fakePRService) AddToStack(_ context.Context, prID, prURL string) (prsvc.StackResult, error) {
+	f.stackCalls = append(f.stackCalls, "add "+prID+" "+prURL)
+	return f.stackResult, f.stackErr
+}
+
+func (f *fakePRService) MergeStack(_ context.Context, request prsvc.StackMergeRequest) (prsvc.StackMergeResult, error) {
+	f.stackMergeReq = request
+	return f.stackMerge, f.stackErr
 }
 
 func (f *fakePRService) ChangeState(_ context.Context, request prsvc.StateRequest) (prsvc.StateResult, error) {
@@ -211,5 +233,78 @@ func TestPRsRoutes_ResolveComments_InvalidPRID(t *testing.T) {
 		body, status, headers := doRequest(t, srv, "POST", "/api/v1/prs/"+id+"/resolve-comments", "")
 		assertJSON(t, headers)
 		assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_PR")
+	}
+}
+
+func TestPRStack_ReturnsLayersBottomFirst(t *testing.T) {
+	svc := &fakePRService{stackResult: prsvc.StackResult{Stack: &prsvc.Stack{
+		Number: 7, URL: "https://github.com/a/b/stack/7", BaseBranch: "main", Open: true,
+		Layers: []prsvc.StackLayer{{Number: 1, Title: "Base", State: domain.PRStateMerged}, {Number: 2, Title: "Top", State: domain.PRStateOpen, SessionID: "s-2"}},
+	}}}
+	srv := newPRTestServer(t, svc)
+	resp, err := http.Get(srv.URL + "/api/v1/prs/2/stack?prUrl=https%3A%2F%2Fgithub.com%2Fa%2Fb%2Fpull%2F2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var out struct {
+		Stack struct {
+			Number int
+			Layers []struct {
+				Number    int
+				State     string
+				SessionID string
+			}
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Stack.Number != 7 || len(out.Stack.Layers) != 2 || out.Stack.Layers[0].State != "merged" || out.Stack.Layers[1].SessionID != "s-2" {
+		t.Fatalf("stack = %#v", out.Stack)
+	}
+	if len(svc.stackCalls) != 1 || svc.stackCalls[0] != "2 https://github.com/a/b/pull/2" {
+		t.Fatalf("calls = %v", svc.stackCalls)
+	}
+}
+
+func TestPRStack_RequiresURL(t *testing.T) {
+	srv := newPRTestServer(t, &fakePRService{})
+	resp, err := http.Get(srv.URL + "/api/v1/prs/2/stack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestPRStackMerge_PassesHeadsAndValidates(t *testing.T) {
+	svc := &fakePRService{stackMerge: prsvc.StackMergeResult{PRNumber: 2, Numbers: []int{1, 2}, Method: "squash", Status: "merged"}}
+	srv := newPRTestServer(t, svc)
+	post := func(body string) int {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/api/v1/prs/2/stack/merge", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode
+	}
+	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","expectedHeads":[{"number":1,"headSha":"a"},{"number":2,"headSha":"b"}]}`); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	if len(svc.stackMergeReq.ExpectedHeads) != 2 || svc.stackMergeReq.ExpectedHeads[1].HeadSHA != "b" {
+		t.Fatalf("request = %#v", svc.stackMergeReq)
+	}
+	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","expectedHeads":[]}`); got != http.StatusBadRequest {
+		t.Fatalf("no heads status = %d", got)
+	}
+	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","method":"octopus","expectedHeads":[{"number":2,"headSha":"b"}]}`); got != http.StatusBadRequest {
+		t.Fatalf("bad method status = %d", got)
 	}
 }

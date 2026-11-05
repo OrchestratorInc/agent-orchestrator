@@ -40,7 +40,11 @@ type SpawnConfig struct {
 	Kind         domain.SessionKind
 	Harness      domain.AgentHarness
 	Branch       string
-	Prompt       string
+	// BaseBranch starts the session's branch from this branch instead of the
+	// project's default, and its pull request is meant to target it: stacking
+	// on another PR. Only ordinary repository projects can honor it.
+	BaseBranch string
+	Prompt     string
 	// AgentConfig overrides the resolved project/role agent config for this
 	// single spawn. Empty fields keep the project defaults.
 	AgentConfig AgentConfig

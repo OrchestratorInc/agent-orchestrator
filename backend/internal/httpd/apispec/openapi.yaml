@@ -4854,6 +4854,159 @@ paths:
       summary: Resolve review threads on a pull request
       tags:
       - prs
+  /api/v1/prs/{id}/stack:
+    get:
+      operationId: getPRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a pull request's stack, or the open pull request it could be stacked
+        on
+      tags:
+      - prs
+    post:
+      operationId: addPRToStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPRToStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stack a pull request on the open pull request it is based on
+      tags:
+      - prs
+  /api/v1/prs/{id}/stack/merge:
+    post:
+      operationId: mergePRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergePRStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Merge a pull request and the unmerged layers below it, all or nothing
+      tags:
+      - prs
   /api/v1/prs/{id}/state:
     post:
       operationId: changePRState
@@ -13034,6 +13187,14 @@ components:
       required:
       - activeBranchId
       type: object
+    AddPRToStackRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
     AddProjectInput:
       properties:
         asWorkspace:
@@ -16863,6 +17024,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         brief:
           maxLength: 16384
           type: string
@@ -17213,6 +17377,13 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GetPRStackResponse:
+      properties:
+        parent:
+          $ref: '#/components/schemas/PRStackParentResponse'
+        stack:
+          $ref: '#/components/schemas/PRStackResponse'
       type: object
     GitHubRepo:
       properties:
@@ -18079,6 +18250,55 @@ components:
       - state
       - stateChangedAt
       type: object
+    MergePRStackRequest:
+      properties:
+        expectedHeads:
+          items:
+            $ref: '#/components/schemas/PRStackHead'
+          minItems: 1
+          type: array
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - expectedHeads
+      type: object
+    MergePRStackResponse:
+      properties:
+        method:
+          type: string
+        numbers:
+          items:
+            type: integer
+          type: array
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        stateChangedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+          - merged
+          - enqueued
+          - pending
+          type: string
+      required:
+      - ok
+      - prNumber
+      - numbers
+      - method
+      - status
+      - stateChangedAt
+      type: object
     MobileDeviceResponse:
       properties:
         createdAt:
@@ -18356,6 +18576,83 @@ components:
       - title
       - targetSha
       - status
+      type: object
+    PRStackHead:
+      properties:
+        headSha:
+          minLength: 40
+          type: string
+        number:
+          type: integer
+      required:
+      - number
+      - headSha
+      type: object
+    PRStackLayerResponse:
+      properties:
+        ci:
+          type: string
+        headBranch:
+          type: string
+        headSha:
+          type: string
+        mergeability:
+          type: string
+        number:
+          type: integer
+        reviewDecision:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - draft
+          - open
+          - merged
+          - closed
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - number
+      - title
+      - url
+      - state
+      - headBranch
+      - headSha
+      type: object
+    PRStackParentResponse:
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - number
+      - url
+      type: object
+    PRStackResponse:
+      properties:
+        baseBranch:
+          type: string
+        layers:
+          items:
+            $ref: '#/components/schemas/PRStackLayerResponse'
+          type: array
+        number:
+          type: integer
+        open:
+          type: boolean
+        url:
+          type: string
+      required:
+      - number
+      - url
+      - baseBranch
+      - open
+      - layers
       type: object
     PostPRCommentRequest:
       properties:
@@ -21074,6 +21371,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         branch:
           type: string
         clientRequestId:
