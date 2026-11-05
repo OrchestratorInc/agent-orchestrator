@@ -48,13 +48,13 @@ func NativeSessionFingerprints(ctx context.Context, db *sql.DB, sessionID string
 	if err != nil {
 		return nil, fmt.Errorf("opencode: read session stamps: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 	type stamped struct{ id, stamp string }
 	var sessions []stamped
 	for rows.Next() {
 		var id string
 		var messages, messageUpdated, parts, partUpdated int64
 		if err := rows.Scan(&id, &messages, &messageUpdated, &parts, &partUpdated); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("opencode: read session stamps: %w", err)
 		}
 		if messages == 0 {
@@ -93,15 +93,14 @@ func openCodeContentFingerprint(ctx context.Context, db *sql.DB, sessionID strin
 	if err != nil {
 		return "", fmt.Errorf("opencode: read session parts: %w", err)
 	}
+	defer func() { _ = partRows.Close() }()
 	for partRows.Next() {
 		var message, data string
 		if err := partRows.Scan(&message, &data); err != nil {
-			_ = partRows.Close()
 			return "", fmt.Errorf("opencode: read session parts: %w", err)
 		}
 		canonical, err := canonicalOpenCodeData(data, openCodeCopiedPartKeys)
 		if err != nil {
-			_ = partRows.Close()
 			return "", err
 		}
 		parts[message] = append(parts[message], canonical)
