@@ -53,13 +53,17 @@ func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
 	}
 }
 
-// An operator reading PostHog sees the exported alias, not the internal name.
-// Typing either one must silence the stream, or the switch is a trap.
-func TestDenylistSinkMatchesEitherInternalOrExportedName(t *testing.T) {
-	for _, denied := range []string{"ao.app.active", "ao.v2.app.active"} {
+// A kill switch configured before the event rename names the old stream. It
+// must still silence the renamed one, or the upgrade quietly re-enables it.
+func TestDenylistSinkMatchesCurrentAndLegacyNames(t *testing.T) {
+	for _, denied := range []string{"ao.cli.active", "ao.app.active", "ao.v2.app.active", "ao.session.*"} {
 		next := &recordingSink{}
 		sink := NewDenylistSink(next, []string{denied})
-		emitAll(sink, "ao.app.active")
+		event := "ao.cli.active"
+		if denied == "ao.session.*" {
+			event = "ao.sessions.spawned"
+		}
+		emitAll(sink, event)
 		if len(next.events) != 0 {
 			t.Fatalf("denylist %q forwarded %v, want dropped", denied, forwardedNames(next))
 		}
@@ -77,6 +81,15 @@ func TestDenylistSinkSupportsPrefixWildcardAndIsCaseInsensitive(t *testing.T) {
 
 // A denylist of only blank or bare "*" entries must not silence everything by
 // accident, and must not add a pointless wrapper either.
+func TestEventDeniedHonorsLegacyNames(t *testing.T) {
+	if !EventDenied([]string{"ao.session.spawned"}, "ao.sessions.spawned") {
+		t.Fatal("legacy ao.session.spawned entry must deny ao.sessions.spawned")
+	}
+	if EventDenied(nil, "ao.sessions.spawned") || EventDenied([]string{"ao.http.5xx"}, "ao.sessions.spawned") {
+		t.Fatal("unrelated entries must not deny")
+	}
+}
+
 func TestDenylistSinkIgnoresEmptyEntries(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"", "   ", "*"})

@@ -246,6 +246,48 @@ func TestRenamedEventAllowlists(t *testing.T) {
 	}
 }
 
+// Each renamed daemon event goes on the wire under its new name, with its
+// property allowlist moved to that name. No old name keeps an allowlist entry,
+// so a reintroduced old emit site would lose its properties and stand out.
+func TestRenamedDaemonEventsExportUnderNewName(t *testing.T) {
+	requests := make(chan map[string]any, len(legacyEventNames))
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatalf("NewPostHogSink: %v", err)
+	}
+	for name, legacy := range legacyEventNames {
+		for _, old := range legacy {
+			if _, ok := remotePayloadAllowlist[old]; ok {
+				t.Errorf("legacy name %q still has an allowlist entry", old)
+			}
+		}
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, Source: "test", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(requests)
+	seen := map[string]bool{}
+	for req := range requests {
+		name, _ := req["event"].(string)
+		if _, ok := legacyEventNames[name]; !ok {
+			t.Errorf("exported %q, want one of the renamed names", name)
+		}
+		seen[name] = true
+	}
+	if len(seen) != len(legacyEventNames) {
+		t.Fatalf("exported %d distinct names, want %d", len(seen), len(legacyEventNames))
+	}
+}
+
 func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
 	var names []string
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
@@ -371,7 +413,7 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 	}
 
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.app.active",
+		Name:       "ao.cli.active",
 		Source:     "cli",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -392,15 +434,15 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.v2.app.active" {
-			t.Fatalf("event = %#v, want ao.v2.app.active", got)
+		if got := req["event"]; got != "ao.cli.active" {
+			t.Fatalf("event = %#v, want ao.cli.active", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
 			t.Fatalf("properties type = %T, want map[string]any", req["properties"])
 		}
-		if props["legacy_event_name"] != "ao.app.active" {
-			t.Fatalf("legacy_event_name = %#v, want ao.app.active", props["legacy_event_name"])
+		if _, ok := props["legacy_event_name"]; ok {
+			t.Fatalf("legacy_event_name = %#v, want absent after the rename", props["legacy_event_name"])
 		}
 		if props["telemetry_schema_version"] != float64(2) {
 			t.Fatalf("telemetry_schema_version = %#v, want 2", props["telemetry_schema_version"])
