@@ -114,11 +114,11 @@ describe("TurnOutcome", () => {
 		const onLogin = vi.fn();
 		const onRetry = vi.fn();
 		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" retry={{ onRetry }}
-			login={{ agent: "Claude Code", onLogin }} />);
+			onRollback={vi.fn()} durationMs={1000} login={{ agent: "Claude Code", onLogin }} />);
 
 		const box = screen.getByTestId("login-notice");
 		expect(within(box).getByText("You’re not logged in to Claude Code")).toBeInTheDocument();
-		expect(within(box).getByText("Retry this turn once you’re in.")).toBeInTheDocument();
+		expect(within(box).getByText("Send your message again once you’re in.")).toBeInTheDocument();
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
 		expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
@@ -126,8 +126,10 @@ describe("TurnOutcome", () => {
 		expect(screen.getAllByText(/log in/i)).toHaveLength(1);
 		fireEvent.click(within(box).getByRole("button", { name: "Log in" }));
 		expect(onLogin).toHaveBeenCalledOnce();
-		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
-		expect(onRetry).toHaveBeenCalledOnce();
+		// The box is the turn's whole ending: no retry, undo or time row under it.
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		expect(document.querySelector("[data-turn-actions]")).toBeNull();
+		expect(onRetry).not.toHaveBeenCalled();
 	});
 
 	it("shows a refused login with no way to log in as the plain failure", () => {

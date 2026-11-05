@@ -2701,7 +2701,7 @@
 	"chat.login.title": "Du bist nicht bei {{agent}} angemeldet",
 	"chat.login.titleOnHost": "Du bist auf {{host}} nicht bei {{agent}} angemeldet",
 	"chat.login.retriesItself": "Danach läuft dieser Schritt von selbst erneut.",
-	"chat.login.thenRetry": "Wiederhole danach diesen Schritt.",
+	"chat.login.thenResend": "Sende danach deine Nachricht erneut.",
 	"chat.login.action": "Anmelden",
 	"chat.versionSwitch.failedTitle": "Wechsel zu {{version}} fehlgeschlagen",
 	"chat.versionSwitch.failedBody": "Der Agent ist mit der neuen Version nicht gestartet. Deine wartenden Nachrichten bleiben erhalten; setze den Agent fort, um es erneut zu versuchen.",

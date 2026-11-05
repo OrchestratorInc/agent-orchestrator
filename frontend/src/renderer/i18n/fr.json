@@ -2745,7 +2745,7 @@
 	"chat.login.title": "Vous n'êtes pas connecté à {{agent}}",
 	"chat.login.titleOnHost": "Vous n'êtes pas connecté à {{agent}} sur {{host}}",
 	"chat.login.retriesItself": "Ensuite, ce tour sera relancé automatiquement.",
-	"chat.login.thenRetry": "Ensuite, relancez ce tour.",
+	"chat.login.thenResend": "Ensuite, renvoyez votre message.",
 	"chat.login.action": "Se connecter",
 	"chat.versionSwitch.failedTitle": "Impossible de passer à {{version}}",
 	"chat.versionSwitch.failedBody": "L’agent n’a pas démarré avec la nouvelle version. Vos messages en attente sont conservés ; reprenez l’agent pour réessayer.",

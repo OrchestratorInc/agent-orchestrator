@@ -3266,8 +3266,9 @@ export function Timeline({
 	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
 	const loginHostId = useContext(ChatHostId);
 	// A turn that ran no tool and changed nothing can run again on its own once the
-	// login takes: there is nothing it could do twice. The cloud connection's login
-	// is not watched from here, so a cloud turn keeps its Retry for the user.
+	// login takes: there is nothing it could do twice. Any other turn, and every
+	// cloud one (the cloud connection's login is not watched from here), asks the
+	// user to send the message again.
 	const retriesAfterLogin = useCallback((turnId: string) => !cloud && Boolean(retryControl) && retryableTurns.has(turnId) &&
 		!snapshot.turns.find((entry) => entry.id === turnId)?.diff?.files.length &&
 		!snapshot.items.some((item) => item.turnId === turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)),
@@ -3297,7 +3298,7 @@ export function Timeline({
 		if (!snapshot.turns.some((entry) => entry.id === turnId)) return;
 		useUiStore.getState().clearLoginReturn(turnId);
 		// A login that took long ago, or a turn something else has moved past, is
-		// left for the user's own Retry.
+		// left for the user to send again.
 		if (!autoRetry || Date.now() - loggedInAt > LOGIN_RETRY_WINDOW_MS) return;
 		if (!retryableTurns.has(turnId) || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) return;
 		void Promise.resolve(retryTurn(turnId)).catch(() => undefined);

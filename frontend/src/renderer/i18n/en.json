@@ -1747,7 +1747,7 @@
 	"chat.login.title": "You’re not logged in to {{agent}}",
 	"chat.login.titleOnHost": "You’re not logged in to {{agent}} on {{host}}",
 	"chat.login.retriesItself": "This turn runs again once you’re in.",
-	"chat.login.thenRetry": "Retry this turn once you’re in.",
+	"chat.login.thenResend": "Send your message again once you’re in.",
 	"chat.login.action": "Log in",
 	"chat.versionSwitch.failedTitle": "Couldn't switch to {{version}}",
 	"chat.versionSwitch.failedBody": "The agent didn't start on the new version. Your queued messages are kept; resume the agent to try again.",

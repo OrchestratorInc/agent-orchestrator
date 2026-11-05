@@ -601,19 +601,12 @@ export function TurnOutcome({
 	}
 	// A refused login is routine and has one way out, so it reads as a step to take
 	// rather than an alarm. The provider's own advice ("run /login") is for its CLI
-	// and never reaches the reader.
+	// and never reaches the reader. The box is the turn's whole ending: logging in
+	// runs it again or leaves the message to send again, so no action row follows.
 	if (state === "failed" && failureCode === "auth_required" && login) {
 		return (
-			<div className="group/message flex min-w-0 flex-col gap-2" data-turn-outcome={state}>
+			<div className="flex min-w-0 flex-col" data-turn-outcome={state}>
 				<LoginNotice login={login} />
-				<TurnActions
-					retry={retry}
-					copyText={copyText}
-					onRollback={onRollback}
-					rollbackDisabled={rollbackDisabled}
-					timestamp={timestamp}
-					durationMs={durationMs}
-				/>
 			</div>
 		);
 	}
@@ -672,7 +665,7 @@ export function TurnOutcome({
 function LoginNotice({ login }: { login: TurnOutcomeLogin }) {
 	const { t } = useTranslation();
 	return (
-		<div data-testid="login-notice" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-surface px-3 py-2.5">
+		<div data-testid="login-notice" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3 rounded-lg bg-surface px-4 py-3">
 			<div className="flex min-w-0 flex-1 basis-64 items-start gap-2.5">
 				<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 				<div className="min-w-0 flex-1">
@@ -680,11 +673,11 @@ function LoginNotice({ login }: { login: TurnOutcomeLogin }) {
 						{login.host ? t("chat.login.titleOnHost", { agent: login.agent, host: login.host }) : t("chat.login.title", { agent: login.agent })}
 					</p>
 					<p className="mt-0.5 text-pretty text-xs leading-5 text-muted-foreground">
-						{login.retriesItself ? t("chat.login.retriesItself") : t("chat.login.thenRetry")}
+						{login.retriesItself ? t("chat.login.retriesItself") : t("chat.login.thenResend")}
 					</p>
 				</div>
 			</div>
-			<Button type="button" variant="primary" size="sm" onClick={login.onLogin} className="ml-auto shrink-0">{t("chat.login.action")}</Button>
+			<Button type="button" variant="primary" onClick={login.onLogin} className="ml-auto">{t("chat.login.action")}</Button>
 		</div>
 	);
 }

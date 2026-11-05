@@ -57,7 +57,8 @@ describe("ChatWorkspace refused login", () => {
 		expect(screen.queryByText("The agent ran into a problem")).toBeNull();
 		// The card already offers the login, so the banner does not repeat it.
 		expect(screen.queryByRole("button", { name: "Log in again" })).toBeNull();
-		expect(screen.getByRole("button", { name: "Retry this turn" })).toBeInTheDocument();
+		// The box is the turn's whole ending: no retry or undo row under it.
+		expect(screen.queryByRole("button", { name: "Retry this turn" })).toBeNull();
 	});
 
 	it("opens the Agents page on the login, then returns and runs a turn that did no work again", async () => {
@@ -81,16 +82,13 @@ describe("ChatWorkspace refused login", () => {
 	it("returns without running a turn again that already ran commands", async () => {
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: true })} retryControl={{ retry }} />);
-		expect(screen.getByText("Retry this turn once you’re in.")).toBeInTheDocument();
+		expect(screen.getByText("Send your message again once you’re in.")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Log in" }));
 		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
 
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).not.toHaveBeenCalled();
-		// Retry stays the user's call.
-		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
-		expect(retry).toHaveBeenCalledWith("turn-1");
 	});
 
 	it("waits for the login on the session's own host", async () => {
