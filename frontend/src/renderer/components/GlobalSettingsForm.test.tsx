@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { GlobalSettingsForm, type GlobalSettingsSection } from "./GlobalSettingsForm";
+import { newChatDraftScope, readChatSessionDraft } from "../lib/chat-drafts";
+import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import { useLocaleStore } from "../stores/locale-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
 import { useTerminalShellStore } from "../stores/terminal-shell-store";
@@ -12,8 +14,8 @@ import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../stores/analytics-opt-out-store";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { harnessSettingsSectionMock, triagePrepare, triageLaunch } = vi.hoisted(() => ({
-	harnessSettingsSectionMock: vi.fn(), triagePrepare: vi.fn(), triageLaunch: vi.fn(),
+const { harnessSettingsSectionMock, triageLaunch } = vi.hoisted(() => ({
+	harnessSettingsSectionMock: vi.fn(), triageLaunch: vi.fn(),
 }));
 vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
 
@@ -117,7 +119,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: { getVersion, openExternal },
-		triage: { prepare: triagePrepare, launch: triageLaunch },
+		triage: { launch: triageLaunch },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
@@ -222,7 +224,6 @@ beforeEach(async () => {
 	updOnStatus.mockReturnValue(() => undefined);
 	getVersion.mockResolvedValue("1.4.0");
 	getDaemonStatus.mockResolvedValue({ state: "ready" });
-	triagePrepare.mockResolvedValue({ ok: true, prompt: "Read the report context", dir: "/home/test/.ao/triage/1" });
 	triageLaunch.mockResolvedValue({ ok: true });
 	useUiStore.setState({ newTaskRequest: null });
 	writeText.mockResolvedValue(undefined);
@@ -911,13 +912,11 @@ describe("GlobalSettingsForm", () => {
 		expect(guidance).toBeInTheDocument();
 	});
 
-	it("opens the normal standalone agent dialog from the report action", async () => {
+	it("opens a standalone agent with the report prompt filled in", async () => {
 		renderForm();
 		await userEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
-		expect(triagePrepare).toHaveBeenCalledWith();
-		expect(useUiStore.getState().newTaskRequest).toEqual(expect.objectContaining({
-			projectId: "__standalone__", hiddenPrompt: "Read the report context", displayName: "Report a problem",
-		}));
+		expect(useUiStore.getState().newTaskRequest).toEqual(expect.objectContaining({ projectId: "__standalone__" }));
+		expect(readChatSessionDraft(newChatDraftScope()).composer.text).toBe(REPORT_PROBLEM_PROMPT);
 		expect(triageLaunch).not.toHaveBeenCalled();
 	});
 
