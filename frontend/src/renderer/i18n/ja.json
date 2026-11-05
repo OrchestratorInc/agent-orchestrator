@@ -3612,7 +3612,6 @@
 	"sideChat.addToChat": "Add to chat",
 	"chat.workedFor": "作業時間",
 	"chat.rollBackToHere": "ここまで巻き戻す",
-	"chat.showReplyWork": "この返信の作業内容を表示",
 	"chat.taskNamed": "新しいタスク名: <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<pr>#{{number}}</pr> で<strong>CI が失敗</strong>しています",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong> が <pr>#{{number}}</pr> にコメントしました",

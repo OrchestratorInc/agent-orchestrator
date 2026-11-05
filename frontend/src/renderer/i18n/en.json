@@ -3527,7 +3527,6 @@
 	"settings.harness.models.context": "Context (tokens)",
 	"chat.workedFor": "Worked for",
 	"chat.rollBackToHere": "Roll back to here",
-	"chat.showReplyWork": "Show the work behind this reply",
 	"chat.taskNamed": "New task named <task>{{title}}</task>",
 	"chat.automation.ciFailing": "<strong>CI failing</strong> on <pr>#{{number}}</pr>",
 	"chat.automation.reviewComment": "<strong>{{author}}</strong> commented on <pr>#{{number}}</pr>",
