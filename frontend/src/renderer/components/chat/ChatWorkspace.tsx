@@ -1913,6 +1913,7 @@ function ChatWorkspaceContent({
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
+							sessionId={snapshot.sessionId}
 							onLinkOpen={onLinkOpen}
 							onFileOpen={onOpenFile}
 							onSessionLinkOpen={onSessionLinkOpen}

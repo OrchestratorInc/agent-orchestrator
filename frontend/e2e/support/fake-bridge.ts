@@ -168,6 +168,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
@@ -1095,6 +1096,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				agentLogin: { request: async () => null },
 				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
+					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [

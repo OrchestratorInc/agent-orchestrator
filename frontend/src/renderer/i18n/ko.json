@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "경로 복사",
+	"chat.path.revealInFinder": "Finder에서 보기",
+	"chat.path.revealInFileManager": "파일 관리자에서 보기",
+	"chat.path.openWith": "{{editor}}로 열기",
+	"chat.path.actionFailed": "경로 작업을 완료하지 못했습니다",
 	"awake.offTooltip": "Stay Awake가 꺼져 있습니다. 클릭하여 켜세요.",
 	"awake.activeTooltip": "Stay Awake가 켜져 있습니다. 클릭하여 끄세요.",
 	"awake.pausedBattery": "배터리가 {{percent}}% 미만이라 일시 중지됨.\n충전 후 다시 시작합니다.",
@@ -960,7 +965,7 @@
 	"inspector.openInSystemBrowser": "시스템 브라우저에서 열기",
 	"link.copy": "링크 복사",
 	"link.openInAOBrowser": "AO 브라우저에서 열기",
-	"link.openInFiles": "파일에서 열기",
+	"link.openInAO": "AO에서 열기",
 	"link.openInExternalBrowser": "외부 브라우저에서 열기",
 	"inspector.openInlineComments": "열린 인라인 댓글 {{count}}개",
 	"inspector.requestRereviewPR": "PR 재리뷰 요청",

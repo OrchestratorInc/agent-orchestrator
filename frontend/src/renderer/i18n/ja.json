@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "パスをコピー",
+	"chat.path.revealInFinder": "Finderで表示",
+	"chat.path.revealInFileManager": "ファイルマネージャーで表示",
+	"chat.path.openWith": "{{editor}}で開く",
+	"chat.path.actionFailed": "パスの操作を完了できませんでした",
 	"awake.offTooltip": "Stay Awake はオフです。クリックしてオンにします。",
 	"awake.activeTooltip": "Stay Awake はオンです。クリックしてオフにします。",
 	"awake.pausedBattery": "バッテリー残量が {{percent}}% 未満のため一時停止中。\n充電後に再開します。",
@@ -960,7 +965,7 @@
 	"inspector.openInSystemBrowser": "システムブラウザで開く",
 	"link.copy": "リンクをコピー",
 	"link.openInAOBrowser": "AO ブラウザで開く",
-	"link.openInFiles": "ファイルで開く",
+	"link.openInAO": "AOで開く",
 	"link.openInExternalBrowser": "外部ブラウザで開く",
 	"inspector.openInlineComments": "未解決のインラインコメント {{count}} 件",
 	"inspector.requestRereviewPR": "PR の再レビューを依頼",
