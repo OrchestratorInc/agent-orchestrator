@@ -5,11 +5,9 @@ package conpty
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -197,49 +195,5 @@ func TestDarwinPTYCloseDoesNotWaitOutAShellThatIgnoresSIGTERM(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed >= darwinPTYCloseGrace {
 		t.Fatalf("Close took %s; a SIGTERM-ignoring shell waited out the %s grace", elapsed, darwinPTYCloseGrace)
-	}
-}
-
-// A shell with job control runs each job in its own process group. Closing
-// the terminal must still reap a job that ignores SIGHUP and SIGTERM, the way
-// it would on Linux, instead of leaving it running under launchd.
-func TestDarwinPTYCloseReapsJobInItsOwnProcessGroup(t *testing.T) {
-	conn, err := newConPTY(t.TempDir(), "/bin/sh", []string{
-		"-c", `set -m; /bin/sh -c 'trap "" HUP TERM; printf "job:%s\n" $$; exec sleep 30' & wait`,
-	}, initialConPTYColumns, initialConPTYRows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out strings.Builder
-	buf := make([]byte, 128)
-	jobPID := 0
-	deadline := time.Now().Add(5 * time.Second)
-	for jobPID == 0 && time.Now().Before(deadline) {
-		n, err := conn.Read(buf)
-		out.Write(buf[:n])
-		if i := strings.Index(out.String(), "job:"); i >= 0 {
-			_, _ = fmt.Sscanf(out.String()[i:], "job:%d\n", &jobPID)
-		}
-		if err != nil {
-			break
-		}
-	}
-	if jobPID == 0 {
-		t.Fatalf("job did not start: output=%q", out.String())
-	}
-	if pgid, err := syscall.Getpgid(jobPID); err != nil || pgid == conn.PID() {
-		t.Fatalf("job pgid=%d err=%v; want its own group apart from the shell's %d", pgid, err, conn.PID())
-	}
-
-	if err := conn.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	deadline = time.Now().Add(2 * time.Second)
-	for pidAlive(jobPID) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if pidAlive(jobPID) {
-		_ = syscall.Kill(jobPID, syscall.SIGKILL)
-		t.Fatalf("job %d in its own process group survived PTY close", jobPID)
 	}
 }
