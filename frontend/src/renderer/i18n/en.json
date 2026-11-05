@@ -1757,7 +1757,6 @@
 	"chat.login.sendAgain": "send your message again",
 	"chat.login.sendFailed": "Couldn’t send your message",
 	"chat.login.sendAgainAction": "Send again",
-	"chat.login.composerLocked": "Log in or pick another agent to keep chatting",
 	"chat.login.status.queued": "Queued",
 	"chat.login.status.waiting": "Waiting for login",
 	"chat.login.status.sending": "Sending…",

@@ -1822,7 +1822,6 @@
 	"chat.login.sendAgain": "отправьте сообщение ещё раз",
 	"chat.login.sendFailed": "Не удалось отправить сообщение",
 	"chat.login.sendAgainAction": "Отправить ещё раз",
-	"chat.login.composerLocked": "Войдите или выберите другого агента, чтобы продолжить",
 	"chat.login.status.queued": "В очереди",
 	"chat.login.status.waiting": "Ждём входа",
 	"chat.login.status.sending": "Отправка…",

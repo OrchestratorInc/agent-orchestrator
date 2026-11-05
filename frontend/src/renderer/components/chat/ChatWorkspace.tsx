@@ -2085,11 +2085,12 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined || chatLogin.locked) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										// Signed out: nothing typed could be sent until the login takes. The box
+										// keeps its look; the agent and model can still be changed.
+										typingLocked={chatLogin.locked}
 										disabledPlaceholder={
-											chatLogin.locked
-												? t("chat.login.composerLocked")
-												: composerLockedPlaceholder !== undefined
+											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder

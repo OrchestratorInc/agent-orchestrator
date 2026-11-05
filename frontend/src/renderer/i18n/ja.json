@@ -2712,7 +2712,6 @@
 	"chat.login.sendAgain": "メッセージを再送信してください",
 	"chat.login.sendFailed": "メッセージを送信できませんでした",
 	"chat.login.sendAgainAction": "もう一度送信",
-	"chat.login.composerLocked": "続けるにはログインするか、別のエージェントを選んでください",
 	"chat.login.status.queued": "待機中",
 	"chat.login.status.waiting": "ログイン待ち",
 	"chat.login.status.sending": "送信中…",

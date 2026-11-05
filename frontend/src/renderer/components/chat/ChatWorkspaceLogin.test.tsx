@@ -58,8 +58,12 @@ describe("ChatWorkspace refused login", () => {
 		expect(band().closest(".chat-composer-band-tray")).toBeInTheDocument();
 		expect(document.querySelector("[data-composer-tray]")).toBeNull();
 		// Nothing new can be sent until the login takes: the agent would refuse it too.
-		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-disabled", "true");
-		expect(screen.getByText("Log in or pick another agent to keep chatting")).toBeInTheDocument();
+		// Typing is locked, but the box keeps its own look: same placeholder, not dimmed.
+		const box = screen.getByLabelText("Message the agent");
+		expect(box).toHaveAttribute("aria-readonly", "true");
+		expect(box).not.toHaveAttribute("aria-disabled");
+		expect(box).toHaveAttribute("aria-placeholder", "Message the agent");
+		expect(box).not.toHaveClass("opacity-50");
 		expect(within(band()).getByRole("button", { name: "Log in" })).toBeInTheDocument();
 		// The status is the message's own: it leads one row under the bubble, with the
 		// time and the copy button after it, rather than a line the actions cover.
@@ -100,7 +104,29 @@ describe("ChatWorkspace refused login", () => {
 		// Kept until the message's copy appears, so a send that fails still knows the user is in.
 		expect(useUiStore.getState().loginReturn?.settled).toBe(true);
 		// In again, so the chat box is open again.
-		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
+	});
+
+	it("takes the band away when the chat switches to another agent while it shows", async () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+		expect(band()).toBeInTheDocument();
+
+		const prompt = snapshot.items[0]!;
+		const switched = {
+			...snapshot,
+			harness: "codex",
+			items: [...snapshot.items, {
+				kind: "activity", id: "switch-1", sequence: prompt.sequence + 5, revision: 0, activityKind: "system", status: "completed",
+				summary: "Switched to Codex", createdAt: prompt.createdAt, updatedAt: prompt.createdAt,
+				detail: { event: "provider_switch", sourceHarness: "claude-code", targetHarness: "codex" },
+			} as unknown as typeof prompt],
+		};
+		rerender(<ChatWorkspace snapshot={switched} retryControl={{ retry: vi.fn() }} />);
+
+		// The chat box opens at once; the band sinks away behind it.
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
+		await waitFor(() => expect(screen.queryByTestId("login-band")).toBeNull());
 	});
 
 	it("lets the chat go on with another agent once it switches away", () => {
@@ -115,7 +141,7 @@ describe("ChatWorkspace refused login", () => {
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
 
 		expect(screen.queryByTestId("login-band")).toBeNull();
-		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
 		expect(screen.getByTestId("login-status")).toHaveTextContent("Not sent");
 	});
 

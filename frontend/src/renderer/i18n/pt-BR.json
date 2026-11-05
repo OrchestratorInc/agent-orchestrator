@@ -2756,7 +2756,6 @@
 	"chat.login.sendAgain": "envie sua mensagem de novo",
 	"chat.login.sendFailed": "Não foi possível enviar sua mensagem",
 	"chat.login.sendAgainAction": "Enviar de novo",
-	"chat.login.composerLocked": "Entre ou escolha outro agente para continuar conversando",
 	"chat.login.status.queued": "Na fila",
 	"chat.login.status.waiting": "Aguardando login",
 	"chat.login.status.sending": "Enviando…",

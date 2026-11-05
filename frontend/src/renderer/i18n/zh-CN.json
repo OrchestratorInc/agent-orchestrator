@@ -2782,7 +2782,6 @@
 	"chat.login.sendAgain": "请重新发送你的消息",
 	"chat.login.sendFailed": "无法发送你的消息",
 	"chat.login.sendAgainAction": "重新发送",
-	"chat.login.composerLocked": "请登录或选择其他智能体以继续对话",
 	"chat.login.status.queued": "已排队",
 	"chat.login.status.waiting": "等待登录",
 	"chat.login.status.sending": "正在发送…",
