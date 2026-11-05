@@ -135,6 +135,7 @@ export function SessionTopbarActions({
 						<span className="inline-flex" style={noDragStyle} data-tour="orchestrator-header">
 							<Button type="button" size="sm"
 								aria-label={orchestratorReplyLabel(t("shell.openOrchestrator"), orchestratorReply, t)}
+								data-ph-capture-attribute-ao_action="open_orchestrator"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => {
@@ -259,6 +260,7 @@ export function SessionTopbarActions({
 							<span className="inline-flex" style={noDragStyle}>
 								<Button type="button" size="sm"
 									aria-label={t("shell.newTask")}
+									data-ph-capture-attribute-ao_action="new_task"
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
 									onClick={() => {
