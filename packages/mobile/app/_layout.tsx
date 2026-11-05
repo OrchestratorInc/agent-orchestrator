@@ -53,6 +53,7 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/store-update", detents: "fitToContents" },
+	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
 ];
 
 // The manual-connect form — the only sheet with text inputs, and the only one
@@ -222,6 +223,7 @@ function Shell() {
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
