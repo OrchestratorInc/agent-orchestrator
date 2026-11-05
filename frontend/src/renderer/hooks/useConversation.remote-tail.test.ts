@@ -35,6 +35,18 @@ describe("remote conversation tail", () => {
 		expect(remoteConversationFloor(page([], []))).toBe(0);
 	});
 
+	it("protects the newest turn with rows when a later turn shows none", () => {
+		// An undone or cancelled turn stays last in turns with its rows hidden.
+		const undone = page(
+			[turn("t1", "completed"), turn("t2", "completed"), turn("t3", "completed", { rolledBack: true })],
+			[message("m1", "t1", 1), message("m2", "t2", 2), message("r2", "t2", 3)],
+		);
+		expect(remoteConversationFloor(undone)).toBe(1);
+		// A second undo from another client allocates no sequence, so its tail is empty.
+		const tail = page(undone.turns.slice(2), [], { latestSequence: 3, oldestSequence: 2 });
+		expect(mergeRemoteConversationTail(undone, tail, 1)?.items.map((item) => item.id)).toEqual(["m1"]);
+	});
+
 	it("replaces the rows above the floor and keeps the rows below it", () => {
 		const tail = page([turn("t2", "running")], [message("m2", "t2", 4), tool("a2", "t2", 5, "completed"), message("r2", "t2", 6, "partial and more"), tool("a3", "t2", 7)], { controller: { state: "busy" }, oldestSequence: 4 });
 		const merged = mergeRemoteConversationTail(prior, tail, 3)!;

@@ -421,13 +421,14 @@ export async function fetchActivityOutput(sessionId: string, hostId: string | un
 }
 
 /**
- * Rows above this sequence can still change: the newest turn (an undo always
- * takes it back), every open turn, and every unsettled activity.
+ * Rows above this sequence can still change: the newest turn with rows (an undo
+ * always takes it back), every open turn, and every unsettled activity. An undone
+ * or cancelled turn stays last in turns with no rows, so turns cannot name it.
  */
 export function remoteConversationFloor(page: ConversationSnapshot): number {
 	const live = new Set(page.turns.filter((turn) => turn.state === "queued" || turn.state === "running").map((turn) => turn.id));
-	const newest = page.turns.at(-1);
-	if (newest) live.add(newest.id);
+	const newest = page.items.findLast((item) => item.turnId)?.turnId;
+	if (newest) live.add(newest);
 	let floor = page.latestSequence;
 	for (const item of page.items) {
 		const unsettled = item.kind === "activity" && (item.status === "running" || item.status === "pending");
