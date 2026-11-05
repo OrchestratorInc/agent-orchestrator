@@ -43,11 +43,12 @@ type VersionProbe func(ctx context.Context, bin string) error
 
 // Config describes the small provider-specific portion of a native ACP binding.
 type Config struct {
-	Harness        domain.AgentHarness
-	Capabilities   ports.ChatCapabilities
-	Configure      Configure
-	SessionMode    func(ports.PermissionMode) string
-	SessionOptions func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	Harness           domain.AgentHarness
+	Capabilities      ports.ChatCapabilities
+	Configure         Configure
+	SessionMode       func(ports.PermissionMode) string
+	SessionOptions    func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	PromptFailureCode func(error) domain.ConversationFailureCode
 	// LaunchSessionOptions, RequireAdvertisedOptions, and
 	// CloseSessionBeforeReload: see acpdriver.Config.
 	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
@@ -58,7 +59,19 @@ type Config struct {
 	ValidateInitialize func(acpsdk.InitializeResponse) error
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
-	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// ResetsConversation: see acpdriver.Config.ResetsConversation.
+	ResetsConversation func([]acpsdk.ContentBlock) bool
+	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
+	SuppressSessionModes bool
+	// ImplicitWorkspaceDirectories: see acpdriver.Config.
+	ImplicitWorkspaceDirectories bool
+	// PromptErrorFailure restates a session/prompt error. See
+	// acpdriver.Config.PromptErrorFailure.
+	PromptErrorFailure func(error, bool) error
+	// HistoryReconciler rewrites a completed session/load replay. See
+	// acpdriver.Config.HistoryReconciler.
+	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
 	PermissionPolicy             acpdriver.PermissionPolicy
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
@@ -153,11 +166,17 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		},
 		SessionMode:                  cfg.SessionMode,
 		SessionOptions:               cfg.SessionOptions,
+		PromptFailureCode:            cfg.PromptFailureCode,
 		LaunchSessionOptions:         cfg.LaunchSessionOptions,
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
+		ResetsConversation:           cfg.ResetsConversation,
+		SuppressSessionModes:         cfg.SuppressSessionModes,
+		ImplicitWorkspaceDirectories: cfg.ImplicitWorkspaceDirectories,
+		HistoryReconciler:            cfg.HistoryReconciler,
+		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,

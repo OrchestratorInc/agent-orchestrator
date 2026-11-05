@@ -27,6 +27,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import type { DictationEvent } from "./shared/dictation";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -51,10 +52,20 @@ import {
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
+import {
+	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareFile,
+	type CloudShareInspection,
+	type CloudShareLinks,
+	type CloudShareProgress,
+	type CloudSharePublishResult,
+} from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
+	CloudCpProxyBinaryRequestInit,
+	CloudCpProxyBinaryResponse,
 	CloudCpStreamEvent,
 } from "./main/cloud-cp-proxy";
 import type { UpdateOutcome } from "./shared/update-telemetry";
@@ -186,7 +197,22 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 	return Object.keys(request).length === 1 && typeof request.requestId === "string" && request.requestId.length <= 64;
 }
 
+// Binary control-plane requests this page has running, by requestId.
+const binaryRequestsInFlight = new Set<string>();
+
 const api = {
+	dictation: {
+		start: () => ipcRenderer.invoke("dictation:start") as Promise<void>,
+		stop: () => ipcRenderer.invoke("dictation:stop") as Promise<void>,
+		cancel: () => ipcRenderer.invoke("dictation:cancel") as Promise<void>,
+		onEvent: (listener: (event: DictationEvent) => void) => {
+			const handler = (_event: Electron.IpcRendererEvent, message: DictationEvent) => listener(message);
+			ipcRenderer.on("dictation:event", handler);
+			return () => {
+				ipcRenderer.removeListener("dictation:event", handler);
+			};
+		},
+	},
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
@@ -199,6 +225,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		listGitHubRepos: (query: string) =>
+			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		refreshGitHubOwners: () => ipcRenderer.invoke("app:refreshGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
 		checkGitHubRepositoryAvailability: (input: { owner: string; name: string }) =>
@@ -384,8 +412,29 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Public share links, published from the share popover's Publish button.
+	// The main process reads and uploads the file; the renderer never sees
+	// the file or the token. See shared/cloud-share.ts.
+	cloudShare: {
+		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
+		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
+		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
+		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		onProgress: (listener: (progress: CloudShareProgress) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
+			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
+			};
+		},
+	},
 	cloudArtifact: {
 		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
+		/** Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it, or shows `reveal` in it. */
+		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string }) =>
+			ipcRenderer.invoke("cloudArtifact:openFolder", input) as Promise<void>,
 		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
 			ipcRenderer.on("cloudArtifact:frameNavigated", wrapped);
@@ -705,6 +754,10 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getExperimentCohort: () => ipcRenderer.invoke("appState:getExperimentCohort") as Promise<number | null>,
+		claimFirstRunExperimentExposure: () => ipcRenderer.invoke("appState:claimFirstRunExperimentExposure") as Promise<boolean>,
+		getFirstRunProjectPrompt: () => ipcRenderer.invoke("appState:getFirstRunProjectPrompt") as Promise<"pending" | "seen">,
+		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},
 	cliLink: {
 		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
@@ -769,7 +822,7 @@ const api = {
 		importAccountHost: (accountId: string, input: { hostId: string; label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:importAccountHost", accountId, input) as Promise<void>,
 		pruneAccountHosts: (accountId: string, hostIds: string[]) => ipcRenderer.invoke("remotes:pruneAccountHosts", accountId, hostIds) as Promise<void>,
-		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<string>,
+		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<{ token: string; hostKey?: string }>,
 		add: (input: { label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
 		// An edit carries only what changed: an omitted password keeps the saved
@@ -838,6 +891,23 @@ const api = {
 	cloudCp: {
 		request: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:request", init) as Promise<CloudCpProxyResponse>,
+		/**
+		 * A request with a bytes body or response (session attachments). Name it
+		 * with requestId to cancel it; main ends it after timeoutMs, and on a
+		 * reload (pagehide) every one still running is cancelled.
+		 */
+		requestBinary: (init: CloudCpProxyBinaryRequestInit) => {
+			const { requestId } = init;
+			if (requestId) binaryRequestsInFlight.add(requestId);
+			return (ipcRenderer.invoke("cloudCp:requestBinary", init) as Promise<CloudCpProxyBinaryResponse>).finally(() => {
+				if (requestId) binaryRequestsInFlight.delete(requestId);
+			});
+		},
+		/** Abort a binary request by its requestId. */
+		cancelBinary: (requestId: string) => {
+			binaryRequestsInFlight.delete(requestId);
+			ipcRenderer.send("cloudCp:cancelBinary", requestId);
+		},
 		openStream: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:openStream", init) as Promise<{ streamId: string }>,
 		closeStream: (streamId: string) => {
@@ -856,6 +926,13 @@ const api = {
 		},
 	},
 };
+
+// A reload or navigation abandons the page that asked: its uploads and
+// downloads are cancelled rather than left running in main for no one.
+window.addEventListener("pagehide", () => {
+	for (const requestId of binaryRequestsInFlight) ipcRenderer.send("cloudCp:cancelBinary", requestId);
+	binaryRequestsInFlight.clear();
+});
 
 contextBridge.exposeInMainWorld("ao", api);
 

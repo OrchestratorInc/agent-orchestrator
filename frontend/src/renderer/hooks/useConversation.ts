@@ -26,7 +26,9 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { resumeAgentErrorMessage } from "./useCanResumeAgent";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -806,10 +808,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				},
 			);
 			if (error)
-				throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
+				throw new Error(resumeAgentErrorMessage(error, response.status));
 			return data;
 		},
 		onSuccess: () => {
+			invalidate();
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+		},
+		onError: () => {
 			invalidate();
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		},
@@ -1690,13 +1696,16 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		staleTime: 30 * 1000,
 		// Local file changes arrive through the workspace event subscription below.
 		// Remote sessions use their owning daemon instead of the local event stream.
-		refetchInterval: hostId ? 30 * 1000 : false,
+		refetchInterval: (query) => hostId && !isMissingWorkspaceError(query.state.error) ? 30 * 1000 : false,
 		retry: false,
 		queryFn: async () => {
-			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
+			const missing = knownMissingWorkspace(sessionId as string, hostId);
+			if (missing) throw missing;
+			const epoch = workspaceRecoveryEpoch(sessionId as string, hostId);
+			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: sessionId as string } },
 			});
-			if (error) throw error;
+			if (error) throw recordWorkspaceResult(sessionId as string, hostId, error, response, "Unable to load workspace files", epoch);
 			return {
 				// A deleted path cannot be read, so offering it would insert a
 				// reference the agent then fails to resolve.
@@ -1727,11 +1736,12 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
-		async (attachments: { mimeType: string; data: string }[]): Promise<string[]> => {
+		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
-				body: { attachments },
+				// The daemon names staged files itself; only the bytes go.
+				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
@@ -1850,6 +1860,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
+			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {
 				resetsAt: turn.usageLimit.resetsAt ?? undefined,
 				autoResume: turn.usageLimit.autoResume,
@@ -1885,6 +1896,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 							}),
 						),
 						spansTurns: turn.plan.spansTurns || undefined,
+						superseded: turn.plan.superseded || undefined,
 					}
 				: undefined,
 			rolledBack: turn.rolledBack ?? undefined,
@@ -1983,6 +1995,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		continuation: wire.continuation || undefined,
+		authoredByUser: wire.authoredByUser || undefined,
 		streaming: wire.streaming,
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,

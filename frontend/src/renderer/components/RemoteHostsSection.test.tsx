@@ -21,7 +21,7 @@ it("keeps host-specific offline controls around shared project rows", () => {
 	/></SidebarMenu></SidebarProvider>);
 	expect(screen.getByTestId("project-box-a")).toHaveTextContent("Project A");
 	expect(screen.queryByTestId("project-box-b")).toBeNull();
-	expect(screen.queryByRole("button", { name: "Add project on Box A" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "New project on Box A" })).toBeNull();
 	expect(screen.getByText("Password rejected")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Retry Box B" }));
 	expect(onRetry).toHaveBeenCalledOnce();

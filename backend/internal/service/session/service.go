@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,12 +15,14 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -52,6 +55,7 @@ type Store interface {
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
+	ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
@@ -134,10 +138,11 @@ type CleanupOutcome struct {
 }
 
 // CleanupSkipped is one terminal session whose workspace was preserved by
-// cleanup (never force-deleted), with the user-facing reason.
+// cleanup (never force-deleted), with a stable code and the user-facing reason.
 type CleanupSkipped struct {
-	SessionID domain.SessionID `json:"sessionId"`
-	Reason    string           `json:"reason"`
+	SessionID domain.SessionID       `json:"sessionId"`
+	Code      domain.CleanupSkipCode `json:"code"`
+	Reason    string                 `json:"reason"`
 }
 
 // RestoreModeView is the API-facing restore-mode enum.
@@ -209,6 +214,7 @@ type Service struct {
 	usageArchiveFlush   func(context.Context)
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
+	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -291,7 +297,10 @@ type Deps struct {
 	// Milestones durably records the install's first spawned session, so
 	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
-	Logger     *slog.Logger
+	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
+	// nil, neither is reported from this service.
+	Delivery *deliverytelemetry.Recorder
+	Logger   *slog.Logger
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
 	// BackgroundContext owns best-effort work that must survive an HTTP request
@@ -321,7 +330,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -450,6 +459,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// Registered before Spawn writes its seed row, so a concurrent spawn that
 	// sees that row cannot take this spawn's first_for_install claim.
 	s.firstSession.begin(firstSession)
+	createdBy := s.spawnCreatedBy(ctx, cfg)
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
 	if err != nil {
 		s.firstSession.finish(s.milestones, firstSession, false)
@@ -458,7 +468,8 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown)
+	s.recordCreatedBy(ctx, rec.ID, createdBy)
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -559,16 +570,21 @@ func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeed
 	return ports.FirstForInstall(m, "session_spawned", eligible)
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool) {
+func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
 	if s.telemetry == nil {
 		return
 	}
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        string(rec.Kind),
+		"kind":        telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
+		"created_by":  string(createdBy),
+	}
+	// Absent for spawns that no client request started (schedules, intake).
+	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
+		payload["surface"] = string(surface)
 	}
 	if firstKnown {
 		payload["first_for_install"] = firstForInstall
@@ -614,7 +630,7 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":    string(rec.Kind),
+		"kind":    telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness": string(rec.Harness),
 	}
 	if !project.RegisteredAt.IsZero() {
@@ -642,7 +658,7 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	payload := map[string]any{
 		"component":   "session_service",
 		"operation":   "spawn_session",
-		"kind":        string(cfg.Kind),
+		"kind":        telemetrymeta.SessionKind(cfg.Kind, cfg.ProjectID),
 		"harness":     string(cfg.Harness),
 		"duration_ms": durationMs,
 		"error_kind":  errorKind,
@@ -697,7 +713,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 	var projectID *domain.ProjectID
 	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
 		payload["harness"] = string(rec.Harness)
-		payload["kind"] = string(rec.Kind)
+		payload["kind"] = telemetrymeta.SessionKind(rec.Kind, rec.ProjectID)
 		projectID = &rec.ProjectID
 	}
 	tags := map[string]string{"area": "agent"}
@@ -772,9 +788,13 @@ func (s *Service) SpawnOrchestrator(
 		}
 		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
+			before, live := s.liveSessionBeforeEnd(retireCtx, orch.ID)
 			_ = s.sendRetireNotice(retireCtx, orch.ID)
-			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
-				return domain.Session{}, toAPIError(err)
+			retireErr := s.manager.RetireForReplacement(retireCtx, orch.ID)
+			// A failed cleanup can follow a successful terminal transition.
+			s.recordKillOutcome(retireCtx, before, live, retireErr)
+			if retireErr != nil {
+				return domain.Session{}, toAPIError(retireErr)
 			}
 		}
 	} else {
@@ -1063,7 +1083,9 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	freed, err := s.manager.Kill(ctx, id)
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
@@ -1079,7 +1101,11 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	result, err := s.manager.RequestKill(ctx, id)
+	// Terminal intent is acknowledged even while cleanup still runs: the
+	// session has ended for the user, also when a later step then failed.
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
@@ -1136,6 +1162,85 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 		}
 	}
 	return err
+}
+
+// sessionDeleteCommander is optional so focused fakes keep implementing the
+// stable commander surface.
+type sessionDeleteCommander interface {
+	DeleteSession(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// Delete permanently removes a terminated session whose workspace is released,
+// then its artifact files; with cleanup it first releases a worktree still on
+// disk, never forced. The record goes first: a refused delete must not have
+// already thrown the artifacts away.
+func (s *Service) Delete(ctx context.Context, id domain.SessionID, cleanup bool) error {
+	deleter, ok := s.manager.(sessionDeleteCommander)
+	if !ok {
+		return apierr.NotImplemented("SESSION_DELETE_UNSUPPORTED", "Session deletion is not supported by this daemon")
+	}
+	if err := deleter.DeleteSession(ctx, id, cleanup); err != nil {
+		return toAPIError(err)
+	}
+	s.cancelTitleRefinement(id)
+	s.deleteArtifactDir(ctx, id)
+	return nil
+}
+
+// archivedSessionLister is optional so focused store fakes need not implement it.
+type archivedSessionLister interface {
+	ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error)
+}
+
+// DeleteExpired permanently deletes the archived sessions whose worktree is
+// released and that were archived more than days ago, the same way Delete
+// does. The store leaves out sessions with shared history, which the delete
+// always refuses. A session the delete refuses for now (an operation running)
+// or that is already gone is left for a later pass.
+func (s *Service) DeleteExpired(ctx context.Context, days int) error {
+	lister, ok := s.store.(archivedSessionLister)
+	if !ok || days <= 0 {
+		return nil
+	}
+	sessions, err := lister.ListReleasedArchivedSessions(ctx)
+	if err != nil {
+		return err
+	}
+	cutoff := s.now().AddDate(0, 0, -days)
+	var errs []error
+	for _, sess := range sessions {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if sess.ArchivedAt.After(cutoff) {
+			continue
+		}
+		err := s.Delete(ctx, sess.ID, false)
+		var apiErr *apierr.Error
+		if err == nil || errors.As(err, &apiErr) && (apiErr.Kind == apierr.KindConflict || apiErr.Kind == apierr.KindNotFound) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("delete expired session %s: %w", sess.ID, err))
+	}
+	return errors.Join(errs...)
+}
+
+// deleteArtifactDir removes a deleted session's artifact directory. Failures
+// are logged, not returned: the record is already gone.
+func (s *Service) deleteArtifactDir(ctx context.Context, id domain.SessionID) {
+	dir := sessionartifacts.Dir(s.dataDir, id)
+	if s.artifactDeleter == nil || dir == "" {
+		return
+	}
+	// The deleter waits out an in-flight capture, then leaves an empty
+	// directory for a restore that cannot happen now, so remove that too.
+	err := s.artifactDeleter.DeleteSession(ctx, id)
+	if err == nil {
+		err = os.Remove(dir)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) && s.logger != nil {
+		s.logger.Warn("delete artifacts of deleted session", "session", id, "err", err)
+	}
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
@@ -1333,7 +1438,7 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		out.AlreadyGone = []domain.SessionID{}
 	}
 	for _, skip := range res.Skipped {
-		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Reason: skip.Reason})
+		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Code: skip.Code, Reason: skip.Reason})
 	}
 	return out, nil
 }
@@ -1552,7 +1657,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1615,9 +1720,10 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
 	return domain.Session{
-		SessionRecord:    rec,
-		WorkspaceCleanup: cleanup,
-		StatusReadiness:  readiness,
+		SessionRecord:              rec,
+		WorkspaceCleanup:           cleanup.WorkspaceDisposition,
+		WorkspaceCleanupReportOnly: cleanup.ReportOnly,
+		StatusReadiness:            readiness,
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1639,6 +1745,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
 		return nil
@@ -1663,6 +1770,22 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
 		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+	case errors.Is(err, sessionmanager.ErrSessionNotTerminated):
+		return apierr.Conflict("SESSION_NOT_TERMINATED", "Archive the session before deleting it.", nil)
+	case errors.As(err, &cleanupRefused):
+		return apierr.Conflict("WORKSPACE_CLEANUP_REFUSED", "The worktree was kept, so the session was not deleted: "+cleanupRefused.Reason,
+			map[string]any{"code": string(cleanupRefused.Code)})
+	case errors.Is(err, sessionmanager.ErrWorkspaceNotReleased):
+		return apierr.Conflict("WORKSPACE_NOT_RELEASED",
+			"The session's worktree has not been cleaned up yet. Run `ao session cleanup` first.", nil)
+	case errors.Is(err, domain.ErrSessionHistoryShared):
+		return apierr.Conflict("SESSION_HISTORY_SHARED",
+			"This session's turns belong to a conversation that outlives it, so it cannot be deleted.", nil)
+	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
+		// A chat session whose controller stopped or never started. Same answer
+		// steer-or-send gives, so clients can offer a resume instead of a 500.
+		return apierr.Conflict("CHAT_CONTROLLER_NOT_READY",
+			"the agent controller for this session is not running", nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)
@@ -1741,6 +1864,8 @@ func mapSessionError(err error) error {
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
 		return apierr.Conflict("BRANCH_CHECKED_OUT_ELSEWHERE", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists):
+		return apierr.Conflict("BRANCH_ALREADY_EXISTS", "Choose a branch name that does not already exist locally or on a remote", nil)
 	case errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved):
 		return apierr.Invalid("DEFAULT_BRANCH_UNRESOLVED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchNotFetched):
@@ -1754,6 +1879,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrRuntimeCommandLineTooLong):
 		return apierr.Invalid("WINDOWS_COMMAND_LINE_TOO_LONG",
 			"The agent launch command exceeds the Windows size limit. Shorten the task or project instructions.", nil)
+	case errors.Is(err, ports.ErrChatPermissionModeUnsupported):
+		return apierr.Invalid("CHAT_PERMISSION_MODE_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatUnsupported):
 		var capabilityErr *ports.ChatCapabilityError
 		if errors.As(err, &capabilityErr) {
@@ -1797,6 +1924,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_CWD_MISMATCH", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceLocked):
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspacePathOccupied):
+		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -1903,7 +2032,7 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, err
 	}
-	var cleanup domain.WorkspaceDisposition
+	var cleanup domain.SessionCleanupRecord
 	if rec.IsTerminated {
 		facts, found, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
 		if err != nil {
@@ -1918,13 +2047,13 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
 }
 
-// currentWorkspaceCleanup is the teardown disposition recorded for an archived
-// session, provided the facts row belongs to its current cleanup generation.
-func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.WorkspaceDisposition {
+// currentWorkspaceCleanup is the teardown recorded for an archived session,
+// provided the facts row belongs to its current cleanup generation.
+func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.SessionCleanupRecord {
 	if found && facts.SessionGeneration == rec.CleanupGeneration {
-		return facts.WorkspaceDisposition
+		return facts
 	}
-	return ""
+	return domain.SessionCleanupRecord{}
 }
 
 // currentHeadReviewRuns reads the session's AO review passes for the Kanban

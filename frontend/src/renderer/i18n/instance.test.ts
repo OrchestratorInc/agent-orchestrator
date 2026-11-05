@@ -10,6 +10,7 @@ import {
 	jaMessages,
 	koMessages,
 	ptBRMessages,
+	ruMessages,
 	zhCNMessages,
 } from "./all-messages";
 
@@ -22,6 +23,7 @@ const allCatalogs = {
 	fr: frMessages,
 	de: deMessages,
 	"pt-BR": ptBRMessages,
+	ru: ruMessages,
 } as const;
 
 function emptyCatalogs(): TranslationCatalogs {
@@ -38,6 +40,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("fr")).toBe("fr");
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
+		expect(coerceLocale("ru")).toBe("ru");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -49,12 +52,13 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
-	it("explains side-chat restrictions as behavior while files remain shared", () => {
-		const explanation = createAppI18n("en").t("sideChat.isolationPolicy");
-		expect(explanation).toContain("Files and Git are shared");
-		expect(explanation).toContain("Read-only is behavioral");
-		expect(explanation).toContain("Sub-agent interaction is prohibited by instruction");
-		expect(explanation).not.toContain("disabled");
+	it("provides a brief side-chat description in every locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["sideChat.emptyDescription"], locale).toBeTruthy();
+		}
+		expect(createAppI18n("en").t("sideChat.emptyDescription"))
+			.toBe("Explore a quick question without interrupting the main chat.");
 	});
 
 	it("provides agent management and readiness labels for every supported locale", () => {
@@ -82,6 +86,7 @@ describe("app i18next instance", () => {
 			fr: "settings.language.fr",
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
+			ru: "settings.language.ru",
 		} as const;
 		const expected = {
 			en: "English",
@@ -92,6 +97,7 @@ describe("app i18next instance", () => {
 			fr: "Français",
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
+			ru: "Русский",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -137,6 +143,18 @@ describe("app i18next instance", () => {
 		const keys = ["pr.progress.open", "pr.progress.draft", "pr.progress.closed"] as const;
 		expect(keys.map((key) => instance.t(key, { count: 1 }))).toEqual(singular);
 		expect(keys.map((key) => instance.t(key, { count: 2 }))).toEqual(plural);
+	});
+
+	it("renders the Russian one, few, and many plural forms", () => {
+		const instance = createAppI18n("ru");
+		expect([1, 2, 5, 21, 22, 25].map((count) => instance.t("pr.progress.draft", { count }))).toEqual([
+			"1 черновик",
+			"2 черновика",
+			"5 черновиков",
+			"21 черновик",
+			"22 черновика",
+			"25 черновиков",
+		]);
 	});
 
 	it("provides Chinese copy for the remaining audited shell surfaces", () => {
@@ -197,9 +215,12 @@ describe("app i18next instance", () => {
 			if (locale === "en") continue;
 			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
-				expect(variables(catalog[key]), `${locale} placeholder mismatch for ${key}`).toEqual(
-					variables(enMessages[key]),
-				);
+				const english = variables(enMessages[key]);
+				// i18next always passes count to plural keys, so a locale may add it where English
+				// hardcodes "1" (Russian uses the one form for 21, 31, ...). It may never drop it.
+				const mayAddCount = /_(zero|one|two|few|many|other)$/.test(key) && !english.includes("count");
+				const actual = variables(catalog[key]).filter((name) => !(mayAddCount && name === "count"));
+				expect(actual, `${locale} placeholder mismatch for ${key}`).toEqual(english);
 			}
 		}
 	});

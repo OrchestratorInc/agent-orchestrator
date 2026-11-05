@@ -1,6 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { AgentAvatar } from "../AgentAvatar";
+import { Pressable } from "../ui/pressable";
 
 /**
  * Shared settings card for one agent provider. Provider identity and
@@ -45,10 +46,9 @@ export function AgentProviderGroup({
 			data-agent-provider={provider}
 		>
 			<header className="settings-row-bar">
-				{collapsible ? <button
-					type="button"
+				{collapsible ? <Pressable
 					aria-expanded={expanded}
-					className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap) rounded-sm text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+					className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap) rounded-sm disabled:cursor-default"
 					disabled={collapseLocked}
 					onClick={() => onExpandedChange(!expanded)}
 				>
@@ -57,7 +57,7 @@ export function AgentProviderGroup({
 						aria-hidden="true"
 						className={`ml-auto size-4 shrink-0 text-settings-muted transition-transform ${expanded ? "" : "-rotate-90"}`}
 					/>
-				</button> : <div className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap)">{identity}</div>}
+				</Pressable> : <div className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap)">{identity}</div>}
 				{action ? <div className="shrink-0">{action}</div> : null}
 			</header>
 			{expanded ? children : null}

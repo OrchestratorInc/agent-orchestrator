@@ -87,6 +87,11 @@ function canonicalKey(url: string, number: number): string {
 	return canonicalURL(url) || `number:${number}`;
 }
 
+/** The key that tells two observations of one pull request apart from others. */
+export function prDisplayKey(pr: { url: string; number: number }): string {
+	return canonicalKey(pr.url, pr.number);
+}
+
 function canonicalURL(rawUrl: string): string | undefined {
 	return prURL({ url: rawUrl, htmlUrl: rawUrl, mergeability: { prUrl: rawUrl } } as SessionPRSummary);
 }
@@ -308,7 +313,8 @@ function reviewStatusDetail(pr: SessionPRSummary): string {
 		case "approved": return appI18n.t("pr.review.requirementSatisfied");
 		case "changes_requested": return appI18n.t("pr.review.changesActive");
 		case "review_required": return appI18n.t("pr.review.requiredNotSubmitted");
-		case "none": return appI18n.t("pr.review.notRequired");
+		// Unresolved comments hold a PR back (the row is a warning) even with no review required.
+		case "none": return appI18n.t(pr.review.hasUnresolvedHumanComments ? "pr.review.unresolvedComments" : "pr.review.notRequired");
 	}
 }
 

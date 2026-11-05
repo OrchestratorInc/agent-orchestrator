@@ -87,4 +87,15 @@ describe("SettingsSection", () => {
 		expect(heading.parentElement).toContainElement(action);
 		expect(screen.getByTestId("machine").querySelector(".settings-grouped-rows")).not.toContainElement(action);
 	});
+
+	it("renders a title action right after the heading text, outside the card", () => {
+		render(
+			<SettingsSection title="Machine" testId="machine" grouped titleAction={<button aria-label="Copy report" type="button" />}>
+				<SettingsRow label="Row" />
+			</SettingsSection>,
+		);
+		const action = screen.getByRole("button", { name: "Copy report" });
+		expect(screen.getByRole("heading", { name: "Machine" }).nextElementSibling).toBe(action);
+		expect(screen.getByTestId("machine").querySelector(".settings-grouped-rows")).not.toContainElement(action);
+	});
 });

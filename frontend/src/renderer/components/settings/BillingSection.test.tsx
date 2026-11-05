@@ -101,11 +101,11 @@ describe("BillingSection", () => {
 		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
 		renderSection();
 		await screen.findByText("Starter");
-		expect(within(card("free")).getByText("Claude Code, Codex and Cursor")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Any supported coding agent, including Claude Code, Codex and Cursor")).toBeInTheDocument();
 		expect(within(card("free")).getByText("Unlimited local agents on your machine")).toBeInTheDocument();
 		expect(within(card("free")).getByText("No cloud agents")).toBeInTheDocument();
 		expect(within(card("free")).getByText("2 devices logged in at once")).toBeInTheDocument();
-		expect(within(card("free")).getByText("Same-network connectivity (no cloud relay)")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Connect on the same network, or from anywhere with Tailscale or the HTTPS tunnel")).toBeInTheDocument();
 		expect(within(card("free")).queryByRole("list", { name: "Cloud agents" })).not.toBeInTheDocument();
 		expect(within(card("starter")).getByText("Agents keep working when your computer sleeps")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Cloud relay for seamless connectivity across devices")).toBeInTheDocument();

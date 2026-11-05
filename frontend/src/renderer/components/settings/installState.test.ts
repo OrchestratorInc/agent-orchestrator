@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { installView, type InstallJob } from "./installState";
+import { installView, showsExistingJob, type InstallJob } from "./installState";
 
 const job = (over: Partial<InstallJob>): InstallJob => ({ target: "cloudflared", status: "idle", ...over }) as InstallJob;
 
@@ -51,5 +51,26 @@ describe("what to show while installing the connector", () => {
 			kind: "failed",
 			reason: "brew exited 1",
 		});
+	});
+
+	it("labels AO's own download as a download", () => {
+		expect(installView(job({ status: "running", method: "download" }), false)).toEqual({ kind: "downloading" });
+	});
+
+	// The next install request runs the package-manager plan, so a failed
+	// download is an offer of that route rather than a dead end.
+	it("offers the package manager after the download failed", () => {
+		expect(installView(job({ status: "failed", method: "download", error: "checksum mismatch" }), false)).toEqual({
+			kind: "fallback",
+			reason: "checksum mismatch",
+		});
+	});
+
+	it("adopts only a running job or a failed download when the panel opens", () => {
+		expect(showsExistingJob(job({ status: "running", method: "download" }))).toBe(true);
+		expect(showsExistingJob(job({ status: "failed", method: "download" }))).toBe(true);
+		expect(showsExistingJob(job({ status: "idle" }))).toBe(false);
+		expect(showsExistingJob(job({ status: "succeeded", method: "download" }))).toBe(false);
+		expect(showsExistingJob(job({ status: "failed", method: "homebrew" }))).toBe(false);
 	});
 });

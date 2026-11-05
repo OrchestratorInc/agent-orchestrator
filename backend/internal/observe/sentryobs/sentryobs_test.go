@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	sqlite3 "modernc.org/sqlite"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
@@ -35,6 +38,65 @@ func TestShouldCaptureStatus(t *testing.T) {
 		if got := ShouldCaptureStatus(status); got != want {
 			t.Fatalf("ShouldCaptureStatus(%d) = %v, want %v", status, got, want)
 		}
+	}
+}
+
+func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
+	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	fingerprint := "9999999999999999"
+	for i := 0; i < 5; i++ {
+		if !allowErrorFingerprint(fingerprint, when) {
+			t.Fatalf("event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprint(fingerprint, when) {
+		t.Fatal("sixth event in a minute was accepted")
+	}
+	if !allowErrorFingerprint(fingerprint, when.Add(time.Minute)) {
+		t.Fatal("new minute did not admit a new event")
+	}
+	for minute := 2; minute < 42; minute++ {
+		for i := 0; i < 5; i++ {
+			allowErrorFingerprint(fingerprint, when.Add(time.Duration(minute)*time.Minute))
+		}
+	}
+	if allowErrorFingerprint(fingerprint, when.Add(42*time.Minute)) {
+		t.Fatal("daily budget exceeded")
+	}
+	if !allowErrorFingerprint(fingerprint, when.Add(24*time.Hour)) {
+		t.Fatal("new day did not reset the budget")
+	}
+}
+
+func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
+	when := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	errorBudget.Lock()
+	previousDay, previousGroups := errorBudget.day, errorBudget.groups
+	errorBudget.day = when.YearDay() + when.Year()*366
+	errorBudget.groups = make(map[string]errorBudgetGroup, maxErrorFingerprintsPerDay+1)
+	for i := range maxErrorFingerprintsPerDay {
+		errorBudget.groups[fmt.Sprintf("%016x", i)] = errorBudgetGroup{}
+	}
+	errorBudget.Unlock()
+	t.Cleanup(func() {
+		errorBudget.Lock()
+		errorBudget.day, errorBudget.groups = previousDay, previousGroups
+		errorBudget.Unlock()
+	})
+	for i := range maxErrorsPerFingerprintMinute {
+		if !allowErrorFingerprint(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), when) {
+			t.Fatalf("overflow event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprint("ffffffffffffffff", when) {
+		t.Fatal("overflow bucket admitted a sixth event in the minute")
+	}
+	errorBudget.Lock()
+	count := len(errorBudget.groups)
+	group := errorBudget.groups["unknown"]
+	errorBudget.Unlock()
+	if count != maxErrorFingerprintsPerDay+1 || group.minuteCount != maxErrorsPerFingerprintMinute {
+		t.Fatalf("overflow bucket = (%d groups, %d events), want (%d groups, %d events)", count, group.minuteCount, maxErrorFingerprintsPerDay+1, maxErrorsPerFingerprintMinute)
 	}
 }
 
@@ -56,8 +118,8 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
@@ -77,8 +139,8 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
@@ -96,6 +158,66 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
+	}
+}
+
+func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	policyPath := filepath.Join(t.TempDir(), policyauthority.FileName)
+	reader := policyauthority.New(policyPath)
+	SetPolicyCheck(func(ctx context.Context) bool { return reader.EventsAllowed(ctx, true, true) })
+	writePolicy := func(eventsEnabled, productionConsent bool) {
+		t.Helper()
+		raw := fmt.Sprintf(`{"schema_version":2,"events_enabled":%t,"consent_generation":"7f80c8a9-ec67-4a16-a067-a444ffcc5cca","consent_production_enabled":%t,"updated_at":"2026-08-28T10:15:30.000Z"}`, eventsEnabled, productionConsent)
+		if err := os.WriteFile(policyPath, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture := func() {
+		CaptureError(context.Background(), errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	}
+	capture()
+	if len(transport.events) != 1 {
+		t.Fatal("missing policy did not use default on")
+	}
+	writePolicy(true, false)
+	capture()
+	if len(transport.events) != 2 {
+		t.Fatal("legacy production flag vetoed opt-in")
+	}
+	writePolicy(true, true)
+	capture()
+	if len(transport.events) != 3 {
+		t.Fatal("opt-in did not reach transport")
+	}
+	writePolicy(false, true)
+	capture()
+	if len(transport.events) != 3 {
+		t.Fatal("durable opt-out reached transport")
+	}
+}
+
+func TestCaptureRejectsPolicyReplacedDuringCheck(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	ctx := context.Background()
+	SetPolicyCheck(func(got context.Context) bool {
+		if got != ctx {
+			t.Error("capture context was not passed to the policy reader")
+		}
+		SetPolicyCheck(nil)
+		return true
+	})
+	CaptureError(ctx, errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	if len(transport.events) != 0 {
+		t.Fatal("capture entered after its policy check was replaced")
 	}
 }
 
@@ -149,8 +271,8 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	const secret = "PrivateProjectOrSession_Z9"
 	tags := map[string]string{
@@ -170,7 +292,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
 		}
-		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || event.Exception[0].Stacktrace != nil {
 			t.Fatalf("diagnostics lost: %+v", event)
 		}
 		if event.Fingerprint[0] != "0123456789abcdef" {
@@ -225,8 +347,8 @@ func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	router := chi.NewRouter()
 	router.Get("/api/v1/projects/{projectID}", func(w http.ResponseWriter, r *http.Request) {
@@ -261,8 +383,8 @@ func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	CaptureError(context.Background(), fmt.Errorf("resume session %s: %s", secret, secret), map[string]string{
 		"component": "session_service", "operation": "resume_agent", "area": "agent",
@@ -287,8 +409,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	tags := map[string]string{"operation": "http_request", "error_code": "WORKSPACE_GIT_READ_FAILED", "area": "git", "path": "/" + secret}
 	site := telemetrymeta.CurrentFailureSite()
@@ -304,9 +426,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
 		t.Fatalf("route and code fingerprint = %v, want %q", event.Fingerprint, wantGroup)
 	}
-	frames := event.Exception[0].Stacktrace.Frames
-	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureError") {
-		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	if event.Exception[0].Stacktrace != nil {
+		t.Fatalf("ordinary Go error acquired a synthetic stack: %+v", event.Exception[0].Stacktrace)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {
@@ -326,8 +447,8 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	assertRepanic := func(value string) {
 		t.Helper()
 		func() {
@@ -356,7 +477,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	default:
 		t.Fatal("background panic was not captured")
 	}
-	SetPolicyEnabled(false)
+	SetPolicyCheck(func(context.Context) bool { return false })
 	assertRepanic("private branch")
 	select {
 	case event := <-transport.events:
@@ -418,10 +539,10 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() {
-		SetPolicyEnabled(false)
+		SetPolicyCheck(nil)
 		enabled.Store(false)
 	})
-	SetPolicyEnabled(true)
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	captured := make(chan struct{})
 	go func() {
@@ -434,7 +555,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatal("provider call did not start")
 	}
 
-	SetPolicyEnabled(false)
+	SetPolicyCheck(func(context.Context) bool { return false })
 	drained := make(chan error, 1)
 	go func() { drained <- Drain(context.Background()) }()
 	select {
