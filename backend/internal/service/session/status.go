@@ -30,6 +30,37 @@ func deriveSCMStatus(prs []domain.PRFacts) domain.SessionStatus {
 	return domain.SessionStatus(contract.DeriveSCMStatus(toContractPRFacts(prs)))
 }
 
+// withReviewRunVerdicts reports each PR's review state with AO's own review
+// passes folded in: the provider's reviewDecision stays empty on a repo that
+// does not require reviews, even after AO reviewed the PR. runs only covers the
+// PR's current head, so a verdict on an older commit never applies. A pass can
+// add to the provider's decision but not hide it: an approval fills only an
+// empty decision, so it cannot clear changes requested or satisfy a review the
+// provider still requires.
+func withReviewRunVerdicts(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []domain.PRFacts {
+	approved := make(map[string]bool, len(runs))
+	changesRequested := make(map[string]bool, len(runs))
+	for _, run := range runs {
+		switch run.Verdict {
+		case domain.VerdictApproved:
+			approved[run.PRURL] = true
+		case domain.VerdictChangesRequested:
+			changesRequested[run.PRURL] = true
+		}
+	}
+	out := make([]domain.PRFacts, len(prs))
+	for i, pr := range prs {
+		switch {
+		case changesRequested[pr.URL]:
+			pr.Review = domain.ReviewChangesRequest
+		case approved[pr.URL] && (pr.Review == "" || pr.Review == domain.ReviewNone):
+			pr.Review = domain.ReviewApproved
+		}
+		out[i] = pr
+	}
+	return out
+}
+
 func toContractSessionFacts(rec domain.SessionRecord, signalCapable bool) contract.SessionFacts {
 	return contract.SessionFacts{
 		Activity:       contract.ActivityState(rec.Activity.State),

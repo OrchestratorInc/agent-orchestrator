@@ -301,6 +301,57 @@ func TestSessionList_EnrichesPRColumnsAndKeepsFallbackFacts(t *testing.T) {
 	}
 }
 
+// The per-PR summary reports the provider's decision alone, so the table and
+// JSON output must take the review state from the session list's PR facts.
+func TestSessionList_ReviewFollowsListFactsOverProviderSummary(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			if r.URL.Query().Get("active") == "false" {
+				_, _ = io.WriteString(w, `{"sessions":[]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"sessions":[
+				{"id":"demo-1","projectId":"demo","kind":"worker","activity":{"state":"idle","lastActivityAt":"2026-06-02T12:00:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"idle","prs":[{"number":3,"ci":"passing","review":"approved"}]}
+			]}`)
+		case "/api/v1/sessions/demo-1/pr":
+			_, _ = io.WriteString(w, `{"sessionId":"demo-1","prs":[{"number":3,"ci":{"state":"passing"},"review":{"decision":"none","unresolvedThreadCount":0}},{"number":4,"ci":{"state":"pending"},"review":{"decision":"review_required","unresolvedThreadCount":0}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--project", "demo", "--json")
+	if err != nil {
+		t.Fatalf("session ls --json failed: %v\nstderr=%s", err, errOut)
+	}
+	var got sessionListOutput
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode JSON: %v\noutput=%s", err, out)
+	}
+	if len(got.Data) != 1 || len(got.Data[0].PRs) != 2 {
+		t.Fatalf("entries = %#v, want one session with two PRs", got.Data)
+	}
+	if got.Data[0].PRs[0].Review != "approved" {
+		t.Fatalf("listed PR review = %q, want approved from the list facts", got.Data[0].PRs[0].Review)
+	}
+	if got.Data[0].PRs[1].Review != "review_required" {
+		t.Fatalf("summary-only PR review = %q, want the summary's decision", got.Data[0].PRs[1].Review)
+	}
+
+	out, errOut, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--project", "demo")
+	if err != nil {
+		t.Fatalf("session ls failed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "approved") {
+		t.Fatalf("table missing approved review:\n%s", out)
+	}
+}
+
 func TestSessionList_ThreadCountUnknownVersusObservedZero(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

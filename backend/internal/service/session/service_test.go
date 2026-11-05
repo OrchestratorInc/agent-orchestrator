@@ -5879,6 +5879,30 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 	}
 }
 
+func TestToSessionWithFactsAppliesAliasReviewVerdictToCanonicalPR(t *testing.T) {
+	st := newFakeStore()
+	rec := domain.SessionRecord{ID: "mer-3", ProjectID: "mer", UpdatedAt: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)}
+	oldURL := "https://github.com/AgentWrapper/agent-orchestrator/pull/5000"
+	newURL := "https://github.com/Untrivial-ai/agent-orchestrator/pull/5000"
+	prs := []domain.PRFacts{
+		{URL: oldURL, Number: 5000, Review: domain.ReviewNone, SourceBranch: "ao/mer-3/fix", TargetBranch: "main", HeadSHA: "same-head", UpdatedAt: rec.UpdatedAt},
+		{URL: newURL, Number: 5000, Review: domain.ReviewNone, SourceBranch: "ao/mer-3/fix", TargetBranch: "main", HeadSHA: "same-head", UpdatedAt: rec.UpdatedAt.Add(time.Minute)},
+	}
+	runs := []domain.CurrentHeadReviewRun{{
+		SessionID: rec.ID, Harness: "claude-code", PRURL: oldURL,
+		Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+		ID: "run-old", CreatedAt: rec.UpdatedAt,
+	}}
+
+	sess, err := (&Service{store: st}).toSessionWithFacts(context.Background(), rec, prs, runs, false, domain.SessionCleanupRecord{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.PRs) != 1 || sess.PRs[0].URL != newURL || sess.PRs[0].Review != domain.ReviewApproved {
+		t.Fatalf("deduped PRs = %+v, want the newest alias approved", sess.PRs)
+	}
+}
+
 func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T) {
 	st := newFakeStore()
 	rec := domain.SessionRecord{
