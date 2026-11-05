@@ -1037,7 +1037,7 @@ export function HumanMessage({
 					data-queued={queued ? "" : undefined}
 					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
-					<CollapsibleHumanBody messageId={message.id}>
+					<CollapsibleHumanBody stateKey={visibleMessageText}>
 						{excerptReferences.length > 0 ? (
 							<ChatAnnotationSummary
 								annotations={excerptReferences.map((excerpt) => ({

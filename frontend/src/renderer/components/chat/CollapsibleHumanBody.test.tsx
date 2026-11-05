@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("CollapsibleHumanBody", () => {
 	it("leaves a message that fits exactly as it was, with no toggle", () => {
 		renderedHeight(120);
-		render(<CollapsibleHumanBody messageId="short"><p>Short message</p></CollapsibleHumanBody>);
+		render(<CollapsibleHumanBody stateKey="short"><p>Short message</p></CollapsibleHumanBody>);
 		expect(screen.getByText("Short message")).toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 		const clip = screen.getByText("Short message").parentElement!.parentElement!;
@@ -24,13 +24,13 @@ describe("CollapsibleHumanBody", () => {
 
 	it("does not fold when only a line or two would hide", () => {
 		renderedHeight(250);
-		render(<CollapsibleHumanBody messageId="nearly"><p>Nearly long</p></CollapsibleHumanBody>);
+		render(<CollapsibleHumanBody stateKey="nearly"><p>Nearly long</p></CollapsibleHumanBody>);
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 
 	it("folds a tall message and opens and closes it", () => {
 		renderedHeight(900);
-		render(<CollapsibleHumanBody messageId="tall"><p>Long message</p></CollapsibleHumanBody>);
+		render(<CollapsibleHumanBody stateKey="tall"><p>Long message</p></CollapsibleHumanBody>);
 		const clip = screen.getByText("Long message").parentElement!.parentElement!;
 		expect(clip).toHaveAttribute("data-folded");
 		expect(clip.style.height).toBe("220px");
@@ -47,12 +47,22 @@ describe("CollapsibleHumanBody", () => {
 		expect(screen.getByRole("button", { name: "Show more" })).toHaveAttribute("aria-expanded", "false");
 	});
 
+	it("starts a remount folded, before anything measures it", () => {
+		renderedHeight(900);
+		const { unmount } = render(<CollapsibleHumanBody stateKey="handoff"><p>Handed off</p></CollapsibleHumanBody>);
+		unmount();
+		// The stored copy replacing a local echo mounts a new bubble with the same text.
+		renderedHeight(0);
+		render(<CollapsibleHumanBody stateKey="handoff"><p>Handed off</p></CollapsibleHumanBody>);
+		expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+	});
+
 	it("comes back open after a remount, as a virtualized chat does when it scrolls away", () => {
 		renderedHeight(900);
-		const { unmount } = render(<CollapsibleHumanBody messageId="remount"><p>Opened</p></CollapsibleHumanBody>);
+		const { unmount } = render(<CollapsibleHumanBody stateKey="remount"><p>Opened</p></CollapsibleHumanBody>);
 		fireEvent.click(screen.getByRole("button", { name: "Show more" }));
 		unmount();
-		render(<CollapsibleHumanBody messageId="remount"><p>Opened</p></CollapsibleHumanBody>);
+		render(<CollapsibleHumanBody stateKey="remount"><p>Opened</p></CollapsibleHumanBody>);
 		expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
 	});
 });

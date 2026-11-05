@@ -14,10 +14,23 @@ const MIN_HIDDEN_LINES = 2;
 const ANIMATION_FALLBACK_MS = 300;
 
 /**
- * Messages the reader opened. A long chat virtualizes its turns, so a bubble that
- * scrolls away remounts; it should come back the way the reader left it.
+ * What each message looked like when it last rendered, keyed by its text. A bubble
+ * remounts more often than it seems: the first message moves from the new chat page
+ * to the session, its local echo gives way to the stored copy under a new id, and a
+ * long chat virtualizes turns that scroll away. Starting from the remembered fold
+ * keeps every remount from painting at full length or closing what the reader opened.
  */
+const foldHeights = new Map<string, number>();
 const openedMessages = new Set<string>();
+/** Bounds the memory above; the oldest entries go first. */
+const REMEMBERED_MESSAGES = 200;
+
+function remember<T>(store: Map<string, T> | Set<string>, key: string, value?: T) {
+	store.delete(key);
+	if (store instanceof Set) store.add(key);
+	else store.set(key, value as T);
+	if (store.size > REMEMBERED_MESSAGES) store.delete(store.keys().next().value as string);
+}
 
 type Animation = { height: number; collapsing: boolean };
 
@@ -26,15 +39,19 @@ type Animation = { height: number; collapsing: boolean };
  * is measured from the rendered content, so pasted text, code and attachments
  * all count by the room they take. Short messages render exactly as before.
  */
-export function CollapsibleHumanBody({ messageId, children }: { messageId: string; children: ReactNode }) {
+export function CollapsibleHumanBody({ stateKey, children }: {
+	/** Stays the same across the echo-to-stored handoff; the message's visible text. */
+	stateKey: string;
+	children: ReactNode;
+}) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const clipId = useId();
 	const clip = useRef<HTMLDivElement>(null);
 	const content = useRef<HTMLDivElement>(null);
 	// The folded height in px, or undefined while the whole message fits.
-	const [foldHeight, setFoldHeight] = useState<number>();
-	const [open, setOpen] = useState(() => openedMessages.has(messageId));
+	const [foldHeight, setFoldHeight] = useState(() => foldHeights.get(stateKey));
+	const [open, setOpen] = useState(() => openedMessages.has(stateKey));
 	// Set only while a reader's toggle is animating; measurement never animates.
 	const [animation, setAnimation] = useState<Animation>();
 	const fallbackTimer = useRef<number | undefined>(undefined);
@@ -45,9 +62,13 @@ export function CollapsibleHumanBody({ messageId, children }: { messageId: strin
 		const contentNode = content.current;
 		if (!clipNode || !contentNode) return;
 		const measure = () => {
+			// Not laid out (a hidden surface): keep the remembered fold rather than guess.
+			if (contentNode.offsetHeight === 0) return;
 			const lineHeight = Number.parseFloat(getComputedStyle(clipNode).lineHeight) || 22;
 			const fold = Math.round(lineHeight * FOLD_LINES);
 			const next = contentNode.offsetHeight > fold + lineHeight * MIN_HIDDEN_LINES ? fold : undefined;
+			if (next === undefined) foldHeights.delete(stateKey);
+			else remember(foldHeights, stateKey, next);
 			setFoldHeight((current) => (current === next ? current : next));
 		};
 		measure();
@@ -55,7 +76,7 @@ export function CollapsibleHumanBody({ messageId, children }: { messageId: strin
 		const observer = new ResizeObserver(measure);
 		observer.observe(contentNode);
 		return () => observer.disconnect();
-	}, []);
+	}, [stateKey]);
 
 	const finishAnimation = useCallback(() => {
 		window.clearTimeout(fallbackTimer.current);
@@ -68,8 +89,8 @@ export function CollapsibleHumanBody({ messageId, children }: { messageId: strin
 		const clipNode = clip.current;
 		const contentNode = content.current;
 		const next = !open;
-		if (next) openedMessages.add(messageId);
-		else openedMessages.delete(messageId);
+		if (next) remember(openedMessages, stateKey);
+		else openedMessages.delete(stateKey);
 		if (reducedMotion || !clipNode || !contentNode || foldHeight === undefined) {
 			finishAnimation();
 			setOpen(next);
