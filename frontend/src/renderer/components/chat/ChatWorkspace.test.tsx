@@ -1225,6 +1225,91 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Ran lint")).toBeInTheDocument();
 	});
 
+	it("names the running step once, on the live row under the steps, with the plan under it", async () => {
+		const user = userEvent.setup();
+		const turnId = "live-turn-plan";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{
+				id: turnId, state: "running", requestedAt: at, startedAt: at,
+				plan: { steps: [
+					{ text: "Build the project", status: "in_progress" },
+					{ text: "Run the tests", status: "pending" },
+				] },
+			}],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "status", turnId, sequence: 2, revision: 0,
+					activityKind: "command", status: "completed", summary: "git status",
+					detail: { command: "git status" }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "running", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const done = screen.getByRole("button", { name: /^Checked git status/ });
+		const live = screen.getByTestId("live-working-row");
+		const plan = screen.getByRole("region", { name: "Agent plan" });
+		// The running step is on the live row only, not also as a row of its own.
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Building project$/);
+		expect(screen.getAllByText("Building project")).toHaveLength(1);
+		expect(done.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(live.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		// The live row opens onto the step's command, as its own row would.
+		expect(live).toHaveAttribute("aria-expanded", "false");
+		await user.click(live);
+		expect(live).toHaveAttribute("aria-expanded", "true");
+		expect(await screen.findByText("go build ./...")).toBeInTheDocument();
+	});
+
+	it("gives the step back its row once it finishes", () => {
+		const turnId = "live-turn-finished-step";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 3,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "build", turnId, sequence: 2, revision: 1,
+					activityKind: "command", status: "completed", summary: "go build ./...",
+					detail: { command: "go build ./..." }, createdAt: at,
+				},
+				{
+					kind: "message", id: "thinking", turnId, sequence: 3, revision: 0,
+					role: "assistant", origin: "provider", text: "The build passes.",
+					streaming: true, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByRole("button", { name: /^Built project/ })).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-row")).toBeNull();
+	});
+
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
 		const turnId = "turn-with-steer";
 		const at = "2026-08-11T10:01:00Z";

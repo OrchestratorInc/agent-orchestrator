@@ -131,6 +131,7 @@ import {
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
+	isLiveStepKind,
 	liveTaskLabel,
 	reconnectCopy,
 	type TurnOutcomeRetryControl,
@@ -4962,59 +4963,77 @@ const TurnGroup = memo(function TurnGroup({
 						item.detail?.event !== "provider.failure",
 				)
 		: undefined;
+	// The step in progress shows once, on the live row next to the loader, which
+	// opens onto its command and output; its own row joins the steps above when it
+	// finishes. A step in a subagent's tree, or one with a subagent under it, keeps
+	// its row, so the tree stays whole.
+	const liveStep =
+		currentTask &&
+		isLiveStepKind(currentTask) &&
+		!currentTask.detail?.parentProviderItemId &&
+		!(currentTask.providerItemId && group.items.some(
+			(item) => item.kind === "activity" && item.detail?.parentProviderItemId === currentTask.providerItemId,
+		))
+			? currentTask
+			: undefined;
 	// Only the run the agent is working in stays open while the turn runs; earlier
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
-	const renderRun = (run: TimelineRun) =>
-		run.kind === "activities" ? (
+	const renderRun = (run: TimelineRun) => {
+		if (run.kind !== "activities") return renderSingleRun(run);
+		const activities = run.items.filter(
+			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
+		);
+		if (activities.length === 0) return null;
+		return (
 			<ActivityRun
 				key={run.key}
 				disclosureKey={`${group.key}:${run.key}`}
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
-				activities={run.items.filter(
-					(item): item is ConversationActivity => item.kind === "activity",
-				)}
+				activities={activities}
 				live={run.key === liveRunKey}
 			/>
-		) : (
-			<TimelineItem
-				key={run.key}
-				item={run.items[0]!}
-				sessionId={sessionId}
-				apiBaseUrl={apiBaseUrl}
-				onDecide={onDecide}
-				onEditHumanMessage={onEditHumanMessage}
-				messageEdit={messageEdit}
-				onStartMessageEdit={onStartMessageEdit}
-				onUpdateMessageEdit={onUpdateMessageEdit}
-				onCancelMessageEdit={onCancelMessageEdit}
-				onAbandonEditRecovery={onAbandonEditRecovery}
-				onSubmitMessageEdit={onSubmitMessageEdit}
-				editPending={editPending}
-				editSendBlocked={editSendBlocked}
-				editRecoveryLabel={editRecoveryLabel}
-				editBusy={editBusy}
-				editError={editError}
-				branchPoints={branchPoints}
-				editableTurns={editableTurns}
-				onActivateBranch={onActivateBranch}
-				activateBranchPending={activateBranchPending}
-				activateBranchError={activateBranchError}
-				busy={busy}
-				queued={queued}
-				newHumanMessageIds={newHumanMessageIds}
-				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
-				live={group.live}
-				onRollback={
-					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
-						? () => onRollback(group.turnId as string)
-						: undefined
-				}
-				rollbackDisabled={rollbackDisabled}
-				onSelectAnnotation={onSelectAnnotation}
-			/>
 		);
+	};
+	const renderSingleRun = (run: TimelineRun) => (
+		<TimelineItem
+			key={run.key}
+			item={run.items[0]!}
+			sessionId={sessionId}
+			apiBaseUrl={apiBaseUrl}
+			onDecide={onDecide}
+			onEditHumanMessage={onEditHumanMessage}
+			messageEdit={messageEdit}
+			onStartMessageEdit={onStartMessageEdit}
+			onUpdateMessageEdit={onUpdateMessageEdit}
+			onCancelMessageEdit={onCancelMessageEdit}
+			onAbandonEditRecovery={onAbandonEditRecovery}
+			onSubmitMessageEdit={onSubmitMessageEdit}
+			editPending={editPending}
+			editSendBlocked={editSendBlocked}
+			editRecoveryLabel={editRecoveryLabel}
+			editBusy={editBusy}
+			editError={editError}
+			branchPoints={branchPoints}
+			editableTurns={editableTurns}
+			onActivateBranch={onActivateBranch}
+			activateBranchPending={activateBranchPending}
+			activateBranchError={activateBranchError}
+			busy={busy}
+			queued={queued}
+			newHumanMessageIds={newHumanMessageIds}
+			showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
+			live={group.live}
+			onRollback={
+				canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
+					? () => onRollback(group.turnId as string)
+					: undefined
+			}
+			rollbackDisabled={rollbackDisabled}
+			onSelectAnnotation={onSelectAnnotation}
+		/>
+	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
@@ -5044,6 +5063,7 @@ const TurnGroup = memo(function TurnGroup({
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
 				task={currentTask ? liveTaskLabel(currentTask) : undefined}
+				step={liveStep}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -5128,23 +5148,10 @@ const TurnGroup = memo(function TurnGroup({
 		// settles fades where it was rather than against some outer ancestor.
 		<div className={cn("relative flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}
-			{/* Both of these are current state of the turn rather than steps in it, which
-			    is why they sit at its end: a checklist that ticks itself off and a file
-			    list that grows both change while the reader watches, and at the end of a
-			    turn neither pushes anything the reader is already looking at. */}
-			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
-			{/* Changed-files review is a settled result, not live activity. Keep it
-			    below the completed assistant response and its bottom action row. */}
-			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
-				<TurnChangedFiles
-					diff={group.diff}
-					items={group.items}
-					onReview={onOpenFiles}
-					onOpenFile={onOpenFile}
-				/>
-			) : null}
-			{/* Once the turn settles the row fades away and "Worked for" takes over at
-			    the top of the turn. */}
+			{/* The live row comes straight after the steps, so the step it names sits
+			    under the work it continues, and the plan reads below it. Once the turn
+			    settles the row fades away and "Worked for" takes over at the top of the
+			    turn. */}
 			{/* popLayout lifts the leaving row out of the flow at once, so the action row
 			    that takes its place sits where it was instead of waiting for a collapse. */}
 			<AnimatePresence initial={false} mode="popLayout">
@@ -5163,6 +5170,22 @@ const TurnGroup = memo(function TurnGroup({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			{/* Both of these are current state of the turn rather than steps in it, which
+			    is why they sit at its end, under the live row: a checklist that ticks
+			    itself off and a file list that grows both change while the reader
+			    watches, and at the end of a turn neither pushes anything the reader is
+			    already looking at. */}
+			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
+			{/* Changed-files review is a settled result, not live activity. Keep it
+			    below the completed assistant response and its bottom action row. */}
+			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
+				<TurnChangedFiles
+					diff={group.diff}
+					items={group.items}
+					onReview={onOpenFiles}
+					onOpenFile={onOpenFile}
+				/>
+			) : null}
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
