@@ -71,6 +71,36 @@ func SessionPath(root, cwd, id string) (string, error) {
 	return filepath.Join(root, "chats", hex.EncodeToString(sum[:]), id, "store.db"), nil
 }
 
+// Layout selects where Cursor looks up a chat it resumes. The terminal CLI keys
+// chats by the md5 of its launch directory; `cursor-agent acp` keeps them in
+// acp-sessions/<id> and loads them by id, running tools in the requested cwd.
+// Both read the same SQLite store format.
+type Layout int
+
+const (
+	LayoutTerminal Layout = iota
+	LayoutACP
+)
+
+// ACPSessionPath matches `cursor-agent acp`'s acp-sessions/<id>/store.db layout.
+func ACPSessionPath(root, id string) (string, error) {
+	if _, err := uuid.Parse(id); err != nil || filepath.Base(id) != id {
+		return "", errors.New("invalid cursor session id")
+	}
+	root, err := providerRoot(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "acp-sessions", id, "store.db"), nil
+}
+
+func (l Layout) path(root, cwd, id string) (string, error) {
+	if l == LayoutACP {
+		return ACPSessionPath(root, id)
+	}
+	return SessionPath(root, cwd, id)
+}
+
 func providerRoot(root string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -314,15 +344,24 @@ func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
 // CopySelected additionally verifies the discovery evidence before snapshotting
 // and before publishing the completed copy. Empty evidence supports old imports.
 func CopySelected(ctx context.Context, root, source, launchCWD, expected string) (string, error) {
-	return copyWithPublisher(ctx, root, source, launchCWD, expected, nil)
+	return CopySelectedIn(ctx, LayoutTerminal, root, source, launchCWD, expected)
+}
+
+// CopySelectedIn publishes the selected copy where layout's resume looks for it.
+func CopySelectedIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string) (string, error) {
+	return copyIn(ctx, layout, root, source, launchCWD, expected, nil)
 }
 
 func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
+	return copyIn(ctx, LayoutTerminal, root, source, launchCWD, expected, publish)
+}
+
+func copyIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
 	root, err := providerRoot(root)
 	if err != nil {
 		return "", err
 	}
-	if target, found, err := PreparedCopy(ctx, root, source, launchCWD, filepath.Base(filepath.Dir(source)), expected); err != nil || found {
+	if target, found, err := PreparedCopyIn(ctx, layout, root, source, launchCWD, filepath.Base(filepath.Dir(source)), expected); err != nil || found {
 		return target, err
 	}
 	if err := checkFingerprint(ctx, root, source, expected); err != nil {
@@ -338,7 +377,7 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	if err != nil {
 		return "", err
 	}
-	target, err := SessionPath(root, launchCWD, archive.ID)
+	target, err := layout.path(root, launchCWD, archive.ID)
 	if err != nil {
 		return "", err
 	}

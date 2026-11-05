@@ -111,6 +111,10 @@ type ImportedSessionRelocation struct {
 	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
 	// provider's own path normalization, such as resolving symlinks.
 	LaunchCWD string
+	// Chat is true when the import resumes through the provider's Chat (ACP)
+	// driver rather than its terminal CLI. A provider whose two front ends keep
+	// chats in different places prepares the copy where that resume looks.
+	Chat bool
 	// SourceFingerprint is optional immutable selection evidence. An adapter
 	// that sets a discovery fingerprint must compare it with the exact native
 	// inputs it snapshots before copying, including sidecars such as a WAL.

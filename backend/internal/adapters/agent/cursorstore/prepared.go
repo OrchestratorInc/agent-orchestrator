@@ -41,6 +41,11 @@ func preparationFor(root, source, cwd, id, expected string) (preparation, error)
 // PreparedCopy reuses only a complete copy published for this exact selection.
 // Its native state may have advanced since publication and must not be replaced.
 func PreparedCopy(ctx context.Context, root, source, cwd, id, expected string) (string, bool, error) {
+	return PreparedCopyIn(ctx, LayoutTerminal, root, source, cwd, id, expected)
+}
+
+// PreparedCopyIn is PreparedCopy for the copy layout's resume path.
+func PreparedCopyIn(ctx context.Context, layout Layout, root, source, cwd, id, expected string) (string, bool, error) {
 	if expected == "" {
 		return "", false, nil
 	}
@@ -52,7 +57,7 @@ func PreparedCopy(ctx context.Context, root, source, cwd, id, expected string) (
 	if err != nil {
 		return "", false, err
 	}
-	target, err := SessionPath(root, cwd, id)
+	target, err := layout.path(root, cwd, id)
 	if err != nil {
 		return "", false, err
 	}

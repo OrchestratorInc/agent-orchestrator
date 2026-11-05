@@ -17,6 +17,10 @@ func cursorAdoptedImportOwnedElsewhere(ctx context.Context, rec domain.SessionRe
 	if source == nil || source.ResumeCwd == "" {
 		return false
 	}
+	// The prepared copy is in the terminal or ACP layout, by the session's mode.
+	if source.ResumeTranscriptPath != "" {
+		return writableTranscriptOwner(ctx, source.ResumeTranscriptPath)
+	}
 	path, err := cursorstore.SessionPath(source.ConfigDir, source.ResumeCwd, rec.Metadata.ProviderConversationID)
 	return err == nil && writableTranscriptOwner(ctx, path)
 }

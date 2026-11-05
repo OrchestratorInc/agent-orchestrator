@@ -68,11 +68,11 @@ func cursorFixture(t *testing.T, root, cwd string) string {
 	return path
 }
 
-func TestCursorImportUsesTerminalDespiteChatCapability(t *testing.T) {
+func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	path := cursorFixture(t, root, cwd)
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
-	svc := New(st, "", func(domain.AgentHarness) bool { return true })
+	svc := New(st, "", func(domain.AgentHarness) bool { return false })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
@@ -115,6 +115,79 @@ func TestCursorImportUsesTerminalDespiteChatCapability(t *testing.T) {
 	cfg.RestoreMode = ports.WorkspaceRestoreFresh
 	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
 		t.Fatalf("changed fresh-launch behavior: %v", err)
+	}
+}
+
+// ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
+// there and the terminal CLI's chat folder is left to the original.
+func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	path := cursorFixture(t, root, cwd)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
+	svc := New(st, "", func(domain.AgentHarness) bool { return true })
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan = %#v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("import = %#v, %v", results, err)
+	}
+	rec := st.sessions[0]
+	if rec.Mode != domain.SessionModeChat {
+		t.Fatalf("mode = %q, want chat", rec.Mode)
+	}
+	launch := t.TempDir()
+	ref, err := cursor.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
+		NativeSessionID:   rec.Metadata.AgentSessionID,
+		ConfigDir:         root,
+		TranscriptPath:    path,
+		SourceCWD:         cwd,
+		LaunchCWD:         launch,
+		Chat:              true,
+		SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := cursorstore.ACPSessionPath(root, rec.Metadata.AgentSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.NativeSessionID != rec.Metadata.AgentSessionID || ref.TranscriptPath != want {
+		t.Fatalf("ref = %#v, want ACP copy %s", ref, want)
+	}
+	copied, err := cursorstore.Read(context.Background(), root, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied.ID != rec.Metadata.AgentSessionID || copied.CWD != resolved || len(copied.Messages) == 0 {
+		t.Fatalf("ACP copy = %#v", copied)
+	}
+	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
+		t.Fatalf("source changed: %v", err)
+	}
+	// A retry reuses the published copy instead of making another.
+	again, err := cursor.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
+		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd,
+		LaunchCWD: launch, Chat: true, SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
+	})
+	if err != nil || again.TranscriptPath != want {
+		t.Fatalf("retry = %#v, %v", again, err)
+	}
+	// The ACP copy is not a terminal chat, so it is never offered for import.
+	files, err := discoverCursor(context.Background(), root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("native buckets = %#v, %v", files, err)
 	}
 }
 

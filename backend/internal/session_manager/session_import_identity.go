@@ -47,6 +47,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			TranscriptPath:    rec.Metadata.NativeTranscriptPath,
 			SourceCWD:         source.CWD,
 			LaunchCWD:         launchPath,
+			Chat:              domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat,
 			SourceFingerprint: source.Fingerprint,
 			DataDir:           m.dataDir,
 			Env:               maps.Clone(env),

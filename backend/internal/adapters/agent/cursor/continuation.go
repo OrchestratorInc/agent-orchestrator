@@ -55,11 +55,17 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// PrepareImportedSession copies the same native id to the launch cwd's bucket.
+// PrepareImportedSession copies the same native id to where the resume looks.
 // Cursor's direct --resume path uses process.cwd() for this lookup and creates
 // tools from the launch workspace, independently of the saved conversation graph.
+// ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
+// there instead; the terminal CLI's own chat folder never holds the copy.
 func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if path, found, err := cursorstore.PreparedCopy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
+	layout := cursorstore.LayoutTerminal
+	if r.Chat {
+		layout = cursorstore.LayoutACP
+	}
+	if path, found, err := cursorstore.PreparedCopyIn(ctx, layout, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
 		return ports.NativeSessionRef{}, err
 	} else if found {
 		return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
@@ -74,7 +80,7 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if r.SourceCWD != "" && archive.CWD != r.SourceCWD {
 		return ports.NativeSessionRef{}, errors.New("cursor source workspace changed since selection")
 	}
-	path, err := cursorstore.CopySelected(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.SourceFingerprint)
+	path, err := cursorstore.CopySelectedIn(ctx, layout, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.SourceFingerprint)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
