@@ -27,10 +27,10 @@ func newOpenCodeStore(t *testing.T) (root string, db *sql.DB) {
 			title text NOT NULL, time_updated integer NOT NULL, time_archived integer)`,
 		`CREATE TABLE message (
 			id text PRIMARY KEY, session_id text NOT NULL,
-			time_created integer NOT NULL, data text NOT NULL)`,
+			time_created integer NOT NULL, time_updated integer NOT NULL DEFAULT 0, data text NOT NULL)`,
 		`CREATE TABLE part (
 			id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
-			time_created integer NOT NULL, data text NOT NULL)`,
+			time_created integer NOT NULL, time_updated integer NOT NULL DEFAULT 0, data text NOT NULL)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {

@@ -66,26 +66,16 @@ func fakeOpenCode(dbPath string, args []string) int {
 }
 
 // storeOpenCodeExport records an export in a test opencode.db as OpenCode's
-// import does: bound to cwd, keeping message times and part contents, with
-// part timestamps set at import time.
+// import does: bound to cwd, storing each message's and part's data without
+// its ids, keeping message times, and setting part timestamps at import time.
 func storeOpenCodeExport(dbPath string, data []byte, cwd string, now int64) (string, error) {
 	var doc struct {
 		Info struct {
 			ID string `json:"id"`
 		} `json:"info"`
 		Messages []struct {
-			Info struct {
-				ID   string `json:"id"`
-				Role string `json:"role"`
-				Time struct {
-					Created int64 `json:"created"`
-				} `json:"time"`
-			} `json:"info"`
-			Parts []struct {
-				ID   string `json:"id"`
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"parts"`
+			Info  map[string]any   `json:"info"`
+			Parts []map[string]any `json:"parts"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -100,13 +90,21 @@ func storeOpenCodeExport(dbPath string, data []byte, cwd string, now int64) (str
 		return "", err
 	}
 	for _, m := range doc.Messages {
-		info, _ := json.Marshal(map[string]any{"role": m.Info.Role, "time": map[string]any{"created": m.Info.Time.Created}})
-		if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)`, m.Info.ID, doc.Info.ID, m.Info.Time.Created, string(info)); err != nil {
+		id, _ := m.Info["id"].(string)
+		created, _ := m.Info["time"].(map[string]any)["created"].(float64)
+		delete(m.Info, "id")
+		delete(m.Info, "sessionID")
+		info, _ := json.Marshal(m.Info)
+		if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`, id, doc.Info.ID, int64(created), now, string(info)); err != nil {
 			return "", err
 		}
 		for _, part := range m.Parts {
-			body, _ := json.Marshal(map[string]any{"type": part.Type, "text": part.Text})
-			if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)`, part.ID, m.Info.ID, doc.Info.ID, now, string(body)); err != nil {
+			partID, _ := part["id"].(string)
+			for _, key := range []string{"id", "sessionID", "messageID"} {
+				delete(part, key)
+			}
+			body, _ := json.Marshal(part)
+			if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`, partID, id, doc.Info.ID, now, now, string(body)); err != nil {
 				return "", err
 			}
 		}
@@ -120,6 +118,7 @@ const (
 	ocMsg2     = "msg_1aa6c8b0e002Q8d0rT4kLmNpQs"
 	ocPart1    = "prt_1aa6c8acd002aBcDeFgHiJkLmN"
 	ocPart2    = "prt_1aa6c8b0e003ZyXwVuTsRqPoNm"
+	ocPart3    = "prt_1aa6c8b0e004ToolCallPartXyZ"
 )
 
 func openCodeExportFixture(sourceDir string) string {
@@ -129,7 +128,8 @@ func openCodeExportFixture(sourceDir string) string {
 		`{"info":{"id":"` + ocMsg1 + `","sessionID":"` + ocSourceID + `","role":"user","time":{"created":1762324000001}},` +
 		`"parts":[{"id":"` + ocPart1 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg1 + `","type":"text","text":"Reply with KIWI"}]},` +
 		`{"info":{"id":"` + ocMsg2 + `","sessionID":"` + ocSourceID + `","role":"assistant","time":{"created":1762324000002},"parentID":"` + ocMsg1 + `","path":{"cwd":"` + sourceDir + `","root":"` + sourceDir + `"},"cost":0.000123456789,"tokens":{"input":12345678901}},` +
-		`"parts":[{"id":"` + ocPart2 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg2 + `","type":"text","text":"KIWI"}]}` +
+		`"parts":[{"id":"` + ocPart2 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg2 + `","type":"text","text":"KIWI"},` +
+		`{"id":"` + ocPart3 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg2 + `","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"ls"},"output":"README.md"}}]}` +
 		`]}`
 }
 
@@ -168,8 +168,8 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 	}
 	for _, stmt := range []string{
 		`CREATE TABLE session (id text PRIMARY KEY, directory text, parent_id text, time_archived integer)`,
-		`CREATE TABLE message (id text PRIMARY KEY, session_id text, time_created integer, data text)`,
-		`CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer, data text)`,
+		`CREATE TABLE message (id text PRIMARY KEY, session_id text, time_created integer, time_updated integer, data text)`,
+		`CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer, time_updated integer, data text)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -212,8 +212,25 @@ func (e fakeOpenCodeEnv) addTurn(t *testing.T, session, id string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, 1762324009999, '{"role":"user"}')`, id, session); err != nil {
+	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, 1762324009999, 1762324009999, '{"role":"user"}')`, id, session); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// editPart replaces the data of a session's part whose text or tool matches.
+func (e fakeOpenCodeEnv) editPart(t *testing.T, session, match, data string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(e.configDir, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	res, err := db.Exec(`UPDATE part SET data = ? WHERE session_id = ? AND (json_extract(data, '$.text') = ? OR json_extract(data, '$.tool') = ?)`, data, session, match, match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("edited %d parts matching %q", n, match)
 	}
 }
 
@@ -462,6 +479,31 @@ func TestPrepareImportedOpenCodeSessionHoldsTheSelectedHistory(t *testing.T) {
 	})
 }
 
+func TestNativeSessionFingerprintsCoverContent(t *testing.T) {
+	for name, edit := range map[string]func(fakeOpenCodeEnv, *testing.T){
+		// Same length as "KIWI": a count or length check would miss it.
+		"same-length text edit": func(e fakeOpenCodeEnv, t *testing.T) {
+			e.editPart(t, ocSourceID, "KIWI", `{"type":"text","text":"PEAR"}`)
+		},
+		"changed tool payload": func(e fakeOpenCodeEnv, t *testing.T) {
+			e.editPart(t, ocSourceID, "bash", `{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"ls"},"output":"MARKER.md"}}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, env := newFakeOpenCode(t)
+			r := env.relocation()
+			r.SourceFingerprint = env.fingerprint(t, ocSourceID)
+			edit(env, t)
+			if env.fingerprint(t, ocSourceID) == r.SourceFingerprint {
+				t.Fatal("edit did not change the fingerprint")
+			}
+			if _, err := p.PrepareImportedSession(context.Background(), r); err == nil || !strings.Contains(err.Error(), "scan again") {
+				t.Fatalf("edited source accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestNativeSessionFingerprintsIgnoreCopiedIdentity(t *testing.T) {
 	_, env := newFakeOpenCode(t)
 	launch := t.TempDir()
@@ -474,7 +516,7 @@ func TestNativeSessionFingerprintsIgnoreCopiedIdentity(t *testing.T) {
 	if _, err := storeOpenCodeExport(filepath.Join(env.configDir, "opencode.db"), doc, launch, 1762329999999); err != nil {
 		t.Fatal(err)
 	}
-	if source, copied := env.fingerprint(t, ocSourceID), env.fingerprint(t, target); source != copied || !strings.HasPrefix(source, "opencode-v1:2:") {
+	if source, copied := env.fingerprint(t, ocSourceID), env.fingerprint(t, target); source != copied || !strings.HasPrefix(source, "opencode-v2:2:") {
 		t.Fatalf("fingerprints %q and %q", source, copied)
 	}
 }
