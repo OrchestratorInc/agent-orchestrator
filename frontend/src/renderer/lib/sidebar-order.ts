@@ -31,6 +31,13 @@ export function applyOrder<T>(
 	return unplaced === "start" ? [...rest, ...placed] : [...placed, ...rest];
 }
 
+/** Stable partition: pinned ids first, each group keeping its incoming order. */
+export function pinnedFirst<T>(items: readonly T[], idOf: (item: T) => string, pinnedIds: readonly string[]): T[] {
+	if (pinnedIds.length === 0) return [...items];
+	const pinned = new Set(pinnedIds);
+	return [...items.filter((item) => pinned.has(idOf(item))), ...items.filter((item) => !pinned.has(idOf(item)))];
+}
+
 export type SidebarNavSession = {
 	sessionId: string;
 	projectId: string;
@@ -43,6 +50,8 @@ export type SidebarOrderInput = {
 	remoteWorkspaces?: readonly WorkspaceSummary[];
 	/** Saved drag order of the project list. */
 	projectOrder?: readonly string[];
+	/** Projects pinned to the top of the list. */
+	pinnedProjectIds?: readonly string[];
 	/** Drag order of each project's sessions, keyed by `sessionUiKey(projectId, hostId)`. */
 	sessionOrders?: Readonly<Record<string, readonly string[]>>;
 };
@@ -58,7 +67,7 @@ function listedSessions(
 
 /**
  * Every session reachable from the sidebar, in the order the sidebar shows
- * them: pinned sessions, then projects in the user's order, then remote hosts,
+ * them: pinned sessions, then projects (pinned first) in the user's order, then remote hosts,
  * then the Scratchpad. A session that appears twice (pinned and under its
  * project) counts once, at its first position. Keyboard navigation and the
  * ⌘1–9 jump both walk this list so they always agree with what is on screen.
@@ -67,6 +76,7 @@ export function buildSidebarSessionOrder({
 	workspaces,
 	remoteWorkspaces = [],
 	projectOrder = [],
+	pinnedProjectIds = [],
 	sessionOrders,
 }: SidebarOrderInput): SidebarNavSession[] {
 	const entries: SidebarNavSession[] = [];
@@ -90,7 +100,8 @@ export function buildSidebarSessionOrder({
 	for (const { workspace, session } of pinned) add(session, workspace);
 
 	const projects = workspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND);
-	for (const workspace of applyOrder(projects, (item) => item.id, projectOrder, "start")) {
+	const orderedProjects = pinnedFirst(applyOrder(projects, (item) => item.id, projectOrder, "start"), (item) => item.id, pinnedProjectIds);
+	for (const workspace of orderedProjects) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
 	}
 	for (const workspace of remoteWorkspaces) {

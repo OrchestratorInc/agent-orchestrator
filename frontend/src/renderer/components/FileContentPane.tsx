@@ -1,5 +1,6 @@
+import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -43,6 +44,8 @@ import { FileMediaPreview } from "./FileMediaPreview";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { AoDiffFile } from "./diffs/AoDiffFile";
 import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
+import { AppBrowserLinkContext } from "./AppLink";
+import { BrowserIcon } from "./icons";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
@@ -53,10 +56,6 @@ import { MermaidBlock } from "./chat/MermaidBlock";
 import { isDelimitedTextPath } from "../lib/delimited-text";
 import { VscodeGoToFileIcon } from "./icons/VscodeGoToFileIcon";
 import { isMermaidPath, isSvgPath } from "../lib/image-files";
-
-// Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
-// height with small text and icons so they do not dwarf the toolbar.
-const EDIT_ACTION_CLASS = "h-6 gap-1 px-2 text-xs";
 
 export type FileViewMode = FileDisplayMode;
 export type FileOpenOptions = { annotationRange?: FileAnnotationRange; source?: FilesSource; previousPath?: string; center?: boolean; commitSha?: string; editing?: boolean; line?: number; mode?: FileViewMode; scope?: WorkspaceDiffScope };
@@ -104,6 +103,7 @@ export function FileContentPane({
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
 	toolbarHost,
+	onEditingChange,
 }: {
 	annotation: FileAnnotationModel;
 	onOpenInCenter?: (mode: FileViewMode) => void;
@@ -132,6 +132,8 @@ export function FileContentPane({
 	 * path row; null renders none until the host mounts.
 	 */
 	toolbarHost?: HTMLElement | null;
+	/** Told whenever the file enters or leaves edit mode. */
+	onEditingChange?: (editing: boolean) => void;
 	/**
 	 * @deprecated Ignored: centre file tabs and the Files panel now share the
 	 * compact toolbar (breadcrumb + status/counts, icon mode switches).
@@ -140,6 +142,7 @@ export function FileContentPane({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
+	const openInBrowser = useContext(AppBrowserLinkContext);
 	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
 	const uiSessionId = sessionUiKey(sessionId,hostId);
  const displayModePath = source.kind === "snapshot" ? `${JSON.stringify(source)}:${path}` : path;
@@ -152,6 +155,7 @@ export function FileContentPane({
 	// the edit is saved or cancelled. No display mode switch.
 	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
+	useEffect(() => onEditingChange?.(editing), [editing, onEditingChange]);
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
@@ -164,22 +168,27 @@ export function FileContentPane({
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
+	const selectionPane = useRef<HTMLDivElement>(null);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, path, source, scope, commitSha, mode, editing, initialRequestKey, annotationRange?.requestKey]);
 	// The daemon serves workspace files by relative path only. An absolute path
 	// that reaches here was not inside the session, so say that rather than
 	// sending a request that can only fail.
 	const outsideWorkspace = source.kind === "workspace" && isAbsoluteFileReference(path ?? "");
-	const query = useQuery({
+	const queryResult = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
 		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
+	const query = { ...queryResult, data: useSelectionSnapshot(selectionPane, queryResult.data, selectionIdentity) };
 	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
-	const liveText = useQuery({
+	const liveTextResult = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
 		staleTime: 5_000,
 		refetchOnWindowFocus: true,
 	});
+
+	const liveText = { ...liveTextResult, data: useSelectionSnapshot(selectionPane, liveTextResult.data, selectionIdentity) };
 
  // Each annotation open must verify rows from this request's fresh source,
  // rather than a still-mounted pane's previous query cache.
@@ -239,13 +248,15 @@ export function FileContentPane({
 		setSaveError("");
 		try {
 			if (source.kind === "artifact") {
-				const saved = await updateSessionArtifactFile({
-					content: draft,
-					expectedFileFingerprint: detail.fileFingerprint,
-					path,
-					sessionId,
-					hostId,
-				});
+				const saved = source.save
+					? await source.save({ content: draft, expectedFileFingerprint: detail.fileFingerprint, path })
+					: await updateSessionArtifactFile({
+						content: draft,
+						expectedFileFingerprint: detail.fileFingerprint,
+						path,
+						sessionId,
+						hostId,
+					});
 				queryClient.setQueryData(sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl).queryKey, {
 					...detail,
 					content: draft,
@@ -323,8 +334,8 @@ export function FileContentPane({
 			contentTruncated: false, diff: "", diffTruncated: false, status: "unmodified", additions: 0, deletions: 0,
 			fileFingerprint: revision.revision,
 		};
-		return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-			<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
+		return <div ref={selectionPane} data-selection-toolbar-scope="" className="flex min-h-0 flex-1 flex-col overflow-auto">
+			<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
 				<span className="truncate">{path}</span>
 			</div>
@@ -353,8 +364,7 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	// A cloud PDF's bytes can't be read: the cloud bridge carries text bodies only.
-	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || (source.kind === "artifact" && !(source.cloud && fileMediaKind(path) === "pdf")) || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const markdownAvailable = canRenderMarkdown(path, detail);
@@ -431,14 +441,12 @@ export function FileContentPane({
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={label}
-					aria-selected={effectiveMode === mode}
-					className={cn("text-muted-foreground hover:text-foreground", effectiveMode === mode && "bg-interactive-active text-foreground")}
+					aria-selected={effectiveMode === mode} data-active={effectiveMode === mode} role="tab"
 					disabled={editing}
 					onClick={() => selectMode(mode)}
-					role="tab"
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					{icon}
 				</Button>
@@ -447,6 +455,9 @@ export function FileContentPane({
 		</Tooltip>
 	);
 	const pathSegments = detail.path.split("/");
+	// HTML has no Rich preview here: its rendered view is the session's Browser,
+	// which serves the live workspace file, so not for a commit or deleted file.
+	const browserPage = openInBrowser && source.kind === "workspace" && !commitSha && !detail.deleted && /\.html?$/i.test(detail.path);
 	// Mode switches and file actions share one row and one gap.
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
@@ -457,17 +468,23 @@ export function FileContentPane({
 					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
 				</div>
 			) : null}
+			{browserPage ? (
+				<Tooltip>
+					<TooltipTrigger asChild><Button aria-label={t("inspector.openInAOBrowser")} className="text-muted-foreground hover:text-foreground" onClick={() => openInBrowser(detail.path)} size="icon-sm" type="button" variant="ghost"><BrowserIcon aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+					<TooltipContent side="bottom">{t("inspector.openInAOBrowser")}</TooltipContent>
+				</Tooltip>
+			) : null}
    {onOpenInCenter ? <Tooltip><TooltipTrigger asChild><span tabIndex={editing ? 0 : undefined}><Button aria-label={t("files.openInCenter",{path:detail.path})} disabled={editing} onClick={()=>onOpenInCenter(effectiveMode)} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{editing ? t("files.finishEditingToOpen") : t("files.openInCenter",{path:detail.path})}</TooltipContent></Tooltip> : null}
 			{editing ? (
 				<div className="flex shrink-0 items-center gap-1">
-					<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
-					<Button aria-label={t("files.saveFile")} className={EDIT_ACTION_CLASS} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="sm" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
+					<Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={cancelEditing} size="xs" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
+					<Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="xs" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
 				</div>
 			) : (
 				<div className="flex shrink-0 items-center gap-0.5">
 					{editable ? (
 						<Tooltip>
-							<TooltipTrigger asChild><Button aria-label={t("files.editFile")} className="text-muted-foreground hover:text-foreground" onClick={beginEditing} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
+							<TooltipTrigger asChild><Button aria-label={t("files.editFile")} onClick={beginEditing} size="icon-sm" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-sm" /></Button></TooltipTrigger>
 							<TooltipContent side="bottom">{t("files.editFile")}</TooltipContent>
 						</Tooltip>
 					) : source.kind === "snapshot" ? (
@@ -478,11 +495,10 @@ export function FileContentPane({
 							<Button
 								aria-label={t("files.addFeedback")}
 								disabled={Boolean(newerLiveText)}
-								className="text-muted-foreground hover:text-foreground"
 								onClick={() => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint })}
 								size="icon-sm"
 								type="button"
-								variant="ghost"
+								variant="quiet"
 							>
 								<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
 							</Button>
@@ -494,7 +510,7 @@ export function FileContentPane({
 		</div>
 	);
 	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
-		<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
+		<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
 				<span className="flex min-w-0 items-center text-xs">
@@ -547,7 +563,7 @@ export function FileContentPane({
 			/>
 		);
 		return (
-			<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+			<div ref={selectionPane} data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 				{toolbarNode}
 				<EditProvider createEditor={createReviewEditor}>
 				{effectiveMode === "diff" ? (
@@ -579,7 +595,7 @@ export function FileContentPane({
 		);
 	}
 	return (
-		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+		<div ref={selectionPane} data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}

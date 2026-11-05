@@ -172,8 +172,9 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
-		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
-		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		pathWritable:          pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes:    map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		privateInstallerHomes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/installer"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
@@ -232,8 +233,9 @@ func TestPlanFor(t *testing.T) {
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
 		// cloudflared is what makes a phone reachable from outside the local
-		// network. Nothing installed it before, so a machine without it showed a
-		// normal QR that only ever worked on Wi-Fi.
+		// network. These are the package-manager fallbacks: newTestService has
+		// no downloader, so AO's own pinned copy is not on offer (see
+		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},
@@ -307,7 +309,6 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode v2 legacy route uses official installer", target: TargetOpencodeV2, goos: "linux", found: []string{"bash"},
-			wantNoticeHas: "replaces the default OpenCode 1",
 		},
 	}
 

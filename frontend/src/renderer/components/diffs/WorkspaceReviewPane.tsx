@@ -9,6 +9,8 @@ import {
 	fetchWorkspaceFileRevision,
 	filesReviewEndOfFileQueryKey,
 	invalidateWorkspaceViews,
+	isStaleWorkspaceSnapshotError,
+	sessionWorkspaceFilesQueryKey,
 	sessionWorkspaceDiffsQueryOptions,
 	workspaceErrorCode,
 	type ReviewTarget,
@@ -27,6 +29,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
+import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
@@ -582,7 +585,22 @@ export function WorkspaceReviewPane({
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, regularBatches.length, reviewSelectionKey]);
-	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
+	const staleSnapshot = patchQueries.some((query) => isStaleWorkspaceSnapshotError(query.error));
+	const staleRefreshVersion = useRef<string | undefined>(undefined);
+	const staleRefreshKey = `${hostId ?? "local"}:${sessionId}:${workspaceVersion ?? ""}`;
+	useEffect(() => {
+		if (!staleSnapshot || staleRefreshVersion.current === staleRefreshKey) return;
+		staleRefreshVersion.current = staleRefreshKey;
+		void queryClient.invalidateQueries({ queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId) });
+	}, [hostId, queryClient, sessionId, staleSnapshot, staleRefreshKey]);
+	const retryAll = () => {
+		if (staleSnapshot) {
+			staleRefreshVersion.current = undefined;
+			void queryClient.invalidateQueries({ queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId) });
+			return;
+		}
+		patchQueries.forEach((query) => void query.refetch());
+	};
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
 	const loading = patchQueries.some((query) => query.isPending);
@@ -614,22 +632,21 @@ export function WorkspaceReviewPane({
 				const isViewed = viewed.has(file.path);
 				return (
 					<div className="bg-background" key={file.path} ref={(node) => { if (node) fallbackRows.current.set(file.path, node); else fallbackRows.current.delete(file.path); }}>
-						<div className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
-							<button
+						<div data-selection-toolbar-header="" className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
+							<Pressable
 								aria-expanded={!collapsed}
 								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
-								className="flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[length:var(--font-size-base)] focus-visible:underline"
+								className="flex h-full min-w-0 flex-1 items-center gap-2 text-[length:var(--font-size-base)] focus-visible:underline"
 								onClick={() => toggleCollapsed(file)}
-								type="button"
 							>
 								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
 								<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 								<span className="truncate" title={file.path}>{file.path}</span>
 								<span className={cn("shrink-0 text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
-							</button>
+							</Pressable>
 							{onOpenFile ? (
 								<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
-									<Button aria-label={t("files.openFullFileGeneric")} className="size-6 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+									<Button aria-label={t("files.openFullFileGeneric")} className="shrink-0" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
 								</HeaderActionTooltip>
 							) : null}
 							<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
@@ -771,20 +788,19 @@ export function WorkspaceReviewPane({
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
 										<PopoverAnchor asChild>
-											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
+											<div data-selection-toolbar-header="" className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
 												<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/file-header:text-foreground", !isCollapsed && "rotate-90")} />
 												<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 												<div className="flex min-w-0 shrink items-baseline gap-3">
-													<button
+													<Pressable
 														aria-expanded={!isCollapsed}
 														aria-label={isCollapsed ? t("files.expandFile", { file: file.path }) : t("files.collapseFile", { file: file.path })}
-														className="flex min-w-0 shrink items-baseline text-left text-[length:var(--font-size-base)] outline-none focus-visible:underline"
+														className="flex min-w-0 shrink items-baseline text-[length:var(--font-size-base)] focus-visible:underline"
 														title={file.path}
-														type="button"
 													>
 														{file.path.includes("/") ? <span className="min-w-0 truncate text-muted-foreground">{file.path.slice(0, file.path.lastIndexOf("/") + 1)}</span> : null}
 														<span className="max-w-full shrink-0 truncate text-foreground">{file.path.slice(file.path.lastIndexOf("/") + 1)}</span>
-													</button>
+													</Pressable>
 													<span className="flex shrink-0 items-baseline gap-2.5 text-xs tabular-nums">
 														<span className={cn("font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
 														<span className="flex items-baseline gap-1.5 @max-[25rem]/review:hidden">
@@ -799,30 +815,30 @@ export function WorkspaceReviewPane({
 												    room; the row's own gap still separates it from the stats. */}
 												<div className="ml-auto flex shrink-0 items-center gap-1 pl-2 @max-[25rem]/review:pl-0" onClick={(event) => event.stopPropagation()}>
 													<div className="flex items-center gap-1">
-              {onOpenFile && target.source?.kind === "snapshot" ? <HeaderActionTooltip label={t("files.readOnlySnapshot")}><span className="@max-[25rem]/review:hidden" tabIndex={0}><Button aria-label={t("files.editFile")} disabled className="size-6" size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></HeaderActionTooltip> : null}
+              {onOpenFile && target.source?.kind === "snapshot" ? <HeaderActionTooltip label={t("files.readOnlySnapshot")}><span className="@max-[25rem]/review:hidden" tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-xs" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></HeaderActionTooltip> : null}
 														{onOpenFile && !target.source && file.editable && file.fileFingerprint ? (
 															<HeaderActionTooltip label={t("files.editFile")}>
-																<Button aria-label={t("files.editFile")} className="@max-[25rem]/review:hidden size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { editing: true, mode: "file", scope })} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.editFile")} className="@max-[25rem]/review:hidden" onClick={() => onOpenFile(file.path, { editing: true, mode: "file", scope })} size="icon-xs" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														{onOpenFile ? (
 															<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
-																<Button aria-label={t("files.openFullFileGeneric")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														{onOpenFile && canOpenInCenter ? (
 															<HeaderActionTooltip label={t("files.openDiffInCenter")}>
-																<Button aria-label={t("files.openDiffInCenter")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff", center:true })} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.openDiffInCenter")} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff", center:true })} size="icon-xs" type="button" variant="quiet"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														<HeaderActionTooltip label={t("files.addFeedback")}>
-															<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationActive} className={cn("@max-[25rem]/review:hidden size-6 text-muted-foreground hover:text-foreground", fileAnnotationActive && "bg-interactive-active text-foreground")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" type="button" variant="ghost"><MessageSquarePlus aria-hidden="true" className="size-icon-sm" /></Button>
+															<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationActive} className="@max-[25rem]/review:hidden" onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-xs" type="button" variant="quiet"><MessageSquarePlus aria-hidden="true" className="size-icon-sm" /></Button>
 														</HeaderActionTooltip>
 													</div>
 													<DropdownMenu>
 														<HeaderActionTooltip label={t("files.moreFileActions")}>
 															<DropdownMenuTrigger asChild>
-																<Button aria-label={t("files.moreFileActions")} className="hidden size-6 text-muted-foreground hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground @max-[25rem]/review:inline-flex" size="icon-sm" type="button" variant="ghost"><MoreVertical aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.moreFileActions")} className="hidden @max-[25rem]/review:inline-flex" size="icon-xs" type="button" variant="quiet"><MoreVertical aria-hidden="true" className="size-icon-sm" /></Button>
 															</DropdownMenuTrigger>
 														</HeaderActionTooltip>
 														<DropdownMenuContent
@@ -885,7 +901,7 @@ export function WorkspaceReviewPane({
 						style={{ height: "100%" }}
 					/>
 				) : null}
-				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
+				<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 			</div>
 				</>
 			)}

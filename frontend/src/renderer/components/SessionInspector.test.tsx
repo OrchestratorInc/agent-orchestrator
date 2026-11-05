@@ -36,6 +36,8 @@ const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.
     cloudCpMock: {
       cancelSessionReviews: vi.fn(),
       getSessionReviewState: vi.fn(),
+      // Pending unless a test answers: most suites never read a Cloud files count.
+      getWorkspaceReview: vi.fn(() => new Promise(() => {})),
       inspectSessionReviewerHarnesses: vi.fn(),
       installSessionReviewerHarness: vi.fn(),
       listChatEvents: vi.fn(),
@@ -778,7 +780,7 @@ describe("SessionInspector PR section", () => {
         (client) => {
           client.setQueryData(settingsQueryKey, {
             defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
-            cloudOffering: true, cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
+            cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
           });
           client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
         },
@@ -1757,6 +1759,46 @@ describe("SessionInspector Activity section", () => {
       .getByText("Idle")
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+  });
+
+  it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5134, state, { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Conflict")).not.toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
+  it.each(["open", "draft"] as const)("keeps a %s PR's conflict and requested changes beside a clean closed PR", (state) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(7, state, { mergeability: "conflicting", review: "changes_requested" }), pr(8, "closed", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+    expect(within(activityRow).getByText("Changes Requested")).toBeInTheDocument();
   });
 
   it("timestamps the live Activity state so it participates in chronological ordering", () => {
@@ -4268,6 +4310,27 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  it("surfaces the stored reason of a failed manual review", async () => {
+    const failedManualReview = {
+      ...failedReview,
+      triggerSource: "manual",
+      body: "launch reviewer: reviewer replace stale pane: no such session",
+    };
+    mockCommonGets([], "", [
+      {
+        ...reviewState(3, "needs_review", "abc123"),
+        latestRun: failedManualReview,
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+    );
+  });
+
   it("hides Reviews and the review preference when the session has no PR", async () => {
     mockCommonGets();
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
@@ -4339,6 +4402,61 @@ describe("SessionInspector Cloud reviews", () => {
     expect(await screen.findByText("make setup")).toBeInTheDocument();
     expect(screen.queryByText("make old")).not.toBeInTheDocument();
     expect(screen.queryByText("make teardown")).not.toBeInTheDocument();
+  });
+  it.each([
+    { who: "the owner", shared: false },
+    { who: "a guest", shared: true },
+  ])("shows $who a shared session's pull request, leaving managing it to the owner", async ({ shared }) => {
+    const readyPR = prSummary(7, "open", { headSha: "abc123" });
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({
+      sessionId: "sess-1",
+      pullRequests: [{ url: readyPR.url, number: 7, state: "open", updatedAt: "2026-06-15T00:00:00Z" }],
+    });
+    cloudCpMock.getSessionReviewState.mockResolvedValue({
+      sessionId: "sess-1",
+      reviewerHarness: "claude-code",
+      availableReviewerHarnesses: ["claude-code"],
+      reviews: [{ pullRequestUrl: readyPR.url, pullRequestNumber: 7, title: "PR 7", targetSha: "abc123", status: "needs_review" }],
+      runs: [],
+    });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { cloud: { orgId: "cloud-org-1", ...(shared ? { shared: true } : {}) } })} />,
+      undefined,
+      (client) => {
+        client.setQueryData(settingsQueryKey, {
+          defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
+          cloudEnabled: true, cloudControlPlaneUrl: "https://cloud.example.test",
+        });
+        client.setQueryData(["cloud-session-scm-summary", "https://cloud.example.test", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
+      },
+    );
+
+    // Everyone sees the pull request.
+    expect(screen.getByText("PR 7")).toBeInTheDocument();
+    if (shared) {
+      expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Ask the owner to merge #7" })).toBeInTheDocument();
+      expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Ask the owner to merge #7" })).not.toBeInTheDocument();
+      expect(screen.getByText("Session controls")).toBeInTheDocument();
+    }
+
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    await waitFor(() => expect(cloudCpMock.getSessionReviewState).toHaveBeenCalled());
+    await screen.findByText("Review controls");
+    if (shared) {
+      await waitFor(() => expect(screen.queryByText("Loading reviews...")).not.toBeInTheDocument());
+      expect(screen.queryByRole("switch", { name: "Auto review" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Select reviewer agent" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^(run review|review latest commit)$/i })).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByRole("switch", { name: "Auto review" })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Select reviewer agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^(run review|review latest commit)$/i })).toBeInTheDocument();
+    }
+    expect(cloudCpMock.triggerSessionReviews).not.toHaveBeenCalled();
   });
   it("does not report an already-reviewed commit while a cloud review handle is pending", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
@@ -4684,6 +4802,30 @@ describe("SessionInspector Cloud reviews", () => {
       handleId: "cloud-reviewer-7",
       harness: "claude-code",
     });
+  });
+  it("does not ask a waking session's absent worker for its files count", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
+    cloudCpMock.getWorkspaceReview.mockResolvedValue({
+      workspaceVersion: "v1", files: [], truncated: false, commits: [],
+      sections: { staged: [], unstaged: [], untracked: [], committed: [] },
+      summary: { files: 2, additions: 3, deletions: 1 },
+    });
+    try {
+      const waking = session([], { cloud: { orgId: "org-1" }, runtimeConnected: false });
+      const view = renderWithQuery(<SessionInspector session={waking} />);
+      await waitFor(() => expect(cloudCpMock.listChatEvents).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(cloudCpMock.getWorkspaceReview).not.toHaveBeenCalled();
+      // Its worker is back: the count is read.
+      view.rerender(
+        <QueryClientProvider client={view.queryClient}>
+          <TooltipProvider><SessionInspector session={{ ...waking, runtimeConnected: true }} /></TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(cloudCpMock.getWorkspaceReview).toHaveBeenCalledWith("org-1", "sess-1"));
+    } finally {
+      cloudCpMock.getWorkspaceReview.mockReset().mockImplementation(() => new Promise(() => {}));
+    }
   });
 });
 

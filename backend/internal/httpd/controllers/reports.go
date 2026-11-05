@@ -48,7 +48,7 @@ func (c *ReportsController) list(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := reader.ListProject(r.Context(), projectID)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "REPORT_LIST_FAILED", "Unable to list reports")
 		return
 	}
 	response := ListReportsResponse{Reports: make([]ReportResponse, len(records))}
@@ -87,7 +87,7 @@ func (c *ReportsController) create(w http.ResponseWriter, r *http.Request) {
 		Note: req.Note, Message: req.Message, Outputs: outputs,
 	})
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "REPORT_CREATE_FAILED", "Unable to create report")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, CreateReportResponse{ID: rec.ID})

@@ -36,6 +36,18 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the first run experiment variants and prompt actions", async () => {
+		for (const variant of ["prompt", "control"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
+		}
+		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
+		}
+		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
+		}
+	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
@@ -151,23 +163,10 @@ describe("telemetry sanitizers", () => {
 		expect(isDeniedEvent("ao.app.active", ["", "  ", "*"])).toBe(false);
 	});
 
-	it("allowlists only counts and the fixed agent-id list on agent inventory", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.agents_available", {
-			installed_count: 2,
-			authorized_count: 1,
-			supported_count: 23,
-			authorized_agents: "claude-code,codex",
-			// Must be dropped: never part of the contract, and a future caller could
-			// pass a path or a label by mistake.
-			binary_path: "/Users/someone/.local/bin/codex",
-			label: "Codex (someone's machine)",
-		});
-		expect(safe).toEqual({
-			installed_count: 2,
-			authorized_count: 1,
-			supported_count: 23,
-			authorized_agents: "claude-code,codex",
-		});
+	it("keeps setup signals and bounded inventory details", async () => {
+		expect(await sanitizeRendererProperties("ao.agents.missing", { reason: "none_installed", path: "/private/bin" })).toEqual({ reason: "none_installed" });
+		expect(await sanitizeRendererProperties("ao.agents.install_clicked", { agent: "codex", method: "/private/bin" })).toEqual({ agent: "codex" });
+		expect(await sanitizeRendererProperties("ao.renderer.agents_available", { installed_count: 2, supported_count: 4, path: "/private/bin" })).toEqual({ installed_count: 2, supported_count: 4 });
 	});
 
 	it("allowlists only enum-like fields on update events", async () => {
@@ -364,6 +363,40 @@ describe("telemetry sanitizers", () => {
 			platform: "darwin",
 			telemetry_schema_version: 2,
 		});
+	});
+
+	it("stamps the install context with the daemon's property names", () => {
+		const context = buildTelemetryContext("1.2.3", "darwin", "stable", {
+			arch: "arm64",
+			osVersion: "15.1.2",
+			installSource: "brew-cask",
+			installedAt: "2026-10-20",
+			isCi: false,
+			isContainer: false,
+		});
+		expect(context).toMatchObject({
+			arch: "arm64",
+			$os_version: "15.1.2",
+			install_source: "brew-cask",
+			installed_at: "2026-10-20",
+			is_ci: false,
+			is_container: false,
+			release_channel: "stable",
+			client: "desktop",
+		});
+		expect(context).not.toHaveProperty("ci_signal");
+		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, isContainer: true })).toMatchObject({
+			is_ci: true,
+			is_container: true,
+		});
+		// Without a context (older main process) nothing is invented.
+		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");
+	});
+
+	it("stamps the shared experiment cohort only when the main process knows it", () => {
+		expect(buildTelemetryContext("1.2.3", "darwin", "stable", undefined, 0)).toMatchObject({ experiment_cohort: 0 });
+		expect(buildTelemetryContext("1.2.3", "darwin", "stable", undefined, 57)).toMatchObject({ experiment_cohort: 57 });
+		expect(buildTelemetryContext("1.2.3", "darwin")).not.toHaveProperty("experiment_cohort");
 	});
 
 	it("uses v2 PostHog event names for streams that have noisy legacy producers", () => {
@@ -581,10 +614,12 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
-	it("keeps only the source enum on orchestrator_spawn events", async () => {
+	it("keeps bounded spawn source and typed failure fields", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
 			project_id: "demo-project",
 			source: "board",
+			provider_kind: "local",
+			spawn_reason: "board",
 		});
 		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "source"]);
 		expect(props.source).toBe("board");
@@ -594,6 +629,22 @@ describe("telemetry sanitizers", () => {
 			source: "/Users/alice/private",
 		});
 		expect(badSource).not.toHaveProperty("source");
+		const failure = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
+			source: "settings", provider_kind: "remote", error_code: "PROJECT_NOT_FOUND", http_status: 404,
+			request_id: "private", message: "private", project_id: "demo-project",
+		});
+		expect(failure).toMatchObject({ source: "settings", error_code: "PROJECT_NOT_FOUND", http_status: 404 });
+		expect(failure).not.toHaveProperty("provider_kind");
+		expect(failure).not.toHaveProperty("spawn_reason");
+		expect(failure).not.toHaveProperty("request_id");
+		expect(failure).not.toHaveProperty("message");
+		const cloud = await sanitizeRendererProperties("ao.renderer.cloud_orchestrator_spawn_succeeded", {
+			project_id: "cloud-project", provider_kind: "cloud", spawn_reason: "sidebar", sandbox_id: "private",
+		});
+		expect(cloud).toHaveProperty("project_id_hash");
+		expect(cloud).not.toHaveProperty("provider_kind");
+		expect(cloud).not.toHaveProperty("spawn_reason");
+		expect(cloud).not.toHaveProperty("sandbox_id");
 	});
 
 	it("keeps every whitelisted spawn source (the shared ORCHESTRATOR_SPAWN_SOURCES list)", async () => {

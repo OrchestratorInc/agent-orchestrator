@@ -37,6 +37,12 @@
 						"NSPrivacyCollectedDataTypeLinked": false,
 						"NSPrivacyCollectedDataTypeTracking": false,
 						"NSPrivacyCollectedDataTypePurposes": ["NSPrivacyCollectedDataTypePurposeAppFunctionality"]
+					},
+					{
+						"NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeCrashData",
+						"NSPrivacyCollectedDataTypeLinked": true,
+						"NSPrivacyCollectedDataTypeTracking": false,
+						"NSPrivacyCollectedDataTypePurposes": ["NSPrivacyCollectedDataTypePurposeAppFunctionality"]
 					}
 				]
 			},
@@ -67,6 +73,7 @@
 		},
 		"plugins": [
 			"expo-router",
+			"@sentry/react-native/expo",
 			"./plugins/withCircleDashedCheck",
 			[
 				"expo-navigation-bar",

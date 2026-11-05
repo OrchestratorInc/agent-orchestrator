@@ -78,7 +78,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -92,6 +92,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	modelHostId?: string;
 	reviewerWarning?: (agent: string) => string | null;
 	autoReviewDescription?: string;
+	/** The issue intake row's description, for an intake with rules of its own. */
+	intakeDescription?: string;
 	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	saveUnchanged?: boolean;
@@ -190,7 +192,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						</div>)}
 						<button type="button" className="flex items-center gap-1 px-3 py-2 text-xs text-settings-muted hover:text-settings-label" onClick={() => patch({ symlinks: [...(draft.symlinks ?? []), ""] })}><Plus className="size-icon-sm" aria-hidden="true" />{t("settings.project.addSymlink")}</button>
 					</ProjectSettingsSection>
-					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
+					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
 						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}

@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionFileTabState } from "../lib/session-file-tabs";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { Pressable } from "./ui/pressable";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
 function basename(path: string): string {
@@ -58,31 +58,26 @@ export function SessionFileTab({
 	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
 	// to the cross on hover.
 	const closeAction = (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<button
-					aria-label={t("files.closeTab", { name })}
-					className={terminalTabActionClassName}
-					onClick={(event) => {
-						event.stopPropagation();
-						onClose();
-					}}
-					type="button"
-				>
-					{dirty ? (
-						<>
-							<span
-								aria-hidden="true"
-								className="size-2 rounded-full bg-foreground group-hover:hidden group-focus-within:hidden"
-								data-testid="unsaved-tab-indicator"
-							/>
-							<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-focus-within:block" />
-						</>
-					) : <X className="size-icon-sm" aria-hidden="true" />}
-				</button>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{t("files.closeTab", { name })}</TooltipContent>
-		</Tooltip>
+		<Pressable
+			aria-label={t("files.closeTab", { name })}
+			className={terminalTabActionClassName}
+			onClick={(event) => {
+				event.stopPropagation();
+				onClose();
+			}}
+			type="button"
+		>
+			{dirty ? (
+				<>
+					<span
+						aria-hidden="true"
+						className="size-2 rounded-full bg-foreground group-hover:hidden group-has-[:focus-visible]:hidden"
+						data-testid="unsaved-tab-indicator"
+					/>
+					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
+				</>
+			) : <X className="size-icon-sm" aria-hidden="true" />}
+		</Pressable>
 	);
 	return (
 		<TerminalTabFrame

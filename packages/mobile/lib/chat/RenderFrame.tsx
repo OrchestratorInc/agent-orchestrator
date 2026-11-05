@@ -2,6 +2,7 @@ import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { authHeaders, httpBase } from "../config";
@@ -11,28 +12,11 @@ import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { space, type } from "../tokens";
-import {
-	RENDER_BRIDGE_SCRIPT,
-	RENDER_ZOOM_SCRIPT,
-	REPORT_SETTLE_LIMIT_MS,
-	clampRenderHeight,
-	initialRenderHeight,
-	isRenderPageLoad,
-	readRenderBridgeMessage,
-	rememberRenderHeight,
-	rememberedRenderHeight,
-	renderFrameLive,
-	renderTheme,
-	renderThemeFragment,
-	renderThemeScript,
-	renderViewerStyleScript,
-	subscribeRenderViewport,
-	type RenderDisplayMode,
-	type RenderRef,
-	type RenderTheme,
-} from "./renderFrameModel";
+import { ARTIFACT_FRAME_HEIGHT, clampRenderHeight, initialRenderHeight, isRenderPageLoad, readRenderBridgeMessage, rememberedRenderHeight, rememberRenderHeight, RENDER_BRIDGE_SCRIPT, RENDER_ZOOM_SCRIPT, type RenderDisplayMode, renderFrameLive, type RenderRef, renderTheme, type RenderTheme, renderThemeFragment, renderThemeScript, renderViewerStyleScript, REPORT_SETTLE_LIMIT_MS, subscribeRenderViewport, withRenderTheme } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
+import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
+import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
 
 startRenderHeightStore();
 
@@ -51,7 +35,8 @@ const SKELETON_DELAY_MS = 250;
 const LEAVE_RANGE_DELAY_MS = 400;
 const VIEWER_STYLE_SCRIPT = renderViewerStyleScript(space.xl);
 
-function useRenderTheme(): RenderTheme {
+/** The app's theme as a page's variables; the artifact viewer posts it into inlined pages too. */
+export function useRenderTheme(): RenderTheme {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return useMemo(() => renderTheme(t, scheme === "light" ? "light" : "dark"), [t, scheme]);
@@ -63,8 +48,10 @@ function useRenderTheme(): RenderTheme {
  * opaque origin. Theme rides in the fragment for first paint and is posted
  * after, so the page never reloads.
  */
-function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed }: {
+function RenderDocument({ path, html, displayMode, onHeight, onReady, onGone, onFailed }: {
 	path: string;
+	/** The page itself, loaded from memory instead of `path` (an inlined artifact). */
+	html?: string;
 	displayMode: RenderDisplayMode;
 	onHeight?: (height: number) => void;
 	onReady: () => void;
@@ -85,13 +72,14 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
 	const fullscreen = displayMode === "fullscreen";
 	// A stable source: a new object each render would make the WebView re-check it.
-	const source = useMemo(() => uri && config ? { uri, headers: authHeaders(config) } : undefined, [uri, config]);
+	// A page from memory has no fragment, so the theme is written into it for first paint.
+	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [theme]);
 
-	if (!uri || !source) return null;
+	if (!source || (!html && !uri)) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
 			ref={web}
@@ -104,7 +92,7 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 				else if (message?.type === "link" && fullscreen && Date.now() - lastTouch.current < LINK_TAP_WINDOW_MS) void Linking.openURL(message.url);
 			}}
 			// Only the page itself loads in the frame; a frame inside the page may load its own.
-			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || isRenderPageLoad(request.url, uri)}
+			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || (html ? /^(about:|data:)/.test(request.url) : Boolean(uri) && isRenderPageLoad(request.url, uri!))}
 			onLoadEnd={() => {
 				loaded.current = true;
 				web.current?.injectJavaScript(renderThemeScript(themeRef.current));
@@ -194,10 +182,20 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
  * of inlined images, and a thread can carry many. Out of range, a placeholder
  * keeps the page's last height so the thread does not jump when it returns.
  */
-export const RenderFrame = memo(function RenderFrame({ render }: { render: RenderRef }) {
+export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
+	render: RenderRef;
+	/**
+	 * Set for an HTML artifact the agent reported: the frame keeps
+	 * ARTIFACT_FRAME_HEIGHT rather than the page's measured height, and a tap
+	 * opens the artifact viewer (with its menu, history and comments) rather
+	 * than the page on its own.
+	 */
+	artifact?: { sessionId: string; path: string };
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config, currentHostId, sessions } = useApp();
+	const router = useRouter();
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
@@ -206,6 +204,13 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
 	const [expanded, setExpanded] = useState(false);
+	// An artifact page is read with the files it links inlined, and only
+	// while its frame is in range; the file's version re-reads a rewrite.
+	const version = artifact ? sessions?.find((session) => session.id === artifact.sessionId)?.artifacts?.find((file) => file.path === artifact.path)?.updatedAt : undefined;
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, config, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version, limits: FRAME_PAGE_LIMITS });
+	// The skeleton covers the frame until the inlined page is ready; if inlining
+	// fails the page loads from its URL instead.
+	const awaitingInline = Boolean(artifact) && !inlined.html && !inlined.failed;
 	// Sized on this device already: by a report this mount, or one saved earlier.
 	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
 	const liveRef = useRef(live);
@@ -274,23 +279,27 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		</Pressable>;
 	}
 
-	const height = clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
+	const height = artifact ? ARTIFACT_FRAME_HEIGHT : clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
-		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
+		{width && live && !awaitingInline ? <RenderDocument key={page.mount} path={render.path} html={inlined.html} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
 		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} delayMs={measured ? SKELETON_DELAY_MS : 0} /> : null}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`Expand ${render.title}`}
-			onPress={() => { haptics.tap(); setExpanded(true); }}
+			accessibilityLabel={artifact ? `Open ${render.title}` : `Expand ${render.title}`}
+			onPress={() => {
+				haptics.tap();
+				if (artifact) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: artifact.sessionId, path: artifact.path, hostId: currentHostId ?? undefined } });
+				else setExpanded(true);
+			}}
 			style={StyleSheet.absoluteFill}
 		>
 			<View style={styles.expandChip}><Feather name="maximize" size={13} color={t.textSecondary} /></View>
 		</Pressable>
-		<RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />
+		{artifact ? null : <RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />}
 	</View>;
-}, (previous, next) => sameRender(previous.render, next.render));
+}, (previous, next) => sameRender(previous.render, next.render) && previous.artifact?.sessionId === next.artifact?.sessionId && previous.artifact?.path === next.artifact?.path);
 
 /** The timeline re-reads each row on every update; the same page must not re-render. */
 function sameRender(a: RenderRef, b: RenderRef): boolean {

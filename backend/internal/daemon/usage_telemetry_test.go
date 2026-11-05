@@ -23,6 +23,7 @@ func (i *usageTestIdentity) OptedOut() bool                                 { re
 func (i *usageTestIdentity) ExportSuppressed() bool                         { return i.optedOut || i.suppressed }
 func (*usageTestIdentity) SetCloudUserID(context.Context, string) error     { return nil }
 func (*usageTestIdentity) MarkInstalledEvent(context.Context) (bool, error) { return false, nil }
+func (*usageTestIdentity) MarkFirstOpenEvent(context.Context) (bool, error) { return false, nil }
 func (*usageTestIdentity) SetGitHubLogin(string)                            {}
 
 type usageTestSink struct{ events []ports.TelemetryEvent }

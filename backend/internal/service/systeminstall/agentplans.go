@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -237,7 +238,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{manualPlan(target, "fx publishes this installer for macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetOMP:
-		official := s.officialByOS(target, "https://omp.sh/install", "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, ompInstallScriptURL, "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrew(target, "can1357/tap/omp"), s.planBun(target), official}
 		} else {
@@ -293,10 +294,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	}
 	for index := range plans {
 		plans[index].DocsURL = agentDocumentationURLs[target]
-		if target != TargetOpencodeV2 || plans[index].Method != "npm" {
-			plans[index].Notice = installNotice(target)
-		}
 		plans[index] = s.planForOperation(plans[index], operation)
+		if target == TargetOpencodeV2 {
+			plans[index] = s.isolateOpenCodeV2(plans[index])
+		}
 	}
 	return plans
 }
@@ -311,7 +312,7 @@ func (s *Service) resolveAgentMethod(target Target, method string) (Plan, error)
 
 func (s requestPlanner) resolveAgentMethod(target Target, method string, operation AgentOperation) (Plan, error) {
 	for _, plan := range s.agentMethodPlans(target, operation) {
-		if plan.Method != method {
+		if plan.ownershipMethod() != method {
 			continue
 		}
 		if plan.Unsupported {
@@ -372,11 +373,18 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
-		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method {
-			managed := plan
+		if record, ok := s.readManagedRecord(plan.Target); ok && s.managedRecordMatchesPlan(record, plan) {
+			managed := s.planManagedOMP(plan, record.Version)
+			if managed.Unsupported {
+				return managed
+			}
+			script := installScript
+			if managed.Script != nil {
+				script = managed.Script
+			}
 			// A release the vendor's installer put there is reinstalled with
 			// that installer (for a Codex cask, its official one, not brew).
-			if script, ok := s.officialManagedScript(plan, installScript); ok {
+			if script, ok := s.officialManagedScript(managed, script); ok {
 				managed.Script = script
 			}
 			if s.managedEligible(managed) {
@@ -415,6 +423,13 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	}
 
 	if operation == AgentOperationUpdate {
+		plan = s.planManagedOMP(plan, "")
+		if plan.Unsupported {
+			return plan
+		}
+		if plan.Script != nil {
+			installScript, plan.Script = plan.Script, nil
+		}
 		switch plan.Method {
 		case "homebrew":
 			// A cask whose upgrade would delete files running sessions load is
@@ -486,6 +501,31 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	}
 
 	return plan
+}
+
+// planManagedOMP discloses the standalone installer before a Bun-owned OMP
+// update or managed reinstall is approved. New OMP releases may require a
+// newer Bun; the isolated binary avoids changing the working copy's runtime.
+func (s requestPlanner) planManagedOMP(plan Plan, pin string) Plan {
+	if plan.Target != TargetOMP || plan.Method != "bun" || s.managedRoot == "" || (s.goos != "darwin" && s.goos != "linux") {
+		return plan
+	}
+	standalone := s.planShellInstaller(TargetOMP, ompInstallScriptURL, "sh")
+	standalone.sourceMethod, standalone.sourcePackage = plan.Method, plan.Package
+	standalone.DocsURL, standalone.Notice = plan.DocsURL, plan.Notice
+	if standalone.Unsupported {
+		return standalone
+	}
+	recipe, ok := s.officialManagedRecipeFor(standalone)
+	if !ok {
+		standalone.Unsupported = true
+		standalone.Reason = "OMP's standalone installer is unavailable."
+		return standalone
+	}
+	dir := filepath.Join(s.managedTargetDir(TargetOMP), "versions", "<next>")
+	standalone.Script.Args = recipe.args(dir, pin)
+	standalone.ExpectedDestination = filepath.Join(dir, recipe.binRel)
+	return standalone
 }
 
 // vendorUpdateCommands are the harnesses' own self-update commands, used only
@@ -650,6 +690,72 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 		return plan
 	}
 	plan.Command = append([]string{plan.Command[0], plan.Command[1], latest}, plan.Command[2:]...)
+	return plan
+}
+
+// openCodeV2HomebrewKeg is the opencode-v2 formula's keg name, and
+// openCodeV1HomebrewKeg the formula it declares conflicts_with.
+const (
+	openCodeV2HomebrewKeg = "opencode-v2"
+	openCodeV1HomebrewKeg = "opencode"
+)
+
+// isolateOpenCodeV2 keeps every OpenCode 2 method from replacing OpenCode 1's
+// `opencode` executable. Both majors ship an executable of that name, and each
+// vendor recipe writes it where OpenCode 1's own recipe does. npm already
+// installs into a private prefix (planNPM). The official installer always
+// writes $HOME/.opencode/bin, so it runs with a private HOME and leaves shell
+// profiles alone. Homebrew links opencode-v2 into <prefix>/bin, so the keg is
+// unlinked afterwards and resolved through its opt link; an OpenCode 1 formula
+// that is linked is unlinked first, because opencode-v2 refuses to install
+// beside it, and linked again whatever the outcome.
+func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
+	if plan.Unsupported {
+		return plan
+	}
+	switch plan.Method {
+	case "official-installer":
+		if plan.Script == nil {
+			return plan
+		}
+		home := strings.TrimSpace(s.privateInstallerHomes[TargetOpencodeV2])
+		if home == "" {
+			plan.Unsupported = true
+			plan.Script = nil
+			plan.Reason = "OpenCode 2's private installer home could not be resolved."
+			return plan
+		}
+		plan.Script = withInstallerEnv(plan.Script, "HOME="+home)
+		if !slices.Contains(plan.Script.Args, "--no-modify-path") {
+			plan.Script.Args = append(slices.Clone(plan.Script.Args), "--no-modify-path")
+		}
+	case "homebrew":
+		if len(plan.Command) == 0 {
+			return plan
+		}
+		// Even an absent marker can mean v1 is reinstalling. Reserve its
+		// harness before inspecting linked state in runAgentOperation.
+		plan.alsoChanges = []Target{TargetOpencode}
+		if s.capabilities != nil {
+			plan.homebrewV1Prefix = s.capabilities.Homebrew.Prefix
+		}
+		plan.Cleanup = [][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}
+	}
+	return plan
+}
+
+// withLinkedOpenCodeV1 inspects linked state only after the run reserves v1.
+// A plan may have been built while a v1 reinstall temporarily removed its
+// marker, or long before a deferred update actually starts.
+func (plan Plan) withLinkedOpenCodeV1() Plan {
+	if plan.homebrewV1Prefix == "" {
+		return plan
+	}
+	_, err := os.Lstat(filepath.Join(plan.homebrewV1Prefix, "var", "homebrew", "linked", openCodeV1HomebrewKeg))
+	if err == nil {
+		plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
+		plan.Cleanup = append(slices.Clone(plan.Cleanup), []string{"brew", "link", openCodeV1HomebrewKeg})
+	}
 	return plan
 }
 

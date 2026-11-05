@@ -21,7 +21,9 @@ import { providerAuthFlow } from "./provider-auth-flow";
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
 // data dir so local claude sessions can authenticate with the SAME credential
 // pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
-// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir. This is not the
+// token chosen in AO's Claude login menu (harnesses/claude-code/setup-token):
+// that one outranks a native login, this one never does.
 async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
   const dir = path.join(dataDir, "harnesses", "claude-code");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -593,7 +595,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.end(
           CALLBACK_HTML(
             "Signed in to AO Cloud",
-            "You can close this tab and return to Agent Orchestrator.",
+            "You can close this tab and return to Orchestrator.",
           ),
         );
       } catch (callbackError) {
@@ -602,7 +604,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.end(
           CALLBACK_HTML(
             "Sign-in failed",
-            "Return to Agent Orchestrator and try signing in again.",
+            "Return to Orchestrator and try signing in again.",
           ),
         );
       } finally {
@@ -641,9 +643,9 @@ function signInFailureDetail(error: unknown): string {
     return "The WorkOS response could not be verified. Start sign-in again to continue.";
   }
   if (message.includes("network") || message.includes("fetch")) {
-    return "Agent Orchestrator could not reach WorkOS. Check your connection and try again.";
+    return "Orchestrator could not reach WorkOS. Check your connection and try again.";
   }
-  return "Agent Orchestrator could not complete WorkOS sign-in. Please try again.";
+  return "Orchestrator could not complete WorkOS sign-in. Please try again.";
 }
 
 export async function showCloudSignInFailure(error: unknown): Promise<void> {
@@ -708,7 +710,7 @@ export function installCloudIPC(
         title: "WorkOS not configured",
         message: "WorkOS sign-in is not configured.",
         detail:
-          "Set VITE_WORKOS_CLIENT_ID and restart Agent Orchestrator to enable sign-in.",
+          "Set VITE_WORKOS_CLIENT_ID and restart Orchestrator to enable sign-in.",
       });
       return;
     }

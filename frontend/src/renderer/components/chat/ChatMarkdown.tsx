@@ -37,6 +37,8 @@ import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
@@ -292,8 +294,10 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				    timeline's whole point is that prose dominates; a permanent row of
 				    controls on every fence is the opposite. */}
 				<div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="icon-sm"
 						onClick={() => {
 							preferredWrap = !wrap;
 							setWrap(!wrap);
@@ -301,13 +305,9 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 						aria-pressed={wrap}
 						aria-label="Wrap long lines"
 						title="Wrap long lines"
-						className={cn(
-							"flex size-7 items-center justify-center rounded-md transition-[background-color,color,transform] hover:bg-interactive-hover hover:text-foreground",
-							wrap ? "text-accent" : "text-muted-foreground",
-						)}
 					>
 						<WrapText aria-hidden="true" className="size-3" />
-					</button>
+					</Button>
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
@@ -371,7 +371,7 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
-					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
+					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} />
 					: <ArtifactLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
 				: undefined}
 			onClick={(event) => {
@@ -505,10 +505,15 @@ export function FileReference({ path, line, className, children }: { path: strin
 	const file = useWorkspaceFile(path);
 	if (!file) return <span className={className} title={path}>{children}</span>;
 	return (
-		<button type="button" className={className} title={path} onClick={() => file.open(line)}>
+		<Pressable className={className} title={path} onClick={() => file.open(line)}>
 			{children}
-		</button>
+		</Pressable>
 	);
+}
+
+/** Opens a URL in this chat session's Browser panel; undefined when the chat cannot. */
+export function useChatBrowserOpen() {
+	return useContext(OpenChatLink).open;
 }
 
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
@@ -538,14 +543,13 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 	if (insideLink) return code;
 	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
 	return (
-		<button
-			type="button"
+		<Pressable
 			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
 			aria-label={`Open ${file.filePath} in Files`}
-			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
+			className="inline rounded transition-colors hover:bg-interactive-hover"
 		>
 			{code}
-		</button>
+		</Pressable>
 	);
 }
 
