@@ -67,7 +67,7 @@ describe("PeopleField", () => {
 		const view = renderField();
 		try {
 			fireEvent.blur(screen.getByRole("combobox", { name: "Add people or teams" }));
-			const blurCall = schedule.mock.calls.findLastIndex(([, delay]) => delay === 120);
+			const blurCall = schedule.mock.calls.map(([, delay]) => delay).lastIndexOf(120);
 			const blurTimer = schedule.mock.results[blurCall]!.value;
 			expect(blurTimer).toBeDefined();
 			view.unmount();
