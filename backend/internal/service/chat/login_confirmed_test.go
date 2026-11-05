@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -213,4 +214,116 @@ func TestConfirmedLoginReplacesRefusedProvider(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("new provider received %v, refused one %v", resumed.sentTexts(), old.sentTexts())
+}
+
+// A message queued behind a refused turn stays held, and used to veto the stop:
+// Retry then went back to the refused process, and every later refusal hit the
+// same veto. The stop now keeps the held message queued, so an explicit Retry
+// reaches a new process, and the held message follows only once that succeeds.
+func TestConfirmedLoginReplacesRefusedProviderKeepingHeldQueue(t *testing.T) {
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	var activity *storeActivity
+	h, old := hibernationHarnessWith(t, "", func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		activity = &storeActivity{st: opts.Store.(*sqlite.Store)}
+		opts.Activity = activity
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	h.activity = &activity.recordingActivity
+	ctx := context.Background()
+
+	refused, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "refused", ClientMessageID: "refused", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: refused.ProviderTurnID})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["refused"] == domain.TurnStateRunning
+	})
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "held", ClientMessageID: "held", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: refused.ProviderTurnID,
+		TurnState: domain.TurnStateFailed,
+		Err:       ports.NewChatProviderFailure("login refused", "", ports.ErrChatAuthRequired),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["refused"] == domain.TurnStateFailed &&
+			s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
+	})
+	// The durable receipt precedes the projector releasing its dispatch lock.
+	if err := waitForActivityState(ctx, h, domain.ActivityWaitingInput); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Second)
+	if !confirmLogin(t, h) {
+		t.Fatal("ConfirmConversationLogin did not clear the demand")
+	}
+
+	h.svc.LoginConfirmed(ctx, testSession)
+
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.calls.Load() != 1 || rec.HibernatedAt == nil {
+		t.Fatalf("refused provider stops = %d, hibernated at = %v; a held message must not keep it running", old.calls.Load(), rec.HibernatedAt)
+	}
+	assertTurnStaysQueued(t, h, "held")
+
+	woke := wakeOnNewRelease(t, h, old, nil)
+	retry, err := h.svc.RetryTurn(ctx, testSession, refused.ID)
+	if err != nil {
+		t.Fatalf("RetryTurn: %v", err)
+	}
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Retry did not wake a new provider process")
+	}
+	if got := resumed.sentTexts(); len(got) != 1 || got[0] != "refused" {
+		t.Fatalf("new provider received %v, want only the retried message", got)
+	}
+	if got := old.sentTexts(); len(got) != 1 {
+		t.Fatalf("refused provider received %v after it was replaced", got)
+	}
+	assertTurnStaysQueued(t, h, "held")
+
+	resumed.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: retry.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted},
+	)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 2 && got[1] == "held" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("held message did not follow the successful retry: new provider received %v", resumed.sentTexts())
+}
+
+func waitForActivityState(ctx context.Context, h *harness, want domain.ActivityState) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rec, _, err := h.st.GetSession(ctx, testSession)
+		if err != nil {
+			return err
+		}
+		if rec.Activity.State == want {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("activity = %q, want %q", rec.Activity.State, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

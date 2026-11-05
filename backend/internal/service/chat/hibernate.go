@@ -191,7 +191,8 @@ type hibernateOptions struct {
 	ignoreViews bool
 	// loginRefresh stops a provider its login refused once a fresh reading
 	// found that login working, so the next message starts a process that
-	// reads the current credentials.
+	// reads the current credentials. Messages a failed turn holds back stay
+	// queued across the stop.
 	loginRefresh bool
 }
 
@@ -320,9 +321,18 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		controller.sendMu.Unlock()
 		return false, nil
 	}
+	// With the dispatch lock held and nothing running, a queued turn is one a
+	// failed turn is holding back. A login refresh still stops the provider, or
+	// a held message would keep the refused process for every later retry. The
+	// message stays queued: a wake does not drain, so it waits for the retry to
+	// succeed or for the user's next message, as it would have anyway.
+	heldQueue := false
 	if _, err := s.store.NextQueuedTurn(ctx, controller.conversation.ID); err == nil {
-		controller.sendMu.Unlock()
-		return false, nil
+		if !opts.loginRefresh {
+			controller.sendMu.Unlock()
+			return false, nil
+		}
+		heldQueue = true
 	} else if !errors.Is(err, domain.ErrNoQueuedTurn) {
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check queued chat turns: %w", err)
@@ -346,7 +356,8 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		controller.sendMu.Unlock()
 		return false, fmt.Errorf("check latest chat turn: %w", err)
 	}
-	if !settled {
+	// The latest user turn of a held queue is the queued message itself.
+	if !settled && !heldQueue {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
