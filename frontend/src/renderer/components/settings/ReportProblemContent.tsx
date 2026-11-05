@@ -1,16 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
-import { newChatDraftScope, readChatSessionDraft } from "../../lib/chat-drafts";
-import { collectReportProblemDiagnostics, reportProblemDestinationUrl } from "../../lib/report-problem";
+import { collectReportProblemDiagnostics, reportProblemDestinationUrl, startProblemReport } from "../../lib/report-problem";
 import { useShell } from "../../lib/shell-context";
 import { captureRendererEvent } from "../../lib/telemetry";
-import { useUiStore } from "../../stores/ui-store";
-import { STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { Button } from "../ui/button";
-
-// A report never replaces text already typed on the new chat page.
-const hasNewChatDraft = () => Boolean(readChatSessionDraft(newChatDraftScope()).composer.text.trim());
 
 export function ReportProblemContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
@@ -28,33 +22,11 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 		return () => { cancelled = true; };
 	}, [active]);
 	const report = async () => {
-		const destination = daemonStatus.state === "ready" ? "agent" : "terminal";
-		let outcome: "succeeded" | "failed" = "failed";
 		setOpening(true);
 		setError(null);
-		try {
-			if (daemonStatus.state !== "ready") {
-				const result = await aoBridge.triage.launch();
-				outcome = result.ok ? "succeeded" : "failed";
-				if (!result.ok) setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
-				return;
-			}
-			if (hasNewChatDraft()) { setError(t("report.composerBusy")); return; }
-			const result = await aoBridge.triage.prepare();
-			if (!result.ok) { setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : "")); return; }
-			const ui = useUiStore.getState();
-			if (hasNewChatDraft()) { setError(t("report.composerBusy")); return; }
-			ui.closeSettings();
-			ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, {
-				hiddenPrompt: result.prompt, displayName: t("report.action"),
-			});
-			outcome = "succeeded";
-		} catch {
-			setError(t("report.failed"));
-		} finally {
-			setOpening(false);
-			void captureRendererEvent("ao.renderer.support_submitted", { destination, outcome });
-		}
+		const failure = await startProblemReport(daemonStatus.state);
+		setOpening(false);
+		if (failure) setError(failure);
 	};
 	return (
 		<div className="flex flex-col items-start gap-3">

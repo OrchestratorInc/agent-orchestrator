@@ -1,5 +1,10 @@
+import type { DaemonStatus } from "../../shared/daemon-status";
+import { appI18n } from "../i18n";
+import { useUiStore } from "../stores/ui-store";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { aoBridge } from "./bridge";
-import { routeSurface } from "./telemetry";
+import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
+import { captureRendererEvent, routeSurface } from "./telemetry";
 
 export type ReportProblemDiagnostics = {
 	appVersion: string;
@@ -10,6 +15,10 @@ export type ReportProblemDiagnostics = {
 	platform: string;
 	routeSurface: string;
 };
+
+// Sent as an agent instruction, so it stays in English in every locale. A session's
+// PATH is pinned to its daemon's own ao, so this reaches the right install.
+export const REPORT_PROBLEM_PROMPT = "Use the bug-triage skill to help me report a problem with Orchestrator. Run `ao triage --no-launch`, then read the prompt file it prints and follow it.";
 
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
@@ -47,6 +56,43 @@ export function sanitizeReportText(value: string): string {
 		.replace(BEARER_SECRET_PATTERN, `$1${REDACTED_SECRET}`)
 		.replace(OPENAI_KEY_PATTERN, REDACTED_SECRET)
 		.replace(GITHUB_TOKEN_PATTERN, REDACTED_SECRET);
+}
+
+/** Opens a standalone agent on the new chat page with the prompt above anything already typed. */
+function openReportAgent() {
+	const scope = newChatDraftScope();
+	const draft = readChatSessionDraft(scope).composer.text;
+	if (!draft.startsWith(REPORT_PROBLEM_PROMPT)) {
+		const written = writeChatComposerText(scope, draft.trim() ? `${REPORT_PROBLEM_PROMPT}\n\n${draft}` : REPORT_PROBLEM_PROMPT);
+		if (!written.ok) throw new Error("The new chat draft could not be saved.");
+	}
+	useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
+	const ui = useUiStore.getState();
+	ui.closeSettings();
+	ui.requestNewTask(STANDALONE_WORKSPACE_ID);
+}
+
+/**
+ * Every Report a problem entry point runs this: an agent when the daemon is
+ * ready, otherwise `ao triage` in the OS terminal. Returns the text to show if
+ * it failed.
+ */
+export async function startProblemReport(daemonState: DaemonStatus["state"]): Promise<string | undefined> {
+	const t = appI18n.t;
+	const destination = daemonState === "ready" ? "agent" : "terminal";
+	let failure: string | undefined;
+	try {
+		if (destination === "agent") {
+			openReportAgent();
+		} else {
+			const result = await aoBridge.triage.launch();
+			if (!result.ok) failure = t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : "");
+		}
+	} catch {
+		failure = t("report.failed");
+	}
+	void captureRendererEvent("ao.renderer.support_submitted", { destination, outcome: failure ? "failed" : "succeeded" });
+	return failure;
 }
 
 export async function collectReportProblemDiagnostics(now = new Date()): Promise<ReportProblemDiagnostics> {

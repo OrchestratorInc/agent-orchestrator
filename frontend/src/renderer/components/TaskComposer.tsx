@@ -78,8 +78,6 @@ type CreateTaskInput = {
 	projectId: string;
 	brief: string;
 	branch?: string;
-	/** Names the session instead of its brief, e.g. a prefilled bug report. */
-	displayName?: string;
 	agent?: DelegateAgent;
 	model?: string;
 	effort?: string;
@@ -148,8 +146,6 @@ export type TaskLaunchOptions = {
 	replay?: LaunchReplay;
 	/** Files to upload with the task, in place of the ones this hook holds. */
 	attachments?: FileAttachmentPayload[];
-	/** Names a standalone session instead of its brief. */
-	displayName?: string;
 };
 
 /** The agent, model and permission parts of a create request, saved so a retry can repeat them exactly. */
@@ -337,7 +333,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-			const displayName = input.displayName ?? (input.brief.trim().slice(0, 100) || input.agent || "Standalone agent");
+			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -927,7 +923,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files, displayName }: TaskLaunchOptions = {}): Promise<string> => {
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
 		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
@@ -957,7 +953,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 				projectId,
 				brief,
 				...(branchOverride && !isCloudProject && !isStandalone ? { branch: branchOverride } : {}),
-				...(displayName ? { displayName } : {}),
 				...(replay ? {
 					agent: replay.agent as CreateTaskInput["agent"],
 					model: replay.model,
@@ -1084,10 +1079,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
 	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
-	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[], displayName?: string) =>
+	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files, displayName })
-			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files, displayName });
+			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
 		setError(undefined);

@@ -1,5 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { collectReportProblemDiagnostics, formatReportTimestamp, reportProblemDestinationUrl, sanitizeReportText, type ReportProblemDiagnostics } from "./report-problem";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "./bridge";
+import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "./chat-drafts";
+import { collectReportProblemDiagnostics, formatReportTimestamp, REPORT_PROBLEM_PROMPT, reportProblemDestinationUrl, sanitizeReportText, startProblemReport, type ReportProblemDiagnostics } from "./report-problem";
 
 const diagnostics: ReportProblemDiagnostics = {
 	appVersion: "1.2.3-test", buildMode: "dev", daemonState: "ready",
@@ -83,4 +86,33 @@ it.each(["client_secret", "refreshToken", "access_token", "id_token", "private_k
 });
 it.each(["pairing 123456", "pairing code 1234567", "code: 12345678"])("redacts %s", (input) => {
  expect(sanitizeReportText(input)).not.toMatch(/\d/);
+});
+
+describe("startProblemReport", () => {
+	const draft = () => readChatSessionDraft(newChatDraftScope()).composer.text;
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ newTaskRequest: null, newChatDraftRevision: 0 });
+	});
+
+	it("keeps text already typed under the prompt", async () => {
+		writeChatComposerText(newChatDraftScope(), "keep this draft");
+		await expect(startProblemReport("ready")).resolves.toBeUndefined();
+		expect(draft()).toBe(`${REPORT_PROBLEM_PROMPT}\n\nkeep this draft`);
+	});
+
+	it("does not stack the prompt when run twice but reloads the composer", async () => {
+		await startProblemReport("ready");
+		await startProblemReport("ready");
+		expect(draft()).toBe(REPORT_PROBLEM_PROMPT);
+		expect(useUiStore.getState().newChatDraftRevision).toBe(2);
+	});
+
+	it("leaves the draft alone when the daemon is down", async () => {
+		vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.desktopRequired", command: "ao triage" });
+		const failure = await startProblemReport("stopped");
+		expect(failure).toContain("ao triage");
+		expect(draft()).toBe("");
+		expect(useUiStore.getState().newTaskRequest).toBeNull();
+	});
 });

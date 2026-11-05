@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
-import { newChatDraftScope, writeChatComposerText } from "../../lib/chat-drafts";
+import { newChatDraftScope, readChatSessionDraft } from "../../lib/chat-drafts";
+import { REPORT_PROBLEM_PROMPT } from "../../lib/report-problem";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { useUiStore } from "../../stores/ui-store";
 import { ReportProblemContent } from "./ReportProblemContent";
@@ -37,41 +38,22 @@ describe("Report a problem", () => {
 		expect(captureRendererEvent).toHaveBeenCalledTimes(2);
 		expect(captureRendererEvent).toHaveBeenLastCalledWith("ao.renderer.support_opened");
 	});
-	it("prepares diagnostics and asks for a new chat with hidden instructions and the report name", async () => {
-		const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "Read /home/me/.ao/triage/context.md", dir: "/home/me/.ao/triage" });
+	it("opens a standalone agent with the prompt filled in", async () => {
 		const launch = vi.spyOn(aoBridge.triage, "launch");
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		await waitFor(() => expect(useUiStore.getState().newTaskRequest).not.toBeNull());
-		expect(prepare).toHaveBeenCalledWith(); expect(launch).not.toHaveBeenCalled();
-		expect(useUiStore.getState().newTaskRequest).toMatchObject({
-			projectId: "__standalone__", hiddenPrompt: "Read /home/me/.ao/triage/context.md", displayName: "Report a problem",
-		});
+		expect(launch).not.toHaveBeenCalled();
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "__standalone__" });
+		expect(readChatSessionDraft(newChatDraftScope()).composer.text).toBe(REPORT_PROBLEM_PROMPT);
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "succeeded" });
-	});
-	it.each(["", "keep this draft"])("handles a new chat draft containing %j", async (draft) => {
-		const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "triage prompt", dir: "/triage" });
-		writeChatComposerText(newChatDraftScope(), draft);
-		renderReport();
-		fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
-		if (draft) {
-			expect(await screen.findByRole("alert")).toHaveTextContent("Send or clear the draft on the new chat page first.");
-			expect(useUiStore.getState().newTaskRequest).toBeNull();
-			expect(useUiStore.getState().settingsModal).not.toBeNull();
-			expect(prepare).not.toHaveBeenCalled();
-			expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
-		} else {
-			await waitFor(() => expect(useUiStore.getState().newTaskRequest?.hiddenPrompt).toBe("triage prompt"));
-			expect(useUiStore.getState().settingsModal).toBeNull();
-		}
 	});
 	it("uses Auto terminal fallback when the daemon is down", async () => {
 		h.daemonState = "stopped";
 		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.terminalFailed" });
-		const prepare = vi.spyOn(aoBridge.triage, "prepare");
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open a terminal. Try again.");
-		expect(launch).toHaveBeenCalledWith(); expect(prepare).not.toHaveBeenCalled();
+		expect(launch).toHaveBeenCalledWith();
 		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "terminal", outcome: "failed" });
 	});
@@ -81,24 +63,24 @@ describe("Report a problem", () => {
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		await waitFor(() => expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "terminal", outcome: "succeeded" }));
 	});
-	it("shows preparation failures and keeps settings open", async () => {
-		vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: false, error: "report.prepareFailed" });
+	it("keeps settings open when the draft cannot be saved", async () => {
+		vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not prepare the report. Try again.");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not start the report. Try again.");
 		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
 	});
-	it.each(["ready", "stopped"])("disables duplicate submission and handles IPC rejection when the daemon is %s", async (state) => {
-		h.daemonState = state;
+	it("disables duplicate submission and handles IPC rejection when the daemon is down", async () => {
+		h.daemonState = "stopped";
 		let reject!: (error: Error) => void;
-		vi.spyOn(aoBridge.triage, state === "ready" ? "prepare" : "launch").mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+		vi.spyOn(aoBridge.triage, "launch").mockReturnValue(new Promise((_, fail) => { reject = fail; }));
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		expect(screen.getByRole("button", { name: "Opening..." })).toBeDisabled();
 		reject(new Error("IPC unavailable"));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not start the report. Try again.");
 		expect(screen.getByRole("button", { name: "Report a problem" })).toBeEnabled();
-		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: state === "ready" ? "agent" : "terminal", outcome: "failed" });
+		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "terminal", outcome: "failed" });
 	});
 	it("shows one action and enabled secondary links", () => {
 		renderReport();

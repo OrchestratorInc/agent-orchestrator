@@ -217,9 +217,10 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	// hiddenPrompt is sent ahead of what the user types and never shown in the
-	// composer; displayName names that session.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number; hiddenPrompt?: string; displayName?: string } | null;
+	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// Bumped after writing the new chat draft from outside the page, so an open
+	// composer reloads it.
+	newChatDraftRevision: number;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -307,7 +308,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string, prefill?: { hiddenPrompt?: string; displayName?: string }) => void;
+	requestNewTask: (projectId: string, hostId?: string) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -449,6 +450,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	newChatDraftRevision: 0,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -811,7 +813,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId, hostId, prefill) => {
+	requestNewTask: (projectId, hostId) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
@@ -823,7 +825,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, ...prefill, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({

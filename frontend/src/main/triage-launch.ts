@@ -1,5 +1,4 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { app } from "electron";
@@ -7,9 +6,8 @@ import { resolveDaemonLaunch } from "../shared/daemon-launch";
 import { launchCommand } from "./launch-command";
 import { terminalCommand } from "./terminal-command";
 
-export type TriageErrorKey = "report.prepareFailed" | "report.timedOut" | "report.tooLarge" | "report.terminalFailed" | "report.desktopRequired";
+export type TriageErrorKey = "report.terminalFailed" | "report.desktopRequired";
 export type TriageResult = { ok: true } | { ok: false; error: TriageErrorKey; command?: string };
-export type TriagePrepareResult = { ok: true; prompt: string; dir: string } | { ok: false; error: TriageErrorKey; command?: string };
 
 function resolveTriageBinary(stateEnv: NodeJS.ProcessEnv): string {
 	const configured = stateEnv.AO_DAEMON_COMMAND?.trim();
@@ -26,69 +24,6 @@ function resolveTriageBinary(stateEnv: NodeJS.ProcessEnv): string {
 		process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
 	if (!launch) throw new Error("The bundled binary is unavailable.");
 	return launch.command;
-}
-
-export async function prepareTriage(stateEnv: NodeJS.ProcessEnv): Promise<TriagePrepareResult> {
-	let stderr = Buffer.alloc(0);
-	const logFailure = (reason: string) => {
-		let detail = stderr.toString("utf8");
-		// Redact values of at least eight characters that may be secrets or private paths.
-		// Keep short flags readable in diagnostics.
-		for (const value of Object.values(stateEnv).filter((value): value is string => typeof value === "string" && value.length >= 8).sort((a, b) => b.length - a.length)) {
-			detail = detail.replaceAll(value, "[redacted]");
-		}
-		// stdout contains the prompt; spawn error messages may echo environment values.
-		console.error(`Report a problem prepare failed: ${reason}; stderr: ${detail.replace(/[\r\n]+/g, " ").trim() || "(empty)"}`);
-	};
-	try {
-		const command = resolveTriageBinary(stateEnv);
-		return await new Promise<TriagePrepareResult>((resolve) => {
-			const child = spawn(command, ["triage", "--no-launch", "--json"], {
-				env: stateEnv, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
-			});
-			let stdout = "";
-			let bytes = 0;
-			let settled = false;
-			const finish = (result: TriagePrepareResult, reason = "") => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timeout);
-				if (!result.ok) logFailure(reason || result.error);
-				resolve(result);
-			};
-			const stop = (error: TriageErrorKey) => {
-				finish({ ok: false, error });
-				child.kill("SIGKILL");
-			};
-			const timeout = setTimeout(() => stop("report.timedOut"), 20_000);
-			child.stderr.on("data", (chunk: Buffer) => {
-				if (!settled) stderr = Buffer.concat([stderr, chunk.subarray(-8192)]).subarray(-8192);
-			});
-			child.stdout.setEncoding("utf8");
-			child.stdout.on("data", (chunk: string) => {
-				if (settled) return;
-				bytes += Buffer.byteLength(chunk);
-				if (bytes > 1024 * 1024) stop("report.tooLarge");
-				else stdout += chunk;
-			});
-			child.on("error", () => finish({ ok: false, error: "report.prepareFailed" as const }, "spawn error"));
-			child.on("close", (code) => {
-				if (settled) return;
-				if (code !== 0) {
-					finish({ ok: false, error: "report.prepareFailed" as const }, `exit ${code}`);
-					return;
-				}
-				try {
-					const result = JSON.parse(stdout);
-					if (!result || !["dir", "prompt", "context", "report", "playbook"].every((key) => typeof result[key] === "string")) throw new Error();
-					finish({ ok: true, prompt: result.prompt, dir: result.dir });
-				} catch { finish({ ok: false, error: "report.prepareFailed" as const }, "invalid JSON response"); }
-			});
-		});
-	} catch {
-		logFailure("could not start command");
-		return { ok: false, error: "report.prepareFailed" as const };
-	}
 }
 
 export async function launchTriageInTerminal(

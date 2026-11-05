@@ -1,6 +1,6 @@
 import { SideCloseRecovery } from "./main/side-close";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
-import { launchTriageInTerminal, prepareTriage } from "./main/triage-launch";
+import { launchTriageInTerminal } from "./main/triage-launch";
 import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
@@ -2798,7 +2798,6 @@ async function triageEnv(): Promise<NodeJS.ProcessEnv> {
 		AO_RUN_FILE: path.resolve(runFilePath() ?? path.join(desktopDataDir, "running.json")),
 	};
 }
-ipcMain.handle("triage.prepare", async () => prepareTriage(await triageEnv()));
 ipcMain.handle("triage.launch", async () => launchTriageInTerminal(await triageEnv()));
 
 const dictation = registerDictationIpc(

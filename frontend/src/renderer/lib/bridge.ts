@@ -8,7 +8,6 @@ export const aoBridge: AoBridge =
 	({
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
-			prepare: async () => ({ ok: false, error: "report.desktopRequired" as const }),
 		},
 		dictation: {
 			start: async () => undefined,

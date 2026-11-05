@@ -5,7 +5,7 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { isSlowDaemonStartupStatus } from "../../shared/daemon-startup-status";
 import { daemonFailureHint, daemonFailureMessage, daemonFailureTitle } from "../lib/daemon-failure";
 import { aoBridge } from "../lib/bridge";
-import { captureRendererEvent } from "../lib/telemetry";
+import { startProblemReport } from "../lib/report-problem";
 import { Button } from "./ui/button";
 
 export function DaemonFailureBanner({ status }: { status: DaemonStatus }) {
@@ -24,15 +24,9 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 	const report = async () => {
 		setReporting(true);
 		setReportError(null);
-		try {
-			const result = await aoBridge.triage.launch();
-			void captureRendererEvent("ao.renderer.support_submitted", { destination: "terminal", outcome: result.ok ? "succeeded" : "failed" });
-			if (!result.ok) setReportError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
-		} catch {
-			setReportError(t("report.failed"));
-			void captureRendererEvent("ao.renderer.support_submitted", { destination: "terminal", outcome: "failed" });
-		}
-		finally { setReporting(false); }
+		const failure = await startProblemReport(status.state);
+		setReporting(false);
+		if (failure) setReportError(failure);
 	};
 	const copiedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const slowStartup = isSlowDaemonStartupStatus(status);
