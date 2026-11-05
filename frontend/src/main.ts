@@ -891,6 +891,7 @@ async function createWindowInternal(): Promise<void> {
 		preload: preloadPath(),
 		platform: process.platform,
 		allowShellDebugging: isDev,
+		hasLivePageBelow: () => browserViewHost?.hasVisiblePanel() ?? false,
 	});
 	windowComposition = composition;
 	syncNativeWindowBackground();

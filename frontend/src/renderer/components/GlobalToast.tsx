@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 import { CloseButton } from "./ui/close-button";
+import { Button } from "./ui/button";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
@@ -60,6 +61,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
+			data-global-toast=""
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
@@ -69,6 +71,21 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>
 				{toast.body ? <p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p> : null}
 			</div>
+			{toast.action ? (
+				<Button
+					type="button"
+					variant="ghost"
+					size="xs"
+					onClick={() => {
+						toast.action?.run();
+						dismissGlobalToast(toast.nonce);
+					}}
+					className="-my-1 font-medium"
+					data-toast-action=""
+				>
+					{toast.action.label}
+				</Button>
+			) : null}
 			{toast.dismissible ? (
 				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}

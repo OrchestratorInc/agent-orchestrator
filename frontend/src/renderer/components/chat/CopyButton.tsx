@@ -6,6 +6,7 @@
  * block and the message action row so both confirm the same way.
  */
 
+import { cn } from "../../lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
@@ -64,9 +65,9 @@ export function CopyButton({
 			className={className}
 		>
 			{copied ? (
-				<Check aria-hidden="true" className="size-3 text-success" />
+				<Check aria-hidden="true" className={cn(compact ? "size-3.5" : "size-3", "text-success")} />
 			) : (
-				<Copy aria-hidden="true" className="size-3" />
+				<Copy aria-hidden="true" className={compact ? "size-3.5" : "size-3"} />
 			)}
 			{compact ? null : copied ? copiedLabel : "Copy"}
 		</Button>

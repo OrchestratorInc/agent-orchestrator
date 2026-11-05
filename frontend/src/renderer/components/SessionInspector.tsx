@@ -447,6 +447,9 @@ const SummaryView = memo(function SummaryView({
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
 	// Subscription accounts are a developer-mode preview.
 	const accountsPreview = useUiStore((state) => state.developerMode);
+	// Reached through a share: this person sees the session's pull requests but
+	// leaves managing them, and the session's policies, to its owner.
+	const guest = session.cloud?.shared === true;
 	return (
 		<SessionInspectorSummaryView
 			activity={
@@ -491,7 +494,7 @@ const SummaryView = memo(function SummaryView({
 									hostId={hostId}
 									sessionId={session.id}
 									cloudOrgId={session.cloud?.orgId}
-									guest={session.cloud?.shared === true}
+									guest={guest}
 									projectId={session.workspaceId}
 								/>
 							))}
@@ -502,7 +505,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			}
-			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
@@ -1779,10 +1782,12 @@ function CloudReviewsSection({
 		prs: (pullRequestsQuery.data?.pullRequests ?? []).map(cloudPullRequestFacts),
 	};
 	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
+	const guest = session.cloud?.shared === true;
 	return (
 		<>
 			<ReviewPanel
 				cloud
+				readOnly={guest}
 				autoReviewEnabled={autoReviewEnabled}
 				error={
 					pullRequestsQuery.error ??
@@ -1829,6 +1834,7 @@ function CloudReviewsSection({
 			/>
 			<MergedReviewsSection
 				githubPRs={[]}
+				readOnly={guest}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
@@ -1902,6 +1908,7 @@ function cloudReviewsToLocal(
 function MergedReviewsSection({
 	githubPRs,
 	hostId,
+	readOnly = false,
 	isLoading,
 	onOpenReviewFile,
 	onWorkerMessageSent,
@@ -1911,6 +1918,8 @@ function MergedReviewsSection({
 }: {
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
+	/** Reached through a share: the reviews show, but only the owner acts on them. */
+	readOnly?: boolean;
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onWorkerMessageSent?: () => void;
@@ -2227,11 +2236,11 @@ function MergedReviewsSection({
 			groups={groups}
 			isLoading={isLoading}
 			labels={labels}
-			onRequestRereview={requestRereview}
-			onResolveInlineComment={resolveInlineComment}
+			onRequestRereview={readOnly ? undefined : requestRereview}
+			onResolveInlineComment={readOnly ? undefined : resolveInlineComment}
 			onOpenInAOBrowser={openInAOBrowser}
-			onSendInlineComment={sendInlineCommentToWorker}
-			onSendReviewSummary={sendReviewSummaryToWorker}
+			onSendInlineComment={readOnly ? undefined : sendInlineCommentToWorker}
+			onSendReviewSummary={readOnly ? undefined : sendReviewSummaryToWorker}
 			onViewInlineCommentInFile={(comment) => {
 				if (comment.file) onOpenReviewFile?.({ line: comment.line, path: comment.file });
 			}}
@@ -2373,6 +2382,7 @@ function mockProjectConfig(): ProjectConfig {
 
 function ReviewPanel({
 	cloud = false,
+	readOnly = false,
 	notice,
 	cloudReviewerHarnesses = [],
 	cloudReviewerHarness = "",
@@ -2438,6 +2448,8 @@ function ReviewPanel({
 	onKill: () => void;
 	/** Cloud sessions choose from only credentials connected for the session owner. */
 	cloud?: boolean;
+	/** Reached through a share: the reviews show, but only the owner runs them. */
+	readOnly?: boolean;
 	/** Cloud-only: the trigger declined to run and says why. */
 	notice?: string | null;
 	cloudReviewerHarnesses?: string[];
@@ -2537,6 +2549,7 @@ function ReviewPanel({
 						<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
 					</Tooltip>
 				) : null}
+				{readOnly ? null : (
 				<div className="review-run-controls-container flex min-w-0 flex-col text-xs">
 					{cloud ? (
 						<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
@@ -2671,6 +2684,7 @@ function ReviewPanel({
 						</div>
 					</div>
 				</div>
+				)}
 				{reviewLive ? (
 					<div className="flex items-center gap-2 border-t border-border pt-3">
 						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />

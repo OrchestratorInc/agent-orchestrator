@@ -83,10 +83,14 @@ describe("settling under a reader who scrolled up", () => {
 		restoreLayout = undefined;
 	});
 
-	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" is 28px) under a scrollable log. */
+	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
 	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
-		const height = (row: Element) => (row.hasAttribute("data-turn-worked") ? 28 : 100);
+		// The empty row reserved under the prompt is 28px until "Worked for" takes its
+		// place, and has collapsed once it has.
+		const reservedRow = (row: Element) => (row.parentElement?.querySelector(":scope > [data-turn-worked]") ? 0 : 28);
+		const height = (row: Element) =>
+			row.hasAttribute("data-turn-worked") ? 28 : row.hasAttribute("data-turn-worked-gap") ? reservedRow(row) : 100;
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
@@ -116,7 +120,7 @@ describe("settling under a reader who scrolled up", () => {
 	it("lands Worked for at the top of the view when the reader was among the steps", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// Rows: prompt 20, note 120, ls 220, second note 320, npm test 420, reply 520.
+		// Rows: prompt 20, reserved row 120, note 148, ls 248, second note 348, npm test 448, reply 548.
 		// At 350 the second note sits across the top edge.
 		stubTurnLayout(log, 350);
 
@@ -130,8 +134,8 @@ describe("settling under a reader who scrolled up", () => {
 	it("holds the reply still when the reader was already on it", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// The reply starts at 520, 40px above the top edge.
-		stubTurnLayout(log, 560);
+		// The reply starts at 548, 40px above the top edge.
+		stubTurnLayout(log, 588);
 
 		settle(rerender);
 

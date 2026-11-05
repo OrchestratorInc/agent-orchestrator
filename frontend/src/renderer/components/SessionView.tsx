@@ -62,7 +62,9 @@ import { conversationQueryKey, conversationSettled } from "../hooks/useConversat
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import type { CloudCpAOReviewRun, CloudCpClientEvent, CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
+import { sessionWasSharedWithYou } from "../lib/shared-session-memory";
 import {
 	refetchCloudProjectsForUnknownSessions,
 	refreshCloudSessionLifecycle,
@@ -109,6 +111,7 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type Sessio
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
+import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
@@ -467,6 +470,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudLookupEnabled,
 		!listedSession,
 	);
+	// The person's own workspace: a missing session in another one was shared
+	// with them, so it is gone because it no longer is.
+	const { org: ownCloudOrg } = useCloudOrg(Boolean(routeCloudOrgId) && !hostId);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
 		Boolean(routedWorkspace) || cloudRouteSession.isError ||
@@ -531,7 +537,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		() => () => aoBridge.app.setChatDraftRisk?.([]),
 		[sessionId],
 	);
-	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl } = useCloudCp();
+	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl, userId: cloudCpUserId } = useCloudCp();
 	// The session's own organization decides whether it can be shared (feature=share).
 	const sessionOffering = useCloudOffering(Boolean(session?.cloud), session?.cloud?.orgId);
 	const theme = useResolvedTheme();
@@ -1605,6 +1611,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
+			{/* On a session shared with this person: what they can do in it, and through which team. */}
+			{session ? <SessionAccessTag session={session} /> : null}
 			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
@@ -2008,11 +2016,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
+		// A shared session's route names no organization, and once its sharing
+		// ends it is gone from the shared list too: it reads as shared because
+		// the list showed it earlier in this run.
+		const routeError = cloudRouteSession.error;
+		const noLongerShared = !hostId && (
+			sessionWasSharedWithYou(cloudCpBaseUrl, cloudCpUserId, sessionId) ||
+			(Boolean(routeCloudOrgId) && (
+				(ownCloudOrg !== undefined && routeCloudOrgId !== ownCloudOrg.id) ||
+				(routeError instanceof CloudCpError && routeError.status === 403)
+			))
+		);
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
 				<PageTopbar />
 				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-					{remoteError ?? t("session.notFound")}
+					{remoteError ?? t(noLongerShared ? "session.noLongerShared" : "session.notFound")}
 				</div>
 			</div>
 		);
@@ -2266,10 +2285,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? (
 					<SessionInspectorRail
 						sessionKey={uiSessionId}
-						showCollapsedHandle={!browserOnly}
 						isOpen={isInspectorOpen}
 						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
-						onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
 						restoreMinWidth={
 							sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
 						}
