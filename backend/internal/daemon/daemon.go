@@ -380,6 +380,16 @@ func Run(buildVersion string) error {
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
+	// The session's own account (a saved one, or this computer's login) is read
+	// again off the chat path; the CLI probe can take seconds.
+	recheckSessionAccount := func(sessionID domain.SessionID, harness domain.AgentHarness) {
+		if accounts := agentAccountSvc; accounts != nil {
+			go func() {
+				defer sentryobs.RecoverBackground()
+				accounts.RecheckSessionAccount(ctx, sessionID, harness)
+			}()
+		}
+	}
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -439,14 +449,7 @@ func Run(buildVersion string) error {
 		Log:      log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			// The session's own account (a saved one, or this computer's login) is
-			// read again off the chat path; the CLI probe can take seconds.
-			if accounts := agentAccountSvc; accounts != nil {
-				go func() {
-					defer sentryobs.RecoverBackground()
-					accounts.RecheckSessionAccount(ctx, sessionID, harness)
-				}()
-			}
+			recheckSessionAccount(sessionID, harness)
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -455,6 +458,7 @@ func Run(buildVersion string) error {
 				agentSvc.InvalidateCodexAccountAuthentication()
 			}
 		},
+		RecheckAccount: recheckSessionAccount,
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
@@ -510,6 +514,13 @@ func Run(buildVersion string) error {
 					Args:    []string{"acp"},
 					Env:     request.Env,
 				}, request.WorkingDir, log)
+			},
+			"hermes": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return chatdriveracp.DiscoverConfigOptionsForHarness(listCtx, chatdriveracp.Launch{
+					Command: request.Binary,
+					Args:    []string{"acp"},
+					Env:     request.Env,
+				}, request.WorkingDir, domain.HarnessHermes, log)
 			},
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,
@@ -630,6 +641,27 @@ func Run(buildVersion string) error {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	// A chat refused its credentials keeps asking for a sign-in until a reading
+	// of its own account finds the login working again, however it came back.
+	agentAccountSvc.SetLoginConfirmed(func(account domain.AgentAccount, at time.Time) {
+		go func() {
+			defer sentryobs.RecoverBackground()
+			waiting, err := store.ConversationsAwaitingLogin(ctx)
+			if err != nil {
+				log.Warn("list chats awaiting sign-in", "error", err)
+				return
+			}
+			for _, conversation := range waiting {
+				id, err := agentAccountSvc.SessionAccountID(ctx, conversation.SessionID, conversation.Harness)
+				if err != nil || id != account.ID {
+					continue
+				}
+				if _, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC()); err != nil {
+					log.Warn("clear chat sign-in demand", "conversation", conversation.ConversationID, "error", err)
+				}
+			}
+		}()
+	})
 	if agentSvc != nil {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
@@ -813,6 +845,7 @@ func Run(buildVersion string) error {
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
+	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
@@ -935,7 +968,7 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
-	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, telemetrySink, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
@@ -1107,6 +1140,7 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
+		LifetimeSessions:   store.LifetimeSessions,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
@@ -1210,7 +1244,7 @@ func Run(buildVersion string) error {
 		log.Warn("supervisor: listener unavailable; frontend-death auto-stop disabled", "err", err)
 	} else {
 		log.Info("supervisor: listening", "addr", addr)
-		sup := supervisor.New(supervisorGrace, srv.RequestShutdown, log)
+		sup := supervisor.New(supervisorGrace, srv.RequestShutdownAfterDesktopExit, log)
 		go func() {
 			defer sentryobs.RecoverBackground()
 			if err := sup.Serve(ctx, ln); err != nil {
@@ -1342,15 +1376,13 @@ func Run(buildVersion string) error {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
-	// srv.Run returning. We deliberately do NOT tear down sessions here: they
-	// survive the daemon exit and the next boot's Reconcile adopts them,
-	// preserving session IDs. The narrowed sessionLifecycle interface makes
-	// teardown-on-shutdown a compile error.
+	// srv.Run returning. Desktop exit, including loss of its supervisor, requests
+	// agent shutdown; daemon replacement preserves processes for the next boot.
 
 	// Shut the background goroutines down in order: cancel the context FIRST so
 	// their loops exit, then wait for them to drain. Doing this explicitly (not
@@ -1392,13 +1424,23 @@ func Run(buildVersion string) error {
 	codexSwitchCancel()
 	managedPreview.Close()
 	<-previewDone
-	// Detach chat controllers before stopping the lifecycle stack. Persistent
-	// provider hosts deliberately survive this daemon and preserve in-flight
-	// turns; the replacement daemon reconnects to the same initialized stream and
-	// consumes host-replayed output. Explicit session termination, not daemon
-	// shutdown, destroys them.
-	chatStopCtx, chatCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	chatSvc.StopAll(chatStopCtx)
+	// Daemon replacement detaches providers. Desktop exit stops processes
+	// while keeping the sessions and worktrees available for resume.
+	chatStopTimeout := cfg.ShutdownTimeout
+	if srv.StopAgentsRequested() {
+		chatStopTimeout = max(chatStopTimeout, 30*time.Second)
+	}
+	chatStopCtx, chatCancel := context.WithTimeout(context.Background(), chatStopTimeout)
+	if srv.StopAgentsRequested() {
+		if err := sessMgr.StopAgentsForQuit(chatStopCtx); err != nil {
+			log.Error("desktop quit agent shutdown", "err", err)
+		}
+		if err := chatSvc.TerminateAll(chatStopCtx); err != nil {
+			log.Error("desktop quit chat shutdown", "err", err)
+		}
+	} else {
+		chatSvc.StopAll(chatStopCtx)
+	}
 	chatCancel()
 	if usageDone != nil {
 		<-usageDone

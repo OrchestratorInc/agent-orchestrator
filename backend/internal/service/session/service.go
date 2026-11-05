@@ -55,6 +55,7 @@ type Store interface {
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
+	ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
@@ -1878,6 +1879,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrRuntimeCommandLineTooLong):
 		return apierr.Invalid("WINDOWS_COMMAND_LINE_TOO_LONG",
 			"The agent launch command exceeds the Windows size limit. Shorten the task or project instructions.", nil)
+	case errors.Is(err, ports.ErrChatPermissionModeUnsupported):
+		return apierr.Invalid("CHAT_PERMISSION_MODE_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatUnsupported):
 		var capabilityErr *ports.ChatCapabilityError
 		if errors.As(err, &capabilityErr) {

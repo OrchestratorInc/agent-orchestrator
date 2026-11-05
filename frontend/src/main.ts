@@ -35,6 +35,7 @@ import {
 	downloadUpdateNow,
 	quitAndInstallUpdate,
 	isUpdateRestartRequested,
+	clearUpdateRestartRequest,
 	setUpdateRestartFailureHandler,
 	getUpdateStatus,
 	recordUpdateDiagnostic,
@@ -54,6 +55,7 @@ import { readEditorSettings, writeEditorPreference } from "./main/editor-setting
 import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
+import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -103,6 +105,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { requestDesktopShutdown } from "./main/desktop-shutdown";
 import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
@@ -145,6 +148,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/u
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
+	getCloudAccessToken,
 	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
@@ -152,11 +156,15 @@ import {
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import { clearShareSnapshots } from "./main/cloud-share";
+import { registerCloudShareIpc } from "./main/cloud-share-ipc";
+import { ShareLinkRecords } from "./main/cloud-share-links";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
+import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { buildTelemetryBootstrap, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -178,8 +186,9 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -211,7 +220,7 @@ import type {
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
-import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
 	dockBounceType,
@@ -402,6 +411,10 @@ const browserCleanupPromises = new Set<Promise<void>>();
 let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
+let preserveAgentsOnQuit = false;
+let agentQuitCleanupComplete = false;
+let agentQuitCleanupPromise: Promise<void> | null = null;
+let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
@@ -885,6 +898,7 @@ async function createWindowInternal(): Promise<void> {
 		preload: preloadPath(),
 		platform: process.platform,
 		allowShellDebugging: isDev,
+		hasLivePageBelow: () => browserViewHost?.hasVisiblePanel() ?? false,
 	});
 	windowComposition = composition;
 	syncNativeWindowBackground();
@@ -1171,6 +1185,8 @@ async function createWindowInternal(): Promise<void> {
 	mainWindow.on("unmaximize", pushMaximized);
 	mainWindow.on("blur", () => {
 		keybindingRecordingActive = false;
+		// Leaving the app (switching apps, hiding, minimizing) finishes dictation.
+		dictation.stop();
 	});
 	shellWebContents.on("render-process-gone", () => {
 		keybindingRecordingActive = false;
@@ -2381,6 +2397,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		portConfirmed = true;
 		stopDiscovery();
 		setDaemonStatus({ state: "ready", port, pid: child.pid });
+		// The renderer opens event streams on a *.localhost name only while the
+		// daemon also serves [::1] at this port; its probe says whether it does.
+		void readDaemonProbe(port, "healthz").then((probe) => {
+			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
+			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
+			// The same attachment, so only the renderer's copy changes.
+			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
+			getShellWebContents()?.send("daemon:status", daemonStatus);
+		});
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
@@ -2581,6 +2606,29 @@ function scheduleDaemonAutoRestart(crashedPid: number | null, runFilePresent: bo
 	}, plan.delayMs);
 }
 
+async function shutdownDaemonForDesktopQuit(): Promise<void> {
+	const accepted = await requestDesktopShutdown({
+		keepAlive: keepDaemonAlive(process.env),
+		appRunId,
+		status: daemonStatus,
+		preserveAgents: () => preserveAgentsOnQuit || isUpdateRestartRequested(),
+		readRunInfo: async () => {
+			const handshakePath = runFilePath();
+			if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
+			return parseRunFile(await readFile(handshakePath, "utf8"));
+		},
+		requestShutdown: (port, body) => fetch(`http://127.0.0.1:${port}/shutdown`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(3000),
+		}),
+	});
+	if (!accepted) return;
+	desktopAgentShutdownAccepted = true;
+	if (daemonProcess) daemonStoppingProcess = daemonProcess;
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
@@ -2765,6 +2813,13 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
+const dictation = registerDictationIpc(
+	path.join(
+		app.isPackaged ? process.resourcesPath : app.getAppPath(),
+		"dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator",
+	),
+	getShellWebContents,
+);
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
 });
@@ -2947,7 +3002,19 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		env: process.env,
 		exists: existsSync,
 	});
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	const bootstrap = await buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	if (!bootstrap || daemonStatus.state !== "ready" || !daemonStatus.port) return bootstrap;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+		if (!response.ok) return bootstrap;
+		const identity = await response.json() as { lifetimeSessions?: unknown };
+		if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
+			bootstrap.lifetimeSessions = identity.lifetimeSessions;
+		}
+	} catch {
+		// A missing daemon count stays absent.
+	}
+	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 async function flushDaemonUsage(): Promise<void> {
@@ -3124,6 +3191,43 @@ async function refreshGitHubOwners(): Promise<GitHubOwner[]> {
 	}
 }
 
+type GitHubRepoSummary = { fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string };
+
+type GitHubRepoRow = { fullName?: string; full_name?: string; description?: string | null; isPrivate?: boolean; private?: boolean; url?: string; html_url?: string; owner?: { login?: string } };
+
+// Repositories the signed-in `gh` account can access. An empty query lists
+// everything it can reach (its own, collaborations and organization repos) by
+// recent push; a query searches every repository the account is allowed to see.
+// `gh repo list` is not used for the empty query: it only lists the signed-in
+// user's own repositories and leaves organization repositories out.
+async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
+	await ensureShellEnv();
+	const term = query.trim().slice(0, 100);
+	const args = term
+		// `--` keeps a query that starts with "-" (a GitHub exclusion qualifier) from being read as a gh flag.
+		? ["search", "repos", "--limit", "30", "--json", "fullName,description,isPrivate,url,owner", "--", term]
+		: ["api", "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member"];
+	try {
+		const { stdout } = await execFileAsync("gh", args, { env: daemonEnv(), timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+		const rows = JSON.parse(stdout) as GitHubRepoRow[];
+		return rows.flatMap((row) => {
+			const fullName = row.fullName ?? row.full_name;
+			const url = row.url ?? row.html_url;
+			if (!fullName || !url) return [];
+			return [{
+				fullName,
+				description: row.description ?? "",
+				isPrivate: (row.isPrivate ?? row.private) === true,
+				url,
+				avatarUrl: `https://github.com/${encodeURIComponent(row.owner?.login ?? fullName.split("/")[0] ?? "")}.png?size=40`,
+			}];
+		});
+	} catch {
+		return [];
+	}
+}
+
+ipcMain.handle("app:listGitHubRepos", (_event, query: unknown) => listGitHubRepos(typeof query === "string" ? query : ""));
 ipcMain.handle("app:getCachedGitHubOwners", () => cachedGitHubOwners);
 ipcMain.handle("app:refreshGitHubOwners", () => refreshGitHubOwners());
 ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { owner: string; name: string }) => {
@@ -3162,8 +3266,38 @@ registerChatImageIpc({
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
+	appName: app.getName(),
 });
-registerCloudArtifactIpc({ ipcMain });
+registerCloudArtifactIpc({
+	ipcMain,
+	openInFileManager: async (target, isFile) => {
+		if (isFile) shell.showItemInFolder(target);
+		else {
+			const error = await shell.openPath(target);
+			if (error) throw new Error(error);
+		}
+	},
+});
+// Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
+void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
+
+// Share links: publishing reads the file and holds the token here, in the main
+// process; the renderer asks for it when the person presses Publish.
+const shareSnapshotDir = path.join(desktopDataDir, "tmp", "share-uploads");
+void clearShareSnapshots(shareSnapshotDir).catch(() => undefined);
+registerCloudShareIpc({
+	ipcMain,
+	daemonDataDir: resolvedDaemonDataDir,
+	snapshotDir: () => shareSnapshotDir,
+	getToken: () => getCloudAccessToken(cloudDataDir()),
+	fetch: (url, init) => net.fetch(url, init),
+	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+});
+registerAgentLoginIpc({
+	ipcMain,
+	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
+	trustedSender: (sender) => sender === getShellWebContents(),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -3188,6 +3322,22 @@ ipcMain.handle("appState:setMigration", async (_event, migration: MigrationState
 	const runFile = runFilePath();
 	if (!runFile) return;
 	await updateMigration({ stateDir: path.dirname(runFile), migration, now: () => new Date() });
+});
+ipcMain.handle("appState:getFirstRunProjectPrompt", async (): Promise<"pending" | "seen"> => {
+	const runFile = runFilePath();
+	return runFile ? readFirstRunProjectPrompt(path.dirname(runFile)) : "seen";
+});
+ipcMain.handle("appState:getExperimentCohort", async (): Promise<number | null> => {
+	return (await loadOrAssignExperimentCohort(desktopDataDir)) ?? null;
+});
+ipcMain.handle("appState:claimFirstRunExperimentExposure", async (): Promise<boolean> => {
+	const runFile = runFilePath();
+	return runFile ? claimFirstRunExperimentExposure(path.dirname(runFile)) : false;
+});
+ipcMain.handle("appState:markFirstRunProjectPromptSeen", async () => {
+	const runFile = runFilePath();
+	if (!runFile) return;
+	await markFirstRunProjectPromptSeen(path.dirname(runFile));
 });
 
 ipcMain.handle("updateSettings:get", async (): Promise<UpdateSettings> => {
@@ -3258,6 +3408,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
+	preserveAgentsOnQuit = true;
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -3454,8 +3605,15 @@ function cloudDataDir(): string {
 	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
+// The control plane the daemon is configured for, the only server the AO
+// Cloud token is sent to (the renderer reads the same value from the daemon).
+const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
+	daemonStatus.state === "ready" && daemonStatus.port
+		? { baseUrl: `http://127.0.0.1:${daemonStatus.port}`, key: `${daemonStatus.port}:${daemonStatus.pid ?? ""}` }
+		: null);
+
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
-const cloudAgentProxy = createCloudAgentProxy(cloudDataDir);
+const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
 	if (!account) {
@@ -3476,7 +3634,7 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir);
+installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
@@ -3488,8 +3646,9 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
-// A shared session's link (ao-app://share/<orgId>/<token>) the renderer has
-// not taken yet: one that arrived before the window was ready waits here.
+// A shared session's link (ao-app://share/<code>, or ao-app://share/<orgId>/<token>
+// from before codes) the renderer has not taken yet: one that arrived before
+// the window was ready waits here. The renderer parses and checks it.
 let pendingShareLink: string | undefined;
 
 ipcMain.handle("cloud:takePendingShareLink", () => {
@@ -3842,7 +4001,7 @@ app.whenReady().then(async () => {
 // self-stops ~5s after the last client (this process) drops its connection.
 // Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
 // Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period. Sessions survive.
+// its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
@@ -3860,7 +4019,30 @@ app.on("before-quit", (event) => {
 			chatDraftQuitConfirmed = true;
 			app.quit();
 		} else {
+			preserveAgentsOnQuit = false;
+			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
+		}
+		return;
+	}
+	if (!agentQuitCleanupComplete) {
+		event.preventDefault();
+		// Quit has started: a pending crash respawn must not race the agent
+		// shutdown request below.
+		cancelDaemonAutoRestart();
+		if (!agentQuitCleanupPromise) {
+			// Fail open: a crashed, hung, or taken-over daemon must never block
+			// quit or an update restart. Dropping the supervisor link and the exit
+			// handler still clean up an app-owned daemon.
+			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+				.catch((error) => {
+					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
+				})
+				.then(() => {
+					agentQuitCleanupComplete = true;
+					agentQuitCleanupPromise = null;
+					app.quit();
+				});
 		}
 		return;
 	}
@@ -3926,7 +4108,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
-	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
+	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env) && !desktopAgentShutdownAccepted) {
 		killDaemon(daemonProcess);
 	}
 });

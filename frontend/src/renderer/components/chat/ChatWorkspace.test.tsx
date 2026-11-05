@@ -4,7 +4,7 @@ import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -408,7 +408,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		expect(container.querySelector(".cursor-chat-human-message > p")?.textContent).toBe(
+		expect(container.querySelector(".cursor-chat-human-message [data-chat-message-body]")?.textContent).toBe(
 			authoredBody,
 		);
 	});
@@ -458,7 +458,7 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
 		expect(paragraph).toHaveTextContent("before Image 1 after");
 		expect(paragraph).not.toHaveTextContent(".ao/attachments");
 		await userEvent.click(within(paragraph as HTMLElement).getByRole("button", { name: "Open image: Image 1" }));
@@ -481,7 +481,7 @@ describe("HumanMessage attachments", () => {
 		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
 		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message > p");
+		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
 		expect(paragraph).toHaveClass("whitespace-pre-wrap");
 		expect(paragraph?.textContent).toBe(text);
 		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
@@ -1133,14 +1133,14 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
-		// The fold names the time, so the answer's own row does not repeat it.
-		expect(document.querySelector("[data-turn-duration]")).toBeNull();
+		// "Worked for" fills the row under the prompt, so no empty one is reserved.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
 
 		await user.click(worked);
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
-	it("puts the turn's duration on the action row when there is no work to fold", () => {
+	it("heads a turn with no work to fold with Worked for as plain text", () => {
 		const turnId = "turn-straight-to-answer";
 		const snapshot: ConversationSnapshot = {
 			...chatFixtureEmpty,
@@ -1170,12 +1170,17 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		// Every settled turn says how long it ran in the same place. With nothing to
+		// fold it is a label: no control and no chevron.
+		const worked = document.querySelector("[data-turn-worked]");
+		expect(worked).toHaveTextContent("Worked for 1m");
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
-		const duration = screen.getByText("1m");
+		expect(worked?.querySelector("svg")).toBeNull();
+		// It fills the row under the prompt, so no empty one is reserved.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
+		// ...and the answer's own row does not repeat the time.
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
-		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.closest("[data-turn-actions]")).not.toHaveTextContent("1m");
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -1482,7 +1487,7 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
 		selection.addRange(range); fireEvent.pointerUp(document.body);
 		button = screen.getByRole("button", { name: "Add to chat" });
-		expect(button).toHaveClass("hover:bg-interactive-hover");
+		expect(button).toHaveClass("text-muted-foreground", "hover:text-foreground");
 		expect(button.querySelector("svg")).toBeNull();
 		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
 		fireEvent.mouseDown(button);
@@ -1548,6 +1553,34 @@ describe("ChatWorkspace timeline", () => {
 		} finally {
 			geometry.mockRestore();
 		}
+	});
+
+	it("applies a navigation request once, so another session's chat never replays it", () => {
+		type Request = { id: string; text: string; messageId?: string };
+		// A surface that stays mounted across sessions, as the Cloud one does,
+		// and drops a request once its chat reports it applied.
+		function Host({ snapshot, initial }: { snapshot: ConversationSnapshot; initial: Request }) {
+			const [request, setRequest] = useState<Request | undefined>(initial);
+			return (
+				<ChatWorkspace
+					snapshot={snapshot}
+					annotationNavigationRequest={request}
+					onAnnotationNavigationHandled={(id) => setRequest((current) => current?.id === id ? undefined : current)}
+				/>
+			);
+		}
+		const other = {
+			...chatFixtureSettled,
+			sessionId: "other-session",
+			items: chatFixtureSettled.items.map((item) => ({ ...item, id: `other-${item.id}` })),
+		} as ConversationSnapshot;
+		const messageId = chatFixtureSettled.items.find((item) => item.kind === "message")!.id;
+		const request = { id: "palette:1", text: "line", messageId };
+		const { rerender } = render(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		rerender(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		expect(screen.queryByText("The referenced message is no longer available in this chat.")).not.toBeInTheDocument();
 	});
 
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
@@ -2421,6 +2454,26 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 	});
 
+	it("says the sandbox is starting under the brief a Freestyle session was started with, until its worker connects", () => {
+		const startedAt = new Date().toISOString();
+		const cloudSession = (observedState: string, runtimeConnected = false, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		const echo = [{ clientMessageId: "req-1", text: "Fix the login bug", createdAt: startedAt, opening: true }];
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		expect(screen.getByText("Starting sandbox")).toBeInTheDocument();
+		// Connected: the row under the brief goes back to timing the reply.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("running", true)} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		view.unmount();
+		// A Coder session starts behind its own startup screen: the chat names no sandbox start.
+		render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning", false, "coder")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+	});
+
 	it.each([
 		["fetch", "Getting the latest code"],
 		["worktree", "Preparing your workspace"],
@@ -3054,7 +3107,7 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it.each([1200, 300])("preserves the spacer and bottom anchor during a disclosure resize to %ipx", async (height) => {
+	it.each([1200, 300])("lets the prompt spacer take a disclosure resize to %ipx in the latest turn", async (height) => {
 		stubVirtualTimelineGeometry();
 		const originalObserver = window.ResizeObserver;
 		const observers: TestResizeObserver[] = [];
@@ -3072,8 +3125,9 @@ describe("ChatWorkspace timeline", () => {
 			const spacer = screen.getByTestId("chat-prompt-spacer");
 			log.scrollTop = log.scrollHeight - log.clientHeight;
 			fireEvent.scroll(log);
-			const initialSpacer = spacer.style.height;
-			const initialScrollTop = log.scrollTop;
+			const initialSpacer = Number.parseFloat(spacer.style.height) || 0;
+			const initialRange = log.scrollHeight;
+			expect(initialSpacer).toBeGreaterThan(0);
 			const latest = log.querySelector<HTMLElement>('[data-index="99"]')!;
 			expect(latest).toBeInTheDocument();
 			// A disclosure changes row geometry without a new conversation snapshot.
@@ -3083,9 +3137,14 @@ describe("ChatWorkspace timeline", () => {
 					if (observer.targets.has(latest)) observer.callback([entry], observer as unknown as ResizeObserver);
 				}
 			});
-			expect(spacer.style.height).toBe(initialSpacer);
-			// Keep the virtualizer's size compensation without an extra forced pin.
-			expect(log.scrollTop).toBe(initialScrollTop + height - 600);
+			// The spacer under the latest prompt gives up or takes back the room in the same
+			// frame, as without windowing, so the view neither slides with each frame of a
+			// fold's animation nor snaps back when React draws the new height.
+			const change = height - 600;
+			const spacerNow = Number.parseFloat(spacer.style.height) || 0;
+			expect(spacerNow).toBe(Math.max(0, initialSpacer - change));
+			// Only what the spacer could not take changes the scroll range.
+			expect(log.scrollHeight).toBe(initialRange + change + spacerNow - initialSpacer);
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		} finally {
 			window.ResizeObserver = originalObserver;

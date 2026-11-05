@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TerminalMux } from "../lib/terminal-mux";
@@ -2971,6 +2971,102 @@ describe("XtermTerminal", () => {
 		// dragenter bumped, or the next folder drag inherits a stale depth and
 		// never shows the overlay.
 		expect(bubbled).toHaveBeenCalledTimes(1);
+	});
+
+	it("types a sandbox path quoted for its shell, so a file name is never run", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/it's a $(id) `id`; x & y | z.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const file = new File(["hello"], "it's a $(id) `id`; x & y | z.txt", { type: "text/plain" });
+
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/it'\\''s a $(id) `id`; x & y | z.txt' ", "paste"));
+	});
+
+	it("takes no dropped files when the session cannot take them", async () => {
+		const saveDroppedFile = vi.fn();
+		window.ao!.terminal.saveDroppedFile = saveDroppedFile;
+		const onInput = vi.fn();
+		const { container } = render(<XtermTerminal theme="dark" saveDroppedFile={null} onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+		const event = createEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		fireEvent(container.firstElementChild!, event);
+		// Left to the window, which ignores a dropped file.
+		expect(event.defaultPrevented).toBe(false);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(saveDroppedFile).not.toHaveBeenCalled();
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
+	it("refuses a dropped file over the session's limit before reading it", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/small.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={4} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const big = new File(["hello"], "big.txt", { type: "text/plain" });
+		const small = new File(["hi"], "small.txt", { type: "text/plain" });
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [big, small]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/small.txt' ", "paste"));
+		expect(saveDroppedFile).toHaveBeenCalledTimes(1);
+		expect(saveDroppedFile).toHaveBeenCalledWith({ name: "small.txt", bytes: expect.any(Uint8Array) });
+	});
+
+	it("shows that a dropped file is being placed, then says why one could not be, without blocking the terminal", async () => {
+		let finishPlacing!: (path: string) => void;
+		const saveDroppedFile = vi.fn(({ name }: { name: string }) => name === "notes.txt"
+			? new Promise<string>((resolve) => (finishPlacing = resolve))
+			: Promise.reject(new Error("This session does not allow workspace writes.")));
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={1024 * 1024} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const files = [
+			new File(["hello"], "notes.txt", { type: "text/plain" }),
+			new File(["hello"], "locked.txt", { type: "text/plain" }),
+			new File([new Uint8Array(1024 * 1024 + 1)], "huge.bin", { type: "application/octet-stream" }),
+		];
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, files) });
+		const placing = await screen.findByRole("status");
+		expect(placing).toHaveTextContent("Attaching 3 files…");
+		expect(placing).toHaveClass("pointer-events-none");
+		finishPlacing("/workspace/.ao/attachments/notes.txt");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Couldn’t attach locked.txt: This session does not allow workspace writes.");
+		expect(alert).toHaveTextContent("Couldn’t attach huge.bin: The file is larger than 1 MB, the most this session takes.");
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		// The file that was placed is still typed.
+		expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/notes.txt' ", "paste");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows a local save's progress only when it is slow", async () => {
+		vi.useFakeTimers();
+		try {
+			let finish!: (path: string) => void;
+			window.ao!.terminal.saveDroppedFile = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
+			const { container } = render(<XtermTerminal theme="dark" />);
+			fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [new File(["x"], "quick.txt")]) });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(100);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(400);
+			});
+			expect(screen.getByRole("status")).toHaveTextContent("Attaching quick.txt…");
+			await act(async () => {
+				finish("/tmp/ao-dropped/quick.txt");
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	// Regression: a dropped folder is the app-wide "open as project" gesture

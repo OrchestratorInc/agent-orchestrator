@@ -734,6 +734,11 @@ describe("browser shortcut matching", () => {
 		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
 	});
 
+	it("leaves ⌘D to the page instead of starting dictation", () => {
+		const chord = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("dictate", chord, true)).toBe(false);
+	});
+
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
 		const input = { key: " ", control: false, meta: false, shift: false, alt: false, type: "keyDown" };
 		expect(browserShortcutAction(input, false)).toBeNull();
@@ -918,6 +923,18 @@ describe("browser shortcut routing", () => {
 			expect((await invoke("browser:getTabs", state.viewId) as unknown as BrowserTabsState).tabs).toHaveLength(0);
 		});
 		expect(webContents.close).toHaveBeenCalledTimes(2);
+	});
+
+	it("reports a visible panel only while a page is on screen", async () => {
+		const { emit, host, invoke } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		expect(host.hasVisiblePanel()).toBe(false);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		expect(host.hasVisiblePanel()).toBe(true);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 2, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: false });
+		expect(host.hasVisiblePanel()).toBe(false);
 	});
 
 	it("keeps browser shortcuts targeted after a blank-tab hide clears native focus", async () => {

@@ -250,6 +250,7 @@
 	--spacing-inspector-min: var(--size-inspector-min);
 	--spacing-textarea-min: var(--size-textarea-min);
 	--spacing-sidebar-project-actions: var(--size-sidebar-project-actions);
+	--spacing-sidebar-project-actions-pinned: var(--size-sidebar-project-actions-pinned);
 	--spacing-row-md: var(--size-row-md);
 	--spacing-empty-offset-y: var(--size-empty-offset-y);
 	--spacing-kv-label: var(--size-kv-label);
@@ -605,6 +606,11 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border: none;
 	border-bottom: 1px solid var(--color-border-strong);
 	border-radius: 0;
+}
+
+/* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
+.center-panel-surface .new-chat-topbar .session-topbar-surface {
+	border-bottom: none;
 }
 
 /* A persistent edge fade signals that the tab strip can scroll horizontally. */
@@ -1247,6 +1253,8 @@ button.settings-row-bar {
 	color: var(--color-text-settings-muted);
 }
 
+/* Footer actions for raw buttons in packages/product-ui (desktop uses Button
+   variant="footer" / "footer-primary"). */
 @utility settings-footer-button {
 	display: inline-flex;
 	height: var(--size-settings-action-height);
@@ -1353,35 +1361,6 @@ button.settings-row-bar {
 	color: var(--color-text-settings-title);
 }
 
-@utility settings-close-button {
-	display: grid;
-	width: calc(var(--spacing) * 8);
-	height: calc(var(--spacing) * 8);
-	place-items: center;
-	border-radius: var(--radius-md);
-	color: var(--color-text-settings-muted);
-	transition-property: color, background-color;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		background-color: var(--color-bg-settings-row-hover);
-		color: var(--color-text-settings-title);
-	}
-
-	&:focus-visible {
-		outline: none;
-		box-shadow: none;
-	}
-}
-
-/* Positioning only — compose with `settings-close-button` at the call site. */
-@utility settings-dialog-close-button {
-	position: absolute;
-	top: var(--space-3);
-	right: var(--space-3);
-	z-index: var(--z-chrome);
-}
-
 @utility import-title {
 	font-size: 20px;
 	font-weight: 700;
@@ -1470,9 +1449,11 @@ select {
 	font: inherit;
 }
 
+/* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+[role="alert"] {
 	-webkit-user-select: text;
 	user-select: text;
 }
@@ -2092,6 +2073,29 @@ textarea,
 	}
 }
 
+/* A sidebar marker (needs you / ready) appearing on a row that was already on
+   screen: one short pop, then still. Transform and opacity only. */
+@keyframes session-marker-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.6);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.session-marker-pop {
+	animation: session-marker-pop 200ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-marker-pop {
+		animation: none;
+	}
+}
+
 @keyframes attention-card-pulse {
 	0%,
 	100% {
@@ -2390,16 +2394,10 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 /* Keep keyboard focus visible without adding a ring to the sidebar chrome.
    Opt out elements that own their own fill (icon actions, brand, folder toggle,
    NavRowHighlight hosts) so each new control does not need another !important. */
-.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not([data-sidebar-brand]):not([data-project-folder]) {
+.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not(.group\/button):not([data-sidebar-brand]):not([data-project-folder]) {
 	background-color: var(--color-interactive-hover) !important;
 	outline: none !important;
 	box-shadow: none !important;
-}
-
-/* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   section "+") share the instant icon-button fill on hover and focus-visible. */
-.sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: var(--color-interactive-hover) !important;
 }
 
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
@@ -2573,43 +2571,6 @@ html.sidebar-reordering * {
 	border-color: var(--color-border) !important;
 }
 
-/* Keep every chat control tactile, including the small native buttons embedded
-   in message rows and activity summaries. The shared Button primitive owns its
-   own transition, but this makes the same interaction contract hold at the
-   thinner timeline boundaries too. */
-.cursor-chat-surface button:not(:disabled) {
-	transition-property: background-color, border-color, color, box-shadow, transform, opacity;
-	transition-duration: 100ms;
-	transition-timing-function: ease-out;
-}
-
-.cursor-chat-surface button:not(:disabled):active {
-	transform: scale(0.96);
-}
-
-/* Menu triggers anchor their menu: scaling one on press would move the open menu,
-   which is positioned from the trigger's box. They get hover and open states only. */
-.cursor-chat-surface .settings-option-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Timeline summaries are disclosure controls, not raised buttons. Keeping their
-   footprint fixed prevents the label from shifting when the pointer lands. */
-.cursor-chat-surface .activity-summary-button:not(:disabled):active {
-	transform: none;
-}
-
-/* Worked is a disclosure row, not a tactile button: keep its geometry and
-   scale stable while the accordion opens. */
-.cursor-chat-surface .chat-worked-trigger:not(:disabled):active {
-	transform: none;
-}
-
-/* Welcome sample prompt chips hold still when pressed. */
-.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
-	transform: none;
-}
-
 .activity-run-toggle {
 	color: var(--color-text-muted);
 }
@@ -2672,16 +2633,6 @@ html.sidebar-reordering * {
 	.chat-worked-accordion-content[data-state="open"],
 	.chat-worked-accordion-content[data-state="closed"] {
 		animation: none;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.cursor-chat-surface button:not(:disabled) {
-		transition: none;
-	}
-
-	.cursor-chat-surface button:not(:disabled):active {
-		transform: none;
 	}
 }
 
@@ -2981,10 +2932,6 @@ html.sidebar-reordering * {
 	flex: none;
 }
 
-.cursor-chat-surface .queue-dock-toggle:not(:disabled):active {
-	transform: none;
-}
-
 .cursor-chat-surface .queue-dock-toggle:hover .queue-dock-label {
 	color: var(--color-foreground);
 }
@@ -3147,6 +3094,41 @@ html.sidebar-reordering * {
 	}
 }
 
+/* A long user message folded to about ten lines (CollapsibleHumanBody). The text
+   fades out at the fold so it reads as continuing; the fade length is registered
+   so it eases with the height instead of snapping. A mask, not an overlay, so the
+   fade works on every bubble fill, including a queued one's transparent body. */
+@property --chat-human-fade {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.chat-human-fold[data-folded] {
+	--chat-human-fade: 40px;
+}
+
+/* Open and settled, the message carries no mask or clip at all. Clip, not hidden:
+   a hidden box still scrolls when focus or find-in-page reaches the folded text,
+   which would leave the fold showing a slice from the middle. */
+.chat-human-fold[data-folded],
+.chat-human-fold[data-animating] {
+	overflow: clip;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - var(--chat-human-fade)), transparent);
+}
+
+.chat-human-fold[data-animating] {
+	transition:
+		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
+		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
+   on the toggle below it and a reader scrolled into the message keeps their place. */
+.chat-human-fold[data-collapsing] {
+	overflow-anchor: none;
+}
+
 .cursor-chat-origin-message,
 .cursor-chat-activity-panel {
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
@@ -3209,9 +3191,27 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	/* `--color-bg-secondary` equals the canvas in light themes; with no border
-	   the composer needs the tertiary step to separate (see human message). */
-	--composer-bg: var(--color-bg-tertiary);
+	/* Light composer is the popover surface (white) held up by a hairline and a
+	   soft shadow, not a gray fill: the canvas is near-white, so a darker well
+	   reads as disabled. Sent messages still use the tertiary fill below. */
+	--composer-bg: var(--color-bg-elevated);
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+		0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+		0 8px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+/* The tray hung under the composer is a near-white surface with a hairline, not
+   a gray well: the composer's shadow falls on it, and a gray tint turns dirty. */
+:root[data-theme="light"] .chat-composer-tray {
+	background: var(--color-bg-elevated);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* With a tray under it, keep only the hairline so the drop shadow does not
+   gray the tray's top edge. */
+:root[data-theme="light"] [data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 /* Light needs the tertiary fill to lift a sent message off the canvas; like
@@ -3288,14 +3288,14 @@ html.sidebar-reordering * {
 
 .chat-scroll-marker {
 	position: absolute;
-	right: 0;
+	right: 3px;
 	top: 50%;
 	width: 7px;
 	height: 2px;
 	transform: translateY(-50%);
 	border-radius: 999px;
-	background: color-mix(in srgb, var(--color-text-muted) 54%, transparent);
-	opacity: 0.76;
+	background: color-mix(in srgb, var(--color-text-muted) 40%, transparent);
+	opacity: 0.28;
 	transition:
 		width 180ms cubic-bezier(0.16, 1, 0.3, 1),
 		background-color 140ms ease,
@@ -3311,7 +3311,8 @@ html.sidebar-reordering * {
 }
 
 .chat-scroll-marker-visible {
-	background: color-mix(in srgb, var(--color-text-muted) 82%, transparent);
+	width: 13px;
+	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
 }
 
@@ -3359,6 +3360,10 @@ html.sidebar-reordering * {
 
 	.chat-human-message-enter {
 		animation: none;
+	}
+
+	.chat-human-fold[data-animating] {
+		transition: none;
 	}
 
 	.chat-welcome-leaving {
@@ -3432,26 +3437,6 @@ html.sidebar-reordering * {
 	font-weight: var(--font-weight-semibold);
 }
 
-
-.workspace-topbar-actions .topbar-control:active:not(:disabled) {
-	transform: scale(0.96);
-}
-
-/* A control that anchors a popover must not transform while pressed. The menu is
-   positioned from the trigger's rect, so scaling the trigger drags the open menu
-   along with it. Press feedback moves to the glyph, which the menu does not
-   measure. */
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) {
-	transform: none;
-}
-
-.workspace-topbar-actions .topbar-control--static-press > svg {
-	transition: transform var(--duration-fast) ease-out;
-}
-
-.workspace-topbar-actions .topbar-control--static-press:active:not(:disabled) > svg {
-	transform: scale(0.96);
-}
 
 .workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
@@ -5409,13 +5394,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	color: var(--fg);
 }
 
-.browser-panel__tab-actions button:not(:disabled):active,
-.browser-panel__toolbar button:not(:disabled):active,
-.browser-panel__address-bar button:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
 .browser-panel__tab-region {
 	position: relative;
 	display: flex;
@@ -5531,6 +5509,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 	white-space: nowrap;
 }
 
+/* Match the title line box to the icon so flex centering aligns both. */
+.side-chat__tab-row .browser-panel__tab-title {
+	line-height: 16px;
+}
+
 .browser-panel__tab-close {
 	position: relative;
 	top: 1px;
@@ -5553,11 +5536,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab-close:not(:disabled):hover {
 	color: var(--fg);
 	background: var(--surface-hover);
-}
-
-.browser-panel__tab-close:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__tab-close:disabled {
@@ -5603,11 +5581,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab-new:focus-visible {
 	outline: 2px solid var(--color-accent);
 	outline-offset: -2px;
-}
-
-.browser-panel__tab-new:active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__url-wrap {
@@ -5897,13 +5870,6 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.browser-panel__tab-close {
 		transition: none;
 	}
-
-	.browser-panel__toolbar button:not(:disabled):hover,
-	.browser-panel__toolbar button:not(:disabled):active,
-	.browser-panel__tab-new:active,
-	.browser-panel__tab-close:not(:disabled):active {
-		transform: none;
-	}
 }
 
 /* Notification rows: subtle entrance so new/unread items slide in when the
@@ -6072,6 +6038,9 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
 html:root[data-window-translucent="true"] {
+	/* The one shell tint over the vibrancy; the shell plate and the startup
+	 * screen both paint it so the loader hands off to the app without a shift. */
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
 	--solid-bg-primary: var(--color-bg-primary);
 	--solid-bg-secondary: var(--color-bg-secondary);
 	--solid-bg-tertiary: var(--color-bg-tertiary);
@@ -6123,6 +6092,13 @@ html[data-window-translucent="true"] :is(
 	--sidebar-accent: var(--solid-sidebar-accent);
 }
 
+/* A Cloud session's startup and interface-switch screens cover the session
+ * beneath them; on a clear canvas that session would show through the steps,
+ * so they keep the solid one. */
+html[data-window-translucent="true"] [data-startup-cover] {
+	background-color: var(--solid-bg-primary);
+}
+
 /* Text drawn in the canvas colour sits on a solid foreground fill (the send
  * button's arrow), so it must keep the solid colour or it vanishes. */
 html[data-window-translucent="true"] :is(.text-background, .hover\:text-background:hover) {
@@ -6161,13 +6137,13 @@ html[data-window-translucent="true"] .app-shell-root::before {
 	inset: 0;
 	z-index: -1;
 	pointer-events: none;
-	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+	background-color: var(--ao-shell-tint);
 }
 
-/* The startup screen covers the window above (or before) the shell. It has
- * only the mascot to show, so it skips the tint and shows the bare blur. */
+/* The startup screen covers the window above (or before) the shell. It paints
+ * the same tint as the shell plate, so the loader matches the loaded app. */
 html[data-window-translucent="true"] .ao-startup-screen {
-	background-color: transparent;
+	background-color: var(--ao-shell-tint);
 }
 
 /* A loader inside the running shell (remote host loading, missing
@@ -6226,4 +6202,31 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 @keyframes build-info-twinkle {
 	0%, 100% { opacity: 0.15; }
 	50% { opacity: 1; }
+}
+
+/* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to
+ * the same surface as the sidebar, so mix in some foreground and add a hairline
+ * + shadow. */
+:root:not([data-theme="light"]) [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
+		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* In light, darkening reads as dirty gray. Use the menu surface and its faint
+ * edge instead; the hover card wrapper already adds the popover shadow. */
+:root[data-theme="light"] [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: var(--color-bg-elevated) !important;
+	box-shadow: 0 0 0 1px var(--color-border-overlay);
+}
+
+/* Keep the session row lit while its hover preview card is open (pointer on the card). */
+.group\/nav-row[data-preview-open] [data-nav-row-highlight-idle] {
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+.group\/nav-row[data-preview-open] {
+	color: var(--color-foreground);
 }

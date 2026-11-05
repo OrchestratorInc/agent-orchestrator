@@ -14,6 +14,7 @@ import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pressable } from "@/components/ui/pressable";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -302,8 +303,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 			data-sidebar="trigger"
 			data-slot="sidebar-trigger"
 			variant="ghost"
-			size="icon"
-			className={cn("size-7", className)}
+			size="icon-sm"
+			className={className}
 			onClick={(event) => {
 				onClick?.(event);
 				toggleSidebar();
@@ -321,7 +322,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
 	const { toggleSidebar } = useSidebar();
 
 	return (
-		<button
+		<Pressable
 			data-sidebar="rail"
 			data-slot="sidebar-rail"
 			aria-label={t("shortcut.toggle-sidebar")}
