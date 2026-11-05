@@ -147,6 +147,19 @@ describe("cloudShare IPC", () => {
 		expect(changed.fingerprint).not.toBe(published.fingerprint);
 	});
 
+	it("republishes a changed file to its link, which clears the change", async () => {
+		const { invoke, publish, file, bodies } = setup();
+		await publish();
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "a newer version of the report");
+		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string };
+		const result = await invoke("cloudShare:publish", { ...file, fingerprint: changed.fingerprint, shareId: SHARE_ID });
+		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
+		// An update names the link alone, not a document.
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).not.toHaveProperty("project");
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: changed.fingerprint, fingerprint: changed.fingerprint });
+	});
+
 	it("reads a record kept before fingerprints were, as a link with nothing to compare", async () => {
 		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [shareRecordKey("https://cp.test", "sess-1", "docs/report.html")]: SHARE_ID }));
 		const { invoke, file, records } = setup();

@@ -440,8 +440,10 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			defaultValue: "This agent can't switch a running terminal session to chat. Start a new chat session instead.",
 		})
 		: undefined;
+	// Switching a cloud session's interface is its workspace's: a guest of a
+	// shared session is always refused, so it isn't offered.
 	const showAction = Boolean(!unsupported && (isCloud
-		? cloudEnabled && sessionId
+		? cloudEnabled && sessionId && session?.cloud?.shared !== true
 		: interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"
