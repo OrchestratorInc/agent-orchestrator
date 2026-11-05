@@ -71,12 +71,9 @@ export function ShellTerminalTab({
 				),
 		),
 	);
-	const title =
-		agent && defaultNumber
-			? sharesAgent
-				? `${agentLabel(agent.harness)} ${defaultNumber}`
-				: agentLabel(agent.harness)
-			: shell.title;
+	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
+	const agentNumber = agentName && sharesAgent ? defaultNumber : undefined;
+	const title = agentName ? (agentNumber ? `${agentName} ${agentNumber}` : agentName) : shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -214,7 +211,8 @@ export function ShellTerminalTab({
 						<SquareTerminal aria-hidden="true" className="size-icon-sm" />
 					)
 				}
-				label={title}
+				label={agentName ?? title}
+				labelSuffix={agentNumber}
 				trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 			/>
 		);

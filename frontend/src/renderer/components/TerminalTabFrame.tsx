@@ -6,6 +6,11 @@ type TerminalTabFrameProps = {
 	active: boolean;
 	icon: ReactNode;
 	label: string;
+	/**
+	 * Text kept visible after the label when the label truncates, e.g. the
+	 * number that tells two "Claude Code" tabs apart.
+	 */
+	labelSuffix?: string;
 	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
 	action?: ReactNode;
 	/** Keep the action in the icon's slot at rest (unsaved dot, running switch). */
@@ -29,6 +34,7 @@ export function TerminalTabFrame({
 	active,
 	icon,
 	label,
+	labelSuffix,
 	action,
 	actionPinned = false,
 	buttonRef,
@@ -74,7 +80,14 @@ export function TerminalTabFrame({
 					>
 						{icon}
 					</span>
-					<span className="truncate">{label}</span>
+					{labelSuffix ? (
+						<span className="flex min-w-0">
+							<span className="truncate">{label}</span>
+							<span className="shrink-0 whitespace-pre">{` ${labelSuffix}`}</span>
+						</span>
+					) : (
+						<span className="truncate">{label}</span>
+					)}
 					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
