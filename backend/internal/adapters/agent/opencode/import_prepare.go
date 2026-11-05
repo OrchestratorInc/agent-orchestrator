@@ -28,6 +28,11 @@ import (
 // the launch directory. The copy gets fresh ids derived from the source id and
 // launch directory, so a retry finds and reuses the copy an earlier attempt
 // published instead of creating a second one.
+//
+// When discovery pinned the selected history (SourceFingerprint), the source
+// must still match it before export, and any copy, new or reused, must match it
+// too, so the copy always holds exactly the history AO archived. A mismatched
+// copy is rejected and left in place, since AO never deletes OpenCode data.
 
 var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
 
@@ -74,7 +79,16 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		if existing.messages == 0 {
 			return ports.NativeSessionRef{}, errors.New("opencode: the prepared session has no messages")
 		}
+		if err := matchOpenCodeFingerprint(ctx, configDir, target, r.SourceFingerprint); err != nil {
+			return ports.NativeSessionRef{}, fmt.Errorf("opencode: the prepared session copy does not hold the selected history: %w", err)
+		}
 		return ref, nil
+	}
+	if strings.TrimSpace(r.DataDir) == "" || !filepath.IsAbs(r.DataDir) {
+		return ports.NativeSessionRef{}, errors.New("opencode: AO's data directory is required to stage the session copy")
+	}
+	if err := matchOpenCodeFingerprint(ctx, configDir, source, r.SourceFingerprint); err != nil {
+		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session changed since it was selected; scan again before importing: %w", err)
 	}
 
 	binary, err := p.opencodeBinary(ctx)
@@ -96,7 +110,13 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if messages == 0 {
 		return ports.NativeSessionRef{}, errors.New("opencode: the imported session has no messages")
 	}
-	dir, err := os.MkdirTemp("", "ao-opencode-import-")
+	// The export holds the whole conversation, so it is staged privately under
+	// AO's own data directory, never the OS temporary directory.
+	staging := filepath.Join(r.DataDir, "import-staging")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	dir, err := os.MkdirTemp(staging, "opencode-")
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
@@ -124,7 +144,27 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if copied.messages != messages {
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session copy holds %d of %d messages", copied.messages, messages)
 	}
+	// The source can gain a turn between the check above and the export.
+	if err := matchOpenCodeFingerprint(ctx, configDir, target, r.SourceFingerprint); err != nil {
+		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session changed while it was copied; scan again before importing: %w", err)
+	}
 	return ref, nil
+}
+
+// matchOpenCodeFingerprint checks a session against the selection evidence.
+// Imports without a fingerprint have nothing to check.
+func matchOpenCodeFingerprint(ctx context.Context, configDir, id, want string) error {
+	if want == "" {
+		return nil
+	}
+	got, err := openCodeSessionFingerprint(ctx, configDir, id)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return errors.New("history fingerprint mismatch")
+	}
+	return nil
 }
 
 // derivedOpenCodeID returns a new id with old's prefix and time component and
@@ -228,15 +268,8 @@ type openCodeCopy struct {
 
 // readOpenCodeCopy reads a session's directory and message count read-only.
 func readOpenCodeCopy(ctx context.Context, configDir, id string) (openCodeCopy, bool, error) {
-	dbPath := filepath.Join(configDir, "opencode.db")
-	if _, err := os.Stat(dbPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return openCodeCopy{}, false, nil
-		}
-		return openCodeCopy{}, false, err
-	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
-	if err != nil {
+	db, err := openOpenCodeStore(configDir)
+	if err != nil || db == nil {
 		return openCodeCopy{}, false, err
 	}
 	defer func() { _ = db.Close() }()
@@ -251,6 +284,19 @@ func readOpenCodeCopy(ctx context.Context, configDir, id string) (openCodeCopy, 
 		return openCodeCopy{}, false, fmt.Errorf("opencode: read session copy: %w", err)
 	}
 	return copied, true, nil
+}
+
+// openOpenCodeStore opens configDir's opencode.db read-only. A missing store
+// returns nil.
+func openOpenCodeStore(configDir string) (*sql.DB, error) {
+	dbPath := filepath.Join(configDir, "opencode.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(2000)")
 }
 
 func sameOpenCodeDir(stored, launch string) bool {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -49,43 +50,68 @@ func fakeOpenCode(dbPath string, args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		var doc struct {
-			Info struct {
-				ID string `json:"id"`
-			} `json:"info"`
-			Messages []struct {
-				Info struct {
-					ID string `json:"id"`
-				} `json:"info"`
-			} `json:"messages"`
-		}
-		if err := json.Unmarshal(data, &doc); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
 		cwd, _ := os.Getwd()
 		if dir := os.Getenv("AO_FAKE_OPENCODE_BIND"); dir != "" {
 			cwd = dir
 		}
-		db, err := sql.Open("sqlite", dbPath)
+		id, err := storeOpenCodeExport(dbPath, data, cwd, time.Now().UnixMilli())
 		if err != nil {
-			return 1
-		}
-		defer func() { _ = db.Close() }()
-		if _, err := db.Exec(`INSERT INTO session (id, directory) VALUES (?, ?)`, doc.Info.ID, cwd); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		for _, m := range doc.Messages {
-			if _, err := db.Exec(`INSERT INTO message (id, session_id) VALUES (?, ?)`, m.Info.ID, doc.Info.ID); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			}
-		}
-		fmt.Printf("Imported session: %s\n", doc.Info.ID)
+		fmt.Printf("Imported session: %s\n", id)
 		return 0
 	}
 	return 2
+}
+
+// storeOpenCodeExport records an export in a test opencode.db as OpenCode's
+// import does: bound to cwd, keeping message times and part contents, with
+// part timestamps set at import time.
+func storeOpenCodeExport(dbPath string, data []byte, cwd string, now int64) (string, error) {
+	var doc struct {
+		Info struct {
+			ID string `json:"id"`
+		} `json:"info"`
+		Messages []struct {
+			Info struct {
+				ID   string `json:"id"`
+				Role string `json:"role"`
+				Time struct {
+					Created int64 `json:"created"`
+				} `json:"time"`
+			} `json:"info"`
+			Parts []struct {
+				ID   string `json:"id"`
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT INTO session (id, directory) VALUES (?, ?)`, doc.Info.ID, cwd); err != nil {
+		return "", err
+	}
+	for _, m := range doc.Messages {
+		info, _ := json.Marshal(map[string]any{"role": m.Info.Role, "time": map[string]any{"created": m.Info.Time.Created}})
+		if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)`, m.Info.ID, doc.Info.ID, m.Info.Time.Created, string(info)); err != nil {
+			return "", err
+		}
+		for _, part := range m.Parts {
+			body, _ := json.Marshal(map[string]any{"type": part.Type, "text": part.Text})
+			if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)`, part.ID, m.Info.ID, doc.Info.ID, now, string(body)); err != nil {
+				return "", err
+			}
+		}
+	}
+	return doc.Info.ID, nil
 }
 
 const (
@@ -102,13 +128,13 @@ func openCodeExportFixture(sourceDir string) string {
 		`"messages":[` +
 		`{"info":{"id":"` + ocMsg1 + `","sessionID":"` + ocSourceID + `","role":"user","time":{"created":1762324000001}},` +
 		`"parts":[{"id":"` + ocPart1 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg1 + `","type":"text","text":"Reply with KIWI"}]},` +
-		`{"info":{"id":"` + ocMsg2 + `","sessionID":"` + ocSourceID + `","role":"assistant","parentID":"` + ocMsg1 + `","path":{"cwd":"` + sourceDir + `","root":"` + sourceDir + `"},"cost":0.000123456789,"tokens":{"input":12345678901}},` +
+		`{"info":{"id":"` + ocMsg2 + `","sessionID":"` + ocSourceID + `","role":"assistant","time":{"created":1762324000002},"parentID":"` + ocMsg1 + `","path":{"cwd":"` + sourceDir + `","root":"` + sourceDir + `"},"cost":0.000123456789,"tokens":{"input":12345678901}},` +
 		`"parts":[{"id":"` + ocPart2 + `","sessionID":"` + ocSourceID + `","messageID":"` + ocMsg2 + `","type":"text","text":"KIWI"}]}` +
 		`]}`
 }
 
 type fakeOpenCodeEnv struct {
-	configDir, launch, source, log, export string
+	configDir, launch, source, log, export, dataDir string
 }
 
 func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
@@ -124,8 +150,9 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 		source:    filepath.Join(root, "source"),
 		log:       filepath.Join(root, "calls.log"),
 		export:    filepath.Join(root, "export.json"),
+		dataDir:   filepath.Join(root, "ao-data"),
 	}
-	for _, dir := range []string{env.configDir, env.launch, env.source} {
+	for _, dir := range []string{env.configDir, env.launch, env.source, env.dataDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +168,8 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 	}
 	for _, stmt := range []string{
 		`CREATE TABLE session (id text PRIMARY KEY, directory text, parent_id text, time_archived integer)`,
-		`CREATE TABLE message (id text PRIMARY KEY, session_id text)`,
+		`CREATE TABLE message (id text PRIMARY KEY, session_id text, time_created integer, data text)`,
+		`CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer, data text)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -149,6 +177,10 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 	}
 	_ = db.Close()
 	if err := os.WriteFile(env.export, []byte(openCodeExportFixture(env.source)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The source session the export describes, as discovery reads it.
+	if _, err := storeOpenCodeExport(dbPath, []byte(openCodeExportFixture(env.source)), env.source, 1762324000500); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AO_FAKE_OPENCODE_DB", dbPath)
@@ -159,7 +191,30 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 }
 
 func (e fakeOpenCodeEnv) relocation() ports.ImportedSessionRelocation {
-	return ports.ImportedSessionRelocation{NativeSessionID: ocSourceID, ConfigDir: e.configDir, SourceCWD: e.source, LaunchCWD: e.launch}
+	return ports.ImportedSessionRelocation{NativeSessionID: ocSourceID, ConfigDir: e.configDir, SourceCWD: e.source, LaunchCWD: e.launch, DataDir: e.dataDir}
+}
+
+// fingerprint is the discovery fingerprint of a session in the test store.
+func (e fakeOpenCodeEnv) fingerprint(t *testing.T, id string) string {
+	t.Helper()
+	got, err := openCodeSessionFingerprint(context.Background(), e.configDir, id)
+	if err != nil || got == "" {
+		t.Fatalf("fingerprint of %s = %q, %v", id, got, err)
+	}
+	return got
+}
+
+// addTurn appends a message to a session, as another turn in OpenCode would.
+func (e fakeOpenCodeEnv) addTurn(t *testing.T, session, id string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(e.configDir, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, 1762324009999, '{"role":"user"}')`, id, session); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (e fakeOpenCodeEnv) calls(t *testing.T) []string {
@@ -197,8 +252,8 @@ func TestPrepareImportedOpenCodeSessionCopiesIntoLaunchDirectory(t *testing.T) {
 	if after, _ := os.ReadFile(env.export); string(after) != string(before) {
 		t.Fatal("source export changed")
 	}
-	if _, found, _ := readOpenCodeCopy(context.Background(), env.configDir, ocSourceID); found {
-		t.Fatal("source session must not be written")
+	if source, found, _ := readOpenCodeCopy(context.Background(), env.configDir, ocSourceID); !found || source.directory != env.source || source.messages != 2 {
+		t.Fatalf("source session changed: %+v", source)
 	}
 
 	// A retry reuses the published copy without running OpenCode again.
@@ -312,5 +367,114 @@ func TestDerivedOpenCodeIDIsStablePerLaunchDirectory(t *testing.T) {
 	}
 	if !openCodeSessionID.MatchString(a) || len(a) != len(ocSourceID) {
 		t.Fatalf("derived id %q is not an OpenCode session id", a)
+	}
+}
+
+func TestPrepareImportedOpenCodeSessionStagesUnderAOData(t *testing.T) {
+	p, env := newFakeOpenCode(t)
+	external := t.TempDir()
+	t.Setenv("TMPDIR", external)
+	ref, err := p.PrepareImportedSession(context.Background(), env.relocation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := env.calls(t)
+	staged := strings.TrimPrefix(calls[len(calls)-1], "import --pure ")
+	staging := filepath.Join(env.dataDir, "import-staging")
+	if rel, err := filepath.Rel(staging, staged); err != nil || !filepath.IsLocal(rel) {
+		t.Fatalf("export staged at %q, want under %q", staged, staging)
+	}
+	if left, _ := os.ReadDir(staging); len(left) != 0 {
+		t.Fatalf("staging not cleaned up: %v", left)
+	}
+	if left, _ := os.ReadDir(external); len(left) != 0 {
+		t.Fatalf("OS temporary directory used: %v", left)
+	}
+	if ref.NativeSessionID == "" {
+		t.Fatal("no copy")
+	}
+
+	// Without AO's data directory there is nowhere private to stage a copy.
+	_, env = newFakeOpenCode(t)
+	r := env.relocation()
+	r.DataDir = ""
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil || !strings.Contains(err.Error(), "data directory") {
+		t.Fatalf("missing data directory accepted: %v", err)
+	}
+}
+
+func TestPrepareImportedOpenCodeSessionHoldsTheSelectedHistory(t *testing.T) {
+	t.Run("copy matches the selection", func(t *testing.T) {
+		p, env := newFakeOpenCode(t)
+		r := env.relocation()
+		r.SourceFingerprint = env.fingerprint(t, ocSourceID)
+		ref, err := p.PrepareImportedSession(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := env.fingerprint(t, ref.NativeSessionID); got != r.SourceFingerprint {
+			t.Fatalf("copy fingerprint %q, selection %q", got, r.SourceFingerprint)
+		}
+	})
+	t.Run("source grew before the first copy", func(t *testing.T) {
+		p, env := newFakeOpenCode(t)
+		r := env.relocation()
+		r.SourceFingerprint = env.fingerprint(t, ocSourceID)
+		env.addTurn(t, ocSourceID, "msg_1aa6c8ff0001LaterTurnInOpenC")
+		if _, err := p.PrepareImportedSession(context.Background(), r); err == nil || !strings.Contains(err.Error(), "scan again") {
+			t.Fatalf("grown source accepted: %v", err)
+		}
+		if calls := env.calls(t); len(calls) != 0 {
+			t.Fatalf("grown source was exported: %q", calls)
+		}
+	})
+	t.Run("retry after a lost checkpoint reuses the matching copy", func(t *testing.T) {
+		// The copy was published, saving its identity failed, and the source
+		// then gained a turn. The copy still holds exactly the archived history.
+		p, env := newFakeOpenCode(t)
+		r := env.relocation()
+		r.SourceFingerprint = env.fingerprint(t, ocSourceID)
+		ref, err := p.PrepareImportedSession(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.addTurn(t, ocSourceID, "msg_1aa6c8ff0001LaterTurnInOpenC")
+		again, err := p.PrepareImportedSession(context.Background(), r)
+		if err != nil || again != ref {
+			t.Fatalf("retry = %+v, %v; want %+v", again, err, ref)
+		}
+	})
+	t.Run("mismatched copy is rejected and kept", func(t *testing.T) {
+		p, env := newFakeOpenCode(t)
+		r := env.relocation()
+		r.SourceFingerprint = env.fingerprint(t, ocSourceID)
+		ref, err := p.PrepareImportedSession(context.Background(), r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env.addTurn(t, ref.NativeSessionID, "msg_1aa6c8ff0002TurnInTheCopyAOx")
+		if _, err := p.PrepareImportedSession(context.Background(), r); err == nil || !strings.Contains(err.Error(), "selected history") {
+			t.Fatalf("mismatched copy reused: %v", err)
+		}
+		if copied, found, _ := readOpenCodeCopy(context.Background(), env.configDir, ref.NativeSessionID); !found || copied.messages != 3 {
+			t.Fatalf("mismatched copy was not preserved: %+v", copied)
+		}
+	})
+}
+
+func TestNativeSessionFingerprintsIgnoreCopiedIdentity(t *testing.T) {
+	_, env := newFakeOpenCode(t)
+	launch := t.TempDir()
+	target := derivedOpenCodeID(ocSourceID, launch)
+	doc, _, err := rewriteOpenCodeExport([]byte(openCodeExportFixture(env.source)), ocSourceID, target, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Different ids, directory and part timestamps; same history.
+	if _, err := storeOpenCodeExport(filepath.Join(env.configDir, "opencode.db"), doc, launch, 1762329999999); err != nil {
+		t.Fatal(err)
+	}
+	if source, copied := env.fingerprint(t, ocSourceID), env.fingerprint(t, target); source != copied || !strings.HasPrefix(source, "opencode-v1:2:") {
+		t.Fatalf("fingerprints %q and %q", source, copied)
 	}
 }

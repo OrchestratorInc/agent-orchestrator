@@ -48,6 +48,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			SourceCWD:         source.CWD,
 			LaunchCWD:         launchPath,
 			SourceFingerprint: source.Fingerprint,
+			DataDir:           m.dataDir,
 			Env:               maps.Clone(env),
 		})
 		if err != nil {

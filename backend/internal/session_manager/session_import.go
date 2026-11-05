@@ -188,6 +188,7 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 		SourceCWD:         source.CWD,
 		LaunchCWD:         launchPath,
 		SourceFingerprint: source.Fingerprint,
+		DataDir:           m.dataDir,
 		Env:               maps.Clone(env),
 	})
 	if err != nil {

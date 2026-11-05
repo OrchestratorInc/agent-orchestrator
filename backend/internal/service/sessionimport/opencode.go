@@ -12,6 +12,7 @@ import (
 
 	_ "modernc.org/sqlite" // read-only SQLite driver for OpenCode's session store
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -64,6 +65,12 @@ func discoverOpenCode(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
+	// The fingerprint pins the history a selection saw. The import's private
+	// copy must match it, so AO's archive and the resumed copy agree.
+	prints, err := opencode.NativeSessionFingerprints(ctx, db, "")
+	if err != nil {
+		return nil, err
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT s.id, s.time_updated,
 		       (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id),
@@ -99,8 +106,9 @@ func discoverOpenCode(ctx context.Context, root string) ([]sourceFiles, error) {
 			key:     id,
 			// paths carries the session id so readTranscript and RefreshArchive
 			// resolve the row without a provider file path.
-			paths:   []string{id},
-			modTime: time.UnixMilli(modMillis),
+			paths:       []string{id},
+			modTime:     time.UnixMilli(modMillis),
+			fingerprint: prints[id],
 			// size doubles as a content-change signal for the scan cache.
 			size: count,
 		})

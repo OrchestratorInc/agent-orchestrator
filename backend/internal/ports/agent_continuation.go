@@ -116,6 +116,9 @@ type ImportedSessionRelocation struct {
 	// inputs it snapshots before copying, including sidecars such as a WAL.
 	// A mismatch is an error; a verified private copy may be reused on retry.
 	SourceFingerprint string
+	// DataDir is AO's durable data directory. Adapters that stage native data
+	// keep it privately under this directory, never the OS temporary directory.
+	DataDir string
 	// Env is a read-only clone of resolved launch overrides, including the
 	// selected account and project values. Present empty values clear inherited
 	// variables; missing keys inherit the daemon environment. Adapters must not
