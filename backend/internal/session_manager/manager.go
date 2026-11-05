@@ -455,6 +455,8 @@ type Manager struct {
 	backgroundWorkers sync.WaitGroup
 	asyncChatSpawnsMu sync.Mutex
 	asyncChatSpawns   map[domain.SessionID]*asyncChatSpawnRun
+	// provisionObserver hears provision-state writes (SetProvisionObserver).
+	provisionObserver ProvisionObserver
 	// killTeardown bounds Kill's detached teardown. Zero means
 	// killTeardownBudget; tests shrink it to prove what survives its expiry.
 	killTeardown time.Duration
