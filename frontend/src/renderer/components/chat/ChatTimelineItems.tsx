@@ -1379,6 +1379,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 						)}
 					</span>
 				) : null}
+				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's. */}
+				{label && labelKind && !startupLabel ? (
+					<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">
+						·
+					</span>
+				) : null}
 				{startupLabel ? null : (
 					<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
 						{formatDuration(elapsedMs)}

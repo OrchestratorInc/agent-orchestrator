@@ -1266,6 +1266,8 @@ describe("ChatWorkspace timeline", () => {
 		const plan = screen.getByRole("region", { name: "Agent plan" });
 		// The running step is on the live row only, not also as a row of its own.
 		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Building project$/);
+		// A dot sits between the step and the turn's timer.
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Building project·\d/);
 		expect(screen.getAllByText("Building project")).toHaveLength(1);
 		expect(done.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(live.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
