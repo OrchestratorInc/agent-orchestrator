@@ -77,19 +77,17 @@ export function nodeCliLinkIo(): CliLinkIo {
 }
 
 export function nodeCliShadowIo(): CliShadowIo {
-	const { canExecute, realpath: resolveReal, join, version } = nodeCliLinkIo();
+	const io = nodeCliLinkIo();
 	return {
+		...io,
 		// A shell skips a directory named ao, though it passes an X_OK check.
 		async isExecutableFile(value) {
 			try {
-				return (await stat(value)).isFile() && (await canExecute(value));
+				return (await stat(value)).isFile() && (await io.canExecute(value));
 			} catch {
 				return false;
 			}
 		},
-		realpath: resolveReal,
-		join,
-		version,
 	};
 }
 

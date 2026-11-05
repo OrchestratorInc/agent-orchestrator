@@ -1,8 +1,7 @@
 import { AlertTriangle, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { CliShadowStatus } from "../../shared/cli-shadow";
-import { aoBridge } from "../lib/bridge";
+import { CliShadowActions, CliShadowDetails, useCliShadowStatus, useCliShadowTitle } from "./CliShadowActions";
 import { Button } from "./ui/button";
 
 // Remembers the dismissed path, not a yes/no: a different ao appearing later is
@@ -25,41 +24,15 @@ function writeDismissedPath(path: string): void {
 	}
 }
 
-export function useCliShadowStatus(): CliShadowStatus | null {
-	const [status, setStatus] = useState<CliShadowStatus | null>(null);
-	useEffect(() => {
-		let active = true;
-		void (async () => {
-			try {
-				const next = await aoBridge.cliShadow.inspect();
-				if (active) setStatus(next);
-			} catch {
-				// An advisory check that fails has nothing to tell the user.
-			}
-		})();
-		return () => {
-			active = false;
-		};
-	}, []);
-	return status;
-}
-
-export function useCliShadowDetail(status: CliShadowStatus | null): string | null {
-	const { t } = useTranslation();
-	if (status?.kind !== "shadowed") return null;
-	return t("cliShadow.detail", {
-		shadowPath: status.shadowPath,
-		shadowVersion: status.shadowVersion ?? t("cliShadow.versionUnknown"),
-		bundledPath: status.bundledPath,
-	});
-}
-
 export function CliShadowBanner() {
 	const { t } = useTranslation();
 	const status = useCliShadowStatus();
-	const detail = useCliShadowDetail(status);
+	const title = useCliShadowTitle(status);
 	const [dismissedPath, setDismissedPath] = useState(readDismissedPath);
-	if (status?.kind !== "shadowed" || status.shadowPath === dismissedPath) return null;
+	// A matching or newer ao rarely breaks anything, so it stays in Settings. A
+	// version that cannot be read may be just as old, so it still warns.
+	if (status?.kind !== "shadowed" || (status.relation !== "older" && status.relation !== "different")) return null;
+	if (status.shadowPath === dismissedPath) return null;
 	const { shadowPath } = status;
 	return (
 		<section
@@ -70,8 +43,9 @@ export function CliShadowBanner() {
 		>
 			<AlertTriangle className="mt-0.5 size-icon-base shrink-0 text-warning" aria-hidden="true" />
 			<div className="min-w-0 flex-1">
-				<p className="font-medium text-(--color-text-import-title)">{t("cliShadow.title")}</p>
-				<p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{detail}</p>
+				<p className="font-medium text-(--color-text-import-title)">{title}</p>
+				<CliShadowActions status={status} surface="toast" />
+				<CliShadowDetails status={status} className="mt-1.5 text-[var(--color-text-import-muted)]" />
 			</div>
 			<Button
 				type="button"

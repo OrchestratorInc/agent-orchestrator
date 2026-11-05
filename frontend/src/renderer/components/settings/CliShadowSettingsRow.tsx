@@ -1,16 +1,20 @@
 import { useTranslation } from "react-i18next";
-import { useCliShadowDetail, useCliShadowStatus } from "../CliShadowBanner";
+import { CliShadowActions, CliShadowDetails, useCliShadowStatus, useCliShadowTitle } from "../CliShadowActions";
+import { SettingsRow } from "./SettingsRow";
 
-// Keeps the warning reachable after the startup banner is dismissed, and only
-// appears when there is something to act on.
+// Keeps the warning reachable after the notice is dismissed, and also lists a
+// newer ao, which raises no notice. Stays away when the versions match.
 export function CliShadowSettingsRow() {
 	const { t } = useTranslation();
-	const detail = useCliShadowDetail(useCliShadowStatus());
-	if (!detail) return null;
+	const status = useCliShadowStatus();
+	const title = useCliShadowTitle(status);
+	if (status?.kind !== "shadowed" || status.relation === "same") return null;
 	return (
-		<div className="flex w-full flex-col gap-0.5 px-3 py-2 text-xs leading-relaxed">
-			<p className="font-medium text-foreground">{t("cliShadow.title")}</p>
-			<p className="wrap-break-word text-muted-foreground">{detail}</p>
+		<div className="flex w-full flex-col">
+			<SettingsRow label={title} description={t("cliShadow.scope")}>
+				<CliShadowActions status={status} surface="row" />
+			</SettingsRow>
+			<CliShadowDetails status={status} className="px-(--settings-row-inset) pb-2 text-muted-foreground" />
 		</div>
 	);
 }

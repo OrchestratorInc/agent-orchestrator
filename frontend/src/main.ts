@@ -55,6 +55,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
+import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
@@ -2701,29 +2702,21 @@ registerCliLinkIpc({
 	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
 });
 
-// The startup probe's limit exists because the daemon spawn waits on it, and a
-// shell near that limit fails it under launch load. Nothing waits on this
-// advisory check, so it can give the shell longer, without touching the env the
-// daemon uses. Takes no fallback: a Finder launch's process PATH is not the
-// user's shell PATH, so a shell that never answers means "unknown".
 const CLI_SHADOW_SHELL_TIMEOUT_MS = 60_000;
-let cliShadowShellPathPromise: Promise<string | undefined> | null = null;
-
-function cliShadowShellPath(): Promise<string | undefined> {
-	cliShadowShellPathPromise ??= (async () => {
-		await ensureShellEnv();
-		await retryFailedEarlyShellEnvProbe();
-		if (cachedShellEnv?.PATH || process.platform === "win32") return cachedShellEnv?.PATH;
-		const resolved = await resolveShellEnv(process.env, loginShellRunner(CLI_SHADOW_SHELL_TIMEOUT_MS), configuredLoginShell);
-		// Keep only an answer, so opening Settings can try again after a failure.
-		if (!resolved?.PATH) cliShadowShellPathPromise = null;
-		return resolved?.PATH;
-	})();
-	return cliShadowShellPathPromise;
-}
 
 registerCliShadowIpc({
-	shellPath: cliShadowShellPath,
+	shellPath: createCliShadowShellPath({
+		settleStartupProbes: async () => {
+			await ensureShellEnv();
+			await retryFailedEarlyShellEnvProbe();
+		},
+		startupPath: () => cachedShellEnv?.PATH,
+		probe: async () => {
+			if (process.platform === "win32") return undefined;
+			const resolved = await resolveShellEnv(process.env, loginShellRunner(CLI_SHADOW_SHELL_TIMEOUT_MS), configuredLoginShell);
+			return resolved?.PATH;
+		},
+	}),
 	bundledPath: () => {
 		const launch = resolveDaemonLaunch(
 			process.env,
@@ -2735,6 +2728,9 @@ registerCliShadowIpc({
 		);
 		return launch && launch.source !== "configured" ? launch.command : undefined;
 	},
+	isPackaged: () => app.isPackaged,
+	appImage: process.env.APPIMAGE,
+	reveal: (filePath) => shell.showItemInFolder(filePath),
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
