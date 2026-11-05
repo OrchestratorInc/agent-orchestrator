@@ -9,15 +9,19 @@ import { prDisplayKey, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { PRSummaryCard } from "./SessionInspector";
+import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
-import { Pressable } from "./ui/pressable";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 /**
- * The floating tile on a shared project's orchestrator: every pull request
- * the project's sessions opened, who opened it and in which session, and the
- * merge requests guests sent. Its owner approves (which merges) or rejects a
- * request here; a guest sees where theirs stands. Nothing shows for a project
- * nobody was given.
+ * The shared project control in a shared project orchestrator's header:
+ * every pull request the project's sessions opened, who opened it and in
+ * which session, and the merge requests guests sent. Its owner approves
+ * (which merges) or rejects a request here; a guest sees where theirs stands.
+ * Nothing shows for a project nobody was given.
+ *
+ * It lives in the header, not over the conversation or terminal, so it never
+ * covers a message or terminal output; the list opens as a popover.
  *
  * Every participant sees every pull request: the orchestrator lists all of its
  * project's, so one opened in a session this person was not given (a guest
@@ -52,25 +56,43 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 		...(pending.length > 0 ? [guest ? t("shareProject.waiting", { count: pending.length }) : t("shareProject.toApprove", { count: pending.length })] : []),
 	].join(" · ");
 
+	const title = t("shareProject.title");
+	const toApprove = pending.length > 0 && !guest;
 	return (
-		<div className="pointer-events-none absolute inset-y-3 right-3 z-chrome flex w-80 max-w-[calc(100%-24px)] flex-col items-end" data-shared-project-panel>
-			<Pressable
-				aria-expanded={open}
-				onClick={() => setOpen((value) => !value)}
-				className={cn(
-					"pointer-events-auto inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md transition-colors hover:bg-interactive-hover",
-					pending.length > 0 && !guest && "border-status-in-review",
-				)}
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<TopbarButton
+					aria-label={`${title}: ${summary}`}
+					className="topbar-control--labeled"
+					data-priority="secondary"
+					data-shared-project-button=""
+					title={`${title}: ${summary}`}
+				>
+					<span className="relative inline-flex shrink-0">
+						<Users aria-hidden="true" className="size-icon-md" />
+						{/* On the icon, so a request waiting on the owner shows when the label compacts away. */}
+						{toApprove ? (
+							<span aria-hidden="true" className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-shared-project-pending="" />
+						) : null}
+					</span>
+					<span data-compact-label="">{summary}</span>
+					<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 transition-transform", open && "rotate-180")} />
+				</TopbarButton>
+			</PopoverTrigger>
+			<PopoverContent
+				align="end"
+				aria-label={title}
+				className="flex max-h-[min(32rem,calc(100dvh-5rem))] w-80 max-w-[calc(100vw-1rem)] flex-col overflow-hidden p-0"
+				data-shared-project-list=""
 			>
-				<Users aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
-				<span className="min-w-0">
-					<span className="block font-medium text-foreground">{t("shareProject.title")}</span>
-					<span className="block truncate text-muted-foreground">{summary}</span>
-				</span>
-				<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
-			</Pressable>
-			{open ? (
-				<div className="pointer-events-auto mt-2 flex min-h-0 w-full flex-col overflow-y-auto rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-md" data-shared-project-list>
+				<div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+					<Users aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
+					<div className="min-w-0 text-xs">
+						<h2 className="truncate font-medium text-foreground">{title}</h2>
+						<p className="truncate text-muted-foreground">{summary}</p>
+					</div>
+				</div>
+				<div className="flex min-h-0 flex-col overflow-y-auto p-2">
 					{prCount === 0 ? (
 						<p className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
 							<GitPullRequest aria-hidden="true" className="size-icon-sm" />
@@ -107,8 +129,8 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 						</section>
 					) : null}
 				</div>
-			) : null}
-		</div>
+			</PopoverContent>
+		</Popover>
 	);
 }
 

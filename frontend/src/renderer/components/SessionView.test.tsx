@@ -283,6 +283,13 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
 // the split under test.
+// The shared project control stands in as a marker: these tests check where it
+// renders, and SharedProjectPanel.test covers what it shows.
+vi.mock("./SharedProjectPanel", () => ({
+	SharedProjectPanel: ({ orchestrator }: { orchestrator: { id: string } }) => (
+		<button type="button" data-testid="shared-project-control">{orchestrator.id}</button>
+	),
+}));
 vi.mock("./SessionTopbarActions", () => ({
 	SessionTopbarActions: ({
 		sessionAction,
@@ -1220,6 +1227,41 @@ describe("SessionView", () => {
 		];
 		view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 		expect(cloudSessionPoll).toHaveBeenLastCalledWith(false);
+	});
+
+	it.each(["chat", "terminal"] as const)(
+		"puts a Cloud orchestrator's shared project control in the header, not over the %s",
+		(mode) => {
+			const cloudOrchestrator: WorkspaceSession = {
+				...workerSession("sess-orch"),
+				workspaceId: "cloud-project",
+				workspaceName: "Cloud project",
+				mode: mode === "chat" ? "chat" : undefined,
+				cloud: { orgId: "cloud-org" },
+			};
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudOrchestrator] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-orch" />);
+			const controls = screen.getAllByTestId("shared-project-control");
+			expect(controls).toHaveLength(1);
+			expect(controls[0].closest(".session-topbar-session-chrome")).not.toBeNull();
+		},
+	);
+
+	it("shows no shared project control on a Cloud worker or a local orchestrator", () => {
+		const cloudWorker: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudWorker] },
+		];
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
+		view.unmount();
+		workspaceQueryState.data = workspaces;
+		render(<SessionView projectId="proj-1" sessionId="sess-orch" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
