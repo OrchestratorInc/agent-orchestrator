@@ -137,8 +137,8 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 	defer func() { _ = rows.Close() }()
 	textByMessage := map[string]string{}
 	shortened := false
-	// As Claude and Pi do, drop the oldest text once the held text passes
-	// maxClaudeHeld, so a huge session is not held whole; the opening message
+	// As the JSONL readers do, drop the oldest text once the held text passes
+	// maxHeldText, so a huge session is not held whole; the opening message
 	// stays, and a dropped message's later parts stay dropped.
 	var order []string
 	dropped := map[string]bool{}
@@ -171,7 +171,7 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 			held += len(chunk)
 			order = append(order, messageID)
 		}
-		for ; held > maxClaudeHeld && drop < len(order); drop++ {
+		for ; held > maxHeldText && drop < len(order); drop++ {
 			if drop == 0 {
 				continue // the opening message stays
 			}
@@ -204,7 +204,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		return t, err
 	}
 	if db == nil {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	defer func() { _ = db.Close() }()
 
@@ -217,7 +217,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		SELECT directory, title, parent_id, time_updated, time_archived
 		FROM session WHERE id = ?`, sessionID).Scan(&directory, &title, &parentID, &timeUpdated, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	if err != nil {
 		return t, err
@@ -268,7 +268,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		if at.After(t.last) && at.Before(now.Add(time.Hour)) {
 			t.last = at
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role.String), Text: text, At: at}, kind: "opencode", id: id})
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role.String), Text: text, At: at}})
 	}
 	if err := msgRows.Err(); err != nil {
 		return t, err
@@ -285,10 +285,10 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		t.messages = append(t.messages, item.Message)
 	}
 	if !hasUser {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
+		return t, errRelativeCWD
 	}
 	if t.last.IsZero() && timeUpdated.Valid {
 		t.last = time.UnixMilli(timeUpdated.Int64)
@@ -310,9 +310,6 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 			}
 		}
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
+	t.title = importTitle(t.title)
 	return t, nil
 }

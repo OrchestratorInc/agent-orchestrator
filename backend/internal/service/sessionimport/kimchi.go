@@ -71,17 +71,6 @@ type kimchiNode struct {
 	dropped                bool
 }
 
-// kimchiNativeID is the conversation UUID encoded in a Kimchi session file
-// name, `<ISO-time>_<uuid>.jsonl`. It matches the id in the file's session
-// header.
-func kimchiNativeID(path string) string {
-	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if i := strings.LastIndex(name, "_"); i >= 0 {
-		return name[i+1:]
-	}
-	return name
-}
-
 // discoverKimchi lists Kimchi conversations without reading full histories.
 // Each JSONL under sessions/<cwd-dashed>/ is one conversation. Folders whose
 // conversation cwd is inside an excluded AO data directory are skipped: those
@@ -175,7 +164,7 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 	}
 	defer func() { _ = providerRoot.Close() }()
 	t.root = root
-	t.nativeID = kimchiNativeID(paths[0])
+	t.nativeID = piFamilyNativeID(paths[0])
 
 	var (
 		nodes     []kimchiNode
@@ -204,7 +193,7 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 			}
 			sawHeader = true
 			if r.ID != t.nativeID {
-				return errors.New("native identity mismatch")
+				return errNativeIdentityMismatch
 			}
 			t.cwd = r.CWD
 			return nil
@@ -248,14 +237,7 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 			firstText = idx
 		}
 		held += len(nodes[idx].text)
-		// Drop the oldest text first, as trimVisible would, but keep the opening prompt.
-		for held > maxClaudeHeld && drop < len(nodes) {
-			if drop != firstText && nodes[drop].text != "" {
-				held -= len(nodes[drop].text)
-				nodes[drop].text, nodes[drop].dropped = "", true
-			}
-			drop++
-		}
+		dropOldestHeld(nodes, &held, &drop, firstText, func(n *kimchiNode) (*string, *bool) { return &n.text, &n.dropped })
 		return nil
 	}
 	for _, path := range paths {
@@ -266,7 +248,7 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 	}
 	t.path = t.paths[len(t.paths)-1]
 	if !sawHeader {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 
 	// Follow the active branch from the last appended record so rewound or
@@ -297,7 +279,7 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: "kimchi"})
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
 	edits := map[string]kimchiNode{}
 	for _, node := range chain {
@@ -331,35 +313,10 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 	}
 	// A session with no real prompt, or a non-UUID name, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
-		return t, errors.New("no readable native conversation")
-	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
-	}
-	if t.last.IsZero() {
-		if info, err := os.Stat(t.path); err == nil {
-			t.last = info.ModTime()
-		}
-	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
+		return t, errNoReadableConversation
 	}
 	// Kimchi names a session with session_info.name; fall back to the opening
 	// prompt when it never set one.
 	t.title = activeTitle
-	if t.title == "" {
-		for _, m := range t.messages {
-			if m.Role == domain.MessageRoleUser {
-				t.title = m.Text
-				break
-			}
-		}
-	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
-	return t, nil
+	return t, finishTranscript(&t, errRelativeCWD)
 }

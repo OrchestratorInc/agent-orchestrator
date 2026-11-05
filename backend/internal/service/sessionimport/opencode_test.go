@@ -178,9 +178,9 @@ func TestOpenCodeMissingDatabaseYieldsNoCandidates(t *testing.T) {
 // A long OpenCode session is bounded while its parts are read: the oldest
 // text goes first and the opening prompt stays.
 func TestOpenCodeHeldTextIsBoundedWhileReading(t *testing.T) {
-	held := maxClaudeHeld
-	maxClaudeHeld = 60
-	t.Cleanup(func() { maxClaudeHeld = held })
+	held := maxHeldText
+	maxHeldText = 60
+	t.Cleanup(func() { maxHeldText = held })
 	root, db := newOpenCodeStore(t)
 	const id = "ses_e830c4a8affelmmC9j6HFbCZAr"
 	addSession(t, db, id, "", "/work/repo", "Long chat", 1700000009000, nil)

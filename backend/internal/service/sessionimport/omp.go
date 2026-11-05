@@ -33,17 +33,6 @@ func ompRoot(home string) string {
 	return filepath.Join(home, ".omp", "agent")
 }
 
-// ompNativeIDFromPath returns the native id: the UUID trailing the timestamp in
-// an OMP transcript file name (<ISO-time>_<uuid>.jsonl). A name without the
-// separator falls back to the whole stem so grouping stays stable.
-func ompNativeIDFromPath(path string) string {
-	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if i := strings.LastIndex(stem, "_"); i >= 0 {
-		return stem[i+1:]
-	}
-	return stem
-}
-
 // ompRecord is one JSONL line. Only user and assistant messages are display
 // messages; the shared contentText keeps text blocks and drops thinking and
 // toolCall parts, and toolResult-role records are left out by readOMPTranscript.
@@ -94,7 +83,7 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 		return t, err
 	}
 	defer func() { _ = providerRoot.Close() }()
-	t.nativeID = ompNativeIDFromPath(paths[0])
+	t.nativeID = piFamilyNativeID(paths[0])
 
 	var (
 		nodes     []ompNode
@@ -124,7 +113,7 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 			}
 			sawMeta = true
 			if r.ID != "" && !strings.EqualFold(r.ID, t.nativeID) {
-				return errors.New("native identity mismatch")
+				return errNativeIdentityMismatch
 			}
 			t.cwd = r.CWD
 			return nil // The header id is the session uuid, not a node in the parent tree.
@@ -162,15 +151,7 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 			firstText = i
 		}
 		held += len(nodes[i].text)
-		// Bound text retained across all branches before the active leaf is known,
-		// keeping the opening prompt and the newest text like the shared readers.
-		for held > maxClaudeHeld && drop < len(nodes) {
-			if drop != firstText && nodes[drop].text != "" {
-				held -= len(nodes[drop].text)
-				nodes[drop].text, nodes[drop].omitted = "", true
-			}
-			drop++
-		}
+		dropOldestHeld(nodes, &held, &drop, firstText, func(n *ompNode) (*string, *bool) { return &n.text, &n.omitted })
 		leafID = r.ID
 		return nil
 	}
@@ -249,30 +230,5 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted {
 		return t, errors.New("invalid native session id or no user prompt")
 	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("session cwd is not absolute")
-	}
-	if t.last.IsZero() {
-		if info, err := os.Stat(t.path); err == nil {
-			t.last = info.ModTime()
-		}
-	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
-	if t.title == "" {
-		for _, m := range t.messages {
-			if m.Role == domain.MessageRoleUser {
-				t.title = m.Text
-				break
-			}
-		}
-	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
-	return t, nil
+	return t, finishTranscript(&t, errors.New("session cwd is not absolute"))
 }

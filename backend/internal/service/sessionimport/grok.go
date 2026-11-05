@@ -117,7 +117,7 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		role, text = "", ""
 		// Keep stable prompt indexes until all rewinds have been applied. Drop
 		// old text under the same memory budget without deleting its boundary.
-		for held > maxClaudeHeld && drop < len(items) {
+		for held > maxHeldText && drop < len(items) {
 			held -= len(items[drop].Text)
 			items[drop].Text = ""
 			t.shortened = true
@@ -223,7 +223,7 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 	}
 	if !hasUser {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	if summary.Title != "" {
 		t.title = summary.Title

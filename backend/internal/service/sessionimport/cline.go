@@ -211,10 +211,7 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 			t.last = at
 		}
 		if t.title == "" && m.Role == "user" {
-			t.title = strings.Join(strings.Fields(text), " ")
-			if runes := []rune(t.title); len(runes) > 100 {
-				t.title = string(runes[:100]) + "…"
-			}
+			t.title = importTitle(text)
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(m.Role), Text: text, At: at}})
 		before := len(items)

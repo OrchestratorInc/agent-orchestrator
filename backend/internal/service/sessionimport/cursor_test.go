@@ -90,7 +90,7 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	launch := t.TempDir()
-	target, err := cursorstore.Copy(context.Background(), root, path, launch)
+	target, err := cursorstore.CopySelectedIn(context.Background(), cursorstore.LayoutTerminal, root, path, launch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	if err != nil || len(files) != 2 {
 		t.Fatalf("native buckets = %#v, %v", files, err)
 	}
-	cfg := ports.WorkspaceHookConfig{WorkspacePath: launch, Env: map[string]string{"CURSOR_DATA_DIR": root}, NativeSessionID: rec.Metadata.AgentSessionID, ImportConfigDir: root, RestoreMode: ports.WorkspaceRestoreImported}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: launch, Env: map[string]string{"CURSOR_DATA_DIR": root}, NativeSessionID: rec.Metadata.AgentSessionID, ImportConfigDir: root}
 	adapter := cursor.New()
 	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
 		t.Fatal(err)
@@ -108,11 +108,10 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	}
 	// The original still exists in another bucket. A restored import must
 	// validate its AO copy rather than accepting that unrelated lookup.
-	cfg.RestoreMode = ports.WorkspaceRestoreNative
 	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err == nil {
 		t.Fatal("accepted a missing copied native store")
 	}
-	cfg.RestoreMode = ports.WorkspaceRestoreFresh
+	cfg.ImportConfigDir = ""
 	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
 		t.Fatalf("changed fresh-launch behavior: %v", err)
 	}

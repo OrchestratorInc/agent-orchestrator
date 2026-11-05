@@ -78,7 +78,7 @@ func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readGeminiTranscript(context.Background(), root, path)
+	got, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path)
 	if err != nil || got.cwd != cwd || len(got.messages) != 2 {
 		t.Fatalf("legacy = %#v, %v", got, err)
 	}
@@ -100,7 +100,7 @@ func TestGeminiLegacyHashResolvesOnlyRegisteredProjectsWithoutMetadata(t *testin
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readGeminiTranscript(context.Background(), root, path); err == nil {
+	if _, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path); err == nil {
 		t.Fatal("unregistered hash was guessed")
 	}
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "legacy", Path: cwd}}}
@@ -144,7 +144,7 @@ func TestGeminiSkimsOversizeToolRecordAndKeepsVisibleText(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readGeminiTranscript(context.Background(), root, path)
+	got, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path)
 	if err != nil || len(got.messages) != 2 || !got.shortened || got.messages[1].Text != "visible answer" {
 		t.Fatalf("oversize = %#v, %v", got, err)
 	}

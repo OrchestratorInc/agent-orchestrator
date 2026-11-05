@@ -3,7 +3,6 @@ package sessionimport
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,11 +14,6 @@ import (
 
 // qwenHomeEnv overrides Qwen Code's state root; it defaults to ~/.qwen.
 const qwenHomeEnv = "QWEN_HOME"
-
-var (
-	errNativeIdentityMismatch = errors.New("native identity mismatch")
-	errNoReadableConversation = errors.New("no readable native conversation")
-)
 
 // Qwen Code is a Gemini-CLI fork. It stores one conversation per file at
 // <root>/projects/<sanitized-cwd>/chats/<sessionId>.jsonl, where the file name is
@@ -88,7 +82,7 @@ func qwenVisibleText(r qwenRecord) string {
 // qwenAppendText bounds a logical message across physical fragments and keeps
 // a valid UTF-8 prefix when a fragment crosses the held-text budget.
 func qwenAppendText(text, fragment string) (string, bool) {
-	remaining := max(0, maxClaudeHeld-len(text))
+	remaining := max(0, maxHeldText-len(text))
 	shortened := len(fragment) > remaining
 	if shortened {
 		fragment = strings.ToValidUTF8(fragment[:remaining], "")
@@ -216,13 +210,7 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		held += len(nodes[idx].text)
 		// Bound text held across branches while preserving links and the opening prompt.
-		for held > maxClaudeHeld && drop < len(nodes) {
-			if drop != firstText && nodes[drop].text != "" {
-				held -= len(nodes[drop].text)
-				nodes[drop].text, nodes[drop].omitted = "", true
-			}
-			drop++
-		}
+		dropOldestHeld(nodes, &held, &drop, firstText, func(n *qwenNode) (*string, *bool) { return &n.text, &n.omitted })
 		return nil
 	}
 	for _, path := range paths {
@@ -270,28 +258,5 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted {
 		return t, errNoReadableConversation
 	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errNoReadableConversation
-	}
-	if t.last.IsZero() {
-		if info, err := os.Stat(t.path); err == nil {
-			t.last = info.ModTime()
-		}
-	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
-	for _, m := range t.messages {
-		if m.Role == domain.MessageRoleUser {
-			t.title = m.Text
-			break
-		}
-	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
-	return t, nil
+	return t, finishTranscript(&t, errNoReadableConversation)
 }

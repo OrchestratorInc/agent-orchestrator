@@ -7,16 +7,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// harnessImporter keeps each additional provider's layout and parser in its own
-// file. Registration adds one map entry here and one IMPORTABLE_AGENTS entry in
-// the UI. The callbacks must only read provider state, confine file reads with
-// os.Root (or open SQLite mode=ro), and return the exact CLI resume identity.
-// A nil nativeID uses sourceFiles.key, which discovery can set to the native ID.
+// harnessImporter keeps a provider's layout and parser in its own file.
+// Registration adds one map entry here, its importedHarnesses hooks in
+// session_manager, and one IMPORTABLE_AGENTS entry in the UI; the harnesses
+// Scan lists itself are dispatched in service.go and transcript.go instead.
+// The callbacks must only read provider state, confine file reads with os.Root
+// (or open SQLite mode=ro), and return the exact CLI resume identity.
+// Discovery sets sourceFiles.key to the native ID.
 type harnessImporter struct {
 	root     func(home string) string
 	discover func(context.Context, string) ([]sourceFiles, error)
 	read     func(context.Context, string, ...string) (transcript, error)
-	nativeID func(sourceFiles) string
 	// discoverRegistered receives only explicitly registered project/repository
 	// paths. Repo-local providers leave root nil and return a root contained in
 	// one supplied path; they must not search parents or unrelated repositories.
@@ -37,7 +38,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCline:  {root: clineRoot, discover: discoverCline, read: readClineTranscript},
 	domain.HarnessCursor: {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
 	domain.HarnessGrok:   {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
+	domain.HarnessGemini: {root: geminiRoot, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
 }
 
 func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {

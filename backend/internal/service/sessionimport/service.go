@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -114,11 +115,6 @@ func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) boo
 	if pi == "" {
 		pi = filepath.Join(home, ".pi", "agent")
 	}
-	// Kimi Code keeps its sessions under KIMI_CODE_HOME, defaulting to ~/.kimi-code.
-	kimi := os.Getenv("KIMI_CODE_HOME")
-	if kimi == "" {
-		kimi = filepath.Join(home, ".kimi-code")
-	}
 	// Kimchi 1.24.3's entry point ignores config-root overrides and always uses
 	// homedir/.config/kimchi/harness. Only offer the root its runtime can load.
 	kimchi := filepath.Join(home, ".config", "kimchi", "harness")
@@ -126,7 +122,7 @@ func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) boo
 	if qwen == "" {
 		qwen = filepath.Join(home, ".qwen")
 	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessCopilot: copilotRoot(home), domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessPi: pi, domain.HarnessCopilot: copilotRoot(home), domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
@@ -156,9 +152,9 @@ func canonical(path string) string {
 	return physical
 }
 
-// gitIdentity reads Git metadata directly: spawning git for every transcript
-// folder made scans take minutes. It returns the shared Git directory, which
-// linked worktrees have in common, and the normalized origin URL.
+// gitIdentity reads Git metadata directly rather than spawning git for every
+// transcript folder. It returns the shared Git directory, which linked
+// worktrees have in common, and the normalized origin URL.
 func gitIdentity(path string) (common, remote string) {
 	for dir := canonical(path); dir != ""; {
 		dotGit := filepath.Join(dir, ".git")
@@ -327,11 +323,6 @@ func pathWithin(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (d *destinations) resolve(cwd string) (domain.ProjectID, bool) {
-	dest := d.destination(cwd)
-	return dest.id, dest.eligible
-}
-
 func (d *destinations) destination(cwd string) destination {
 	if cwd == "" {
 		return destination{eligible: true}
@@ -408,6 +399,21 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// discoverFor lists one harness's conversations through the discovery its
+// importer provides.
+func (s *Service) discoverFor(ctx context.Context, harness domain.AgentHarness, root string, projects []string) ([]sourceFiles, error) {
+	importer := harnessImporters[harness]
+	switch {
+	case importer.discoverRegistered != nil:
+		files, err := importer.discoverRegistered(ctx, projects)
+		return registeredSources(files, projects), err
+	case importer.discoverWithProjects != nil:
+		return importer.discoverWithProjects(ctx, root, projects)
+	default:
+		return s.discover(ctx, harness, root)
+	}
+}
+
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
 	if importer, ok := harnessImporters[harness]; ok {
@@ -418,8 +424,6 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	switch harness {
 	case domain.HarnessCopilot:
 		return discoverCopilot(ctx, root)
-	case domain.HarnessKimi:
-		return discoverKimi(ctx, root)
 	case domain.HarnessKimchi:
 		// Kimchi stores one JSONL per conversation under sessions/<cwd-dashed>/,
 		// like Pi, but AO's own resume copies live there too; discoverKimchi skips
@@ -432,14 +436,11 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
 	switch harness {
-	case domain.HarnessCodex:
-		// Archived Codex threads are not resumable without unarchiving them in Codex.
+	case domain.HarnessCodex, domain.HarnessPi, domain.HarnessOMP:
+		// Archived Codex threads are not resumable without unarchiving them in
+		// Codex. Pi and OMP store one JSONL per conversation under
+		// sessions/<cwd-dashed>/.
 		dir = filepath.Join(root, "sessions")
-	case domain.HarnessPi, domain.HarnessOMP:
-		// Pi and OMP store one JSONL per conversation under sessions/<cwd-dashed>/.
-		dir = filepath.Join(root, "sessions")
-	case domain.HarnessDroid:
-		dir = filepath.Join(root, droidSessions)
 	}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -459,27 +460,17 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 		}
 		key := path
 		switch harness {
-		case domain.HarnessClaudeCode:
-			if !strings.HasSuffix(entry.Name(), ".jsonl") {
-				return nil
-			}
-		case domain.HarnessDroid:
-			// One conversation per <id>.jsonl; the <id>.settings.json sidecar
-			// and its .bak are not transcripts.
+		case domain.HarnessClaudeCode, domain.HarnessPi, domain.HarnessOMP:
+			// Each JSONL is one conversation; the default key (its path) groups it alone.
 			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
 		case domain.HarnessCodex:
-			if key = codexThreadID(path); key == "" {
+			if key = nativeconfig.CodexRolloutThread(path); key == "" {
 				return nil
 			}
 		case domain.HarnessQwen:
 			if !qwenIsTranscript(path, entry.Name()) {
-				return nil
-			}
-		case domain.HarnessPi, domain.HarnessOMP:
-			// Each JSONL is one conversation; the default key (its path) groups it alone.
-			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
 		}
@@ -523,7 +514,7 @@ func codexThreadSegments(ctx context.Context, root, threadID string) ([]string, 
 		if walkErr != nil {
 			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
-		if entry.Type().IsRegular() && codexThreadID(path) == threadID {
+		if entry.Type().IsRegular() && nativeconfig.CodexRolloutThread(path) == threadID {
 			paths = append(paths, path)
 		}
 		return nil
@@ -548,23 +539,17 @@ func codexSegments(paths []string) []string {
 	return out
 }
 
-// nativeID names the conversation as readTranscript will: Claude's file name,
-// Codex's thread id.
+// nativeID names the conversation as its reader will: the JSONL file name for
+// Claude and Qwen, the UUID after the timestamp for Pi, OMP and Kimchi, and
+// otherwise the key discovery set, such as Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	if importer, ok := harnessImporters[f.harness]; ok && importer.nativeID != nil {
-		return importer.nativeID(f)
-	}
-	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid || f.harness == domain.HarnessQwen) && len(f.paths) > 0 {
-		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
-	}
-	if f.harness == domain.HarnessPi && len(f.paths) > 0 {
-		return piNativeID(f.paths[0])
-	}
-	if f.harness == domain.HarnessOMP && len(f.paths) > 0 {
-		return ompNativeIDFromPath(f.paths[0])
-	}
-	if f.harness == domain.HarnessKimchi && len(f.paths) > 0 {
-		return kimchiNativeID(f.paths[0])
+	if len(f.paths) > 0 {
+		switch f.harness {
+		case domain.HarnessClaudeCode, domain.HarnessQwen:
+			return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
+		case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi:
+			return piFamilyNativeID(f.paths[0])
+		}
 	}
 	return f.key
 }
@@ -576,7 +561,6 @@ func (f sourceFiles) cacheKey() string {
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
 // A chat from a repository that no project holds names that repository's folder.
 func (s *Service) Scan(ctx context.Context) (Preview, error) {
-	// ponytail: serialize explicit scans/imports; add a persistent index only if host scans become too slow.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	dests, err := s.destinations(ctx)
@@ -622,17 +606,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		if !ok && importer.discoverRegistered == nil {
 			continue
 		}
-		root := canonical(configured)
-		var files []sourceFiles
-		var err error
-		if importer.discoverRegistered != nil {
-			files, err = importer.discoverRegistered(ctx, projects)
-			files = registeredSources(files, projects)
-		} else if importer.discoverWithProjects != nil {
-			files, err = importer.discoverWithProjects(ctx, root, projects)
-		} else {
-			files, err = s.discover(ctx, harness, root)
-		}
+		files, err := s.discoverFor(ctx, harness, canonical(configured), projects)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Preview{}, ctxErr
@@ -642,8 +616,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			slog.Warn("session import: skipping a provider whose history could not be read", "harness", harness, "err", err)
 			continue
 		}
-		// ponytail: every scan reads all histories (4 GiB took 27 s cold, under 1 s once
-		// cached by size and mtime). Add a persistent index if that first scan grows.
+		// Every scan reads all histories; unchanged ones come from the cache,
+		// keyed by size and mtime.
 		recent := time.Now().AddDate(0, 0, -recentDays)
 		results := make([]parsed, len(files))
 		group, groupCtx := errgroup.WithContext(ctx)
@@ -728,27 +702,28 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if source.ResumeNativeID != "" || source.ResumeCwd != "" {
 		return nil
 	}
+	if source.Fingerprint == "" && !ok {
+		return nil
+	}
+	dests, err := s.destinations(ctx)
+	if err != nil {
+		return err
+	}
+	projects := s.registeredDiscoveryRoots(dests)
+	path := rec.Metadata.NativeTranscriptPath
+	if source.SourceTranscriptPath != "" {
+		path = source.SourceTranscriptPath
+	}
 	if source.Fingerprint != "" {
-		dests, err := s.destinations(ctx)
-		if err != nil {
-			return err
-		}
-		path := rec.Metadata.NativeTranscriptPath
-		if source.SourceTranscriptPath != "" {
-			path = source.SourceTranscriptPath
-		}
 		selected := transcript{harness: rec.Harness, root: source.ConfigDir, path: path, nativeID: source.NativeID, fingerprint: source.Fingerprint}
-		if err := s.checkSourceFingerprint(ctx, selected, s.registeredDiscoveryRoots(dests)); err != nil {
+		if err := s.checkSourceFingerprint(ctx, selected, projects); err != nil {
 			return err
 		}
 	}
 	if !ok {
 		return nil
 	}
-	paths := []string{rec.Metadata.NativeTranscriptPath}
-	if source.SourceTranscriptPath != "" {
-		paths = []string{source.SourceTranscriptPath}
-	}
+	paths := []string{path}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -759,11 +734,7 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	dests, err := s.destinations(ctx)
-	if err != nil {
-		return err
-	}
-	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, s.registeredDiscoveryRoots(dests), paths...)
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, projects, paths...)
 	if err != nil {
 		return err
 	}
@@ -800,8 +771,9 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		result.SessionID = item.candidate.SessionID
 		return result
 	}
-	project, eligible := dests.resolve(source.cwd)
-	if readErr != nil || !eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd {
+	dest := dests.destination(source.cwd)
+	project := dest.id
+	if readErr != nil || !dest.eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd {
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
 	}
@@ -815,8 +787,9 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	}
 	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
-	// Claude and Pi resume on AO's or the user's default model unless told
-	// otherwise, which may be a provider the chat never used; keep the chat's own.
+	// Claude, Pi, OMP and Kimchi resume on AO's or the user's default model
+	// unless told otherwise, which may be a provider the chat never used; keep
+	// the chat's own.
 	switch source.harness {
 	case domain.HarnessClaudeCode:
 		rec.Metadata.Model = source.model
@@ -854,6 +827,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 	// only one batch of full histories is held; each batch then registers in
 	// order.
 	batch := max(1, runtime.GOMAXPROCS(0)/2)
+	projects := s.registeredDiscoveryRoots(dests)
 	for start := 0; start < len(ids); start += batch {
 		chunk := ids[start:min(start+batch, len(ids))]
 		type fresh struct {
@@ -868,11 +842,6 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 				continue
 			}
 			group.Go(func() error {
-				projects := s.registeredDiscoveryRoots(dests)
-				if err := s.checkSourceFingerprint(ctx, item.source, projects); err != nil {
-					reads[i].err = err
-					return nil //nolint:nilerr // Collected per item so the batch reports every result.
-				}
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
 				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
 				if reads[i].err == nil {

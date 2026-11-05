@@ -106,13 +106,13 @@ func TestOMPRejectsIdentityMismatchAndPromptlessSessions(t *testing.T) {
 }
 
 func TestOMPNativeIDFromPath(t *testing.T) {
-	if got := ompNativeIDFromPath("2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+	if got := piFamilyNativeID("2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
 		t.Fatalf("name only: got %q, want %q", got, ompSession)
 	}
-	if got := ompNativeIDFromPath("/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+	if got := piFamilyNativeID("/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
 		t.Fatalf("full path: got %q, want %q", got, ompSession)
 	}
-	if got := ompNativeIDFromPath("noseparator.jsonl"); got != "noseparator" {
+	if got := piFamilyNativeID("noseparator.jsonl"); got != "noseparator" {
 		t.Fatalf("no separator: got %q, want %q", got, "noseparator")
 	}
 	// sourceFiles derives the same grouping id from the file name.
@@ -234,9 +234,9 @@ func TestOMPModelAndEffortFollowTheActiveBranch(t *testing.T) {
 }
 
 func TestOMPBoundsHeldTextAcrossAbandonedBranches(t *testing.T) {
-	oldHeld := maxClaudeHeld
-	maxClaudeHeld = 128
-	t.Cleanup(func() { maxClaudeHeld = oldHeld })
+	oldHeld := maxHeldText
+	maxHeldText = 128
+	t.Cleanup(func() { maxHeldText = oldHeld })
 	body := `{"type":"session","id":"` + ompSession + `","cwd":"/work/repo"}` + "\n" +
 		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":"opening prompt"}}` + "\n" +
 		`{"type":"message","id":"a1","parentId":"m1","message":{"role":"assistant","content":"` + strings.Repeat("x", 100) + `"}}` + "\n" +

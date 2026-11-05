@@ -235,12 +235,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 			opening = len(nodes) - 1
 		}
 		held += len(node.msg.Text)
-		for ; held > maxClaudeHeld && drop < len(nodes); drop++ {
-			if drop != opening && nodes[drop].msg.Text != "" {
-				held -= len(nodes[drop].msg.Text)
-				nodes[drop].msg.Text, nodes[drop].shortened = "", true
-			}
-		}
+		dropOldestHeld(nodes, &held, &drop, opening, func(n *copilotNode) (*string, *bool) { return &n.msg.Text, &n.shortened })
 		return nil
 	}
 	if err := readOne(providerRoot, t.root, t.path, handle); err != nil {
@@ -270,35 +265,10 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 	if t.cwd == "" {
 		t.cwd = metadata.CWD
 	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("copilot working directory must be absolute")
-	}
-	if t.last.IsZero() {
-		if info, err := os.Stat(t.path); err == nil {
-			t.last = info.ModTime()
-		}
-	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
 	if metadata.Name != "" {
 		t.title = metadata.Name
 	}
-	if t.title == "" {
-		for _, msg := range t.messages {
-			if msg.Role == domain.MessageRoleUser {
-				t.title = msg.Text
-				break
-			}
-		}
-	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if title := []rune(t.title); len(title) > 100 {
-		t.title = string(title[:100]) + "…"
-	}
-	return t, nil
+	return t, finishTranscript(&t, errors.New("copilot working directory must be absolute"))
 }
 
 func readCopilotWorkspace(root *os.Root, sessionDir string) copilotWorkspace {

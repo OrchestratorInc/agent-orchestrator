@@ -327,9 +327,9 @@ func TestCopilotRewindAndClearKeepOnlyCurrentHistory(t *testing.T) {
 }
 
 func TestCopilotHeldHistoryIsBoundedAndKeepsOpeningAndNewest(t *testing.T) {
-	oldHeld := maxClaudeHeld
-	maxClaudeHeld = 512
-	t.Cleanup(func() { maxClaudeHeld = oldHeld })
+	oldHeld := maxHeldText
+	maxHeldText = 512
+	t.Cleanup(func() { maxHeldText = oldHeld })
 	root := t.TempDir()
 	path := copilotFixture(t, root, copilotTestID, t.TempDir())
 	body, err := os.ReadFile(path)

@@ -54,9 +54,11 @@ type piNode struct {
 	dropped                bool
 }
 
-// piNativeID is the conversation UUID encoded in a Pi session file name,
-// `<ISO-time>_<uuid>.jsonl`. It matches the id in the file's session header.
-func piNativeID(path string) string {
+// piFamilyNativeID is the conversation UUID encoded in a Pi, OMP or Kimchi
+// session file name, `<ISO-time>_<uuid>.jsonl`. It matches the id in the
+// file's session header. A name without the separator falls back to the whole
+// stem so grouping stays stable.
+func piFamilyNativeID(path string) string {
 	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	if i := strings.LastIndex(name, "_"); i >= 0 {
 		return name[i+1:]
@@ -64,10 +66,6 @@ func piNativeID(path string) string {
 	return name
 }
 
-// readPiTranscript reads one Pi conversation JSONL. It reuses the shared
-// os.Root-confined reader and oversize-record skimming so a huge tool result
-// neither hides the text beside it nor is retained, and it follows the active
-// branch so a rewound prompt is not shown beside its replacement.
 func readPiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessPi, root: root}
 	if len(paths) == 0 {
@@ -80,7 +78,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	}
 	defer func() { _ = providerRoot.Close() }()
 	t.root = root
-	t.nativeID = piNativeID(paths[0])
+	t.nativeID = piFamilyNativeID(paths[0])
 
 	var (
 		nodes     []piNode
@@ -109,7 +107,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 			}
 			sawHeader = true
 			if r.ID != "" && !strings.EqualFold(r.ID, t.nativeID) {
-				return errors.New("native identity mismatch")
+				return errNativeIdentityMismatch
 			}
 			t.cwd = r.CWD
 			return nil
@@ -143,14 +141,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 			firstText = idx
 		}
 		held += len(nodes[idx].text)
-		// Drop the oldest text first, as trimVisible would, but keep the opening prompt.
-		for held > maxClaudeHeld && drop < len(nodes) {
-			if drop != firstText && nodes[drop].text != "" {
-				held -= len(nodes[drop].text)
-				nodes[drop].text, nodes[drop].dropped = "", true
-			}
-			drop++
-		}
+		dropOldestHeld(nodes, &held, &drop, firstText, func(n *piNode) (*string, *bool) { return &n.text, &n.dropped })
 		return nil
 	}
 	for _, path := range paths {
@@ -161,7 +152,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	}
 	t.path = t.paths[len(t.paths)-1]
 	if !sawHeader {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 
 	// Follow the active branch from the last appended record so rewound or
@@ -192,7 +183,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: "pi"})
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
 	for _, node := range chain {
 		t.shortened = t.shortened || node.dropped
@@ -213,30 +204,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	}
 	// A session with no real prompt, or a non-UUID name, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
-	}
-	if t.last.IsZero() {
-		if info, err := os.Stat(t.path); err == nil {
-			t.last = info.ModTime()
-		}
-	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
-	for _, m := range t.messages {
-		if m.Role == domain.MessageRoleUser {
-			t.title = m.Text
-			break
-		}
-	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
-	return t, nil
+	return t, finishTranscript(&t, errRelativeCWD)
 }

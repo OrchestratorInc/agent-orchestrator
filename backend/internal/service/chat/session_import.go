@@ -23,7 +23,7 @@ func (s *Service) withImportedHistory(ctx context.Context, id domain.SessionID, 
 		return rows, nil
 	}
 	if limit <= 0 {
-		limit = 200 // the store's default page
+		limit = 200 // the store's default page (DefaultConversationPageSize)
 	}
 	room := limit - int64(len(rows.Messages)+len(rows.Activities))
 	if room <= 0 {

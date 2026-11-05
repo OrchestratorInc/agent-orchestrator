@@ -121,10 +121,6 @@ func geminiCWD(ctx context.Context, root *os.Root, path, hash string, projects [
 	return ""
 }
 
-func readGeminiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
-	return readGeminiTranscriptWithProjects(ctx, root, nil, paths...)
-}
-
 func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects []string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessGemini, root: canonical(root)}
 	if len(paths) != 1 {
@@ -162,7 +158,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 		msg.Content, _ = json.Marshal(text)
 		held += len(msg.Content)
 		messages[msg.ID] = msg
-		for held > maxClaudeHeld && len(order) > 1 {
+		for held > maxHeldText && len(order) > 1 {
 			id := order[1]
 			held -= len(messages[id].Content)
 			delete(messages, id)
@@ -309,10 +305,6 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 		return t, errors.New("no readable gemini conversation")
 	}
 	return t, nil
-}
-
-func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
-	return discoverGeminiWithProjects(ctx, root, nil)
 }
 
 func discoverGeminiWithProjects(ctx context.Context, root string, projects []string) ([]sourceFiles, error) {

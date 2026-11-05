@@ -15,18 +15,7 @@ func (s *Service) checkSourceFingerprint(ctx context.Context, source transcript,
 	if source.fingerprint == "" {
 		return nil
 	}
-	importer := harnessImporters[source.harness]
-	var files []sourceFiles
-	var err error
-	switch {
-	case importer.discoverRegistered != nil:
-		files, err = importer.discoverRegistered(ctx, projects)
-		files = registeredSources(files, projects)
-	case importer.discoverWithProjects != nil:
-		files, err = importer.discoverWithProjects(ctx, source.root, projects)
-	default:
-		files, err = s.discover(ctx, source.harness, source.root)
-	}
+	files, err := s.discoverFor(ctx, source.harness, source.root, projects)
 	if err != nil {
 		return err
 	}

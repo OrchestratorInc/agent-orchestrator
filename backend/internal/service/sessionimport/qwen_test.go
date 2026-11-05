@@ -364,9 +364,9 @@ func TestQwenUserDisplayProjection(t *testing.T) {
 }
 
 func TestQwenAbandonedTextDoesNotShortenActiveBranch(t *testing.T) {
-	oldLimit := maxClaudeHeld
-	maxClaudeHeld = 64
-	t.Cleanup(func() { maxClaudeHeld = oldLimit })
+	oldLimit := maxHeldText
+	maxHeldText = 64
+	t.Cleanup(func() { maxHeldText = oldLimit })
 	root := t.TempDir()
 	path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
 		qwenLinkedRecord("u1", "", "user", "opening"),
@@ -455,9 +455,9 @@ func TestQwenFragmentTextBudget(t *testing.T) {
 		{"UTF8", 15, "ééé", "1234567890éé"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			oldLimit := maxClaudeHeld
-			maxClaudeHeld = tc.limit
-			t.Cleanup(func() { maxClaudeHeld = oldLimit })
+			oldLimit := maxHeldText
+			maxHeldText = tc.limit
+			t.Cleanup(func() { maxHeldText = oldLimit })
 			root := t.TempDir()
 			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
 				qwenLinkedRecord("prompt", "", "user", "1234567890"),

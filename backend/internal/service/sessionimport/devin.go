@@ -83,7 +83,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 		return t, err
 	}
 	if db == nil {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	defer func() { _ = db.Close() }()
 	var updated int64
@@ -92,7 +92,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 		return t, err
 	}
 	if !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
+		return t, errRelativeCWD
 	}
 	t.last = devinTime(updated)
 	rows, err := db.QueryContext(ctx, `WITH RECURSIVE chain(node_id,parent_node_id) AS (
@@ -140,21 +140,16 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 			}
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(m.Role), Text: text, At: devinTime(at)}})
-		if len(items) > 2 {
-			before := len(items)
-			items = trimVisible(items)
-			t.shortened = t.shortened || len(items) < before
-		}
+		before := len(items)
+		items = trimVisible(items)
+		t.shortened = t.shortened || len(items) < before
 	}
 	if err := rows.Err(); err != nil {
 		return t, err
 	}
 	if !hasUser {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
-	before := len(items)
-	items = trimVisible(items)
-	t.shortened = t.shortened || len(items) < before
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}

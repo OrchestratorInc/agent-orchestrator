@@ -509,9 +509,9 @@ func TestClaudePromptOnlyStripsCommandRecords(t *testing.T) {
 // A long Claude history is not held whole while its branches are read: the
 // oldest text goes first, the opening prompt stays, and the row says so.
 func TestClaudeReadHoldsBoundedText(t *testing.T) {
-	held := maxClaudeHeld
-	maxClaudeHeld = 100
-	t.Cleanup(func() { maxClaudeHeld = held })
+	held := maxHeldText
+	maxHeldText = 100
+	t.Cleanup(func() { maxHeldText = held })
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
 	var lines []string
 	parent := "null"
