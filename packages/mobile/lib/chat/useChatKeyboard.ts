@@ -1,5 +1,5 @@
 import { useHeaderHeight } from "expo-router/build/react-navigation/elements";
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { Keyboard, Platform } from "react-native";
 import { KeyboardEvents } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -46,6 +46,9 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 		insets.bottom,
 		initialState,
 	);
+	// The keyboard is on its way down. Only the conversation's padding hears it
+	// (see rootStyle); the composer's own handling waits for the close as before.
+	const [closing, setClosing] = useState(false);
 
 	useEffect(() => {
 		// React Native's reports wait out the keyboard's own animation; see
@@ -61,8 +64,15 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 			}, PLATFORM_KEYBOARD_SETTLE_MS);
 		};
 		const subscriptions = [
-			KeyboardEvents.addListener("keyboardWillShow", (event) => dispatch({ kind: "controller-show", height: event.height })),
-			KeyboardEvents.addListener("keyboardDidHide", () => dispatch({ kind: "controller-hidden" })),
+			KeyboardEvents.addListener("keyboardWillShow", (event) => {
+				setClosing(false);
+				dispatch({ kind: "controller-show", height: event.height });
+			}),
+			KeyboardEvents.addListener("keyboardWillHide", () => setClosing(true)),
+			KeyboardEvents.addListener("keyboardDidHide", () => {
+				setClosing(false);
+				dispatch({ kind: "controller-hidden" });
+			}),
 			Keyboard.addListener("keyboardDidShow", (event) => settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
 			Keyboard.addListener("keyboardDidHide", () => settleThenCorrect({ kind: "platform-hidden" })),
 		];
@@ -74,7 +84,12 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 
 	return {
 		keyboardVisible: state.visible,
-		rootStyle: platform === "android" ? { paddingBottom: state.visible ? state.height : 0 } : undefined,
+		// Released as the keyboard starts down, not once it has gone: the composer
+		// rides the keyboard down frame by frame, and a conversation still padded
+		// for the open keyboard left an empty band above it until the close ended.
+		// Unpadded, the conversation runs on under the closing keyboard, which
+		// uncovers it as it goes.
+		rootStyle: platform === "android" ? { paddingBottom: state.visible && !closing ? state.height : 0 } : undefined,
 		behavior: platform === "ios" ? "padding" as const : undefined,
 		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(underHeader ? 0 : headerHeight) : 0,
 		restingInset: dockRestingInset(insets.bottom),

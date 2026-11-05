@@ -39,6 +39,26 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => renderer?.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+// The composer rides the keyboard down frame by frame; a conversation still
+// padded for the open keyboard left an empty band above it until the close ended.
+it("releases the conversation's pad as the keyboard starts to close, not once it has gone", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 336 });
+	await fire("controller", "keyboardWillHide");
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
+	// The composer's own handling still waits for the close.
+	expect(latest?.keyboardVisible).toBe(true);
+	expect(latest?.composerLift).toBeUndefined();
+	// Opened again mid-close: padded again.
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 336 });
+	await fire("controller", "keyboardWillHide");
+	await fire("controller", "keyboardDidHide");
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
+	expect(latest?.composerLift).toBe(0);
+});
+
 it("keeps the keyboard pad through a close React Native reports before keyboard-controller", async () => {
 	await mount();
 	await fire("controller", "keyboardWillShow", { height: 336 });
