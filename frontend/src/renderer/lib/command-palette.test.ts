@@ -26,6 +26,7 @@ import {
 } from "../types/workspace";
 import { appI18n } from "../i18n";
 import { sessionBranchPresentation } from "./session-branch";
+import { buildSettingsCommands, buildShortcutCommands } from "./palette-registry";
 
 function session(overrides: Partial<WorkspaceSession> & { id: string }): WorkspaceSession {
 	return {
@@ -768,6 +769,46 @@ describe("Report a problem", () => {
 	it.each(["bug", "report"])("is found by typing %s", (query) => {
 		const ids = filterCommands(buildCommands({ workspaces: workspaces() }), query).map((item) => item.id);
 		expect(ids).toContain("global-report-problem");
+	});
+
+	const paletteRows = () => [
+		...buildCommands({ workspaces: workspaces() }),
+		...buildShortcutCommands(appI18n.t),
+		...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false }),
+	];
+
+	it.each(["bug", "report", "report a problem", "issue", "feedback"])("is the Enter target for %s", (query) => {
+		expect(displayGroups(paletteRows(), query)[0]?.items[0]?.id).toBe("global-report-problem");
+	});
+
+	it("has one row, so Enter and a click can't do different things", () => {
+		const title = appI18n.t("report.action");
+		expect(paletteRows().filter((item) => item.title === title).map((item) => item.id)).toEqual(["global-report-problem"]);
+	});
+});
+
+describe("whole keyword matches", () => {
+	const row = (id: string, keywords: string[]): CommandItem => ({ id, group: "global", title: "Unrelated", keywords, action: { kind: "toggle-theme" } });
+
+	it("rank above the same letters inside a longer word", () => {
+		const whole = row("whole", ["bug"]);
+		const inside = row("inside", ["debug"]);
+		expect(matchScore("bug", whole)).toBeGreaterThan(matchScore("bug", inside));
+		expect(filterCommands([inside, whole], "bug").map((item) => item.id)).toEqual(["whole", "inside"]);
+	});
+
+	it("still rank below a title match", () => {
+		const titled: CommandItem = { ...row("titled", []), title: "Fix the bug" };
+		expect(matchScore("bug", titled)).toBeGreaterThan(matchScore("bug", row("whole", ["bug"])));
+	});
+
+	it.each([
+		["keys", "shortcut:keyboard-shortcuts"],
+		["review", "shortcut:toggle-diff"],
+		["code", "shortcut:open-in-editor"],
+	])("send Enter on %s to the row that names it", (query, id) => {
+		const rows = [...buildShortcutCommands(appI18n.t), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
+		expect(displayGroups(rows, query)[0]?.items[0]?.id).toBe(id);
 	});
 });
 

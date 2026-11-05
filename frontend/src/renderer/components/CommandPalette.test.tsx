@@ -288,6 +288,19 @@ describe("CommandPalette gating", () => {
 		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
 	});
 
+	it.each(["bug", "report"])("starts a problem report when Enter follows %s", async (query) => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.change(input, { target: { value: query } });
+		await screen.findByText(rowTitle("Report a problem"));
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
+	});
+
 	it("subscribes to workspace updates only while open", () => {
 		renderPalette();
 		expect(workspaceSubscriptionMock).toHaveBeenLastCalledWith({ subscribed: false });
