@@ -207,13 +207,13 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
 		// ⌘D splits a new terminal to the right, as in macOS terminals. Plain
-		// Ctrl+D is end-of-input in a terminal, so other platforms use Windows
-		// Terminal's Alt+Shift+D.
+		// Ctrl+D is end-of-input in a terminal, and Alt+Shift switches keyboard
+		// layouts, so other platforms require Ctrl+Alt+Shift.
 		case "split-shell-terminal":
-			return [isMac ? binding("d", { meta: true }) : binding("d", { alt: true, shift: true })];
-		// ⌘⇧D, as in macOS terminals; Windows Terminal's Alt+Shift+- elsewhere.
+			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true, shift: true })];
+		// ⌘⇧D on macOS; Ctrl+Alt+Shift+- elsewhere.
 		case "split-shell-terminal-down":
-			return [isMac ? binding("d", { meta: true, shift: true }) : binding("_", { alt: true, shift: true })];
+			return [isMac ? binding("d", { meta: true, shift: true }) : binding("_", { ctrl: true, alt: true, shift: true })];
 		// ⌃⌘D on macOS (⌥⌘D toggles the Dock). Plain Ctrl+D is end-of-input in
 		// a terminal, so other platforms add Alt.
 		case "dictate":

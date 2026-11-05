@@ -166,6 +166,14 @@ describe("default shortcuts", () => {
 		expect(matchesAppShortcut(id, pressed, true)).toBe(true);
 	});
 
+	it.each([
+		["split-shell-terminal", "D"],
+		["split-shell-terminal-down", "_"],
+	] as const)("Windows/Linux binds %s without taking Alt+Shift layout switching", (id, key) => {
+		expect(matchesAppShortcut(id, chord({ key, ctrl: true, alt: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut(id, chord({ key, alt: true, shift: true }), false)).toBe(false);
+	});
+
 	it("tells ⌘[ (history) apart from ⌘⇧[ (previous session)", () => {
 		const unshifted = chord({ key: "[", code: "BracketLeft", meta: true });
 		const shifted = chord({ key: "{", code: "BracketLeft", meta: true, shift: true });
