@@ -14,9 +14,10 @@ const MAX_BADGE = 99;
 // Material settings and notifications glyphs.
 const SETTINGS_ICON = toolbarIcon({ ios: "gear", android: "settings" });
 const NOTIFICATIONS_ICON = toolbarIcon({ ios: "bell", android: "notifications" });
-// SF Symbols' own pull request, so it has the bar's weight and size like the
-// gear beside it.
-const PULL_REQUESTS_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;
+// The app's own pull-request glyph on both platforms, tinted as a template like
+// the bar's other items: SF Symbols' arrow.triangle.pull is a merge arrow, not
+// a pull request.
+const PULL_REQUESTS_ICON = PULL_REQUEST_GLYPH;
 
 export type BoardHeaderItemsProps = {
 	unread: number;
