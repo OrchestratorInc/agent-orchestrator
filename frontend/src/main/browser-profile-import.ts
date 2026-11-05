@@ -766,7 +766,7 @@ export class BrowserProfileImportService {
 			for (const [index, group] of groups.entries()) {
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index, total: groups.length });
-				const profile = await this.options.profileStore.createProfile(group.name);
+				const profile = await this.options.profileStore.createProfile(group.name, { claimDefault: false });
 				created.push(profile);
 				throwIfImportAborted(signal);
 				const history = group.data.flatMap((data) => data.history);
@@ -803,6 +803,8 @@ export class BrowserProfileImportService {
 				});
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
+			// Only a committed import may become the default; see createProfile.
+			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
 			const cleanupFailures: string[] = [];

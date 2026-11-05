@@ -283,7 +283,12 @@ export class BrowserProfileStore {
 		}
 	}
 
-	async createProfile(rawName: unknown): Promise<BrowserProfile> {
+	/**
+	 * The first profile becomes the default. An import passes
+	 * `claimDefault: false` and calls `claimDefaultIfFirst` after it commits,
+	 * so no unbound worker opens a half-imported or rolled-back profile.
+	 */
+	async createProfile(rawName: unknown, { claimDefault = true }: { claimDefault?: boolean } = {}): Promise<BrowserProfile> {
 		const name = normalizeBrowserProfileName(rawName);
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
 		return this.enqueueMutation((current) => {
@@ -296,9 +301,18 @@ export class BrowserProfileStore {
 			const now = this.now().toISOString();
 			const profile: BrowserProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now };
 			current.profiles.push(profile);
-			// The first profile, imported or empty, becomes the default.
-			if (current.profiles.length === 1) current.defaultProfileId = profile.id;
+			if (claimDefault && current.profiles.length === 1) current.defaultProfileId = profile.id;
 			return { registry: current, result: { ...profile } };
+		});
+	}
+
+	/** Makes `profileId` the default if no default is set and it is the oldest profile. */
+	async claimDefaultIfFirst(profileId: string): Promise<void> {
+		return this.enqueueMutation((current) => {
+			if (current.defaultProfileId === null && current.profiles[0]?.id === profileId) {
+				current.defaultProfileId = profileId;
+			}
+			return { registry: current, result: undefined };
 		});
 	}
 

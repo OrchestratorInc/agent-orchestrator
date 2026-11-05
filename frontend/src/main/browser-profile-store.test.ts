@@ -194,6 +194,18 @@ describe("BrowserProfileStore", () => {
 		expect(store.getDefaultProfileId()).toBeNull();
 	});
 
+	it("lets a deferred first profile claim the default only while it is the oldest", async () => {
+		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
+		const imported = await store.createProfile("Imported", { claimDefault: false });
+		expect(store.getDefaultProfileId()).toBeNull();
+		const later = await store.createProfile("Later", { claimDefault: false });
+
+		await store.claimDefaultIfFirst(later.id);
+		expect(store.getDefaultProfileId()).toBeNull();
+		await store.claimDefaultIfFirst(imported.id);
+		expect(store.getDefaultProfileId()).toBe(imported.id);
+	});
+
 	it("promotes the oldest remaining profile when the default is deleted", async () => {
 		const store = new BrowserProfileStore({ stateDir: await makeStateDir() });
 		const work = await store.createProfile("Work");
