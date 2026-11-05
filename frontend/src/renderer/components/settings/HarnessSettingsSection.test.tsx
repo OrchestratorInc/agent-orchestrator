@@ -296,6 +296,40 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	// A chat refused for its login opened this page: the inline sign-in that
+	// takes sends the user back to that chat.
+	it("returns to the chat waiting on this agent's login once an inline sign-in takes", async () => {
+		act(() => useUiStore.setState({
+			settingsModal: { scope: "global", section: "harness", focusAgentId: "codex" },
+			loginReturn: { sessionId: "s1", agentId: "codex" },
+		}));
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const operation = { id: "inline-login", agentId: "codex", method: "browser", status: "succeeded", expiresAt: "2026-10-27T12:00:00Z" };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never
+			: path === "/api/v1/agents/{agent}/auth/operations/{operationId}" ? { data: operation } as never : get(path, options));
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations"
+			? { data: operation } as never
+			: path === "/api/v1/agents/{agent}/probe"
+				? { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never
+				: post(path, options));
+		try {
+			renderSection();
+			await userEvent.click(await findListRow("codex"));
+			const page = await findAgentRow("codex");
+			await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+			await userEvent.click(await within(page).findByRole("button", { name: "ChatGPT in browser" }));
+			await waitFor(() => expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined());
+			expect(useUiStore.getState().settingsModal).toBeNull();
+		} finally {
+			act(() => useUiStore.setState({ loginReturn: null, settingsModal: null }));
+		}
+	});
+
 	it("blocks updates during inline sign-in and releases the guard after cancellation", async () => {
 		mockInstalledOperations("npm");
 		const login = { id: "login-update-guard", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-28T12:00:00Z", loginUrl: "https://auth.openai.com/authorize" };

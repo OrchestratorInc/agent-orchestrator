@@ -780,7 +780,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
 						const cliSignedIn = await refreshCliLogin(agentId);
-						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") return true;
+						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") {
+							// A chat turn that sent the user here to log in gets them back.
+							useUiStore.getState().completeLoginReturn(agentId, hostId);
+							return true;
+						}
 					}
 					return false;
 				}}
