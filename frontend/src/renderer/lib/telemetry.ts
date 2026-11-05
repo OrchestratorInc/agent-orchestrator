@@ -357,7 +357,11 @@ export function withTelemetryContext(properties: TelemetryProperties): Telemetry
 let cloudUser: { id: string; email: string } | null = null;
 let signInKnown = false;
 let githubLogin: string | null = null;
+// The ID the SDK is identified as, and the account identify() last ran for.
+// A launch that boots identified (bootstrap.cloudUserId) has the first but not
+// the second, so the person properties are still set once that launch.
 let identifiedId: string | null = null;
+let identifyCalledFor: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
 
@@ -379,12 +383,12 @@ function registerBaseProperties(): void {
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
 	signInKnown = true;
-	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
+	if (analyticsOptedOut || identifyCalledFor === user.id || !(await initTelemetry())) return;
 	// A sign-out, a different account or an opt-out may have landed while init
 	// was pending; this continuation must not identify who is no longer current.
 	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
 	// Switching accounts without a sign-out: never layer B onto A's person.
-	if (identifiedId !== null) posthog.reset();
+	if (identifiedId !== null && identifiedId !== user.id) posthog.reset();
 	registerBaseProperties();
 	posthog.identify(user.id, {
 		email: user.email,
@@ -392,6 +396,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 		...(githubLogin ? { github_login: githubLogin } : {}),
 	});
 	identifiedId = user.id;
+	identifyCalledFor = user.id;
 	linkPendingWebVisitor(user.id);
 }
 
@@ -443,6 +448,7 @@ export function clearCloudUser(): void {
 	cloudUser = null;
 	signInKnown = true;
 	pendingWebVisitor = null;
+	identifyCalledFor = null;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -1241,7 +1247,7 @@ async function loadPostHog(): Promise<PostHogClient> {
 	return (await import("posthog-js/dist/module.full.no-external")).default;
 }
 
-export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
+export function buildPostHogConfig(distinctId: string, identified = false): PostHogInitOptions {
 	return {
 		api_host: POSTHOG_HOST,
 		defaults: RELEASE_TAG,
@@ -1273,7 +1279,7 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
-			isIdentifiedID: false,
+			isIdentifiedID: identified,
 		},
 		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
 		session_recording: {
@@ -1309,7 +1315,16 @@ export async function initTelemetry(): Promise<boolean> {
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
 		if (analyticsOptedOut) return false;
-		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
+		// Boot as the signed-in Cloud user main verified against the daemon's
+		// binding, unless this launch already learned of a sign-out or a
+		// different account (the runtime can resolve while init is pending).
+		const bootCloudId = bootstrap.cloudUserId && !(signInKnown && cloudUser?.id !== bootstrap.cloudUserId) ? bootstrap.cloudUserId : null;
+		if (bootCloudId) {
+			cloudUser ??= { id: bootCloudId, email: "" };
+			signInKnown = true;
+			identifiedId = bootCloudId;
+		}
+		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootCloudId ?? bootstrap.distinctId, bootCloudId !== null));
 		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
 		// source of truth and the bootstrap is only handed out when it is absent.
 		posthog.opt_in_capturing({ captureEventName: false });

@@ -313,6 +313,50 @@ describe("PostHog identity and opt-out", () => {
 		}
 	});
 
+	it("boots identified as the bound Cloud user, resets on sign-out and re-identifies on sign-in", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "user_01H", isIdentifiedID: true } }));
+		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
+		// Launch events go out identified, with install_id still attached.
+		const launchEvents = posthogStub.capture.mock.calls.map(([, properties]) => properties);
+		expect(launchEvents.length).toBeGreaterThan(0);
+		for (const properties of launchEvents) {
+			expect(properties).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+			expect(properties).not.toHaveProperty("$process_person_profile", false);
+		}
+		// The runtime still sets the person properties once, without a reset.
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.reset).not.toHaveBeenCalled();
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		clearCloudUser();
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, $process_person_profile: false, install_id: "ins_test" });
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.identify).toHaveBeenCalledTimes(2);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+	});
+
+	it("boots anonymous without a verified Cloud binding", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch" }));
+		const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+		expect(withTelemetryContext({})).toMatchObject({ $process_person_profile: false });
+	});
+
+	it("does not boot identified after this launch already saw a sign-out", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
+		const { initTelemetry, clearCloudUser } = await import("./telemetry");
+		clearCloudUser();
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+	});
+
 	it("stamps sign-in only after the renderer learns the account state", async () => {
 		localStorage.clear();
 		mockBridge(async () => bootstrap);
