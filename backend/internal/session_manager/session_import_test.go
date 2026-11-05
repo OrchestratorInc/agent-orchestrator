@@ -176,7 +176,7 @@ func TestImportedIdleHistoryDoesNotRestartUntilResume(t *testing.T) {
 }
 
 func TestDeferredPendingImportPreservesHistoryWithoutPreparingWorkspace(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessKimi, domain.HarnessDroid} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessKimi, domain.HarnessDroid} {
 		t.Run(string(harness), func(t *testing.T) {
 			rec := domain.SessionRecord{ID: "mer-1", Harness: harness, Mode: domain.SessionModeChat}
 			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-session", ConfigDir: "/provider/home"}

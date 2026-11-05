@@ -100,7 +100,9 @@ func TestOpenCodeDiscoverSkipsChildAndArchived(t *testing.T) {
 	}
 }
 
-func TestScanDoesNotOfferOpenCodeWithReadableHistory(t *testing.T) {
+// OpenCode resumes from a private copy bound to AO's workspace (see the
+// opencode adapter's PrepareImportedSession), so readable chats are offered.
+func TestScanOffersOpenCodeWithReadableHistory(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	project := t.TempDir()
 	addSession(t, db, "ses_deferred", "", project, "Deferred import", 9000, nil)
@@ -111,8 +113,8 @@ func TestScanDoesNotOfferOpenCodeWithReadableHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Candidates) != 0 {
-		t.Fatalf("OpenCode must not be offered until tools run in AO's worktree: %+v", preview.Candidates)
+	if len(preview.Candidates) != 1 || preview.Candidates[0].Harness != domain.HarnessOpenCode || preview.Candidates[0].ProjectID != "repo" {
+		t.Fatalf("readable OpenCode chat was not offered: %+v", preview.Candidates)
 	}
 }
 

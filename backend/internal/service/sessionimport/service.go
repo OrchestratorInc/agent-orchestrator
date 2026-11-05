@@ -612,7 +612,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
 	projects := s.registeredDiscoveryRoots(dests)
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessCopilot, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessCopilot, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen, domain.HarnessOpenCode}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
