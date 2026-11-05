@@ -2234,9 +2234,10 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			>
 				<strong
 					className={cn(
-						"activity-row-label shrink-0 text-xs font-normal",
+						"activity-row-label min-w-0 truncate text-xs font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
+					title={tool}
 				>
 					<span>{tool}</span>
 				</strong>
