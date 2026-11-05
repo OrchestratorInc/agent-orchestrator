@@ -529,7 +529,9 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
-	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title})
+	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
+		Owner: "agentaccounts:" + string(p), Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title,
+	})
 	if err != nil {
 		discard()
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)
