@@ -660,7 +660,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("button", { name: "Retry message safely" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
 	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -755,7 +755,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
-	expect(screen.getByRole("button", { name: "Retry message safely" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-b:3001"); });
 	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
 	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
