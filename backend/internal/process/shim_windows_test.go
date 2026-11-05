@@ -353,6 +353,38 @@ func TestCommandContextRunsDeclinedShimThroughCmdExe(t *testing.T) {
 	}
 }
 
+// TestCommandContextRunsDeclinedShimWithoutComSpec covers the fallback's own
+// fallback: with no ComSpec, the shell still has to be named by absolute path.
+// Cmd.Start resolves a bare `cmd.exe` against cmd.Dir, which callers set to a
+// workspace after construction, so a cmd.exe checked into a cloned project would
+// be the one that runs. systemexec and previewserver used to hand the bare name
+// to exec.Command, which resolved it in the daemon's environment; the moved
+// fallback has to do that resolution itself.
+func TestCommandContextRunsDeclinedShimWithoutComSpec(t *testing.T) {
+	t.Setenv("ComSpec", "")
+	dir := filepath.Join(t.TempDir(), "ao tools")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shim := writeShimFixture(t, dir, "echo tool.cmd", "@echo off\r\necho %~1\r\n")
+
+	cmd := CommandContext(context.Background(), shim, "argument with spaces")
+	cmd.Dir = t.TempDir()
+	if !filepath.IsAbs(cmd.Path) {
+		t.Fatalf("cmd.Path = %q, want an absolute path to the system cmd.exe", cmd.Path)
+	}
+	if !strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") {
+		t.Fatalf("cmd.Path = %q, want the system cmd.exe", cmd.Path)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run shim without ComSpec: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(string(output)); got != "argument with spaces" {
+		t.Fatalf("output = %q, want the argument preserved", got)
+	}
+}
+
 // TestCommandResolvesShimNamedThroughPATH mirrors real callers, which name the
 // tool and let PATH answer with the shim file.
 func TestCommandResolvesShimNamedThroughPATH(t *testing.T) {

@@ -6,8 +6,9 @@ import (
 )
 
 // Command creates a non-interactive child process. On Windows it suppresses
-// transient console windows for CLI tools launched by the desktop daemon and
-// starts batch shims' targets directly (see ResolveBatchShim).
+// transient console windows for CLI tools launched by the desktop daemon, starts
+// a batch shim's target directly when it can follow the shim, and otherwise runs
+// the batch file through cmd.exe /d /s /c (see rewriteBatchShim).
 func Command(name string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
 	rewriteBatchShim(cmd)

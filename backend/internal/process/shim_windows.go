@@ -70,7 +70,7 @@ func rewriteBatchShim(cmd *exec.Cmd) {
 	args := cmd.Args[1:]
 	shell := strings.TrimSpace(os.Getenv("ComSpec"))
 	if shell == "" {
-		shell = "cmd.exe"
+		shell = systemCommandShell()
 	}
 	cmd.Path = shell
 	cmd.Args = nil
@@ -78,6 +78,21 @@ func rewriteBatchShim(cmd *exec.Cmd) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(shim, args) + `"`
+}
+
+// systemCommandShell names the batch interpreter for the rare environment that
+// has no ComSpec. It returns an absolute path for the same reason ComSpec
+// normally is one: Cmd.Start resolves a bare name against cmd.Dir, which
+// callers point at a workspace after construction, so a cmd.exe checked into a
+// cloned project would be the one that runs.
+func systemCommandShell() string {
+	if root := os.Getenv("SystemRoot"); root != "" {
+		return filepath.Join(root, "System32", "cmd.exe")
+	}
+	if resolved, err := exec.LookPath("cmd.exe"); err == nil {
+		return resolved
+	}
+	return "cmd.exe"
 }
 
 func isBatchFile(path string) bool {
