@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
-import { AgentAvatar } from "./AgentAvatar";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -682,7 +681,7 @@ function LegacySessionStatusDot({ session }: { session: WorkspaceSession }) {
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean; legacy: boolean }) {
+function SessionStatusDot({ session, working, legacy }: { session: WorkspaceSession; working: boolean; legacy: boolean }) {
 	// A working agent shows the spinner even when its PR has a state to flag:
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
@@ -696,19 +695,6 @@ function SessionStatusDot({ session, working, harnessOnly, legacy }: { session: 
 		previous.current = marker;
 	}, [marker]);
 	if (legacy) return <LegacySessionStatusDot session={session} />;
-	if (harnessOnly) {
-		return (
-			// Same 14px box, 10px inset, and 8px gap as a project's avatar. A session
-			// waiting on the user swaps the logo for the red alert.
-			<span aria-hidden="true" className="relative z-[1] mr-0.5 inline-flex size-icon-md shrink-0 items-center justify-center">
-				{!working && sessionNeedsInput(session) ? (
-					<SessionMarkerIcon data-session-status={session.status} marker="attention" />
-				) : (
-					<AgentAvatar className="size-icon-md" decorative provider={session.provider} />
-				)}
-			</span>
-		);
-	}
 	// Rows with nothing to flag still get a quiet dot, so every title starts on
 	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
@@ -2451,7 +2437,6 @@ function ScratchpadSection({
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
 						indented={false}
-						harnessOnly
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
 						onOpen={openSession}
@@ -2493,7 +2478,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
-	harnessOnly,
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
@@ -2504,7 +2488,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
 	indented?: boolean;
-	harnessOnly?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
@@ -2528,7 +2511,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			session={session}
 			active={active}
 			indented={indented}
-			harnessOnly={harnessOnly}
 			onKilled={onKilled}
 			onOpen={open}
 			layoutDependency={layoutDependency}
@@ -2549,7 +2531,6 @@ function SessionReorderList({
 	sessionIds,
 	activeSessionId,
 	indented = true,
-	harnessOnly = false,
 	plain = false,
 	onReorder,
 	onKilled,
@@ -2562,8 +2543,6 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
-	/** Rows show only the harness logo and the title (the Scratchpad). */
-	harnessOnly?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
 	 *  descendants on drop. */
@@ -2622,7 +2601,6 @@ function SessionReorderList({
 						session={session}
 						active={activeSessionId === session.id}
 						indented={indented}
-						harnessOnly={harnessOnly}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
 					/>
@@ -2650,7 +2628,6 @@ function SessionReorderList({
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
 							indented={indented}
-							harnessOnly={harnessOnly}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
@@ -2676,7 +2653,6 @@ const SessionRow = memo(function SessionRow({
 	active,
 	hostLabel,
 	indented = true,
-	harnessOnly: harnessOnlyRequested = false,
 	layoutDependency,
 	listIsDragging = false,
 	onKilled,
@@ -2687,8 +2663,6 @@ const SessionRow = memo(function SessionRow({
 	active: boolean;
 	hostLabel?: string;
 	indented?: boolean;
-	/** Show only the harness logo and the title: no status, spinner, or age. */
-	harnessOnly?: boolean;
 	/** The list order. Present only for rows in a reorderable list: the row then
 	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
@@ -2705,8 +2679,6 @@ const SessionRow = memo(function SessionRow({
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
-	// The Scratchpad's logo-only rows are part of the new design.
-	const harnessOnly = harnessOnlyRequested && newSidebarDesign;
 	const working = isSessionRowWorking(session);
 	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
@@ -2715,8 +2687,8 @@ const SessionRow = memo(function SessionRow({
 		const updated = Date.parse(session.updatedAt);
 		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
 	}, [active, markRead, session]);
-	const shimmer = newSidebarDesign && working && !active && !harnessOnly;
-	const marker = !newSidebarDesign || harnessOnly || working ? null : getSessionRowMarker(session);
+	const shimmer = newSidebarDesign && working && !active;
+	const marker = !newSidebarDesign || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
@@ -2772,20 +2744,19 @@ const SessionRow = memo(function SessionRow({
 			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
 				<div
 					className={cn(
-						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
-						harnessOnly ? "pl-2.5" : "pl-1.5",
+						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
 						active && "text-foreground",
 					)}
 					data-session-row=""
 				>
 					<NavRowHighlight active={active} />
-					<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+					<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 					<input
 						aria-label={t("shell.renameSession", { title: session.title })}
 						autoFocus
 						className={cn(
 							"relative z-[1] h-full min-w-0 flex-1 appearance-none border-0 bg-transparent! p-0 text-sm text-foreground outline-none ring-0 focus:outline-none focus:ring-0",
-							!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
+							(session.lastInteractionAt ?? session.lastUserMessageAt) && "pr-[36px]",
 						)}
 						data-session-inline-editor=""
 						maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
@@ -2803,7 +2774,7 @@ const SessionRow = memo(function SessionRow({
 						}}
 						value={rename.draft}
 					/>
-					{harnessOnly ? null : <SessionMessageAge session={session} />}
+					<SessionMessageAge session={session} />
 				</div>
 			</SidebarMenuSubItem>
 		);
@@ -2846,9 +2817,8 @@ const SessionRow = memo(function SessionRow({
 							aria-keyshortcuts="F2"
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
-								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								harnessOnly ? "pl-2.5" : "pl-1.5",
-								!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
+								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
@@ -2887,7 +2857,7 @@ const SessionRow = memo(function SessionRow({
 							ref={reorder?.setActivatorNodeRef}
 							type="button"
 						>
-							<SessionStatusDot harnessOnly={harnessOnly} legacy={!newSidebarDesign} session={session} working={working} />
+							<SessionStatusDot legacy={!newSidebarDesign} session={session} working={working} />
 							<span className="flex min-w-0 flex-1 items-center gap-1.5">
 								<span
 									className={cn(
@@ -2920,7 +2890,6 @@ const SessionRow = memo(function SessionRow({
 					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
 						archiveOpen={archiveOpen}
-						hideAge={harnessOnly}
 						isDragging={Boolean(reorder?.isDragging)}
 						onArchiveOpenChange={setArchiveOpen}
 						onKilled={onKilled}
@@ -2972,14 +2941,12 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 
 const SessionActions = memo(function SessionActions({
 	session,
-	hideAge = false,
 	isDragging,
 	archiveOpen,
 	onArchiveOpenChange,
 	onKilled,
 }: {
 	session: WorkspaceSession;
-	hideAge?: boolean;
 	isDragging: boolean;
 	archiveOpen: boolean;
 	onArchiveOpenChange: (open: boolean) => void;
@@ -3072,7 +3039,7 @@ const SessionActions = memo(function SessionActions({
 					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
 				</Tooltip>}
 			</div>
-			{hideAge ? null : <SessionMessageAge session={session} />}
+			<SessionMessageAge session={session} />
 		</div>
 	);
 });

@@ -1139,8 +1139,6 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
-		// The fold names the time, so the answer's own row does not repeat it.
-		expect(document.querySelector("[data-turn-duration]")).toBeNull();
 		// "Worked for" fills the row under the prompt, so no empty one is reserved.
 		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
 
@@ -1148,7 +1146,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
-	it("puts the turn's duration on the action row when there is no work to fold", () => {
+	it("heads a turn with no work to fold with Worked for as plain text", () => {
 		const turnId = "turn-straight-to-answer";
 		const snapshot: ConversationSnapshot = {
 			...chatFixtureEmpty,
@@ -1178,14 +1176,17 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// Nothing to fold, so no "Worked for": the time ends the answer's action row instead.
+		// Every settled turn says how long it ran in the same place. With nothing to
+		// fold it is a label: no control and no chevron.
+		const worked = document.querySelector("[data-turn-worked]");
+		expect(worked).toHaveTextContent("Worked for 1m");
 		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
-		// An empty row of the same height keeps the prompt's hover actions off the answer.
-		expect(document.querySelector("[data-turn-worked-gap]")).toBeInTheDocument();
-		const duration = screen.getByText("1m");
+		expect(worked?.querySelector("svg")).toBeNull();
+		// It fills the row under the prompt, so no empty one is reserved.
+		expect(document.querySelector("[data-turn-worked-gap]")).toBeNull();
+		// ...and the answer's own row does not repeat the time.
 		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
-		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
-		expect(copy.compareDocumentPosition(duration) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(copy.closest("[data-turn-actions]")).not.toHaveTextContent("1m");
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -3112,7 +3113,7 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
-	it.each([1200, 300])("preserves the spacer and bottom anchor during a disclosure resize to %ipx", async (height) => {
+	it.each([1200, 300])("lets the prompt spacer take a disclosure resize to %ipx in the latest turn", async (height) => {
 		stubVirtualTimelineGeometry();
 		const originalObserver = window.ResizeObserver;
 		const observers: TestResizeObserver[] = [];
@@ -3130,8 +3131,9 @@ describe("ChatWorkspace timeline", () => {
 			const spacer = screen.getByTestId("chat-prompt-spacer");
 			log.scrollTop = log.scrollHeight - log.clientHeight;
 			fireEvent.scroll(log);
-			const initialSpacer = spacer.style.height;
-			const initialScrollTop = log.scrollTop;
+			const initialSpacer = Number.parseFloat(spacer.style.height) || 0;
+			const initialRange = log.scrollHeight;
+			expect(initialSpacer).toBeGreaterThan(0);
 			const latest = log.querySelector<HTMLElement>('[data-index="99"]')!;
 			expect(latest).toBeInTheDocument();
 			// A disclosure changes row geometry without a new conversation snapshot.
@@ -3141,9 +3143,14 @@ describe("ChatWorkspace timeline", () => {
 					if (observer.targets.has(latest)) observer.callback([entry], observer as unknown as ResizeObserver);
 				}
 			});
-			expect(spacer.style.height).toBe(initialSpacer);
-			// Keep the virtualizer's size compensation without an extra forced pin.
-			expect(log.scrollTop).toBe(initialScrollTop + height - 600);
+			// The spacer under the latest prompt gives up or takes back the room in the same
+			// frame, as without windowing, so the view neither slides with each frame of a
+			// fold's animation nor snaps back when React draws the new height.
+			const change = height - 600;
+			const spacerNow = Number.parseFloat(spacer.style.height) || 0;
+			expect(spacerNow).toBe(Math.max(0, initialSpacer - change));
+			// Only what the spacer could not take changes the scroll range.
+			expect(log.scrollHeight).toBe(initialRange + change + spacerNow - initialSpacer);
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 		} finally {
 			window.ResizeObserver = originalObserver;
