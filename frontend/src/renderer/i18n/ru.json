@@ -312,6 +312,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "Рабочий каталог недоступен для использования",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Рабочая папка уже используется",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Рабочая папка не сохраняется при перезапуске",
+	"cloud.startupError.sandboxUnresponsiveTitle": "Песочница перестала отвечать",
 	"board.empty.body": "Опишите задачу — оркестратор спланирует её, запустит воркер-сессии и будет отслеживать их здесь по мере выполнения.",
 	"board.empty.title": "Воркер-сессий пока нет",
 	"home.folderMissing": "Папка не найдена",

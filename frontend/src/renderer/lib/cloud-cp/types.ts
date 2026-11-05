@@ -753,8 +753,9 @@ export interface CloudCpArtifactAccessResponse {
  * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
  * worker_never_started, bootstrap_failed, workspace_build_failed,
  * workspace_create_failed, working_directory_not_durable (the project's
- * working folder is outside the Coder durable root); treat any other code
- * generically.
+ * working folder is outside the Coder durable root), sandbox_unresponsive (a
+ * running session's compute stopped responding and every repair failed, so
+ * it was stopped); treat any other code generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;

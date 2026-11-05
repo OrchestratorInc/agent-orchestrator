@@ -158,7 +158,11 @@ export function CloudSessionStartupError({
 						? t("cloud.startupError.workingDirectoryOccupiedTitle")
 						: problem.phase === "failed" && problem.code === "working_directory_not_durable"
 							? t("cloud.startupError.workingDirectoryNotDurableTitle")
-							: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
+							// A session that ran and whose compute then stopped responding did
+							// not fail to start: say what happened instead.
+							: problem.phase === "failed" && problem.code === "sandbox_unresponsive"
+								? t("cloud.startupError.sandboxUnresponsiveTitle")
+								: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
 	// The failed Setup run as a step log, or the retry's run while it goes.
 	const latestSetup = projectSetupFailed || rerunning ? latestRun : undefined;
 	const setupRun = latestSetup && (latestSetup.status === "failed" || (rerunning && latestSetup.status === "running")) ? latestSetup : undefined;

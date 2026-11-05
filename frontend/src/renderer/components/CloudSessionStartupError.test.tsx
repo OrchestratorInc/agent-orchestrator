@@ -219,6 +219,16 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 
+	it("says a running session's sandbox stopped responding, and still offers Retry", async () => {
+		const message = "The sandbox stopped responding: AO tried to restart the session's worker 4 times over 12 minutes and every attempt failed. The sandbox has been stopped. Retry to start it again.";
+		mount({ phase: "failed", code: "sandbox_unresponsive", message });
+		expect(screen.getByRole("heading", { name: "The sandbox stopped responding" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "This session couldn't start" })).not.toBeInTheDocument();
+		expect(screen.getByText(message)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(retrySessionStartup).toHaveBeenCalledWith("org-1", "sess-1");
+	});
+
 	it("shows a pending retry, then refetches the session", async () => {
 		let resolve!: (value: unknown) => void;
 		retrySessionStartup.mockReturnValue(new Promise((done) => { resolve = done; }));
