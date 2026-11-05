@@ -3018,7 +3018,7 @@
 	"chat.startup.retrying": "Wird wiederholt",
 	"chat.edit.label": "Nachricht bearbeiten",
 	"chat.edit.stopCurrentTurn": "Stoppen Sie den aktuellen Durchlauf, bevor Sie verzweigen",
-	"chat.edit.reconstructedContext": "Rekonstruierter Kontext: Textnachrichten werden in einer neuen Agentensitzung wiedergegeben. Werkzeugaufrufe, Genehmigungen und der Arbeitsbereichsverlauf werden nicht wiedergegeben; die aktuellen Worktree-Dateien bleiben unverändert.",
+	"chat.edit.branchNote": "Startet einen neuen Gesprächszweig. Die Dateien bleiben unverändert.",
 	"chat.edit.preservedContent": "Beibehaltener Nachrichteninhalt",
 	"chat.edit.image": "Bild",
 	"chat.image.gallery": "Bilder",

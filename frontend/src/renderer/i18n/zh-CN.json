@@ -3000,7 +3000,7 @@
 	"chat.startup.retrying": "正在重试",
 	"chat.edit.label": "编辑消息",
 	"chat.edit.stopCurrentTurn": "请先停止当前回合再创建分支",
-	"chat.edit.reconstructedContext": "重建上下文：文本消息将在新的智能体会话中重放。工具调用、审批和工作区历史不会重放；当前工作树文件将保持不变。",
+	"chat.edit.branchNote": "将开始新的对话分支。文件保持不变。",
 	"chat.edit.preservedContent": "已保留的消息内容",
 	"chat.edit.image": "图像",
 	"chat.image.gallery": "图片",

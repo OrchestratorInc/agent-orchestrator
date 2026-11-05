@@ -3018,7 +3018,7 @@
 	"chat.startup.retrying": "再試行中",
 	"chat.edit.label": "メッセージを編集",
 	"chat.edit.stopCurrentTurn": "分岐する前に現在のターンを停止してください",
-	"chat.edit.reconstructedContext": "再構築されたコンテキスト: テキストメッセージは新しいエージェントセッションで再生されます。ツール呼び出し、承認、ワークスペース履歴は再生されず、現在のワークツリーファイルはそのまま残ります。",
+	"chat.edit.branchNote": "新しい会話ブランチを開始します。ファイルはそのまま残ります。",
 	"chat.edit.preservedContent": "保持されたメッセージ内容",
 	"chat.edit.image": "画像",
 	"chat.image.gallery": "画像",

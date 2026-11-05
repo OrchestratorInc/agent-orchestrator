@@ -3028,7 +3028,7 @@
 	"chat.startup.retrying": "Retrying",
 	"chat.edit.label": "Edit message",
 	"chat.edit.stopCurrentTurn": "Stop the current turn before branching",
-	"chat.edit.reconstructedContext": "Reconstructed context: text messages will be replayed into a new agent session. Tool calls, approvals, and workspace history will not be replayed; current worktree files stay as they are.",
+	"chat.edit.branchNote": "Starts a new conversation branch. Files stay as they are.",
 	"chat.edit.preservedContent": "Preserved message content",
 	"chat.edit.image": "Image",
 	"chat.image.gallery": "Images",
