@@ -6186,13 +6186,21 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	50% { opacity: 1; }
 }
 
-/* Sidebar hover preview: lift the card off the sidebar. It resolves to the same
- * surface as the sidebar, so mix in some foreground and add a hairline + shadow. */
-[data-session-preview-card] [data-testid="board-session-card"] {
+/* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to
+ * the same surface as the sidebar, so mix in some foreground and add a hairline
+ * + shadow. */
+:root:not([data-theme="light"]) [data-session-preview-card] [data-testid="board-session-card"] {
 	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
 	box-shadow:
 		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
 		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* In light, darkening reads as dirty gray. Use the menu surface and its faint
+ * edge instead; the hover card wrapper already adds the popover shadow. */
+:root[data-theme="light"] [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: var(--color-bg-elevated) !important;
+	box-shadow: 0 0 0 1px var(--color-border-overlay);
 }
 
 /* Keep the session row lit while its hover preview card is open (pointer on the card). */
