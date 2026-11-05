@@ -1303,3 +1303,45 @@ func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
 func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }
+
+// The provision observer is how ao.sessions.spawned learns when an
+// asynchronous start became usable or failed: it must see provisioning while
+// the request is live, then exactly the settled state, with the failure cause.
+func TestAsyncChatSpawnReportsProvisionStatesToTheObserver(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		createErr error
+		want      []domain.SessionProvisionState
+	}{
+		{"ready", nil, []domain.SessionProvisionState{domain.SessionProvisionProvisioning, domain.SessionProvisionReady}},
+		{"failed", errors.New("branch already checked out"), []domain.SessionProvisionState{domain.SessionProvisionProvisioning, domain.SessionProvisionFailed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _ := newChatManager(&recordingLauncher{})
+			m.browserCapabilities = browsersvc.NewAuthority()
+			deferred := deferredBackground(m)
+			m.workspace.(*fakeWorkspace).createErr = tc.createErr
+			type requestKey struct{}
+			var states []domain.SessionProvisionState
+			var causes []error
+			var requestBound []bool
+			m.SetProvisionObserver(func(ctx context.Context, _ domain.SessionRecord, state domain.SessionProvisionState, cause error) {
+				states, causes = append(states, state), append(causes, cause)
+				requestBound = append(requestBound, ctx.Value(requestKey{}) != nil)
+			})
+			if _, _, _, err := m.Spawn(context.WithValue(context.Background(), requestKey{}, true), asyncChatSpawnConfig("do the thing")); err != nil {
+				t.Fatalf("spawn: %v", err)
+			}
+			(*deferred)[0]()
+			if !slices.Equal(states, tc.want) {
+				t.Fatalf("states = %v, want %v", states, tc.want)
+			}
+			if !requestBound[0] {
+				t.Fatal("provisioning must be observed on the request context")
+			}
+			if tc.createErr != nil && !errors.Is(causes[1], ErrWorkspaceCreate) {
+				t.Fatalf("failure cause = %v, want the workspace stage error", causes[1])
+			}
+		})
+	}
+}

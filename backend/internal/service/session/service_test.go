@@ -3408,8 +3408,8 @@ func TestStandaloneSessionTelemetryKind(t *testing.T) {
 	st.sessions[rec.ID] = rec
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
-	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	svc.emitSpawned(rec, 1, 1, false, false, spawnFacts{createdBy: domain.SessionCreatedByUser})
+	svc.emitSpawnFailed(spawnFailure{kind: domain.KindWorker, harness: domain.HarnessCodex}, errors.New("launch failed"), 1, 1)
 	originalCapture := captureRelaunchError
 	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
 	t.Cleanup(func() { captureRelaunchError = originalCapture })
@@ -4043,11 +4043,11 @@ func TestEmitSpawnFailedClassifiesRawStageSentinel(t *testing.T) {
 	})
 
 	raw := fmt.Errorf("spawn mer-1: %w: tmux runtime: create session mer-1: boom", sessionmanager.ErrRuntimeCreate)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{
-		ProjectID: "mer",
-		Kind:      domain.KindWorker,
-		Harness:   domain.HarnessCodex,
-	}, raw, 42)
+	svc.emitSpawnFailed(spawnFailure{
+		projectID: "mer",
+		kind:      domain.KindWorker,
+		harness:   domain.HarnessCodex,
+	}, raw, 42, 42)
 
 	if len(ts.events) != 1 {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
