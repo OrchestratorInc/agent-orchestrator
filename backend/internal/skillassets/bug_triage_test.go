@@ -11,7 +11,7 @@ func TestBugTriageEmbeddedCopyMatchesCanonicalToPreventDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(canonical, BugTriagePlaybook()) {
-		t.Fatal("embedded bug-triage playbook differs from canonical skill")
+	if !bytes.Equal(canonical, BugTriageSkill()) {
+		t.Fatal("embedded bug-triage skill differs from canonical skill")
 	}
 }

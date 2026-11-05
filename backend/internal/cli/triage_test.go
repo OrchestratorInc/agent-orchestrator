@@ -49,7 +49,7 @@ func TestTriageNoLaunch(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("directory mode %v", info.Mode())
 	}
-	for _, name := range []string{"context.md", "prompt.md", "PLAYBOOK.md"} {
+	for _, name := range []string{"context.md", "prompt.md", "SKILL.md"} {
 		path := filepath.Join(dir, name)
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -74,8 +74,8 @@ func TestTriageNoLaunch(t *testing.T) {
 				t.Fatal("context exceeds cap")
 			}
 		}
-		if name == "PLAYBOOK.md" && !bytes.Equal(b, skillassets.BugTriagePlaybook()) {
-			t.Fatal("wrong playbook")
+		if name == "SKILL.md" && !bytes.Equal(b, skillassets.BugTriageSkill()) {
+			t.Fatal("wrong skill")
 		}
 	}
 }
@@ -134,7 +134,7 @@ func TestTriageLaunchArgvAndCwd(t *testing.T) {
 					}
 				}
 				promptPath := filepath.Join(dir, "prompt.md")
-				wantPrompt := fmt.Sprintf(`Read the file "%s" and follow its instructions exactly: it is your bug-triage playbook, and it starts with asking the user what went wrong.`, promptPath)
+				wantPrompt := fmt.Sprintf(`Read the file "%s" and follow its instructions exactly: it starts with asking the user what went wrong.`, promptPath)
 				if name != "/missing/"+agent || filepath.Dir(dir) != filepath.Join(state, "triage") || !reflect.DeepEqual(args, []string{"--model", "example-model", wantPrompt}) {
 					t.Fatalf("launch: %s %q cwd=%s", name, args, dir)
 				}

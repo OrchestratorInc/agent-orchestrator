@@ -16,6 +16,16 @@ import (
 	"time"
 )
 
+// triageRunDir returns the single scratch folder a triage run wrote under state.
+func triageRunDir(t *testing.T, state string) string {
+	t.Helper()
+	dirs, err := filepath.Glob(filepath.Join(state, "triage", "*"))
+	if err != nil || len(dirs) != 1 {
+		t.Fatalf("triage dirs: %v, %v", dirs, err)
+	}
+	return dirs[0]
+}
+
 func fakeTriageGH(t *testing.T, script string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -34,44 +44,33 @@ func fakeTriageGH(t *testing.T, script string) string {
 	return path
 }
 
-func TestTriageJSONAndDraft(t *testing.T) {
-	deps, out, state := triageTestDeps(t)
+func TestTriageWritesDraft(t *testing.T) {
+	deps, _, state := triageTestDeps(t)
 	for _, name := range []string{"daemon", "desktop", "hooks"} {
 		if err := os.WriteFile(filepath.Join(state, name+".log"), []byte("ERROR "+name+" connection failed token=private\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cmd := NewRootCommand(deps)
-	cmd.SetArgs([]string{"triage", "--no-launch", "--json"})
+	cmd.SetArgs([]string{"triage", "--no-launch"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var packet map[string]string
-	if err := json.Unmarshal(out.Bytes(), &packet); err != nil {
-		t.Fatal(err, out.String())
-	}
-	if len(packet) != 5 {
-		t.Fatal(packet)
-	}
-	for _, key := range []string{"dir", "context", "report", "playbook"} {
-		if !filepath.IsAbs(packet[key]) {
-			t.Fatalf("%s=%q", key, packet[key])
+	dir := triageRunDir(t, state)
+	prompt, _ := os.ReadFile(filepath.Join(dir, "prompt.md"))
+	for _, name := range []string{"context.md", "bug-report.md", "SKILL.md"} {
+		if !strings.Contains(string(prompt), filepath.Join(dir, name)) {
+			t.Fatal("prompt missing absolute path", name)
 		}
 	}
-	for _, key := range []string{"context", "report", "playbook"} {
-		if !strings.Contains(packet["prompt"], packet[key]) {
-			t.Fatal("prompt missing absolute path", key)
-		}
-	}
-	prompt, _ := os.ReadFile(filepath.Join(packet["dir"], "prompt.md"))
-	if string(prompt) != packet["prompt"] || !strings.Contains(string(prompt), "In-app mode") {
+	if !strings.Contains(string(prompt), "In-app mode") {
 		t.Fatal(string(prompt))
 	}
-	draft, err := os.ReadFile(packet["report"])
+	draft, err := os.ReadFile(filepath.Join(dir, "bug-report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, _ := os.Stat(packet["report"])
+	info, _ := os.Stat(filepath.Join(dir, "bug-report.md"))
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatal(info.Mode())
 	}
@@ -83,7 +82,7 @@ func TestTriageJSONAndDraft(t *testing.T) {
 	if strings.Contains(string(draft), "private") || strings.Contains(string(draft), "Duplicate candidates") || strings.Count(string(draft), "- Log excerpt:") > 8 {
 		t.Fatal(string(draft))
 	}
-	snapshot, _ := os.ReadFile(packet["context"])
+	snapshot, _ := os.ReadFile(filepath.Join(dir, "context.md"))
 	for _, want := range []string{"# Orchestrator diagnostics", "App: ", "gh=missing", "auth=failed", "filing=unavailable", "daemon.log", "desktop.log", "hooks.log"} {
 		if !strings.Contains(string(snapshot), want) {
 			t.Error("missing", want)
@@ -91,48 +90,36 @@ func TestTriageJSONAndDraft(t *testing.T) {
 	}
 }
 
-func TestTriageJSONRequiresNoLaunch(t *testing.T) {
-	deps, _, _ := triageTestDeps(t)
-	cmd := NewRootCommand(deps)
-	cmd.SetArgs([]string{"triage", "--json"})
-	if err := cmd.Execute(); ExitCode(err) != 2 {
-		t.Fatal(err)
-	}
-}
-
 func TestTriageAuthTimeoutStillWritesFiles(t *testing.T) {
-	deps, out, _ := triageTestDeps(t)
+	deps, _, state := triageTestDeps(t)
 	deps.LookPath = func(name string) (string, error) { return "/unused/" + name, nil }
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	cmd := NewRootCommand(deps)
 	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{"triage", "--no-launch", "--json"})
+	cmd.SetArgs([]string{"triage", "--no-launch"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var packet map[string]string
-	if err := json.Unmarshal(out.Bytes(), &packet); err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"context", "report", "playbook"} {
-		if _, err := os.Stat(packet[key]); err != nil {
+	dir := triageRunDir(t, state)
+	for _, name := range []string{"context.md", "bug-report.md", "SKILL.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	snapshot, _ := os.ReadFile(packet["context"])
+	snapshot, _ := os.ReadFile(filepath.Join(dir, "context.md"))
 	for _, want := range []string{"auth=unknown (timed out)\n", "filing=unknown\n", "label needs-triage=unavailable: timeout\n", "unavailable: timeout"} {
 		if !strings.Contains(string(snapshot), want) {
 			t.Errorf("missing %q in %s", want, snapshot)
 		}
 	}
-	draft, _ := os.ReadFile(packet["report"])
+	draft, _ := os.ReadFile(filepath.Join(dir, "bug-report.md"))
 	for _, name := range []string{"claude", "codex"} {
 		if !strings.Contains(string(draft), "- "+name+" version: unavailable: timeout\n") {
 			t.Fatal(string(draft))
 		}
 	}
-	if strings.Contains(string(snapshot)+string(draft)+packet["prompt"], "filing=unavailable") {
+	if strings.Contains(string(snapshot)+string(draft), "filing=unavailable") {
 		t.Fatal("timeout marked filing unavailable")
 	}
 }
