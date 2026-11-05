@@ -173,6 +173,7 @@ type CIState = contract.CIState
 // CI states.
 const (
 	CIUnknown = contract.CIUnknown
+	CINone    = contract.CINone
 	CIPending = contract.CIPending
 	CIPassing = contract.CIPassing
 	CIFailing = contract.CIFailing
@@ -244,7 +245,9 @@ type MergeReadiness struct {
 
 // ReadyToMerge reports whether the PR has no known blocker left. An unknown or
 // still-running CI result is treated as a blocker: AO only claims readiness it
-// can actually prove.
+// can actually prove. A commit with no checks (CINone) is settled, not unknown:
+// there is nothing to wait for, so the provider's own merge state (Mergeability)
+// decides.
 func (r MergeReadiness) ReadyToMerge() bool {
 	if r.Merged || r.Closed || r.Draft {
 		return false

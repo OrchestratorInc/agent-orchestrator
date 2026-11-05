@@ -52,9 +52,12 @@ type SessionFacts struct {
 // CIState is the aggregate CI state of a pull request.
 type CIState string
 
-// CIState values aggregate all checks for a pull request.
+// CIState values aggregate all checks for a pull request. CIUnknown means the
+// state has not been observed (or could not be decided); CINone means it was
+// observed and the head commit carries no checks at all.
 const (
 	CIUnknown CIState = "unknown"
+	CINone    CIState = "none"
 	CIPending CIState = "pending"
 	CIPassing CIState = "passing"
 	CIFailing CIState = "failing"
