@@ -609,6 +609,7 @@ function BoardArtifactLinks({
 							>
 								<HoverCardTrigger asChild>
 									<Pressable
+										data-ph-capture-attribute-ao_action="open_artifact"
 										aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
 										className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-foreground hover:underline"
 										onFocus={() => {
@@ -647,6 +648,7 @@ function BoardArtifactLinks({
 				<div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
 					<Pressable
 						aria-controls={listId}
+						data-ph-capture-attribute-ao_action="toggle_artifact_list"
 						aria-expanded={expanded}
 						className="self-start rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
 						onClick={(event) => {
@@ -662,6 +664,7 @@ function BoardArtifactLinks({
 					</Pressable>
 					{expanded && artifacts.length > BOARD_ARTIFACT_EXPANDED_LIMIT && onOpenInspector ? (
 						<Pressable
+							data-ph-capture-attribute-ao_action="open_artifacts"
 							className="rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
 							onClick={(event) => {
 								event.stopPropagation();
