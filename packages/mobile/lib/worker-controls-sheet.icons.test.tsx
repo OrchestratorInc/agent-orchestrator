@@ -79,8 +79,8 @@ describe.each([
 			{ id: "dev", name: "Dev", appearance: { symbol: "linux" } },
 		]} />); });
 		const option = (label: string) => renderer!.root.findAllByType("Pressable" as never).find(node => node.findAllByType("Text" as never).some(text => text.props.children === label))!;
-		expect(option("Mac").findAll(node => String(node.type) === "Feather")[0].props.name).toBe("laptop");
-		expect(option("Dev").findAll(node => String(node.type) === "Feather")[0].props.name).toBe("terminal");
+		expect(option("Mac").findAll(node => (node.type as { name?: string }).name === "AppSymbol")[0].props.name).toBe("laptop");
+		expect(option("Dev").findAll(node => (node.type as { name?: string }).name === "AppSymbol")[0].props.name).toBe("terminal");
 	});
 	it("uses a server glyph for the all-environments option", async () => {
 		await act(async () => { renderer = create(<Controls {...props} />); });

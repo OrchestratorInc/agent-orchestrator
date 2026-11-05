@@ -200,7 +200,7 @@ describe("Workers selected-machine reachability", () => {
 		const choices = sheet.findAllByType("Pressable" as never).filter(node => node.props.accessibilityRole === "radio");
 		expect(choices.map(node => node.props.accessibilityLabel)).toEqual(["All environments", "Mac", "Windows"]);
 		expect(choices[2].props.accessibilityState.checked).toBe(true);
-		expect(choices[2].findAllByType("Feather" as never)[0].props.name).toBe("laptop");
+		expect(choices[2].findAll(node => (node.type as { name?: string }).name === "AppSymbol")[0].props.name).toBe("laptop");
 		act(() => choices[1].props.onPress());
 		expect(renderer.root.findByType("WorkerDock" as never).props.selectedEnvironmentId).toBe("mac");
 		expect(renderer.root.findAllByType("BottomSheet" as never)).toHaveLength(0);
@@ -220,7 +220,7 @@ describe("Workers selected-machine reachability", () => {
 		expect(status.findByType("ActivityIndicator" as never).props.size).toBe("small");
 		expect(status.findByType("Text" as never).props.children).toBe("Connecting…");
 		expect(renderer.root.findByType("MenuView" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
-		expect(renderer.root.findAllByType("Feather" as never).some((node) => node.props.name === "laptop")).toBe(true);
+		expect(renderer.root.findAll(node => (node.type as { name?: string }).name === "AppSymbol").some((node) => node.props.name === "laptop")).toBe(true);
 		expect(renderer.root.findByType("MenuView" as never).props.actions[2].image).toBe("laptopcomputer");
 	});
 	// One unanswered poll on the selected machine is a blip, not a machine that is down.

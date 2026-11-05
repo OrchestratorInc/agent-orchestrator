@@ -135,3 +135,14 @@ export function storeUpdateSheetRoute(opts: {
 		},
 	};
 }
+
+/** Route + params for the manual connect page, calling `onConnected` once a machine connects. */
+export function connectRoute(onConnected: () => void, hostId?: string) {
+	return {
+		pathname: "/connect" as const,
+		params: {
+			resultKey: parkSheetResult(onConnected),
+			...(hostId ? { hostId } : {}),
+		},
+	};
+}
