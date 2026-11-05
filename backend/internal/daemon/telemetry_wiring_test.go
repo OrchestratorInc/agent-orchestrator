@@ -132,7 +132,7 @@ func (f wiringTestRoundTripper) Do(req *http.Request) (*http.Response, error) { 
 
 // TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire builds the
 // daily summary in front of PostHog, the shape newTelemetrySink wires up, and
-// asserts ao.cli.usage_errors becomes one event whose count survives the
+// asserts ao.usage.cli_usage_errors becomes one event whose count survives the
 // allowlist. Raw error text must not.
 func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	requests := make(chan map[string]any, 1)
@@ -154,7 +154,7 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	day := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
 		daily.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.cli.usage_errors",
+			Name:       "ao.usage.cli_usage_errors",
 			Source:     "cli",
 			OccurredAt: day,
 			Level:      ports.TelemetryLevelWarn,
@@ -171,8 +171,8 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.cli.usage_errors" {
-			t.Fatalf("event = %#v, want ao.cli.usage_errors (aggregatedEventNames entry must match the real emit site)", got)
+		if got := req["event"]; got != "ao.usage.cli_usage_errors" {
+			t.Fatalf("event = %#v, want ao.usage.cli_usage_errors (aggregatedEventNames entry must match the real emit site)", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {

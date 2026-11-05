@@ -233,8 +233,8 @@ func TestCLIUsageErrorRouteEmitsTelemetry(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.cli.usage_errors" {
-		t.Fatalf("events = %#v, want one ao.cli.usage_errors event", sink.events)
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.usage.cli_usage_errors" {
+		t.Fatalf("events = %#v, want one ao.usage.cli_usage_errors event", sink.events)
 	}
 	payload := sink.events[0].Payload
 	if got := payload["component"]; got != "cli" {
