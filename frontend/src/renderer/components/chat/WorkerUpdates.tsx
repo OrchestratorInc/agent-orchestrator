@@ -17,7 +17,6 @@ import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
-import { AgentAvatar } from "../AgentAvatar";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
@@ -323,11 +322,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	return (
 		<div className="min-w-0 text-xs" data-testid="worker-update">
 			<div className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover">
-				{session?.provider ? (
-					<AgentAvatar provider={session.provider} decorative className="size-4 shrink-0" />
-				) : (
-					<Bot aria-hidden="true" className="size-3.5 shrink-0" />
-				)}
+				<Bot aria-hidden="true" className="size-3.5 shrink-0" />
 				{/* The sender opens its session, as the "[from …]" label on a worker message does; the rest of the row expands. */}
 				{href ? (
 					<SessionLabelLink
@@ -418,7 +413,7 @@ export function FromAgent({ item, queued, children }: { item: ConversationItem; 
 	const name = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title || update.name;
 	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
 	return (
-		<SenderRow avatar={<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />} createdAt={update.createdAt} body={update.body}>
+		<SenderRow avatar={<Bot aria-hidden="true" className="absolute left-0 top-[3px] size-4 text-muted-foreground" />} createdAt={update.createdAt} body={update.body}>
 			{href ? (
 				<SessionLabelLink href={href} className={cn(SENDER_NAME, "decoration-foreground/40 underline-offset-2 hover:underline")}>
 					{name}

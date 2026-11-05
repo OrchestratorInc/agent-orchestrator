@@ -444,7 +444,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+/** One side of a handoff: its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -453,7 +453,6 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
-			<ProviderMark provider={harness} />
 			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
 			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
 			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
