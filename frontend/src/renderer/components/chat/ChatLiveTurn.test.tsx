@@ -72,11 +72,7 @@ describe("settling under a reader who scrolled up", () => {
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
 	let restoreLayout: (() => void) | undefined;
-	// The empty row reserved under the prompt is 28px while the turn runs and has
-	// collapsed once "Worked for" takes its place.
-	let settled = false;
 	afterEach(async () => {
-		settled = false;
 		cleanup();
 		// TanStack Virtual's scroll-reset debounce survives unmount in jsdom.
 		// Drain it while window still exists, before this file's DOM is torn down.
@@ -90,8 +86,11 @@ describe("settling under a reader who scrolled up", () => {
 	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
 	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		// The empty row reserved under the prompt is 28px until "Worked for" takes its
+		// place, and has collapsed once it has.
+		const reservedRow = (row: Element) => (row.parentElement?.querySelector(":scope > [data-turn-worked]") ? 0 : 28);
 		const height = (row: Element) =>
-			row.hasAttribute("data-turn-worked") ? 28 : row.hasAttribute("data-turn-worked-gap") ? (settled ? 0 : 28) : 100;
+			row.hasAttribute("data-turn-worked") ? 28 : row.hasAttribute("data-turn-worked-gap") ? reservedRow(row) : 100;
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
@@ -115,7 +114,6 @@ describe("settling under a reader who scrolled up", () => {
 	}
 
 	function settle(rerender: (ui: ReactElement) => void) {
-		settled = true;
 		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", items)} /></TooltipProvider>);
 	}
 
