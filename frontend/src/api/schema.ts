@@ -4795,7 +4795,7 @@ export interface components {
             validatedAt?: string;
             warning?: string;
             /** @enum {string} */
-            warningCode?: "auth_required" | "auth_expired";
+            warningCode?: "auth_required" | "auth_expired" | "not_installed";
         };
         AgentReadinessResponse: {
             agents: components["schemas"]["AgentReadinessSnapshot"][];
