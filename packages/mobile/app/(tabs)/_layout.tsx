@@ -107,6 +107,9 @@ export default function BoardTabsLayout() {
 				listeners={{ tabPress: () => startNewTask(() => router.push("/spawn")) }}
 			>
 				<NativeTabs.Trigger.Icon sf="square.and.pencil" md="add" />
+				{/* Named for what it starts, not the route: untitled, the bar
+				    labelled it "compose". */}
+				<NativeTabs.Trigger.Label>New task</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
 		</NativeTabs>
 	), [android, labelVisibilityMode, router, t, waiting]);

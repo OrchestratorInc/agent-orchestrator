@@ -108,6 +108,7 @@ describe("board tabs", () => {
 		render();
 		const compose = renderer!.root.findAllByType("Trigger" as never).find((trigger) => trigger.props.name === "compose")!;
 		expect(compose.props).toMatchObject({ role: "search", disabled: true, hidden: os !== "ios", accessibilityLabel: "New task" });
+		expect(compose.findByType("TriggerLabel" as never).props.children).toBe("New task");
 		act(() => compose.props.listeners.tabPress());
 		expect(fixtures.push).toHaveBeenCalledWith("/spawn");
 		fixtures.push.mockClear();
