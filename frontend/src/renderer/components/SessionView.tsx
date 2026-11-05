@@ -974,7 +974,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 
 	const openShellTerminal = useOpenShellTerminal(hostId);
-	const shellOpening = openShellTerminal.isPending;
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -988,20 +987,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 	// Until the shell list loads, an absent shell is unknown rather than closed.
 	const shellListKnown = shellTerminalsQuery.data !== undefined;
+	// Placeholders of shells being opened that the shell list has shown.
+	const seenPendingShellsRef = useRef(new Set<string>());
+	for (const key of splittableKeys) if (key.startsWith(PENDING_SHELL_KEY_PREFIX)) seenPendingShellsRef.current.add(key);
 	const groups = useMemo(() => {
 		if (!shellListKnown) return storedGroups;
 		// A shell opened into a split is a placeholder until the daemon answers:
-		// keep its pane while it opens, then follow it to the shell it becomes.
-		// A placeholder whose open failed is dropped like a closed shell.
+		// keep its pane until the list shows it, then follow it to the shell it
+		// becomes. One that left the list without becoming a shell failed to
+		// open, and is dropped like a closed shell.
 		let available: ReadonlySet<string> = splittableKeys;
-		if (shellOpening) for (const group of storedGroups) {
+		for (const group of storedGroups) {
 			for (const key of leafKeys(group.root)) {
 				if (!key.startsWith(PENDING_SHELL_KEY_PREFIX) || adoptedShellHandle(key) || available.has(key)) continue;
+				if (seenPendingShellsRef.current.has(key)) continue;
 				available = new Set([...available, key]);
 			}
 		}
 		return reconcileGroups(storedGroups, available, adoptedShellHandle);
-	}, [shellListKnown, shellOpening, splittableKeys, storedGroups]);
+	}, [shellListKnown, splittableKeys, storedGroups]);
 	const updateGroups = useCallback(
 		(update: (current: TabGroup[]) => TabGroup[]) => {
 			setGroupsBySession((current) => {
