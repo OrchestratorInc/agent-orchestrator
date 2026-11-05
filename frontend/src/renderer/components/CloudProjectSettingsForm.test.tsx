@@ -181,7 +181,10 @@ describe("Cloud project settings", () => {
 		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		mount();
 		// The worker's role, and the reviewer's, which runs the worker's model.
-		expect((await screen.findAllByText("claude-opus-5-5 isn't available to your Claude Code account on Cloud, so tasks use the default. Pick another model.")).length).toBeGreaterThan(0);
+		const warnings = await screen.findAllByText("claude-opus-5-5 isn't available to your Claude Code account on Cloud, so tasks use the default. Pick another model.");
+		expect(warnings.length).toBeGreaterThan(0);
+		// It takes its own line under the agent and model pickers, which stay side by side.
+		for (const warning of warnings) expect(warning).toHaveClass("basis-full");
 	});
 
 	it("lists nothing from this computer after a failed Cloud read", async () => {

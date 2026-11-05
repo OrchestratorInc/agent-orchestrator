@@ -926,6 +926,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// that still rejects the spawn for a stale catalog, so keep the notice there.
 	const loginRenewsItself = modelAuthIssue === "expired" && !hostId;
 	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself;
+	// Reading the list again can clear a failed or stale read, not a model the
+	// account's own list lacks: that one is changed in the picker or settings.
+	const modelWarningRetries = !(isCloudProject && cloudCatalog !== undefined &&
+		(cloudModelUnavailable(selectedModelOrMode) || projectModelUnavailable));
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
 		: modelAuthIssue && showModelNotice ? (
@@ -1254,6 +1258,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		} : undefined,
 		remoteLoadError,
 		modelWarning,
+		modelWarningRetries,
 		fallbackAction,
 		fallbackLabel: fallbackAction === "bypass-permissions"
 			? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })

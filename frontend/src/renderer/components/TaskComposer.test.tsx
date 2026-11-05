@@ -3080,6 +3080,28 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
 	});
 
+	it("offers no retry for a model the account's own list lacks, and does for a list that failed to load", async () => {
+		function Notice() {
+			const launch = useTaskLaunch({ projectId: "cloud-1" });
+			return <p data-testid="notice" data-retries={String(launch.modelWarningRetries)}>{typeof launch.modelWarning === "string" ? launch.modelWarning : ""}</p>;
+		}
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(accountCatalog([
+			{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] },
+		], "0.130.0"));
+		const view = render(<Wrap queryClient={queryClient}><Notice /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("notice")).toHaveTextContent("isn't available to your Codex account on Cloud"));
+		// Reading the list again cannot make the model available.
+		expect(screen.getByTestId("notice")).toHaveAttribute("data-retries", "false");
+		view.unmount();
+
+		const failing = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("Unavailable", { status: 502, code: "BAD_GATEWAY" }));
+		render(<Wrap queryClient={failing}><Notice /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("notice")).toHaveTextContent(/Couldn't load Cloud's models for Codex/));
+		expect(screen.getByTestId("notice")).toHaveAttribute("data-retries", "true");
+	});
+
 	it("says a model the account's own list lacks won't run when it is chosen anyway", async () => {
 		const queryClient = cloudFixture("codex");
 		h.cloudListUserAgentModels.mockResolvedValueOnce(releaseCatalog([{ id: "chosen", displayName: "Chosen", default: false }]))

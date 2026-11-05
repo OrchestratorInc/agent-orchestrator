@@ -35,6 +35,7 @@ export function AgentModelField({
 	emptyLabel,
 	independentMode = false,
 	cloudOrgId,
+	warningClassName,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
 	variant?: "settings" | "task";
@@ -56,6 +57,8 @@ export function AgentModelField({
 	emptyLabel?: string;
 	/** Cloud Cursor can select both a model and a launch mode. */
 	independentMode?: boolean;
+	/** Where the warning sits in the caller's layout (a row gives it its own line). */
+	warningClassName?: string;
 	/**
 	 * A Cloud project's organization: the field then lists Cloud's models for
 	 * the account (the ones its sessions run), and this computer's only where
@@ -111,7 +114,7 @@ export function AgentModelField({
 				onValidityChange={onValidityChange}
 				onRefresh={async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
 			/>
-			{warning ? <p className="text-xs text-warning">{warning}</p> : null}
+			{warning ? <p className={cn("text-xs text-warning", warningClassName)}>{warning}</p> : null}
 		</>;
 	}
 
@@ -141,7 +144,7 @@ export function AgentModelField({
 						/>
 					</div>
 				</div>
-				{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
+				{warning && <p className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>{warning}</p>}
 			</>
 		);
 	}
@@ -211,7 +214,7 @@ export function AgentModelField({
 					/>
 				</div>
 			</div>
-			{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
+			{warning && <p className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>{warning}</p>}
 		</>
 	);
 }
