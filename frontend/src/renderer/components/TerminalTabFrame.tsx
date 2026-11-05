@@ -83,7 +83,9 @@ export function TerminalTabFrame({
 					{labelSuffix ? (
 						<span className="flex min-w-0">
 							<span className="truncate">{label}</span>
-							<span className="shrink-0 whitespace-pre">{` ${labelSuffix}`}</span>
+							{/* A separate text node keeps the space in the accessible name;
+							    the flex layout drops it visually, so padding draws the gap. */}{" "}
+							<span className="shrink-0 ps-1">{labelSuffix}</span>
 						</span>
 					) : (
 						<span className="truncate">{label}</span>
