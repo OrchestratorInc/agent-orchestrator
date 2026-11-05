@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -115,5 +116,55 @@ func TestReviewMessageAndCancelUseInteractiveTUI(t *testing.T) {
 	cancel, err := r.ReviewCancel(context.Background())
 	if err != nil || cancel.Mode != ports.ReviewCancelInput || cancel.Input != "\x1b" {
 		t.Fatalf("ReviewCancel = %+v, %v", cancel, err)
+	}
+}
+
+// Kiro admits a command when an allowedCommands regex matches it and no
+// deniedCommands regex does. Review text reaches the submit commands through a
+// quoted heredoc, so the body may hold any character, but no body line may end
+// the heredoc early and nothing may follow the closing delimiter.
+func TestShellPolicyAdmitsHeredocSubmitsOnly(t *testing.T) {
+	inv := ports.ReviewInvocation{WorkerSessionID: "worker-1", WorkspacePath: "/worktrees/worker-1"}
+	var allowed []*regexp.Regexp
+	for _, pattern := range shellAllowedCommands(inv) {
+		allowed = append(allowed, regexp.MustCompile(pattern))
+	}
+	denied := regexp.MustCompile(shellDeniedCommand)
+	admits := func(command string) bool {
+		if denied.MatchString(command) {
+			return false
+		}
+		for _, re := range allowed {
+			if re.MatchString(command) {
+				return true
+			}
+		}
+		return false
+	}
+	const body = "## Review\nThe worker's check doesn't run: a > b | c; $(d) `e` < f\n> quoted\nAO_REVIEW_EOF is mentioned here\nAO_REVIEW_EO\n"
+	for _, command := range []string{
+		"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{ \"event\": \"COMMENT\", \"body\": \"it's a > b\" }\nAO_REVIEW_EOF",
+		"ao review submit --session worker-1 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n" + body + "AO_REVIEW_EOF",
+		"ao review submit --session worker-1 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\n",
+		"ao review submit --session worker-1 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF",
+		"git --no-pager -C /worktrees/worker-1 status --short",
+	} {
+		if !admits(command) {
+			t.Errorf("submit command was denied: %q", command)
+		}
+	}
+	for _, command := range []string{
+		"ao review submit --session worker-1 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned\nAO_REVIEW_EOF",
+		"ao review submit --session worker-1 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned",
+		"ao review submit --session worker-1 --run run-1 --verdict approved --body - <<AO_REVIEW_EOF\n$(id)\nAO_REVIEW_EOF",
+		"ao review submit --session worker-1 --run run-1 --verdict approved --body - > f <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF",
+		"ao review submit --session worker-2 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF",
+		"gh api --method PUT repos/o/r/pulls/1/merge --input - <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF",
+		"printf '%s' '{}' | ao review submit --session worker-1 --reviews -",
+		"git --no-pager -C /worktrees/worker-1 status > f",
+	} {
+		if admits(command) {
+			t.Errorf("command was admitted: %q", command)
+		}
 	}
 }

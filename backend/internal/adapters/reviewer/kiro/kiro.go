@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
@@ -100,7 +101,7 @@ Kiro security and reporting rules:
 - Your process runs outside the checkout. Use the read, glob, and grep tools on the absolute worker checkout path from the task.
 - Shell is deny-by-default. Only the narrow git inspection and review-reporting command shapes configured by AO can run.
 - The supported git shell shapes are exactly: status with optional --short; diff with --no-ext-diff --no-textconv; log; and show. Additional arguments must be single whitespace-free refs, options, or paths. Filenames with spaces, extra shell quoting, compound commands, redirections, and complex ref expressions are intentionally unsupported; use read, glob, or grep instead.
-- For each JSON reporting body, base64-encode the UTF-8 JSON yourself and use the task's command with the JSON replaced by the base64 text: printf '%s' '<base64>' | base64 --decode | gh api ... or ... | ao review submit .... Use base64 -D instead of --decode on systems that require it.
+- Report with the task's quoted-heredoc commands exactly as shown: the GitHub review POST and ao review submit, each followed by <<'AO_REVIEW_EOF', the text, and AO_REVIEW_EOF alone on the last line. Kiro has no printf fallback; use only the heredoc form.
 - Never request or attempt any write, unrestricted shell, commit, push, extension, MCP server, skill, steering, or project agent resource.
 `
 	if err := hookutil.AtomicWriteFile(kiroSystemPath, append(system, extra...), 0o600); err != nil {
@@ -119,7 +120,7 @@ Kiro security and reporting rules:
 		"toolsSettings": map[string]any{
 			"shell": map[string]any{
 				"allowedCommands":   shellAllowedCommands(inv),
-				"deniedCommands":    []string{".*(?:git[[:space:]]+(?:commit|push)|--output(?:=|[[:space:]])|>|>>|tee[[:space:]]).*"},
+				"deniedCommands":    []string{shellDeniedCommand},
 				"autoAllowReadonly": false,
 				"denyByDefault":     true,
 			},
@@ -136,12 +137,17 @@ Kiro security and reporting rules:
 	return nil
 }
 
+// shellDeniedCommand rejects writes and pushes on the command line itself. It
+// checks only the first line so a heredoc body (review text, which may contain
+// > or tee) is not mistaken for a redirection.
+const shellDeniedCommand = `^[^\n]*(?:git[[:space:]]+(?:commit|push)|--output(?:=|[[:space:]])|>|>>|tee[[:space:]])(?s:.*)$`
+
 func shellAllowedCommands(inv ports.ReviewInvocation) []string {
 	workspace := regexp.QuoteMeta(filepath.ToSlash(inv.WorkspacePath))
 	session := regexp.QuoteMeta(string(inv.WorkerSessionID))
 	gitPrefix := `git --no-pager -C ['"]?` + workspace + `['"]? `
 	safeArg := `[A-Za-z0-9_./:=,@{}^~+\-]+`
-	base64Pipe := `printf '%s' '[A-Za-z0-9+/=]+' \| base64 (?:--decode|-D) \| `
+	heredoc := ` <<'` + ports.ReviewSubmitHeredocDelimiter + `'\n` + heredocBodyPattern(ports.ReviewSubmitHeredocDelimiter) + ports.ReviewSubmitHeredocDelimiter + `\n?$`
 	// Kiro accepts regex policies rather than structured argv. Anchor every
 	// pattern to the complete command and intentionally support only the exact
 	// whitespace-free argument shapes described in the reviewer prompt above.
@@ -150,7 +156,20 @@ func shellAllowedCommands(inv ports.ReviewInvocation) []string {
 		`^` + gitPrefix + `diff --no-ext-diff --no-textconv(?: ` + safeArg + `)*(?: --(?: ` + safeArg + `)*)?$`,
 		`^` + gitPrefix + `log(?: ` + safeArg + `)*$`,
 		`^` + gitPrefix + `show(?: ` + safeArg + `)*(?: --(?: ` + safeArg + `)*)?$`,
-		`^` + base64Pipe + `gh api --method POST repos/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/pulls/[0-9]+/reviews --input - --jq '[.]id'$`,
-		`^` + base64Pipe + `ao review submit --session ` + session + ` --reviews -$`,
+		`^gh api --method POST repos/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/pulls/[0-9]+/reviews --input - --jq '[.]id'` + heredoc,
+		`^ao review submit --session ` + session + ` (?:--reviews -|--run [A-Za-z0-9_.:\-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -)` + heredoc,
 	}
+}
+
+// heredocBodyPattern matches here-document body lines, each ending in a
+// newline, none of which equals delimiter. Kiro's regex engine has no
+// lookahead, so a line that is not the delimiter is spelled out as: shorter,
+// longer, or the same length with a first differing character.
+func heredocBodyPattern(delimiter string) string {
+	n := len(delimiter)
+	alternatives := []string{fmt.Sprintf(`[^\n]{0,%d}`, n-1), fmt.Sprintf(`[^\n]{%d,}`, n+1)}
+	for i := 0; i < n; i++ {
+		alternatives = append(alternatives, regexp.QuoteMeta(delimiter[:i])+`[^`+regexp.QuoteMeta(delimiter[i:i+1])+`\n]`+fmt.Sprintf(`[^\n]{%d}`, n-1-i))
+	}
+	return `(?:(?:` + strings.Join(alternatives, `|`) + `)\n)*`
 }
