@@ -84,6 +84,9 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 	}
 	for i := 1; i < min(len(argv), 5); i++ {
 		arg := argv[i]
+		if i == 1 && arg == "run" && (interpreter == "bun" || interpreter == "deno") {
+			continue
+		}
 		flag, _, hasValue := strings.Cut(arg, "=")
 		switch flag {
 		case "-e", "--eval", "-p", "--print", "--check":
