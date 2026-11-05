@@ -764,6 +764,13 @@ describe("pending branch presentation", () => {
 	});
 });
 
+describe("Report a problem", () => {
+	it.each(["bug", "report"])("is found by typing %s", (query) => {
+		const ids = filterCommands(buildCommands({ workspaces: workspaces() }), query).map((item) => item.id);
+		expect(ids).toContain("global-report-problem");
+	});
+});
+
 describe("search groups", () => {
 	it("keep daemon results below local rows so Enter never moves to them", () => {
 		const local = buildCommands({ workspaces: workspaces() });

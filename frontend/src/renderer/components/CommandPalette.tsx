@@ -38,6 +38,7 @@ import {
 	commandPaletteFileSearchQueryOptions,
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
+import { startProblemReport } from "../lib/report-problem";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
@@ -102,7 +103,7 @@ export function CommandPalette() {
 	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const { cloneProject, createProject, initializeProjectRepository } = useShell();
+	const { cloneProject, createProject, daemonStatus, initializeProjectRepository } = useShell();
 	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
 	const setThemePreference = useUiStore((s) => s.setThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
@@ -666,6 +667,13 @@ export function CommandPalette() {
 						closePalette();
 						requestOpenShareLink();
 						break;
+					case "report-problem": {
+						const failure = await startProblemReport(daemonStatus.state);
+						if (failure) throw new Error(failure);
+						if (!isCurrentRun()) break;
+						closePalette();
+						break;
+					}
 				case "open-pr":
 					await aoBridge.app.openExternal(action.url);
 					if (!isCurrentRun()) break;
@@ -772,7 +780,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[daemonStatus.state, findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(

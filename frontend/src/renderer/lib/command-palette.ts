@@ -70,7 +70,8 @@ export type CommandAction =
 	| { kind: "copy-pr-url"; url: string }
 	| { kind: "trigger-review"; sessionId: string }
 	| { kind: "toggle-theme" }
-	| { kind: "open-shared-link" };
+	| { kind: "open-shared-link" }
+	| { kind: "report-problem" };
 
 export type CommandItem = {
 	id: string;
@@ -574,6 +575,13 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("command.toggleTheme"),
 		keywords: ["dark", "light", "appearance"],
 		action: { kind: "toggle-theme" },
+	});
+	items.push({
+		id: "global-report-problem",
+		group: "global",
+		title: t("report.action"),
+		keywords: ["bug", "report", "issue", "triage", "feedback"],
+		action: { kind: "report-problem" },
 	});
 	if (ctx.cloudReady) {
 		items.push({

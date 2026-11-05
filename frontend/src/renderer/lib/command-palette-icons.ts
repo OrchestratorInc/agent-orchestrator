@@ -1,6 +1,7 @@
 import { OrchestratorIcon, type AppIcon } from "../components/icons";
 import {
 	ArrowRight,
+	Bug,
 	Copy,
 	File,
 	FileSearch,
@@ -29,6 +30,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"global-new-project": FolderPlus,
 	"global-settings": Settings,
 	"global-theme": Sun,
+	"global-report-problem": Bug,
 };
 
 /** Fallback icons by group when no exact id match exists. */
