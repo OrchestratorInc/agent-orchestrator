@@ -2766,14 +2766,23 @@ html.sidebar-reordering * {
 	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
-/* A band over the composer, the two in one tray: the New Chat tray's inset,
-   wrapped round the composer instead of hung under it, and a step more tint
-   because the band carries text and an action. Concentric with the composer. */
+/* A band hung on top of the composer, the New Chat tray's mirror: narrower,
+   and stopping at the composer's edge instead of going under it, so the
+   composer keeps its place and its own fill (a see-through composer would show
+   anything behind it). In dark the composer is itself only a little lighter
+   than the canvas, so the band takes a stronger wash to stand apart from it. */
 .chat-composer-band-tray {
-	--tray-inset: 0.375rem;
+	--tray-inset: 0.25rem;
 
-	padding: var(--tray-inset);
-	border-radius: calc(var(--radius-chat-composer) + var(--tray-inset));
+	margin: 0 1.25rem;
+	padding: var(--tray-inset) var(--tray-inset) 0;
+	border-radius: calc(var(--radius-lg) + var(--tray-inset)) calc(var(--radius-lg) + var(--tray-inset)) 0 0;
+	background: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+}
+
+/* Light's composer is lighter than the canvas and the wash darkens, so a light
+   one already sets the band apart. */
+:root[data-theme="light"] .chat-composer-band-tray {
 	background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
 }
 

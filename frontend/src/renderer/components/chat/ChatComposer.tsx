@@ -376,7 +376,7 @@ export const ChatComposer = memo(function ChatComposer({
 	commandError?: string;
 	/** A notice attached to the form, below queued messages and input requests. */
 	notice?: ReactNode;
-	/** A band the chat box sits under, the two wrapped in one tray (a refused login's). */
+	/** A band hung on top of the chat box (a refused login's); the box itself is not moved or recolored. */
 	trayBand?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
@@ -1878,18 +1878,9 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
-				{trayBand ? (
-					<div className="chat-composer-band-tray" data-composer-tray="">
-						{trayBand}
-						{notice}
-						{form}
-					</div>
-				) : (
-					<>
-						{notice}
-						{form}
-					</>
-				)}
+				{trayBand ? <div className="chat-composer-band-tray">{trayBand}</div> : null}
+				{notice}
+				{form}
 			</div>
 		);
 

@@ -167,6 +167,12 @@ export type LoginReturn = {
 	agentId: string;
 	/** The remote host whose login is being fixed; omitted for this computer. */
 	hostId?: string;
+	/**
+	 * The account the session runs on, by id (the computer's own login is one
+	 * too). A login to another account does not fix the session, so it does not
+	 * count. Unknown for a remote host, whose accounts this app cannot read.
+	 */
+	accountId?: string;
 	/** When the login took. */
 	loggedInAt?: number;
 	/** The chat has seen the login and sent nothing again: it says the user is in. */
@@ -290,8 +296,8 @@ export type UiState = {
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
 	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled">) => void;
-	/** A login on the Agents page took: return to the waiting chat, if this agent's. */
-	completeLoginReturn: (agentId: string, hostId?: string) => void;
+	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
+	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
 	/** The waiting chat saw the login and sent nothing again. */
 	settleLoginReturn: (sessionId: string) => void;
 	/** Drop the waiting chat, or only when it is this session's. */
@@ -587,10 +593,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 	})),
 	loginReturn: null,
 	startLoginReturn: (intent) => set({ loginReturn: intent }),
-	completeLoginReturn: (agentId, hostId) => set((state) => {
+	completeLoginReturn: (agentId, hostId, accountId) => set((state) => {
 		const waiting = state.loginReturn;
 		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
 		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
 		const modal = state.settingsModal;
 		// A login only finishes while the Agents page shows it, so closing global
 		// settings here returns the user to the chat they came from.

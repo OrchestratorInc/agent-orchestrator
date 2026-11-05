@@ -5,6 +5,7 @@ import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
@@ -2084,9 +2085,11 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined || chatLogin.locked) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
-											composerLockedPlaceholder !== undefined
+											chatLogin.locked
+												? t("chat.login.composerLocked")
+												: composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder
@@ -5595,10 +5598,14 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	hostId?: string;
 	cloud: boolean;
 	newWorkDisabled: boolean;
-}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin> } {
+}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean } {
 	const retryable = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
 	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
-	const refused = latest?.state === "failed" && latest.failureCode === "auth_required" &&
+	// Switching the chat to another agent leaves this agent's login behind.
+	const switchedAway = Boolean(latest) && snapshot.items.some((item) => item.kind === "activity" &&
+		item.detail?.event === "provider_switch" &&
+		snapshot.items.every((own) => own.turnId !== latest!.id || own.sequence < item.sequence));
+	const refused = latest?.state === "failed" && latest.failureCode === "auth_required" && !switchedAway &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latest.id)
 		? latest
 		: undefined;
@@ -5608,18 +5615,39 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 	// cloud one (the cloud connection's login is not watched from here), is the
 	// user's to send again.
 	const queued = Boolean(refusedId && !cloud && retryControl && retryable.has(refusedId) && !turnDidWork(snapshot, refusedId));
+	// The account this session runs on: only that account's login fixes it. A
+	// remote host's accounts are not readable from here.
+	const provider = agentAccountProviderFor(snapshot.harness);
+	const sessionAccounts = useSessionAgentAccounts(refusedId && provider && !hostId && !cloud ? snapshot.sessionId : undefined);
 	const stored = useUiStore((state) => state.loginReturn);
 	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
-	const sending = Boolean(refusedId && retryControl?.pending && (!retryControl.turnId || retryControl.turnId === refusedId));
+	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
+	const sending = Boolean(refusedId && retryControl?.pending && forRefused(retryControl.turnId));
+	// Sending it again after the login was refused (the daemon or the network):
+	// the user is in, so the band says what failed and offers it once more.
+	const sendError = refusedId && loginReturn?.loggedInAt !== undefined && forRefused(retryControl?.turnId)
+		? retryControl?.error
+		: undefined;
 	const state: ChatLoginBandProps["state"] = sending
 		? "sending"
-		: loginReturn?.loggedInAt !== undefined
-			? loginReturn.settled ? "loggedIn" : "sending"
-			: loginReturn ? "waiting" : "signedOut";
+		: sendError
+			? "failed"
+			: loginReturn?.loggedInAt !== undefined
+				? loginReturn.settled ? "loggedIn" : "sending"
+				: loginReturn ? "waiting" : "signedOut";
 	const retryTurn = useStableCallback(retryControl?.retry);
+	const sendAgain = useStableCallback(() => {
+		if (refusedId) void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
+	});
 	const logIn = useStableCallback(() => {
 		const ui = useUiStore.getState();
-		ui.startLoginReturn({ sessionId: snapshot.sessionId, agentId: snapshot.harness, ...(hostId ? { hostId } : {}) });
+		const accountId = provider ? sessionAccounts.data?.[provider] : undefined;
+		ui.startLoginReturn({
+			sessionId: snapshot.sessionId,
+			agentId: snapshot.harness,
+			...(hostId ? { hostId } : {}),
+			...(accountId ? { accountId } : {}),
+		});
 		ui.openGlobalSettings("harness", {
 			focusAgentId: snapshot.harness,
 			...(hostId ? { hostId } : {}),
@@ -5643,7 +5671,9 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 			ui.settleLoginReturn(snapshot.sessionId);
 			return;
 		}
-		ui.clearLoginReturn(snapshot.sessionId);
+		// Kept until the message's copy appears, so a send that fails still knows
+		// the user is in.
+		ui.settleLoginReturn(snapshot.sessionId);
 		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
 	}, [loginReturn, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, snapshot]);
 	const lines = useMemo(() => {
@@ -5652,13 +5682,21 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 			if (turn.state !== "failed" || turn.failureCode !== "auth_required" || turn.rolledBack) continue;
 			const status: TurnOutcomeLogin["status"] = turn.id !== refusedId
 				? "stopped"
-				: state === "sending" ? "sending" : !queued || state === "loggedIn" ? "resend" : state === "waiting" ? "waiting" : "queued";
+				: state === "sending" ? "sending"
+					: !queued ? "resend"
+						: state === "waiting" ? "waiting"
+							: state === "signedOut" ? "queued"
+								// In, but it was not sent: the band offers Send again.
+								: "stopped";
 			map.set(turn.id, { status, align: turnDidWork(snapshot, turn.id) ? "start" : "end" });
 		}
 		return map;
 	}, [queued, refusedId, snapshot, state]);
 	return {
 		lines,
+		// Until the login takes (or the chat moves to another agent), nothing new can
+		// be sent: the agent would refuse it the same way.
+		locked: Boolean(refused) && (state === "signedOut" || state === "waiting"),
 		...(refused ? {
 			band: {
 				harness: snapshot.harness,
@@ -5667,6 +5705,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				state,
 				queued,
 				onLogin: logIn,
+				...(queued ? { onSendAgain: sendAgain } : {}),
+				...(sendError ? { error: sendError } : {}),
 			},
 		} : {}),
 	};

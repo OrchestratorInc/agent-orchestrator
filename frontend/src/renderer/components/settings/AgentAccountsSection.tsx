@@ -89,7 +89,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 				const ui = useUiStore.getState();
 				const waiting = ui.loginReturn;
 				if (waiting && !waiting.hostId && agentAccountProviderFor(waiting.agentId) === provider) {
-					ui.completeLoginReturn(waiting.agentId);
+					ui.completeLoginReturn(waiting.agentId, undefined, result.account?.id);
 				}
 			}
 		}

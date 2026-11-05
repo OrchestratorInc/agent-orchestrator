@@ -637,6 +637,16 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
 	}, [hostId, queryClient]);
 
+	// The computer's own login for this agent, as the saved-accounts list names it:
+	// a chat waiting on another account is not fixed by the CLI's login.
+	const cliAccountId = useCallback(async (agentId: AgentId): Promise<string | undefined> => {
+		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		if (!provider) return undefined;
+		const accounts = queryClient.getQueryData<Awaited<ReturnType<typeof fetchAgentAccounts>>>(agentAccountsQueryKey)
+			?? await fetchAgentAccounts().catch(() => undefined);
+		return accounts?.find((account) => account.provider === provider && account.device)?.id;
+	}, [hostId, queryClient]);
+
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
@@ -673,7 +683,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			setAuthWorkflow(null);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
 			// A chat turn that sent the user here to log in gets them back.
-			if (signingIn) useUiStore.getState().completeLoginReturn(workflow.agentId, hostId);
+			if (signingIn) useUiStore.getState().completeLoginReturn(workflow.agentId, hostId, await cliAccountId(workflow.agentId));
 			return;
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {
@@ -681,7 +691,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			phase: signedOut ? "unauthorized" : "unverified",
 			reason: !signingIn ? t("settings.harness.logoutUnverified") : signedOut ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
 		} : current);
-	}, [checkAuth, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
+	}, [checkAuth, cliAccountId, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
 
 	const closeAuth = useCallback(async (workflow: AuthTerminalWorkflow): Promise<boolean> => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return false;
@@ -782,7 +792,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						const cliSignedIn = await refreshCliLogin(agentId);
 						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") {
 							// A chat turn that sent the user here to log in gets them back.
-							useUiStore.getState().completeLoginReturn(agentId, hostId);
+							useUiStore.getState().completeLoginReturn(agentId, hostId, await cliAccountId(agentId));
 							return true;
 						}
 					}

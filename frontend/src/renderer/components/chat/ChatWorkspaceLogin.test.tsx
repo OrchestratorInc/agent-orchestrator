@@ -8,7 +8,7 @@
  * work, sends it again.
  */
 
-import { act, screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -16,6 +16,7 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
 import { useUiStore } from "../../stores/ui-store";
+import { apiClient } from "../../lib/api-client";
 
 const CLI_ADVICE = "Not logged in · Please run /login";
 
@@ -53,7 +54,12 @@ describe("ChatWorkspace refused login", () => {
 		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry: vi.fn() }} />);
 
 		expect(band()).toHaveTextContent("Claude Code is signed out · your message sends once you’re in");
-		expect(band().closest("[data-composer-tray]")).toBeInTheDocument();
+		// Hung on top of the chat box, which keeps its place and fill.
+		expect(band().closest(".chat-composer-band-tray")).toBeInTheDocument();
+		expect(document.querySelector("[data-composer-tray]")).toBeNull();
+		// Nothing new can be sent until the login takes: the agent would refuse it too.
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByText("Log in or pick another agent to keep chatting")).toBeInTheDocument();
 		expect(within(band()).getByRole("button", { name: "Log in" })).toBeInTheDocument();
 		// The status is the message's own: it leads one row under the bubble, with the
 		// time and the copy button after it, rather than a line the actions cover.
@@ -91,7 +97,81 @@ describe("ChatWorkspace refused login", () => {
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(retry).toHaveBeenCalledOnce();
 		expect(retry).toHaveBeenCalledWith("turn-1");
+		// Kept until the message's copy appears, so a send that fails still knows the user is in.
+		expect(useUiStore.getState().loginReturn?.settled).toBe(true);
+		// In again, so the chat box is open again.
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-disabled", "true");
+	});
+
+	it("lets the chat go on with another agent once it switches away", () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const prompt = snapshot.items[0]!;
+		snapshot.harness = "codex";
+		snapshot.items = [...snapshot.items, {
+			kind: "activity", id: "switch-1", turnId: undefined, sequence: prompt.sequence + 5, revision: 0, activityKind: "system", status: "completed",
+			summary: "Switched to Codex", createdAt: prompt.createdAt, updatedAt: prompt.createdAt,
+			detail: { event: "provider_switch", sourceHarness: "claude-code", targetHarness: "codex" },
+		} as unknown as typeof prompt];
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
+
+		expect(screen.queryByTestId("login-band")).toBeNull();
+		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Not sent");
+	});
+
+	it("says when sending the message again failed and offers it once more", async () => {
+		const retry = vi.fn();
+		const { rerender } = render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		expect(retry).toHaveBeenCalledOnce();
+
+		rerender(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry, error: "The daemon is not reachable", turnId: "turn-1" }} />);
+		expect(band()).toHaveTextContent("Couldn’t send your message · The daemon is not reachable");
+		expect(screen.getByTestId("login-status")).toHaveTextContent("Not sent");
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledTimes(2);
+		expect(retry).toHaveBeenLastCalledWith("turn-1");
+	});
+
+	it("only comes back for the login of the account the session runs on", async () => {
+		const get = vi.spyOn(apiClient, "GET").mockImplementation(async (path: string) =>
+			(path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { data: { claude: "acct-a" } } : { data: undefined }) as never);
+		try {
+			const retry = vi.fn();
+			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+			await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}", expect.anything()));
+			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+			await waitFor(() => expect(useUiStore.getState().loginReturn?.accountId).toBe("acct-a"));
+
+			// Another account signing in leaves this session signed out.
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "acct-b"));
+			expect(useUiStore.getState().settingsModal).not.toBeNull();
+			expect(retry).not.toHaveBeenCalled();
+
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "acct-a"));
+			expect(useUiStore.getState().settingsModal).toBeNull();
+			expect(retry).toHaveBeenCalledWith("turn-1");
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("drops the wait, and sends nothing, once the conversation has moved on", () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items[0]!;
+		// The user sent it again by hand while Settings was open, and it was answered.
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", state: "completed", failureCode: undefined, errorMessage: undefined }];
+		snapshot.items = [prompt, { ...prompt, id: "user-2", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt];
+		act(() => useUiStore.setState({ loginReturn: { sessionId: snapshot.sessionId, agentId: "claude-code" } }));
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+
 		expect(useUiStore.getState().loginReturn).toBeNull();
+		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		expect(retry).not.toHaveBeenCalled();
+		expect(screen.queryByTestId("login-band")).toBeNull();
 	});
 
 	it("says the user is in and leaves a message that did work for them to send again", async () => {
