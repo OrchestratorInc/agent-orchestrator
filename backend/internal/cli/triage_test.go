@@ -80,6 +80,14 @@ func TestTriageNoLaunch(t *testing.T) {
 	}
 }
 
+func TestTriagePromptAsksForAShortReport(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		if prompt := triagePrompt(t.TempDir(), terminal); !strings.Contains(prompt, "about 120 words") {
+			t.Fatalf("terminal=%v prompt has no length guide:\n%s", terminal, prompt)
+		}
+	}
+}
+
 func TestTriageAgentSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name, requested, want string

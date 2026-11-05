@@ -25,6 +25,7 @@ Start by asking the user what went wrong in their own words. Ask at most two sho
 Fill the draft in %s. Edit only its human sections and first status line.
 - First line: "status: ready" for a complete new issue, "status: duplicate" for a confirmed duplicate, otherwise "status: draft".
 - New issue: fill Title, what happened, what was expected and up to five steps. Delete unused steps. Leave Comment empty.
+- Keep the human sections to about 120 words in total. Logs and versions belong in the evidence, not in the report.
 - Duplicate: fill Title and Comment only, delete the what-happened and Steps placeholders, and set "Related: #n" to the ISSUE number. Comment is the only human text posted to that issue.
 - Keep "status:", "Title:", "Related:", "## Comment" and "## Agent-collected evidence" literal in every language, each heading exactly once, Comment before evidence.
 - Keep the Seen on line and the program-filled evidence unless it holds private data.
