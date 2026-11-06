@@ -229,6 +229,26 @@ describe("CloudSessionStartupError", () => {
 		expect(retrySessionStartup).toHaveBeenCalledWith("org-1", "sess-1");
 	});
 
+	it.each([
+		["workspace_setup_not_ready", "The workspace setup didn't finish"],
+		["project_setup_failed", "The project's Setup script failed"],
+		["repository_checkout_failed", "The repository checkout failed"],
+		["working_directory_unusable", "The working directory can't be used"],
+		["working_directory_occupied", "The working folder is already in use"],
+		["working_directory_not_durable", "The working folder isn't kept across restarts"],
+		["sandbox_unresponsive", "The sandbox stopped responding"],
+		["worker_never_started", "This session couldn't start"],
+		[undefined, "This session couldn't start"],
+	])("titles a failed startup with code %s as \"%s\"", (code, title) => {
+		mount({ phase: "failed", code, message: "The reason." });
+		expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+	});
+
+	it("titles a runtime that ended without a startup reason as not running", () => {
+		mount({ phase: "unavailable" });
+		expect(screen.getByRole("heading", { name: "This session isn't running" })).toBeInTheDocument();
+	});
+
 	it("shows a pending retry, then refetches the session", async () => {
 		let resolve!: (value: unknown) => void;
 		retrySessionStartup.mockReturnValue(new Promise((done) => { resolve = done; }));
