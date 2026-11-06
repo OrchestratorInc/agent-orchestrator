@@ -77,6 +77,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 				<Select value={currentId ?? ""} disabled={moving || options.length < 2} onValueChange={(value) => void move(value)}>
 					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 					<SelectContent align="end">
+						{/* Only a subscription takes a session: the daemon refuses a move to an API-key login. */}
 						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountName(option, t)}</SelectItem>)}
 					</SelectContent>
 				</Select>

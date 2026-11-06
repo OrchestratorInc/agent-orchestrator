@@ -13655,6 +13655,8 @@ components:
           type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
+        loggedIn:
+          type: boolean
         plan:
           type: string
         problem:
@@ -13672,6 +13674,7 @@ components:
       - device
       - default
       - signedIn
+      - loggedIn
       type: object
     AgentAccountUsageByModel:
       properties:

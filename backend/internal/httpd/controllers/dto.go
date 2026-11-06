@@ -3937,7 +3937,10 @@ type AgentAccountResponse struct {
 	Email     string     `json:"email,omitempty"`
 	Plan      string     `json:"plan,omitempty"`
 	Default   bool       `json:"default"`
+	// SignedIn is a subscription sign-in; LoggedIn is any login the CLI
+	// launches with, an API key included.
 	SignedIn  bool       `json:"signedIn"`
+	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
 	Problem string                     `json:"problem,omitempty"`

@@ -3589,6 +3589,7 @@
 	"settings.agentAccounts.makeDefault": "既定にする",
 	"settings.agentAccounts.refresh": "制限を更新",
 	"settings.agentAccounts.signedOut": "サインアウト済み",
+	"settings.agentAccounts.noSubscription": "サブスクリプションなしでサインイン中",
 	"settings.agentAccounts.remove": "アカウントを削除",
 	"settings.agentAccounts.removeDescription": "AO は {{email}} で動いているエージェントを停止し、サインアウトしてフォルダーを削除します。停止したセッションは、開くと既定のアカウントで続きます。その後、サマリーで別のアカウントに移せます。",
 	"settings.agentAccounts.loginTitle": "{{provider}} にサインイン",

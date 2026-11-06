@@ -3589,6 +3589,7 @@
 	"settings.agentAccounts.makeDefault": "Als Standard festlegen",
 	"settings.agentAccounts.refresh": "Limits aktualisieren",
 	"settings.agentAccounts.signedOut": "Abgemeldet",
+	"settings.agentAccounts.noSubscription": "Ohne Abonnement angemeldet",
 	"settings.agentAccounts.remove": "Konto entfernen",
 	"settings.agentAccounts.removeDescription": "AO stoppt die Agenten, die mit {{email}} laufen, meldet das Konto ab und löscht den Ordner. Eine gestoppte Sitzung läuft mit dem Standardkonto weiter, wenn du sie öffnest. Danach kannst du sie in ihrer Zusammenfassung auf ein anderes Konto verschieben.",
 	"settings.agentAccounts.loginTitle": "Bei {{provider}} anmelden",

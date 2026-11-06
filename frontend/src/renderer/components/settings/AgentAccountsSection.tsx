@@ -139,7 +139,9 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 	const resets = account.limits?.resetCredits ?? 0;
 	const meta = [
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
-		account.signedIn ? null : t("settings.agentAccounts.signedOut"),
+		// An API key (or a cloud provider login) launches the CLI but is not a
+		// subscription: no limits, and no account to move a session to.
+		account.signedIn ? null : account.loggedIn ? t("settings.agentAccounts.noSubscription") : t("settings.agentAccounts.signedOut"),
 		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
 	].filter(Boolean).join(" · ");
 	return <div className="px-3 py-2.5" data-agent-account={account.id}>
@@ -159,7 +161,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 					: account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
-					? cliLogin?.canLogout && account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
+					? cliLogin?.canLogout && account.loggedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
 					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="destructive-ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>

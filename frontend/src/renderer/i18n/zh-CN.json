@@ -3571,6 +3571,7 @@
 	"settings.agentAccounts.makeDefault": "设为默认",
 	"settings.agentAccounts.refresh": "刷新限额",
 	"settings.agentAccounts.signedOut": "已退出登录",
+	"settings.agentAccounts.noSubscription": "已登录，未使用订阅",
 	"settings.agentAccounts.remove": "移除账户",
 	"settings.agentAccounts.removeDescription": "AO 会停止使用 {{email}} 的智能体，退出该账户并删除其文件夹。已停止的会话在你打开时会使用默认账户继续。之后你可以在其摘要中把它移到其他账户。",
 	"settings.agentAccounts.loginTitle": "登录 {{provider}}",

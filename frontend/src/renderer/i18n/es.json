@@ -3650,6 +3650,7 @@
 	"settings.agentAccounts.makeDefault": "Hacer predeterminada",
 	"settings.agentAccounts.refresh": "Actualizar límites",
 	"settings.agentAccounts.signedOut": "Sesión cerrada",
+	"settings.agentAccounts.noSubscription": "Sesión iniciada sin suscripción",
 	"settings.agentAccounts.remove": "Quitar cuenta",
 	"settings.agentAccounts.removeDescription": "AO detiene los agentes que usan {{email}}, cierra su sesión y borra su carpeta. Una sesión detenida continúa con la cuenta predeterminada cuando la abres. Después puedes moverla a otra cuenta en su Resumen.",
 	"settings.agentAccounts.loginTitle": "Iniciar sesión en {{provider}}",

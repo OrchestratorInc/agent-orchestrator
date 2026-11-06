@@ -3704,6 +3704,7 @@
 	"settings.agentAccounts.makeDefault": "Сделать основным",
 	"settings.agentAccounts.refresh": "Обновить лимиты",
 	"settings.agentAccounts.signedOut": "Вход не выполнен",
+	"settings.agentAccounts.noSubscription": "Вход выполнен без подписки",
 	"settings.agentAccounts.remove": "Удалить аккаунт",
 	"settings.agentAccounts.removeDescription": "AO остановит агентов, работающих с {{email}}, выполнит выход из аккаунта и удалит его папку. Когда вы откроете остановленную сессию, она продолжится с аккаунтом по умолчанию. Затем вы сможете перенести её в другой аккаунт в разделе «Сводка».",
 	"settings.agentAccounts.loginTitle": "Войти в {{provider}}",
