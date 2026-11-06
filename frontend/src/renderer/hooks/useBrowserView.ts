@@ -119,7 +119,7 @@ export type BrowserViewModel = {
 	closeDevTools: () => Promise<void>;
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
-	agentBrowserActivity: BrowserAgentActivityState | null;
+	agentBrowserActivity: ObservedBrowserAgentActivity | null;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -204,8 +204,7 @@ let browserHoleOwner: string | null = null;
 
 function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	const root = document.documentElement;
-	// Custom properties on :root restyle the whole document, so only write them
-	// while the translucent window actually needs the hole.
+	// Only the translucent window needs the hole.
 	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
 	if (!rect) {
 		if (browserHoleOwner !== viewId) return;
@@ -215,10 +214,16 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	}
 	browserHoleOwner = viewId;
 	root.dataset.browserHole = "true";
-	root.style.setProperty("--browser-hole-x", `${rect.x}px`);
-	root.style.setProperty("--browser-hole-y", `${rect.y}px`);
-	root.style.setProperty("--browser-hole-w", `${rect.width}px`);
-	root.style.setProperty("--browser-hole-h", `${rect.height}px`);
+	// This runs on every frame of an inspector slide. The hole properties are
+	// registered non-inheriting (styles.css) and live on the shell root, whose
+	// tint pseudo-element alone reads them, so a write restyles that one element
+	// instead of the whole document, as :root custom properties did.
+	const shell = document.querySelector<HTMLElement>(".app-shell-root");
+	if (!shell) return;
+	shell.style.setProperty("--browser-hole-x", `${rect.x}px`);
+	shell.style.setProperty("--browser-hole-y", `${rect.y}px`);
+	shell.style.setProperty("--browser-hole-w", `${rect.width}px`);
+	shell.style.setProperty("--browser-hole-h", `${rect.height}px`);
 }
 
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
@@ -277,6 +282,11 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
 	return Boolean(fullscreen) && !fullscreen!.contains(node);
 }
 
+/** An agent command event, marked with whether its start arrived while this
+ *  session's view was the one on screen. A command that began while the user
+ *  was elsewhere and finishes after they switch in is not theirs to reveal. */
+export type ObservedBrowserAgentActivity = BrowserAgentActivityState & { startObserved: boolean };
+
 export function useBrowserView({
 	sessionId,
 	origin,
@@ -306,7 +316,8 @@ export function useBrowserView({
 	const [tabNotice, setTabNotice] = useState("");
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
-	const [agentBrowserActivity, setAgentBrowserActivity] = useState<BrowserAgentActivityState | null>(null);
+	const [agentBrowserActivity, setAgentBrowserActivity] = useState<ObservedBrowserAgentActivity | null>(null);
+	const observedCommandStartsRef = useRef(new Set<string>());
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
 	const viewIdRef = useRef("");
@@ -489,6 +500,7 @@ export function useBrowserView({
 		setClosedTabs(closedTabsBySession.get(sessionId) ?? []);
 		setAgentBrowserActive(false);
 		setAgentBrowserActivity(null);
+		observedCommandStartsRef.current.clear();
 		if (tabNoticeTimerRef.current !== null) {
 			window.clearTimeout(tabNoticeTimerRef.current);
 			tabNoticeTimerRef.current = null;
@@ -658,8 +670,17 @@ export function useBrowserView({
 	useEffect(() => {
 		return window.ao?.browser.onAgentActivity((state) => {
 			if (state.viewId !== viewIdRef.current) return;
+			const starts = observedCommandStartsRef.current;
+			let startObserved = false;
+			if (state.commandId) {
+				if (state.phase === "started") starts.add(state.commandId);
+				startObserved = starts.has(state.commandId);
+				if (state.phase === "finished") starts.delete(state.commandId);
+				// Bound memory if a finish is ever lost.
+				if (starts.size > 64) starts.delete(starts.values().next().value!);
+			}
 			setAgentBrowserActive(state.active);
-			setAgentBrowserActivity(state);
+			setAgentBrowserActivity({ ...state, startObserved });
 		});
 	}, []);
 

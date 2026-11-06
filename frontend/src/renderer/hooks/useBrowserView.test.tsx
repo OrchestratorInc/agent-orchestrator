@@ -271,6 +271,32 @@ describe("useBrowserView", () => {
 		expect(result.current.viewId).toBe("42:sess-1");
 	});
 
+	it("marks only agent commands whose start this session saw", async () => {
+		const bridge = setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: true, action: "open", phase: "started", commandId: "seen" }));
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "seen" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "seen", phase: "finished", startObserved: true });
+
+		// Started while the user was on another session: only the finish arrives here.
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "unseen" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "unseen", startObserved: false });
+
+		// A start seen before switching away does not carry over to a later visit.
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: true, action: "open", phase: "started", commandId: "left" }));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		rerender({ sessionId: "sess-1" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "left" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "left", startObserved: false });
+	});
+
 	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
 		createSlot();
