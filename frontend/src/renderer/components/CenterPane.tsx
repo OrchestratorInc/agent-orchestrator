@@ -309,8 +309,6 @@ export function CenterPane({
 	const {
 		scrollRef: tabsOverflowRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade,
-		showRightFade,
 	} = useTabScrollEdges([isFullscreen, tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
 	const target = terminalTarget ?? { kind: "worker" };
@@ -573,7 +571,7 @@ export function CenterPane({
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 								<motion.div
 									ref={tabsOverflowRef}
-									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									className="session-tab-scroll-region edge-fade edge-fade-x scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 									data-tab-scroll-region
 									layoutScroll
 								>
@@ -651,8 +649,6 @@ export function CenterPane({
 									{workspaceTabActions}
 								</div>
 							</motion.div>
-								{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-								{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 							</div>
 					</div>
 			}

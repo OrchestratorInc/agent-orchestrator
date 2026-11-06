@@ -634,15 +634,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * its own space after the last tab's separator; the action region starts one
  * gap after it; and the reserve for the panel's trailing controls drops the
  * surface's 1px edge padding. */
-/* Tab-strip scroll fades blend into the window chrome the bar floats on. */
-.center-panel-shell--floating-topbar .session-tab-scroll-fade {
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
-}
-
-.center-panel-shell--floating-topbar .session-tab-scroll-fade--left {
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-sidebar) 82%);
-}
-
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
 	padding-inline-start: var(--space-2);
 }
@@ -883,45 +874,9 @@ html[data-theme="light"] .center-panel-shell--floating-topbar :is(.topbar-contro
 	border-bottom-color: transparent;
 }
 
-/* A persistent edge fade signals that the tab strip can scroll horizontally. */
-.session-tab-scroll-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: var(--space-8);
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-primary) 82%);
-}
-
-.session-tab-scroll-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
-}
-
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
 .sidebar-sections-container {
 	container-type: size;
-}
-
-/* Persistent edge fades show when a sidebar section has more content to scroll. */
-.sidebar-section-scroll-fade {
-	position: absolute;
-	inset-inline: 0;
-	z-index: 10;
-	height: var(--space-4);
-	pointer-events: none;
-}
-
-.sidebar-section-scroll-fade--top {
-	top: 0;
-	background: linear-gradient(180deg, var(--color-bg-sidebar) 0%, transparent 100%);
-}
-
-.sidebar-section-scroll-fade--bottom {
-	bottom: 0;
-	background: linear-gradient(0deg, var(--color-bg-sidebar) 0%, transparent 100%);
 }
 
 /* Session actions are portaled into the center pane. Make their responsive
@@ -1452,17 +1407,6 @@ button.settings-row-bar {
 	&::-webkit-scrollbar {
 		display: none;
 	}
-}
-
-.model-menu-overflow-cue {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
-	height: var(--space-8);
-	pointer-events: none;
-	background: linear-gradient(to bottom, transparent, var(--color-bg-settings-menu));
-	transition: opacity var(--duration-fast) ease-out;
 }
 
 /* Search field inside a dropdown menu. settings-inline-input cannot be reused
@@ -2259,46 +2203,54 @@ textarea,
 	}
 }
 
-/* Chat scroll windows (the plan): content fades out at
-   whichever edge still has more to scroll to, so a long list reads as continuing
-   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
-   from the scroll position; the lengths are registered so the fade eases in and out
-   instead of snapping. */
-@property --edge-fade-top {
+/* Scroll edge fades (hooks/useEdgeFade.ts): content fades out at whichever
+   edge still has more to scroll to, so a list reads as continuing rather than
+   cut off. The fade is a mask on the scroller itself, never a gradient painted
+   in a surface color, so it holds over the translucent window tint and in every
+   theme. The hook sets the data attributes from the scroll position; the lengths
+   are registered so a fade eases in and out instead of snapping. Masks do not
+   affect hit testing, so faded content stays clickable. */
+@property --edge-fade-start {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-@property --edge-fade-bottom {
+@property --edge-fade-end {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-.edge-fade-viewport {
+.edge-fade {
+	--edge-fade-size: 24px;
+	--edge-fade-direction: to bottom;
 	mask-image: linear-gradient(
-		to bottom,
+		var(--edge-fade-direction),
 		transparent,
-		#000 var(--edge-fade-top),
-		#000 calc(100% - var(--edge-fade-bottom)),
+		#000 var(--edge-fade-start),
+		#000 calc(100% - var(--edge-fade-end)),
 		transparent
 	);
 	transition:
-		--edge-fade-top 150ms ease-out,
-		--edge-fade-bottom 150ms ease-out;
+		--edge-fade-start 150ms ease-out,
+		--edge-fade-end 150ms ease-out;
 }
 
-.edge-fade-viewport[data-fade-top] {
-	--edge-fade-top: 24px;
+.edge-fade-x {
+	--edge-fade-direction: to right;
 }
 
-.edge-fade-viewport[data-fade-bottom] {
-	--edge-fade-bottom: 24px;
+.edge-fade[data-fade-start] {
+	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size));
+}
+
+.edge-fade[data-fade-end] {
+	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size));
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.edge-fade-viewport {
+	.edge-fade {
 		transition: none;
 	}
 }
@@ -2975,16 +2927,6 @@ html.sidebar-reordering * {
 	position: relative;
 	z-index: 1;
 	background: transparent;
-}
-
-.chat-composer-fade {
-	position: absolute;
-	right: 0;
-	bottom: 100%;
-	left: 0;
-	height: 10px;
-	background: linear-gradient(to top, var(--color-bg-primary), transparent);
-	pointer-events: none;
 }
 
 .cursor-chat-composer textarea {
@@ -5747,22 +5689,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 
 .browser-panel__tab-strip::-webkit-scrollbar {
 	display: none;
-}
-
-.browser-panel__tab-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: 24px;
-	background: linear-gradient(90deg, transparent 0%, var(--bg) 82%);
-}
-
-.browser-panel__tab-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
 }
 
 .browser-panel__tab {

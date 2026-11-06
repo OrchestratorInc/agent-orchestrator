@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
-import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -233,23 +234,7 @@ export function AgentModelCombobox({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
-	useLayoutEffect(() => {
-		if (!menuOpen) {
-			setCanScrollDown(false);
-			return;
-		}
-		updateScrollCue();
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, [groups.length, menuOpen, normalizedSearch, showCustomSearchAction, updateScrollCue, visibleModels.length]);
+	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
 		// A Cursor model keeps the current effort, thinking and speed where it has them.
@@ -419,8 +404,7 @@ export function AgentModelCombobox({
 				<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-						onScroll={updateScrollCue}
+						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
@@ -541,10 +525,6 @@ export function AgentModelCombobox({
 							</p>
 						)}
 					</div>
-					<div
-						className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-						aria-hidden="true"
-					/>
 				</div>
 				{footer && (
 					<div className="shrink-0">
