@@ -77,7 +77,6 @@
 			"./plugins/withCircleDashedCheck",
 			"./plugins/withHarnessMenuIcons",
 			"./plugins/withAndroidDialogTheme",
-			"./plugins/withIosSceneLifecycle",
 			"./plugins/withIosSoftScrollEdge",
 			[
 				"expo-navigation-bar",
@@ -90,6 +89,9 @@
 				{
 					"android": {
 						"usesCleartextTraffic": true
+					},
+					"ios": {
+						"enableSceneSupport": true
 					}
 				}
 			],
