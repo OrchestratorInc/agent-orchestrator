@@ -1729,7 +1729,8 @@ SELECT conversation_activities.* FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
@@ -1764,7 +1765,8 @@ JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND conversation_activities.sequence < sqlc.arg(before_sequence)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
