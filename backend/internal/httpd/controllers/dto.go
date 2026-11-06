@@ -3188,9 +3188,6 @@ type ConversationTurnResponse struct {
 	ProviderTurnID string `json:"providerTurnId,omitempty"`
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
-	// DeliveredWithTurnID is the turn whose provider input carried this queued
-	// turn's messages: a queue drain, or a steer that lists it in its detail.
-	DeliveredWithTurnID string `json:"deliveredWithTurnId,omitempty"`
 	// HasRetryAttempt remains true when the attempt is outside the active branch.
 	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
@@ -3372,9 +3369,12 @@ type ConversationSnapshotResponse struct {
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
-	SessionID                  string `json:"sessionId"`
-	Harness                    string `json:"harness,omitempty"`
-	Mode                       string `json:"mode" enum:"chat,tui"`
+	// BatchedDeliveries links each queued turn AO batched into another turn's
+	// provider input. The turns list leaves those turns out.
+	BatchedDeliveries []domain.ConversationBatchedDelivery `json:"batchedDeliveries,omitempty"`
+	SessionID         string                               `json:"sessionId"`
+	Harness           string                               `json:"harness,omitempty"`
+	Mode              string                               `json:"mode" enum:"chat,tui"`
 	// Controller is reported separately from history so a client can tell "no
 	// messages yet" apart from "the agent is not running".
 	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,hibernated,stopped"`

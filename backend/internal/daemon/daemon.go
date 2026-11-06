@@ -422,6 +422,7 @@ func Run(buildVersion string) error {
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 			}, nil
 		}),
 		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, limit int64) (chatsvc.ConversationRows, error) {
@@ -439,6 +440,7 @@ func Run(buildVersion string) error {
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
 			}, nil

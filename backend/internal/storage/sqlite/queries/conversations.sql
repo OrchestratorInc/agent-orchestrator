@@ -2124,3 +2124,21 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
+
+-- The queued turns AO batched into another turn's provider input: a queue drain
+-- or a steer. The snapshot turn queries leave them out, so the client reads the
+-- delivery link here.
+-- name: ListConversationBatchedTurns :many
+SELECT id, promoted_to_turn_id
+FROM conversation_turns
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND batched_input = 1
+  AND promoted_to_turn_id IS NOT NULL;
+
+-- Steers that carried queued turns, with the detail naming those turns.
+-- name: ListConversationBatchSteers :many
+SELECT id, detail_json
+FROM conversation_activities
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND json_extract(detail_json, '$.event') = 'steer'
+  AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array';

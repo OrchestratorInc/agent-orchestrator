@@ -3853,6 +3853,7 @@ type ConversationSnapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
+	BatchedDeliveries                []domain.ConversationBatchedDelivery
 }
 
 // DefaultConversationPageSize is the standard number of messages in a conversation page.
@@ -4197,6 +4198,11 @@ func (s *Store) LoadConversationSnapshotPage(
 		return ConversationSnapshot{}, err
 	}
 
+	batchedDeliveries, err := s.conversationBatchedDeliveries(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
 		ActiveBranch:                     presentation.activeBranch,
@@ -4206,6 +4212,7 @@ func (s *Store) LoadConversationSnapshotPage(
 		BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
 		OldestSequence:                   oldest,
 		HasMoreBefore:                    hasMore,
+		BatchedDeliveries:                batchedDeliveries,
 	}
 	for _, row := range turnRows {
 		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfterSequence) {
@@ -4348,6 +4355,11 @@ func (s *Store) LoadConversationSnapshot(
 		return ConversationSnapshot{}, fmt.Errorf("select activities: %w", err)
 	}
 
+	batchedDeliveries, err := s.conversationBatchedDeliveries(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -4356,6 +4368,7 @@ func (s *Store) LoadConversationSnapshot(
 		NativeForkAvailableAfterSequence: presentation.nativeForkAvailableAfterSequence,
 		BranchPoints:                     presentation.branchPoints,
 		BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
+		BatchedDeliveries:                batchedDeliveries,
 	}
 	for _, row := range turnRows {
 		turn := turnToDomain(row)
@@ -4705,9 +4718,6 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	}
 	if row.RetryOfTurnID.Valid {
 		turn.RetryOfTurnID = row.RetryOfTurnID.String
-	}
-	if row.BatchedInput != 0 && row.PromotedToTurnID.Valid {
-		turn.DeliveredWithTurnID = row.PromotedToTurnID.String
 	}
 	if row.StartedAt.Valid {
 		started := row.StartedAt.Time
@@ -5371,4 +5381,42 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 		return fmt.Errorf("rebind branch %s provider: %d rows", branchID, rows)
 	}
 	return nil
+}
+
+// conversationBatchedDeliveries reads where each batched queued turn was
+// delivered. A steer records the queued turns it carried; any other batched turn
+// joined its target's input in a queue drain.
+func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) ([]domain.ConversationBatchedDelivery, error) {
+	turns, err := s.qr.ListConversationBatchedTurns(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("list batched turns: %w", err)
+	}
+	if len(turns) == 0 {
+		return nil, nil
+	}
+	steers, err := s.qr.ListConversationBatchSteers(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("list batch steers: %w", err)
+	}
+	steerFor := map[string]string{}
+	for _, steer := range steers {
+		var detail struct {
+			SourceTurnIDs []string `json:"providerInputSourceTurnIds"`
+		}
+		if json.Unmarshal([]byte(steer.DetailJson), &detail) != nil {
+			continue
+		}
+		for _, turnID := range detail.SourceTurnIDs {
+			steerFor[turnID] = steer.ID
+		}
+	}
+	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, domain.ConversationBatchedDelivery{
+			TurnID:              turn.ID,
+			DeliveredWithTurnID: turn.PromotedToTurnID.String,
+			SteerActivityID:     steerFor[turn.ID],
+		})
+	}
+	return out, nil
 }

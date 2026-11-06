@@ -128,8 +128,6 @@ export interface ConversationTurn {
 	providerTurnId?: string;
 	/** Failed source whose durable prompt created this retry attempt. */
 	retryOfTurnId?: string;
-	/** The turn whose provider input carried this queued turn's messages (a queue drain or a steer). */
-	deliveredWithTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
@@ -897,6 +895,8 @@ export interface ConversationSnapshot {
 	nativeForkAvailableAfterSequence?: number;
 	activeBranchId?: string;
 	branchedFromEarlierMessage?: boolean;
+	/** Queued turns AO batched into another turn's provider input; `turns` leaves them out. */
+	batchedDeliveries?: BatchedDelivery[];
 	branchPoints?: ConversationBranchPoint[];
 	/** How the active historical branch acquired its provider context. */
 	branchMaterialization?: ConversationBranchMaterialization;
@@ -1074,4 +1074,11 @@ export function pendingUserInput(snapshot: ConversationSnapshot): ConversationAc
 		(item): item is ConversationActivity =>
 			item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending",
 	);
+}
+
+/** Where a batched queued turn went: a steer that carried it, or else a queue drain into `deliveredWithTurnId`. */
+export interface BatchedDelivery {
+	turnId: string;
+	deliveredWithTurnId: string;
+	steerActivityId?: string;
 }
