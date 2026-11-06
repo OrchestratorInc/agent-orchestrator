@@ -7,6 +7,7 @@ import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -1979,7 +1980,6 @@ function ChatWorkspaceContent({
 						</ChatLinkProvider>
 
 						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
-							<div aria-hidden="true" className="chat-composer-fade" />
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2390,8 +2390,6 @@ function ChatHeader({
 	const {
 		scrollRef: tabsOverflowRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade,
-		showRightFade,
 	} = useTabScrollEdges([tabScrollWatch]);
 	const previousTabCountRef = useRef(orderedAuxiliaryTabs.length);
 	useEffect(() => {
@@ -2434,7 +2432,7 @@ function ChatHeader({
 						role="tablist"
 					>
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
+							<motion.div ref={tabsOverflowRef} className="edge-fade edge-fade-x scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
 								{/* The macOS header is a window drag region outside its controls; the
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}
@@ -2501,8 +2499,6 @@ function ChatHeader({
 								{workspaceTabActions}
 								</div>
 							</motion.div>
-							{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 						</div>
 					</div>
 			}
@@ -2784,6 +2780,9 @@ export function Timeline({
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	const scroller = useRef<HTMLDivElement>(null);
+	// The transcript fades out under the top bar once it is scrolled, and above
+	// the composer while there is more below.
+	useEdgeFade(scroller);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -4524,7 +4523,7 @@ export function Timeline({
 				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
-				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
+				className="chat-scroll-viewport cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"

@@ -91,6 +91,7 @@ import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMen
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -423,48 +424,13 @@ function SidebarSectionScroller({
 	wrapperClassName?: string;
 }) {
 	const scrollerRef = useRef<HTMLDivElement>(null);
-	const [scrollEdges, setScrollEdges] = useState({ top: false, bottom: false });
-	const updateScrollEdges = useCallback(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		const overflow = scroller.scrollHeight - scroller.clientHeight;
-		const next = {
-			top: overflow > 1 && scroller.scrollTop > 1,
-			bottom: overflow > 1 && scroller.scrollTop < overflow - 1,
-		};
-		setScrollEdges((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
-	}, []);
-
-	useLayoutEffect(() => {
-		const scroller = scrollerRef.current;
-		if (!scroller) return;
-		updateScrollEdges();
-		scroller.addEventListener("scroll", updateScrollEdges, { passive: true });
-		const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateScrollEdges);
-		resizeObserver?.observe(scroller);
-		if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-		const mutationObserver =
-			typeof MutationObserver === "undefined"
-				? undefined
-				: new MutationObserver(() => {
-					if (scroller.firstElementChild) resizeObserver?.observe(scroller.firstElementChild);
-					updateScrollEdges();
-				});
-		mutationObserver?.observe(scroller, { childList: true, subtree: true });
-		return () => {
-			scroller.removeEventListener("scroll", updateScrollEdges);
-			resizeObserver?.disconnect();
-			mutationObserver?.disconnect();
-		};
-	}, [updateScrollEdges]);
+	useEdgeFade(scrollerRef);
 
 	return (
 		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
-			<div ref={scrollerRef} className={className} data-sidebar-section-scroller="" data-testid={testId} style={style}>
+			<div ref={scrollerRef} className={`edge-fade [--edge-fade-size:var(--space-4)] ${className}`} data-sidebar-section-scroller="" data-testid={testId} style={style}>
 				{children}
 			</div>
-			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
-			{scrollEdges.bottom ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--bottom" /> : null}
 		</div>
 	);
 }

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type RefCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefCallback } from "react";
+import { syncEdgeFade } from "./useEdgeFade";
 
 type ScrollBehavior = ScrollToOptions["behavior"];
 
-// Tracks whether a horizontal tab strip has hidden content on either edge.
-// The small tolerance avoids flickering from fractional layout measurements.
+// Fades a horizontal tab strip's edges while tabs sit past them (the strip
+// needs `edge-fade edge-fade-x`), and drives it from the wheel. The fade is
+// set as data attributes, so scrolling never re-renders the owner.
 export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 	// A callback ref, so the listeners below attach whenever the strip mounts,
 	// even after its owner rendered (a portal waiting for its host). `current`
@@ -17,23 +19,19 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 		ref.current = null;
 		return ref;
 	}, []);
-	const [edges, setEdges] = useState({ left: false, right: false });
-	const [scrollingToEnd, setScrollingToEnd] = useState(false);
+	// Gliding to the end (a new tab) holds the end fade off, so the tab being
+	// revealed is not faded on its way in.
+	const scrollingToEnd = useRef(false);
 	const updateEdges = useCallback(() => {
 		const element = scrollRef.current;
 		if (!element) return;
-		const overflow = element.scrollWidth - element.clientWidth;
-		const next = {
-			left: overflow > 1 && element.scrollLeft > 1,
-			right: overflow > 1 && element.scrollLeft < overflow - 1,
-		};
-		setEdges((current) => (current.left === next.left && current.right === next.right ? current : next));
-		if (!next.right) setScrollingToEnd(false);
+		if (element.scrollLeft >= element.scrollWidth - element.clientWidth - 1) scrollingToEnd.current = false;
+		syncEdgeFade(element, "x", scrollingToEnd.current);
 	}, [scrollRef]);
 	const scrollToEnd = useCallback((behavior: ScrollBehavior = "smooth") => {
 		const element = scrollRef.current;
 		if (!element) return;
-		setScrollingToEnd(true);
+		scrollingToEnd.current = true;
 		element.scrollTo({ left: element.scrollWidth, behavior });
 		window.requestAnimationFrame(updateEdges);
 	}, [scrollRef, updateEdges]);
@@ -49,9 +47,17 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 			const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
 			if (delta === 0) return;
 			event.preventDefault();
+			scrollingToEnd.current = false;
 			element.scrollBy({ left: delta });
 		};
+		// A glide that stops short (the reader took over, the strip resized)
+		// releases the end fade it was holding off.
+		const handleScrollEnd = () => {
+			scrollingToEnd.current = false;
+			updateEdges();
+		};
 		element.addEventListener("scroll", updateEdges, { passive: true });
+		element.addEventListener("scrollend", handleScrollEnd, { passive: true });
 		element.addEventListener("wheel", handleWheel, { passive: false });
 		// Read the strip's overflow in the next frame, not inside the observer
 		// pass. Another observer (a terminal refit, a chat reflow) has usually
@@ -69,6 +75,7 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 		observer?.observe(element);
 		return () => {
 			element.removeEventListener("scroll", updateEdges);
+			element.removeEventListener("scrollend", handleScrollEnd);
 			element.removeEventListener("wheel", handleWheel);
 			observer?.disconnect();
 			if (frame !== null) window.cancelAnimationFrame(frame);
@@ -78,8 +85,6 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 	return {
 		scrollRef,
 		scrollToEnd,
-		showLeftFade: edges.left,
-		showRightFade: edges.right && !scrollingToEnd,
 		updateEdges,
 	};
 }
