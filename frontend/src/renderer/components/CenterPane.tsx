@@ -14,6 +14,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -40,6 +41,9 @@ import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { beginPaneTabDrag } from "../lib/pane-drag";
+import { SESSION_TAB_KEY } from "../lib/pane-split";
+import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -102,8 +106,29 @@ const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
+const PANE_DRAG_IGNORE = "[data-terminal-tab-action],input,a";
+
+// The session's own tab does not reorder, but it can still be dragged out of
+// the strip into a split.
+export function startSessionTabPaneDrag(event: PointerEvent<HTMLElement>) {
+	if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
+	beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
+}
+
+// The strip's slot for the session's own tab. It drags out like any tab, and
+// it is left out while the tab is shown in a split group's tab.
+export function SessionTabSlot({ children }: { children: ReactNode }) {
+	if (useSplitHiddenTabKeys().has(SESSION_TAB_KEY)) return null;
+	return (
+		<div className="flex shrink-0 self-stretch" data-terminal-tab-key={SESSION_TAB_KEY} onPointerDown={startSessionTabPaneDrag}>
+			{children}
+		</div>
+	);
+}
+
 // A reorderable strip tab. It stays inside its group, so it never covers the
 // pinned session tab or the toolbar, and keeps its hover look while dragged.
+// Pulled out of the strip vertically, it hands over to the split-pane drag.
 export function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
 	const dragControls = useDragControls();
 	const itemRef = useRef<HTMLDivElement>(null);
@@ -111,8 +136,10 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const [dragging, setDragging] = useState(false);
 	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
+		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
+		const item = itemRef.current;
+		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
 	};
 	// While dragging, the tab's x is derived from the pointer and the group's
 	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
@@ -131,6 +158,18 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		if (Math.abs(x.get() - next) > 0.01) x.set(next);
 	}, [x]);
 	useEffect(() => x.on("change", followPointer), [x, followPointer]);
+	// Lifting the tab out into a split hands its motion to the drag ghost. The
+	// tab goes straight back to its slot: letting the reorder drag animate home
+	// while followPointer still tracked the pointer could strand it a few
+	// pixels off, leaving a gap in the strip.
+	const settleInSlot = useCallback(() => {
+		dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
+		dragRef.current = null;
+		dragControls.cancel();
+		x.stop();
+		x.set(0);
+		setDragging(false);
+	}, [dragControls, followPointer, x]);
 	// A tab removed mid-drag gets no onDragEnd; drop its scroll listener anyway.
 	useEffect(() => () => dragRef.current?.scroller?.removeEventListener("scroll", followPointer), [followPointer]);
 	useLayoutEffect(followPointer);
@@ -230,6 +269,8 @@ export function CenterPane({
 	);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
+	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -246,10 +287,11 @@ export function CenterPane({
 				: []),
 			...shellTerminals.map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
+	const stripShellHandleIds = useMemo(() => shellTerminals.map((terminal) => terminal.handleId), [shellTerminals]);
 	const orderedAuxiliaryTabs = useMemo(() => {
 		const preferred = auxiliaryTabOrder ?? (sessionId ? (tabOrderBySession[sessionId] ?? []) : []);
 		const byKey = new Map(auxiliaryTabs.map((tab) => [tab.key, tab]));
@@ -374,10 +416,11 @@ export function CenterPane({
 	useEffect(
 		() =>
 			aoBridge.app.onCloseShellTerminalShortcut(() => {
-				if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
+				if (closeFocusedSplitPane) closeFocusedSplitPane();
+				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (target.kind === "shell") onCloseShellTerminal?.(target.handleId);
 			}),
-		[activeWorkspaceTab, target, onCloseShellTerminal],
+		[activeWorkspaceTab, closeFocusedSplitPane, target, onCloseShellTerminal],
 	);
 
 	useEffect(() => {
@@ -391,10 +434,10 @@ export function CenterPane({
 
 	useEffect(() => {
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
-			Boolean(activeWorkspaceTab?.onClose) || (target.kind === "shell" && Boolean(onCloseShellTerminal)),
+			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || (target.kind === "shell" && Boolean(onCloseShellTerminal)),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, target.kind, onCloseShellTerminal]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, target.kind, onCloseShellTerminal]);
 
 	useEffect(() => {
 		if (availableAuxiliaryKeys.length > previousTabCountRef.current) scrollTabsToEnd();
@@ -504,26 +547,23 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
+	const simplifiedTopbar = useSimplifiedTopbar();
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
-			actions={
-				<>
-					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{topbarActions}
-				</>
-			}
+			actions={topbarActions}
 			clearanceClassName={cn(
 				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 			)}
 			clearanceRef={clearanceRef}
+			tabsTrailing={tabStripAction}
 			hideActions={isFullscreen}
 			regionWidth={terminalBounds.width > 0 ? terminalBounds.width : "100%"}
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className="flex h-full min-w-0 flex-1 items-stretch"
+							className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
@@ -540,7 +580,7 @@ export function CenterPane({
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									<div className="flex shrink-0 self-stretch">
+									<SessionTabSlot>
 										{session ? (
 											<SessionPaneTab
 												isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
@@ -554,7 +594,7 @@ export function CenterPane({
 										) : (
 											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
 										)}
-									</div>
+									</SessionTabSlot>
 									<Reorder.Group
 										as="div"
 										axis="x"
@@ -594,6 +634,7 @@ export function CenterPane({
 														}
 														onSelect={() => onSelectShellTerminal?.(tab.terminal.handleId)}
 														shell={tab.terminal}
+														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
 													tab.tab.content

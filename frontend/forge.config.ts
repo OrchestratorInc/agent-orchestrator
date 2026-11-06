@@ -5,6 +5,7 @@ import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import { rebuild } from "@electron/rebuild";
 import electronPackage from "electron/package.json";
+import appPackage from "./package.json";
 import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
@@ -36,6 +37,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
 const APP_BUNDLE_ID = "dev.agent-orchestrator.desktop";
+export const WINDOWS_DISPLAY_NAME = "Orchestrator.inc";
 const AUTH_PROTOCOL = {
 	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
@@ -108,12 +110,15 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform, env: NodeJS
 		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
 		"assets/trayIconTemplate.png",
 		"assets/trayIconTemplate@2x.png",
+		"assets/trayAwakeIconTemplate.png",
+		"assets/trayAwakeIconTemplate@2x.png",
+		"assets/trayAwakeIcon.LICENSE",
 		"app-update.yml",
 		// Written in prePackage, only for a build signed with a passkey profile.
 		...(platform === "darwin" && env.AO_MAC_PROVISIONING_PROFILE ? [WEBAUTHN_CONFIG_RESOURCE] : []),
@@ -137,10 +142,21 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
+// The dictation helper records the microphone itself, and the hardened runtime
+// blocks audio input without this entitlement. Its disclaim only helps dev and
+// terminal launches: signed and nested here, macOS checks the app's usage
+// strings instead (see extendInfo). osx-sign signs its executable, then its bundle.
+const DICTATION_HELPER_PATHS = [
+	"/Contents/Resources/dictation-helper/Orchestrator.app",
+	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
+];
+const DICTATION_HELPER_ENTITLEMENTS = ["com.apple.security.device.audio-input"];
+
 export function macSignOptionsForFile(
 	filePath: string,
 	appEntitlementsPath?: string,
 ): { entitlements?: string | string[] } {
+	if (DICTATION_HELPER_PATHS.some((helper) => filePath.endsWith(helper))) return { entitlements: DICTATION_HELPER_ENTITLEMENTS };
 	// The top-level bundle (signed last) carries the main executable's
 	// entitlements. Only a passkey-provisioned build overrides them; nested
 	// helpers keep their defaults because they embed no profile.
@@ -207,7 +223,23 @@ const config: ForgeConfig = {
 		appBundleId: APP_BUNDLE_ID,
 		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
-		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
+		// Match the Windows installer without changing the executable name.
+		win32metadata: {
+			FileDescription: WINDOWS_DISPLAY_NAME,
+			InternalName: WINDOWS_DISPLAY_NAME,
+			ProductName: WINDOWS_DISPLAY_NAME,
+		},
+		extendInfo: {
+			LSHasLocalizedDisplayName: true,
+			CFBundleDevelopmentRegion: "en",
+			// In a signed build, macOS checks the dictation helper's speech and
+			// microphone requests against this app's Info.plist, despite the
+			// helper's own usage strings and its disclaim. Without the speech key
+			// it kills the helper. The microphone string also covers terminals and
+			// agents, which macOS attributes to this app.
+			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
+			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
+		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
@@ -268,6 +300,9 @@ const config: ForgeConfig = {
                 const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
                 if (wakeBuild.error) throw wakeBuild.error;
                 if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
+				const dictationBuild = spawnSync(process.execPath, [path.resolve("scripts/build-dictation-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+				if (dictationBuild.error) throw dictationBuild.error;
+				if (dictationBuild.status !== 0) throw new Error("macOS dictation helper build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -317,6 +352,7 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
 					if (MAC_PROVISIONING_PROFILE) {
 						// keychain-access-groups without its profile is an app macOS kills at launch.
 						const profile = path.join(outputPath, appBundle, "Contents", "embedded.provisionprofile");
@@ -408,7 +444,7 @@ const config: ForgeConfig = {
 				appId: "dev.agent-orchestrator.desktop",
 				// The name shown in the installer, the updater, the shortcuts, and
 				// Windows Apps. It matches the app's display name in main.ts.
-				productName: "Orchestrator.inc",
+				productName: WINDOWS_DISPLAY_NAME,
 				// Match the packaged binary name so the Start menu shortcut targets
 				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
@@ -457,7 +493,7 @@ const config: ForgeConfig = {
 					// the Electron app binary". (Both are "agent-orchestrator".)
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
-					maintainer: "Agent Orchestrator",
+					maintainer: appPackage.author,
 					homepage: "https://github.com/aoagents/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},

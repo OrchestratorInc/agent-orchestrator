@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
@@ -7,7 +8,7 @@ import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
@@ -20,6 +21,7 @@ import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDe
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "../ui/context-menu";
 import { handleTabListKeyDown } from "../../lib/terminal-tabs";
@@ -27,6 +29,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
+import { useUiStore } from "../../stores/ui-store";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -87,6 +90,7 @@ export function SideComposer({
 }) {
 	const { t } = useTranslation();
 	const editor = useRef<ComposerEditorHandle>(null);
+	const enterSends = useUiStore((state) => state.chatSendKeyMode === "enter");
 	const [concealExpired, setConcealExpired] = useState(false);
 	useEffect(() => {
 		if (!sending) {
@@ -175,13 +179,16 @@ export function SideComposer({
 											className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px]"
 										>
 											{file.name}
-											<button
+											<Button
 												type="button"
+												variant="destructive-ghost"
+												size="icon-xs"
+												className="-my-1 -mr-1.5"
 												aria-label={t("sideChat.remove", { value1: file.name })}
 												onClick={() => onRemoveFile(index)}
 											>
 												<X className="size-3" />
-											</button>
+											</Button>
 										</li>
 									))}
 								</ul>
@@ -196,13 +203,16 @@ export function SideComposer({
 											<span className="max-w-[120px] truncate" title={file.name}>
 												{file.name}
 											</span>
-											<button
+											<Button
 												type="button"
+												variant="destructive-ghost"
+												size="icon-xs"
+												className="-my-1 -mr-1.5"
 												aria-label={t("sideChat.remove", { value1: file.name })}
 												onClick={() => onRemoveFile(index + draft.attachments.length)}
 											>
 												<X className="size-3" />
-											</button>
+											</Button>
 										</li>
 									))}
 								</ul>
@@ -211,6 +221,7 @@ export function SideComposer({
 					) : null}
 					<ComposerEditor
 						ref={editor}
+						enterSends={enterSends}
 						concealed={sending && !concealExpired}
 						label="Side chat question"
 						placeholder={
@@ -290,12 +301,13 @@ export function SideComposer({
 							/>
 							<Button
 								type="button"
-								variant="ghost"
+								variant="quiet"
 								size="icon-sm"
+								shape="pill"
 								disabled={!ready || sending}
 								aria-label={t("sideChat.attachAFile")}
 								onClick={() => filePicker.current?.click()}
-								className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-white/5! hover:text-foreground"
+								className="shrink-0"
 							>
 								<Plus aria-hidden="true" className="size-3.5" />
 							</Button>
@@ -309,12 +321,12 @@ export function SideComposer({
 						</div>
 						<Button
 							type={running && !canSend ? "button" : "submit"}
-							variant="ghost"
+							variant="primary"
 							size="icon-sm"
+							shape="pill"
 							aria-label={running && !canSend ? t("sideChat.stopTurn") : t("sideChat.sendMessage")}
 							onClick={running && !canSend ? onInterrupt : undefined}
 							disabled={running && !canSend ? false : !canSend}
-							className="size-7 rounded-full bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground"
 						>
 							{running && !canSend ? (
 								<Square aria-hidden="true" className="size-2.5 fill-current" />
@@ -534,7 +546,7 @@ export function useIndependentSideChats(
 		let stream: EventSource | undefined;
 		if (baseUrl && typeof EventSource !== "undefined") {
 			stream = new EventSource(
-				`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation/side-chats/${encodeURIComponent(activeId)}/events`,
 			);
 			stream.addEventListener("changed", refreshSafely);
 			stream.addEventListener("snapshot", refreshSafely);
@@ -1071,6 +1083,9 @@ export function useIndependentSideChats(
 				}
 
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
+				// The first accepted question may have named this tab. A list refresh
+				// failure must not turn an accepted delivery into a failed send.
+				void refreshList().catch(() => undefined);
 			} catch (cause) {
 				if (sessionRef.current === sessionId && !closedSidesRef.current.has(sideId)) setError(apiErrorMessage(cause));
 				if (propagateError) throw cause;
@@ -1079,7 +1094,7 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList],
 	);
 
 	const close = useCallback(
@@ -1105,7 +1120,7 @@ export function useIndependentSideChats(
 					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
 						await aoBridge.sideChats.capture(sideId, true);
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
-					throw new Error(apiErrorMessage(requestError));
+					throw apiErrorException(requestError);
 				}
 				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {
@@ -1309,7 +1324,7 @@ export function useIndependentSideChats(
 	};
 
 	const tabBar = enabled ? (
-		<header className="browser-panel__tab-row">
+		<header className="browser-panel__tab-row side-chat__tab-row">
 			<div className="browser-panel__tab-region">
 				<div
 					ref={tabStripRef}
@@ -1348,8 +1363,7 @@ export function useIndependentSideChats(
 										}}
 									/>
 								) : (
-									<button
-										type="button"
+									<Pressable
 										role="tab"
 										aria-selected={side.id === currentActiveId}
 										tabIndex={side.id === currentActiveId ? 0 : -1}
@@ -1374,10 +1388,9 @@ export function useIndependentSideChats(
 									>
 										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
 										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}{pendingCloses.some((pending) => pending.id === side.id) ? ` · ${t("sideChat.closingTab")}` : ""}</span>
-									</button>
+									</Pressable>
 								)}
-								<button
-									type="button"
+								<Pressable
 									hidden={renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)}
 									className="browser-panel__tab-close"
 									aria-label={t("sideChat.closeNamed", { name: side.label })}
@@ -1387,7 +1400,7 @@ export function useIndependentSideChats(
 									}}
 								>
 									<X className="size-3.5" aria-hidden="true" />
-								</button>
+								</Pressable>
 							</div>
 						);
 						if (renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)) return tab;
@@ -1409,17 +1422,15 @@ export function useIndependentSideChats(
 				) : null}
 				{showRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 			</div>
-			<Button
+			<Pressable
 				type="button"
-				variant="ghost"
-				size="icon-sm"
 				className="browser-panel__tab-new"
 				disabled={!canCreate || pending}
 				aria-label={t("sideChat.newSideChat")}
 				onClick={() => void create(undefined, true).catch(() => undefined)}
 			>
 				<Plus className="size-3.5" />
-			</Button>
+			</Pressable>
 		</header>
 	) : null;
 	const closeDialog = (
@@ -1509,11 +1520,11 @@ export function useIndependentSideChats(
 				{pendingCloses.some((side) => side.id === activeId) ? (
 					<div className="p-4" role="status">
 						<p>{t("sideChat.closing")}</p>
-						<button type="button" disabled={closing} onClick={() => {
+						<Button type="button" variant="outline" size="sm" disabled={closing} onClick={() => {
 							if (!currentActiveId) return;
 							setClosing(true);
 							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
-						}}>{t("sideChat.retryClose")}</button>
+						}}>{t("sideChat.retryClose")}</Button>
 					</div>
 				) : snapshot && snapshot.side.id === activeId ? (
 					<>
@@ -1529,7 +1540,7 @@ export function useIndependentSideChats(
 									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
-										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
+										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.emptyDescription")}</p>
 									</div>
 								) : null}
 								<Timeline
@@ -1767,7 +1778,6 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{enabled ? <p className="max-w-sm leading-relaxed">{t("sideChat.isolationPolicy")}</p> : null}
 					{error ? <p role="alert">{error}</p> : null}
 				</div>
 			</div>

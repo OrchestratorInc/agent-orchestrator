@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
     paths:
       - "backend/**"
       - "pricing/**"
@@ -15,16 +16,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: go-${{ github.event.pull_request.number || github.sha }}
+  group: go-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
+  # Coalesce pending main runs, but let the active run finish for a main signal.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend-core:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        # One complete suite; keep the first existing shard check name.
+        shard: [0]
     defaults:
       run:
         working-directory: backend
@@ -78,16 +83,18 @@ jobs:
         # a required check must still run every test. Compilation stays cached.
         run: |
           packages=$(go list ./... | grep -v -e '/internal/storage/sqlite$' -e '/internal/service/chat$' -e '/internal/session_manager$' -e '/internal/storage/sqlite/store$')
-          selected=$(printf '%s\n' "$packages" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 2) == shard')
-          test -n "$selected"
-          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=20m
+          test -n "$packages"
+          printf '%s\n' "$packages" | xargs go test -race -count=1 -timeout=40m
 
   chat-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        # One complete suite; keep the first existing shard check name.
+        shard: [0]
     defaults:
       run:
         working-directory: backend
@@ -100,14 +107,12 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Test chat
-        run: |
-          tests=$(go test -race -list . ./internal/service/chat | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 2) == shard' | paste -sd '|' -)
-          test -n "$selected"
-          go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/service/chat
+        run: go test -race -count=1 -timeout=40m ./internal/service/chat
 
   session-store-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -123,11 +128,13 @@ jobs:
         run: go test -race -count=1 -timeout=20m ./internal/session_manager ./internal/storage/sqlite/store
 
   sqlite-race:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1]
     defaults:
       run:
         working-directory: backend
@@ -142,18 +149,20 @@ jobs:
       - name: Test SQLite shard
         run: |
           tests=$(go test -race -list . ./internal/storage/sqlite | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 4) == shard' | paste -sd '|' -)
+          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 2) == shard' | paste -sd '|' -)
           test -n "$selected"
-          go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/storage/sqlite
+          go test -race -count=1 -timeout=40m -run "^($selected)$" ./internal/storage/sqlite
 
   # Keep the existing required check as the gate for every backend race test.
   build-test:
-    if: always()
+    if: ${{ always() && !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')) }}
     needs: [backend-core, chat-race, session-store-race, sqlite-race]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check backend results
         run: |
+          # This gate is skipped with draft/stacked jobs, never for a failed dependency.
           test '${{ needs.backend-core.result }}' = success
           test '${{ needs.chat-race.result }}' = success
           test '${{ needs.session-store-race.result }}' = success
@@ -165,7 +174,9 @@ jobs:
   # an open handle makes both fail. Scoped to those packages rather than the
   # whole suite to keep the matrix cheap.
   windows-workspace:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'ci:full'))
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -194,6 +205,9 @@ jobs:
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
 
+      - name: Test Windows shell terminal start grid (pty-host --size)
+        run: go test -race -count=3 -v -run '^(TestConPTYStartsAtRequestedGrid|TestHostStartGrid|TestPtyHostArgsCarryInitialGrid|TestPtyHostArgsCarryHostOptions)$' ./internal/adapters/runtime/conpty/
+
       - name: Test Windows Cue shell readiness and command delivery
         run: go test -race -count=1 -timeout=10m -run '^TestCue' ./internal/service/shellterm
 
@@ -221,7 +235,9 @@ jobs:
         run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
 
   lint:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -245,7 +261,9 @@ jobs:
           # any new issue fails CI rather than being grandfathered.
 
   sqlc-drift:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -267,7 +285,9 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- backend/internal/storage/sqlite/gen)"
 
   api-drift:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

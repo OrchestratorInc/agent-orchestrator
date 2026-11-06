@@ -36,6 +36,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
@@ -55,6 +56,13 @@ export function ArtifactsView() {
 	const [projectId, setProjectId] = useState("");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	// The open preview follows its row as the list refreshes, so a file an
+	// agent rewrites shows its new content.
+	const previewRow = useMemo(() => {
+		if (!preview) return null;
+		const key = artifactKey(preview.row);
+		return groups.flatMap((group) => group.rows).find((row) => artifactKey(row) === key) ?? preview.row;
+	}, [groups, preview]);
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
@@ -188,7 +196,7 @@ export function ArtifactsView() {
 							) : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
-									<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={clearFilters}>
+									<Button variant="quiet" size="sm" onClick={clearFilters}>
 										{t("artifacts.clearFilters")}
 									</Button>
 								</div>
@@ -231,7 +239,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
-			<ArtifactPreviewModal artifact={preview?.row ?? null} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
+			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
@@ -264,17 +272,16 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 		<section aria-label={name} className={expanded ? "mb-3" : undefined}>
 			<header>
 				<h2 aria-label={name}>
-					{collapsible ? <button
-						type="button"
+					{collapsible ? <Pressable
 						aria-label={name}
 						aria-expanded={expanded}
 						aria-controls={gridId}
 						onClick={() => toggleSection(sectionId)}
-						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md text-left transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-3 rounded-md"
 					>
 						{headerContent}
 						<ChevronDown aria-hidden="true" className={cn("size-icon-sm shrink-0 text-muted-foreground", !expanded && "-rotate-90")} />
-					</button> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
+					</Pressable> : <div className="flex min-h-11 min-w-0 items-center gap-3">{headerContent}</div>}
 				</h2>
 			</header>
 			<ul id={gridId} aria-label={name} hidden={!expanded} className={expanded ? (view === "gallery" ? ARTIFACT_GRID_CLASS : "grid gap-2") : "hidden"}>
@@ -304,9 +311,8 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 		return (
 			<li>
 				<div className="group/artifact relative flex h-11 items-center gap-2.5 rounded-md bg-card px-3 transition-none hover:bg-accent focus-within:bg-accent">
-					<button
-						type="button"
-						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch text-left outline-none after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
+					<Pressable
+						className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch after:absolute after:inset-0 after:z-[1] after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/60"
 						onClick={open}
 						title={`${row.sessionTitle} · ${row.path}`}
 					>
@@ -315,7 +321,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						<span className="relative z-[1] min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 						</span>
-					</button>
+					</Pressable>
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
@@ -431,7 +437,7 @@ function CreateArtifactMenu({
 			// Anchors the menu, so it must not scale on press.
 			<TopbarButton
 				variant="primary"
-				className={cn("topbar-control--labeled topbar-control--static-press", className)}
+				className={cn("topbar-control--labeled", className)}
 				disabled={disabled}
 				aria-busy={pending}
 			>

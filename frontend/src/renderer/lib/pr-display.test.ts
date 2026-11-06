@@ -276,12 +276,37 @@ describe("prCardPresentation", () => {
 		expect(presentation.statusRows?.find((status) => status.key === "review")?.detail).toBe("No review required");
 	});
 
+	it("names unresolved comments on a PR that needs no review, which its warning stands for", () => {
+		const presentation = prCardPresentation(
+			summary({ review: { decision: "none", hasUnresolvedHumanComments: true, unresolvedBy: [] } }),
+		);
+
+		expect(presentation.statusRows?.find((status) => status.key === "review")).toMatchObject({
+			detail: "Unresolved review comments",
+			tone: "warning",
+		});
+	});
+
 	it.each(["review_required", "changes_requested"] as const)("does not call a %s PR mergeable", (decision) => {
 		const presentation = prCardPresentation(
 			summary({ review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] } }),
 		);
 
 		expect(presentation.readiness?.label).toBe("Not mergeable yet");
+	});
+
+	it.each([
+		["review_required", "A required review must be completed before this PR can merge."],
+		["approved", "The review requirement is satisfied, but failing checks still block this PR."],
+	] as const)("only says the review is satisfied on a failing %s PR when it is", (decision, detail) => {
+		const presentation = prCardPresentation(
+			summary({
+				ci: { autoInjectCI: true, state: "failing", failingChecks: [] },
+				review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			}),
+		);
+
+		expect(presentation.readiness).toMatchObject({ label: "Not mergeable yet", detail });
 	});
 
 	it.each(["blocked", "unstable"] as const)("does not call a %s PR mergeable", (state) => {

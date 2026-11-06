@@ -1089,6 +1089,34 @@ func TestOpenShellTerminalDefersStartWhenTheClientWillSizeIt(t *testing.T) {
 	}
 }
 
+func TestOpenShellTerminalStartsAtTheClientGridWhenGiven(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 146, Rows: 37}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 146 || rt.created[0].InitialRows != 37 {
+		t.Fatalf("runtime creates = %+v, want the client's 146x37 grid", rt.created)
+	}
+}
+
+func TestOpenShellTerminalIgnoresAnOutOfRangeGrid(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 1, Rows: 5000}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 0 || rt.created[0].InitialRows != 0 || !rt.created[0].StartOnAttach {
+		t.Fatalf("runtime creates = %+v, want no grid and start-on-attach kept", rt.created)
+	}
+}
+
 func TestOpenShellTerminalRejectsUnavailableWindowsShell(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows shell selection only applies on Windows")
@@ -2268,28 +2296,41 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []ShellTerminal{side, standalone}
+			// A daemon restart within the same launch keeps every shell. A new
+			// launch reaps the session-less one: clients show shells only in a
+			// session's tab strip, so nothing could show or close it.
+			newLaunch := tc.nextRun != testAppRunID
+			want, wantReaped, wantNext := []ShellTerminal{side, standalone}, int64(0), "Terminal 3"
+			if newLaunch {
+				want, wantReaped, wantNext = []ShellTerminal{side}, 1, "Terminal 1"
+			}
 
 			// Recreate the service just as boot does. The runtime and durable rows
 			// belong to the shells, not to this service or desktop launch.
 			svc = NewService(rt, st, projects, sessions, "/data/dir", tc.nextRun, testLogger())
 			rt.aliveErr = tc.probeErr // The fake returns false alongside probe errors.
-			if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
-				t.Fatalf("reap = %d, %v", n, err)
+			if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != wantReaped {
+				t.Fatalf("reap = %d, %v; want %d", n, err, wantReaped)
 			}
 			got, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatalf("restored = %+v, %v; want %+v", got, err, want)
 			}
-			if len(rt.destroyed) != 0 {
+			if newLaunch {
+				if !reflect.DeepEqual(rt.destroyed, []string{standalone.HandleID}) {
+					t.Fatalf("destroyed = %v, want only the session-less shell %s", rt.destroyed, standalone.HandleID)
+				}
+			} else if len(rt.destroyed) != 0 {
 				t.Fatalf("destroyed user shells: %v", rt.destroyed)
 			}
 			next, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "session-1"})
-			if err != nil || next.Title != "Terminal 3" {
-				t.Fatalf("next terminal = %+v, %v; want Terminal 3", next, err)
+			if err != nil || next.Title != wantNext {
+				t.Fatalf("next terminal = %+v, %v; want %s", next, err, wantNext)
 			}
-			if err := svc.CloseShellTerminal(ctx, standalone.HandleID); err != nil {
-				t.Fatal(err)
+			if !newLaunch {
+				if err := svc.CloseShellTerminal(ctx, standalone.HandleID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			release, err := svc.BeginSessionTeardown(ctx, "session-1")
 			if err != nil {
@@ -2396,7 +2437,7 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			rt.destroyErr, rt.aliveErr = tc.destroyErr, tc.hostProbeErr
 			handleID := "ptyhost-v1:shell-exited"
 			rt.aliveByHandle[handleID] = true
-			st := &fakeShellTerminalStore{records: []ShellTerminalRecord{{HandleID: handleID, AppRunID: "previous"}}}
+			st := &fakeShellTerminalStore{records: []ShellTerminalRecord{{HandleID: handleID, SessionID: "session-1", AppRunID: "previous"}}}
 			svc := newTestService(rt, st, &fakeProjectRootLocator{})
 			if count, err := svc.ReapShellTerminalsFromPreviousAppRuns(context.Background()); err != nil || count != 0 {
 				t.Fatalf("reap = %d, %v; want preserved runtime", count, err)
@@ -2467,5 +2508,23 @@ func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.
 	case got := <-rt.sentCh:
 		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
 	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+// A restarted daemon in the same app launch must still see the trusted command
+// terminals its predecessor opened, so agent auth can keep excluding logins.
+func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},
+		{HandleID: "auth-current", AppRunID: testAppRunID, Title: "Log in to Codex", Transient: true},
+		{HandleID: "auth-previous", AppRunID: "previous", Title: "Log in to Codex", Transient: true},
+	}}
+	svc := newTestService(newFakeShellRuntime(), st, nil)
+	got, err := svc.ListCommandTerminalsForCurrentAppRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "auth-current" || got[0].Title != "Log in to Codex" {
+		t.Fatalf("command terminals = %+v, want only this launch's trusted terminal", got)
 	}
 }

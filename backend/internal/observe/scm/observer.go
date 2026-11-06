@@ -21,6 +21,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -90,6 +91,7 @@ type Store interface {
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
+	RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error
 }
 
 // Lifecycle is the provider-neutral lifecycle notification sink.
@@ -262,6 +264,9 @@ type Observer struct {
 	rateLimitUntil map[string]time.Time
 	// Cache holds bounded in-memory provider ETags and review poll timestamps.
 	Cache ObserverCache
+	// renames holds the repository renames already recorded, keyed
+	// host/old name. One entry per renamed scan repository.
+	renames map[string]string
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
 	// forceMu guards forcedReviews.
@@ -677,6 +682,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
@@ -692,11 +698,13 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			cancel()
 			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "notify"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
 			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
@@ -1149,6 +1157,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			continue
 		}
 		pullsByRepo[repoKey] = pulls
+		o.recordRename(ctx, repo, pulls)
 		// Record the listed PR numbers so selectRefreshCandidates can
 		// restrict refresh to only updated MRs rather than every tracked MR.
 		// Subjects are identity-keyed, so when a listed PR's provider id
@@ -1238,7 +1247,6 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				Host:         repo.Host,
 				Repo:         repoFullName(repo),
 				ProviderID:   pr.ProviderID,
-				URLAlias:     listedRepoAlias(firstNonEmpty(pr.URL, pr.HTMLURL), repo),
 				UpdatedAt:    now,
 			}
 			// Persist the discovered PR as an open baseline row immediately, before
@@ -1249,6 +1257,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// durable, and the session could terminate while that PR is still open.
 			if err := o.store.WriteSCMObservation(ctx, known, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: persist discovered PR failed", "session", sr.session.ID, "pr", known.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "persist"})
 				if markRepoFailed != nil {
 					markRepoFailed(repo)
 				}
@@ -2233,21 +2242,30 @@ func repoFullName(repo ports.SCMRepo) string {
 	return repo.Owner + "/" + repo.Name
 }
 
-// listedRepoAlias returns prURL rewritten to the repository name it was listed
-// under when the provider answered with another name (a renamed or transferred
-// repository), so links built from the old name resolve to the same PR. The
-// alias is normalized like ParseChangeRequestURL so any spelling of it matches.
-func listedRepoAlias(prURL string, repo ports.SCMRepo) string {
-	ref, err := domain.ParseChangeRequestURL(prURL)
-	listed := repoFullName(repo)
-	if err != nil || strings.EqualFold(ref.Repository, listed) {
-		return ""
+// recordRename stores the provider's current name for repo when its PR
+// listing answers under another name, as a renamed or transferred
+// repository's old name does. Each rename is written once per process.
+func (o *Observer) recordRename(ctx context.Context, repo ports.SCMRepo, pulls []ports.SCMPRObservation) {
+	if len(pulls) == 0 || pulls[0].BaseRepo == "" {
+		return
 	}
-	alias, err := domain.ParseChangeRequestURL(strings.Replace(ref.URL, "/"+ref.Repository+"/", "/"+listed+"/", 1))
-	if err != nil {
-		return ""
+	r := domain.RepositoryRename{
+		Host:    strings.ToLower(repo.Host),
+		OldName: strings.ToLower(repoFullName(repo)),
+		Name:    strings.ToLower(pulls[0].BaseRepo),
 	}
-	return alias.URL
+	key := r.Host + "/" + r.OldName
+	if r.Name == r.OldName || o.renames[key] == r.Name {
+		return
+	}
+	if err := o.store.RecordRepositoryRename(ctx, r); err != nil {
+		o.logger.Warn("scm observer: record repository rename failed", "repo", key, "err", err)
+		return
+	}
+	if o.renames == nil {
+		o.renames = map[string]string{}
+	}
+	o.renames[key] = r.Name
 }
 
 func ownerOf(full string) string {

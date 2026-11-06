@@ -9,6 +9,11 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
+import { parseTeamsFlag } from "./src/shared/teams-flag";
+
+// Read once, when the renderer is built or served: a value that is neither
+// "on" nor "off" stops here instead of shipping a build that guessed.
+const TEAMS_FLAG = parseTeamsFlag(process.env.VITE_AO_TEAMS);
 
 const POSTHOG_ORIGINS = (() => {
 	const configured = process.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -200,6 +205,7 @@ export default defineConfig({
 		"import.meta.env.VITE_AO_GIT_COMMIT": JSON.stringify(DEV_BUILD_INFO.commit),
 		"import.meta.env.VITE_AO_GIT_WORKTREE": JSON.stringify(DEV_BUILD_INFO.worktree),
 		"import.meta.env.VITE_AO_GIT_DIRTY": JSON.stringify(String(DEV_BUILD_INFO.isDirty)),
+		"import.meta.env.VITE_AO_TEAMS": JSON.stringify(TEAMS_FLAG),
 	},
 	// "@/" → the renderer root (src/renderer), the shadcn/ui import convention.
 	resolve: {

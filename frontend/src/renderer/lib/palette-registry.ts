@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { AppShortcutId } from "../../shared/shortcuts";
+import { isSplitPaneShortcut, type AppShortcutId } from "../../shared/shortcuts";
 import { shortcutLabelKeys } from "../i18n/key-maps";
 import type { MessageKey } from "../i18n";
 import type { GlobalSettingsSection } from "../stores/ui-store";
@@ -27,6 +27,8 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "previous-tab", keywords: ["switch tab"] },
 	{ id: "next-tab", keywords: ["switch tab"] },
 	{ id: "new-shell-terminal", keywords: ["shell", "console", "pty"] },
+	{ id: "split-shell-terminal", keywords: ["split", "side by side", "pane", "shell"] },
+	{ id: "split-shell-terminal-down", keywords: ["split", "horizontal", "below", "pane", "shell"] },
 	{ id: "close-shell-terminal", keywords: ["close terminal"] },
 	{ id: "reopen-closed-tab", keywords: ["undo close", "restore tab"] },
 	{ id: "archive-session", keywords: ["hide", "done", "remove"] },
@@ -40,8 +42,8 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "toggle-browser-devtools", keywords: ["show", "hide", "open", "close", "inspect", "web inspector", "console"] },
 ];
 
-export function buildShortcutCommands(t: TFunction): CommandItem[] {
-	return SHORTCUT_COMMANDS.map(({ id, keywords }) => ({
+export function buildShortcutCommands(t: TFunction, { splitPanes = false }: { splitPanes?: boolean } = {}): CommandItem[] {
+	return SHORTCUT_COMMANDS.filter(({ id }) => splitPanes || !isSplitPaneShortcut(id)).map(({ id, keywords }) => ({
 		id: `shortcut:${id}`,
 		group: "global",
 		title: t(shortcutLabelKeys[id]),
@@ -90,7 +92,9 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "error-events", section: "general", label: "settings.telemetryEvents.label", keywords: ["crash reports", "sentry", "telemetry"] },
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug"] },
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
-	{ id: "cloud", section: "general", label: "settings.cloud", keywords: ["ao cloud", "enable cloud"] },
+	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"] },
+	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
+	{ id: "simplified-topbar", section: "general", label: "settings.simplifiedTopbar", keywords: ["top bar", "topbar", "toolbar", "floating", "tabs"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
 	{ id: "accounts", section: "agents", label: "settings.agents", keywords: [] },
 	{ id: "add-account", section: "agents", label: "settings.codexAccounts.add", keywords: ["sign in"] },

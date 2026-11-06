@@ -1,9 +1,9 @@
 import { useRef } from "react";
-import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
 	DialogClose,
@@ -89,16 +89,13 @@ export function ConfirmDialog({
 				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} />}
 			>
 				<DialogClose asChild>
-					<button
-						type="button"
+					<CloseButton
+						floating
 						disabled={busy}
 						tabIndex={-1}
-						className="settings-dialog-close-button settings-close-button"
 						aria-label={t("confirm.close")}
 						title={t("confirm.closeEsc")}
-					>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					/>
 				</DialogClose>
 
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
@@ -128,8 +125,8 @@ export function ConfirmDialog({
 						ref={confirmRef}
 						aria-label={confirmAriaLabel}
 						type="button"
-						variant="footer-primary"
-						className={cn(compactButtonClass, destructive && "bg-danger-strong hover:bg-danger-strong")}
+						variant={destructive ? "footer-destructive" : "footer-primary"}
+						className={compactButtonClass}
 						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>

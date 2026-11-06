@@ -175,8 +175,9 @@ type SessionMetadata struct {
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
 	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
-	// purpose while keeping the session (an agent exit). Its runtime's death is
-	// then not a crash. It names one launch, so a new launch is never covered.
+	// purpose while keeping the session (an agent exit), or found already gone
+	// at startup. Its runtime's death is then not a crash. It names one launch,
+	// so a new launch is never covered.
 	RuntimeReleasedLaunchID string `json:"-"`
 	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
@@ -494,6 +495,14 @@ func (s SessionProvisionState) IsProvisioning() bool {
 // IsStandalone reports whether the session has no registered project owner.
 func (s SessionRecord) IsStandalone() bool { return s.ProjectID == "" }
 
+// RuntimeReleased reports that AO ended the current terminal launch on purpose
+// and kept the session stopped. That launch's runtime is gone by design, so its
+// death is not a crash; a resume starts a new launch, which this never covers.
+func (s SessionRecord) RuntimeReleased() bool {
+	launch := s.Metadata.RuntimeLaunchID
+	return s.Activity.State == ActivityExited && launch != "" && s.Metadata.RuntimeReleasedLaunchID == launch
+}
+
 // SessionControllerOwner is the durable identity of the process/controller
 // currently allowed to act for a session. Narrow lifecycle writes compare this
 // snapshot before updating so stale launch work cannot mutate a replacement.
@@ -529,6 +538,9 @@ type Session struct {
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
+	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
+	// archive: clients list its failure but raise no error for it.
+	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`

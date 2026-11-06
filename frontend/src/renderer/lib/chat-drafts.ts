@@ -1,5 +1,6 @@
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
+import { isCloudAttachmentReference } from "./cloud-attachment-reference";
 
 /**
  * Renderer-owned, session-scoped Chat drafts.
@@ -52,8 +53,6 @@ export interface ChatDraftInlineEdit {
 	turnId: string;
 	text: string;
 	content: ConversationContentSummary[];
-	/** True when the edit replays portable history instead of using a native fork. */
-	reconstructedContext?: boolean;
 }
 
 export interface ChatDraftQueuedEdit {
@@ -153,6 +152,13 @@ export interface ChatSessionDraft {
 		/** Durable delivery journal. Present until acceptance is durably cleared. */
 		delivery?: ChatComposerDelivery;
 	};
+	/**
+	 * A send whose outcome is unknown and that nothing is sending now (an app
+	 * restart or a lost answer). It sits beside the composer, always with its own
+	 * `draft`, so the person can type while they retry it with the same id or
+	 * discard it.
+	 */
+	unsent?: ChatComposerDelivery;
 	queuedEdit?: ChatDraftQueuedEdit;
 	inlineEdit?: ChatDraftInlineEdit;
 	/** Durable delivery journal for an inline branch edit. */
@@ -724,7 +730,8 @@ function isAttachment(value: unknown): value is ChatDraftAttachment {
 		typeof attachment.id === "string" &&
 		attachment.id.length > 0 &&
 		typeof attachment.path === "string" &&
-		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/")) &&
+		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/") ||
+			isCloudAttachmentReference(attachment.path)) &&
 		typeof attachment.name === "string" &&
 		typeof attachment.mimeType === "string" &&
 		typeof attachment.bytes === "number" &&
@@ -755,8 +762,6 @@ function isInlineEdit(value: unknown): value is ChatDraftInlineEdit {
 			typeof edit.turnId === "string" &&
 			edit.turnId.length > 0 &&
 			typeof edit.text === "string" &&
-			(edit.reconstructedContext === undefined ||
-				typeof edit.reconstructedContext === "boolean") &&
 			Array.isArray(edit.content) &&
 			edit.content.every(isContentSummary)
 	);
@@ -841,6 +846,8 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 			(Array.isArray(composer.excerpts) && composer.excerpts.every(isExcerptReference))) &&
 		(composer.fileReferences === undefined || (Array.isArray(composer.fileReferences) && composer.fileReferences.every(isFileReference))) &&
 		(composer.delivery === undefined || isComposerDelivery(composer.delivery)) &&
+		(draft.unsent === undefined || (isComposerDelivery(draft.unsent) &&
+			draft.unsent.kind === "send" && draft.unsent.state === "dispatching" && draft.unsent.draft !== undefined)) &&
 		(draft.queuedEdit === undefined || (draft.queuedEdit !== null &&
 			typeof draft.queuedEdit.revision === "string" && draft.queuedEdit.revision.length > 0 &&
 			typeof draft.queuedEdit.turnId === "string" && draft.queuedEdit.turnId.length > 0 &&
@@ -922,6 +929,7 @@ function hasContent(draft: ChatSessionDraft): boolean {
 		(draft.composer.excerpts?.length ?? 0) > 0 ||
 		(draft.composer.fileReferences?.length ?? 0) > 0 ||
 		Boolean(draft.composer.delivery) ||
+		Boolean(draft.unsent) ||
 		Boolean(draft.queuedEdit) ||
 		Boolean(draft.inlineEdit) ||
 		Boolean(draft.inlineEditDelivery)
@@ -1184,6 +1192,114 @@ export function clearUncertainChatComposerDelivery(
 }
 
 /**
+ * Move a send that nothing is sending (no live mutation) out of the composer into
+ * `unsent`, so the composer is free again. A send prepared without its own copy of
+ * the text takes the composer's text, attachments and references with it.
+ */
+/**
+ * Whether an unanswered delivery can wait in the unsent slot.
+ * ponytail: excerpt and file-reference sends keep the locked retry, as they do for optimistic sends; park them once the strip can show those chips.
+ */
+export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | undefined): delivery is ChatComposerDelivery {
+	return delivery?.kind === "send" && delivery.state === "dispatching" &&
+		!delivery.excerpts?.length && !delivery.fileReferences?.length;
+}
+
+export function parkChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	const delivery = loaded.draft.composer.delivery;
+	if (
+		!loaded.ok ||
+		getChatComposerMutation(scope).pending ||
+		!isParkableChatComposerDelivery(delivery) ||
+		delivery.clientMessageId !== clientMessageId ||
+		// ponytail: one unsent slot; a second unanswered send stays in the composer until the first is resolved.
+		loaded.draft.unsent
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const composer = loaded.draft.composer;
+	const next: ChatSessionDraft = {
+		...loaded.draft,
+		unsent: { ...delivery, draft: delivery.draft ?? { text: composer.text, attachments: composer.attachments } },
+		composer: delivery.draft
+			? {
+				revision: composer.revision,
+				text: composer.text,
+				attachments: composer.attachments,
+				excerpts: composer.excerpts,
+				fileReferences: composer.fileReferences,
+			}
+			: { revision: composer.revision + 1, text: "", attachments: [], excerpts: [], fileReferences: [] },
+	};
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Put the unsent message back in the composer's delivery slot for a retry with the same id. */
+export function reviveUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	const unsent = loaded.draft.unsent;
+	if (
+		!loaded.ok ||
+		getChatComposerMutation(scope).pending ||
+		!unsent ||
+		unsent.clientMessageId !== clientMessageId ||
+		loaded.draft.composer.delivery
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const next: ChatSessionDraft = { ...loaded.draft, composer: { ...loaded.draft.composer, delivery: unsent } };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Drop the unsent message. If it did arrive, the chat already shows it. */
+export function discardUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	clientMessageId: string,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	if (!loaded.ok || loaded.draft.unsent?.clientMessageId !== clientMessageId) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const next: ChatSessionDraft = { ...loaded.draft };
+	delete next.unsent;
+	const result = persistDraftProven(next, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/** Undo a discard, unless another unsent message has taken the slot since. */
+export function restoreUnsentChatComposerDelivery(
+	scope: ChatDraftScopeInput,
+	delivery: ChatComposerDelivery,
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	if (
+		!loaded.ok ||
+		loaded.draft.unsent ||
+		loaded.draft.composer.delivery?.clientMessageId === delivery.clientMessageId ||
+		delivery.kind !== "send" ||
+		!delivery.draft
+	) {
+		return { ok: false, draft: loaded.draft };
+	}
+	const result = persistDraftProven({ ...loaded.draft, unsent: { ...delivery, state: "dispatching" } }, storage);
+	return result.ok ? result : { ok: false, draft: loaded.draft };
+}
+
+/**
  * Atomically proves an inline edit and its stable branch-mutation id before
  * dispatch. A restored journal is returned unchanged for explicit safe retry.
  */
@@ -1209,7 +1325,6 @@ export function prepareChatInlineEditDelivery(
 	const exact =
 			current?.turnId === input.turnId &&
 			current.text === input.text &&
-			current.reconstructedContext === input.reconstructedContext &&
 			JSON.stringify(current.content) === JSON.stringify(input.content);
 	const inlineEdit: ChatDraftInlineEdit = exact
 		? current
@@ -1217,7 +1332,6 @@ export function prepareChatInlineEditDelivery(
 					turnId: input.turnId,
 					text: input.text,
 					content: input.content,
-					reconstructedContext: input.reconstructedContext,
 					revision: draftEditRevision(),
 			};
 	const mutation: ChatInlineEditDelivery = {
