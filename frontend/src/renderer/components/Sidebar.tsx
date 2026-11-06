@@ -3012,32 +3012,34 @@ const SessionActions = memo(function SessionActions({
 							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						</Button>}
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
-				{session.cloud?.shared ? null : <Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<SessionArchiveDialog
-								onConfirm={confirmArchive}
-								onOpenChange={onArchiveOpenChange}
-								open={archiveOpen}
-								session={session}
-								trigger={
-									<Button
-										size="icon-xs"
-										variant="quiet"
-										aria-label={t("shell.archiveSession")}
-										className={SESSION_ACTION_CLASS}
-										disabled={isKilling}
-										onClick={handleArchive}
-										type="button"
-									>
-										<Archive aria-hidden="true" />
-									</Button>
-								}
-							/>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>}
+				{session.cloud?.shared ? null : (
+					<SessionArchiveDialog
+						onConfirm={confirmArchive}
+						onOpenChange={onArchiveOpenChange}
+						open={archiveOpen}
+						session={session}
+						trigger={
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											size="icon-xs"
+											variant="quiet"
+											aria-label={t("shell.archiveSession")}
+											className={SESSION_ACTION_CLASS}
+											disabled={isKilling}
+											onClick={handleArchive}
+											type="button"
+										>
+											<Archive aria-hidden="true" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
+							</Tooltip>
+						}
+					/>
+				)}
 			</div>
 			<SessionMessageAge session={session} />
 		</div>
