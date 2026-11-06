@@ -9,6 +9,7 @@ import {
 	type ReactNode,
 	type RefObject,
 } from "react";
+import { agentLabel } from "@aoagents/product-ui";
 import { Ungroup, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
@@ -18,6 +19,9 @@ import { cn } from "../lib/utils";
 import type { Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
+import { useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
+import { AgentAvatar } from "./AgentAvatar";
+import { ShellAgentStatus } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -183,6 +187,8 @@ export type SplitGroupMember = {
 	onSelect: () => void;
 	/** Closes the member's pane (a member that cannot close leaves the group). */
 	onClose: () => void;
+	/** A shell whose running agent should show, as on its strip tab. */
+	agentHandleId?: string;
 };
 
 /**
@@ -205,9 +211,20 @@ export function SplitGroupTab({
 	onUngroup: () => void;
 }) {
 	const { t } = useTranslation();
+	// A shell in a split has no strip tab of its own, so the group tab keeps
+	// the agent watch open and shows the agent as that tab would.
+	useShellAgentStream(members.some((member) => member.agentHandleId));
+	const agents = useShellAgentStore((state) => state.agents);
+	const shown = members.map((member) => {
+		const agent = member.agentHandleId ? agents[member.agentHandleId] : undefined;
+		if (!agent) return { ...member, agent };
+		// A default-named shell ("Terminal 3") reads as its agent.
+		const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;
+		return { ...member, agent, label, icon: <AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} /> };
+	});
 	const frame = (
 		<span
-			aria-label={t("splitPane.group", { names: members.map((member) => member.label).join(", ") })}
+			aria-label={t("splitPane.group", { names: shown.map((member) => member.label).join(", ") })}
 			className={cn(
 				"group relative inline-flex h-full shrink-0 self-stretch items-stretch border-r border-border",
 				active ? "bg-overlay text-foreground" : "text-passive hover:bg-raised",
@@ -218,7 +235,7 @@ export function SplitGroupTab({
 			data-terminal-tab-frame
 			role="group"
 		>
-			{members.map((member, index) => {
+			{shown.map((member, index) => {
 				const focused = member.key === focusedKey;
 				const segment = (
 					<Pressable
@@ -252,6 +269,7 @@ export function SplitGroupTab({
 							{member.icon}
 						</span>
 						{focused ? <span className="truncate">{member.label}</span> : null}
+						{focused && member.agent ? <ShellAgentStatus agent={member.agent} done={false} /> : null}
 					</Pressable>
 				);
 				return (

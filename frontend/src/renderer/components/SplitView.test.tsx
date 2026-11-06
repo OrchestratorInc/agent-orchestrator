@@ -2,8 +2,14 @@ import { render, fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { SplitDivider, SplitGroupTab } from "./SplitView";
 import { TooltipProvider } from "./ui/tooltip";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 
 vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
+const { useShellAgentStream } = vi.hoisted(() => ({ useShellAgentStream: vi.fn() }));
+vi.mock("../stores/shell-agent-store", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../stores/shell-agent-store")>()),
+	useShellAgentStream,
+}));
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -52,4 +58,18 @@ it.each([true, false])("marks the group tab's frame as the selected tab only whi
 	const frame = container.querySelector("[data-terminal-tab-frame]");
 	// The floating top bar draws the selected pill from data-active.
 	expect(frame?.hasAttribute("data-active")).toBe(active);
+});
+
+it("names a grouped shell by the agent running in it and keeps the agent watch open", () => {
+	useShellAgentStore.setState({ agents: { "sh-1": { harness: "claude-code", state: "working" } } });
+	const member = (key: string, label: string, agentHandleId?: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn(), agentHandleId });
+	const { getByText, container } = render(
+		<TooltipProvider>
+			<SplitGroupTab active focusedKey="sh-1" members={[member("session", "Greeting"), member("sh-1", "Terminal 1", "sh-1")]} onUngroup={vi.fn()} />
+		</TooltipProvider>,
+	);
+	expect(getByText("Claude Code")).toBeInTheDocument();
+	expect(container.querySelector("[data-shell-agent-state='working']")).not.toBeNull();
+	expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
+	useShellAgentStore.setState({ agents: {} });
 });
