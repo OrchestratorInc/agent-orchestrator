@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, Link2, LoaderCircle, X } from "lucide-react";
+import { ChevronLeft, Folder, Link2, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,9 +7,10 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, NO_PRESS_EFFECT, WithGitHubState } from "./FirstRunSteps";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState } from "./FirstRunSteps";
 import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
@@ -319,15 +320,11 @@ export default function CloneRepositoryDialog({
 								{firstRun ? t("firstRun.description") : t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
 							</Dialog.Description>
 						</div>
-						<button
-							type="button"
-							className="settings-close-button"
+						<CloseButton
 							aria-label={t("createProject.cloneClose")}
 							disabled={disabled || choosingDestination}
 							onClick={onClose}
-						>
-							<X className="size-4" aria-hidden="true" />
-						</button>
+						/>
 					</div>
 
 					<form className="min-h-0 overflow-y-auto" onSubmit={submit}>
@@ -409,15 +406,17 @@ export default function CloneRepositoryDialog({
 											onChange={(event) => onChange({ ...value, destinationParent: event.target.value })}
 										/>
 									</div>
-									<button
+									<Button
 										aria-label={t("createProject.cloneChooseDestination")}
-										className="flex h-full shrink-0 items-center border-l border-border/60 px-4 text-foreground outline-none transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 disabled:pointer-events-none disabled:opacity-50"
+										variant="ghost"
+										size="none"
+										className="h-full rounded-none border-0 border-l border-border/60 px-4"
 										disabled={disabled || choosingDestination}
 										type="button"
 										onClick={() => void chooseDestination()}
 									>
 										{t("createProject.cloneChoose")}
-									</button>
+									</Button>
 								</div>
 								<p id="cloneDestinationHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
 									{cloning && targetPath
@@ -454,7 +453,7 @@ export default function CloneRepositoryDialog({
 						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 							<div className="flex items-center justify-end gap-3">
 								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
-								<Button type="submit" variant="primary" className={firstRun ? NO_PRESS_EFFECT : undefined} disabled={!canContinue}>
+								<Button type="submit" variant="primary" disabled={!canContinue}>
 									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>

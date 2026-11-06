@@ -10,7 +10,14 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
-vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
+vi.mock("pdfjs-dist", () => ({
+	GlobalWorkerOptions: {},
+	getDocument: vi.fn(),
+	TextLayer: class {
+		render() { return Promise.resolve(); }
+		cancel() {}
+	},
+}));
 
 describe("FileMediaPreview", () => {
 	afterEach(() => {
@@ -119,12 +126,14 @@ describe("FileMediaPreview", () => {
 		};
 		vi.mocked(getDocument).mockReturnValueOnce({ promise: Promise.resolve({ numPages: 2, getPage: async () => page }), destroy: async () => {} } as unknown as ReturnType<typeof getDocument>);
 		const source = { kind: "artifact" as const, cloud: true, rawUrl: "https://cp.test/api/cloud/v1/artifact-files/t/report.pdf?v=1" };
-		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={source} version={1} />);
+		const view = render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={source} version={1} />);
 
 		await waitFor(() => expect(document.querySelectorAll("[data-page-number]")).toHaveLength(2));
+		await waitFor(() => expect(document.querySelectorAll(".endOfContent")).toHaveLength(2));
 		expect(fetchFile).toHaveBeenCalledWith(source.rawUrl);
 		expect(getDocument).toHaveBeenCalledWith({ data: bytes });
 		expect(browserFetch).not.toHaveBeenCalled();
+		view.unmount();
 		fetchFile.mockRestore();
 	});
 

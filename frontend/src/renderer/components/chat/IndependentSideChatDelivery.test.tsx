@@ -71,6 +71,38 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it("refreshes the accepted title without switching the active sidechat", async () => {
+		let label = "Side Chat";
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [
+				{ id: "other", sessionId: "session", state: "ready", label: "Other topic" },
+				{ id: "side", sessionId: "session", state: "ready", label },
+			] } };
+			return originalGet(path, ...args);
+		});
+		const hook = await beginSend("Explain this code");
+		expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe("Side Chat");
+		act(() => hook.result.current.show("other"));
+		label = "Explain this code";
+		await act(async () => { accept({}); await hook.sending; });
+		await waitFor(() => expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe(label));
+		expect(hook.result.current.activeId).toBe("other");
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it("does not fail an accepted send when refreshing its title fails", async () => {
+		const hook = await beginSend();
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) throw new Error("List unavailable");
+			return originalGet(path, ...args);
+		});
+		await act(async () => { accept({}); await hook.sending; });
+		expect(hook.result.current.error).toBeUndefined();
+		expect(post).toHaveBeenCalledOnce();
+	});
+
 	it("keeps existing sides accessible while creation is unsupported", async () => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, undefined, false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));

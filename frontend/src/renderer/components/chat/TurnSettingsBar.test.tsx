@@ -99,10 +99,12 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			</div>,
 		);
 		const open = async () => {
-			await user.click(screen.getByRole("button", {
+			const trigger = screen.getByRole("button", {
 				name: path === "ACP standalone" ? "Model" : "Model and reasoning effort for the next turn",
-			}));
-			if (path !== "ACP standalone") await user.keyboard("{ArrowDown}{ArrowRight}");
+			});
+			const alreadyOpen = trigger.getAttribute("aria-expanded") === "true";
+			if (!alreadyOpen) await user.click(trigger);
+			if (path !== "ACP standalone") await user.keyboard(alreadyOpen ? "{ArrowRight}" : "{ArrowDown}{ArrowRight}");
 		};
 		return { user, onChange, onComposerClick, open };
 	}
@@ -137,6 +139,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 			expect(onChange).toHaveBeenCalledWith("model", { value: "provider-1/model-99" });
 		}
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(path === "ACP standalone" ? 0 : 1);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -261,6 +264,7 @@ describe.each(["native", "ACP submenu", "ACP standalone"] as const)("%s model se
 		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryAllByRole("menu")).toHaveLength(0);
 		await open();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
@@ -646,7 +650,8 @@ describe("ACP session config options", () => {
 			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
 				.querySelector(".lucide-chevron-down"),
 		).toBeNull();
-		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).toBeNull();
+		// The permission button reads as a select: value first, caret second.
+		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).not.toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Default")).not.toBeInTheDocument();

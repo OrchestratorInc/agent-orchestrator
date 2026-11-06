@@ -12,6 +12,11 @@ for (const [locale, catalog] of Object.entries(appCatalogs)) {
 	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
 }
 import { appShortcutBus } from "./app-shortcut-bus";
+import { resetAgentLoginLifecycle } from "../lib/agent-login-lifecycle";
+
+// Login lifecycle state is module-wide; a retained disposal must not leak into
+// the next test.
+beforeEach(() => resetAgentLoginLifecycle());
 
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
@@ -139,6 +144,7 @@ if (typeof window !== "undefined") {
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
@@ -218,8 +224,10 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
+			pathAction: async () => undefined,
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },

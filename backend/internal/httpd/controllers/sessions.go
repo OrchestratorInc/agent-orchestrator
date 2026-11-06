@@ -284,10 +284,11 @@ func (c *SessionsController) Register(r chi.Router) {
 }
 
 // RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree notifications remain active only while a client is
-// actually viewing that session's files.
+// middleware. Worktree and artifact notifications remain active only while a
+// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
+	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
 }
 
 func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
@@ -1584,8 +1585,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 //   - An explicit workspace-local path (e.g. `index.html`, `./dist/index.html`)
 //     is served through the preview/files route so local files load.
 //   - Absolute paths and file: URLs are accepted only when their fully resolved
-//     target remains inside the fully resolved session workspace. They use the
-//     workspace-confined preview origin rather than an automatable file: URL.
+//     target remains inside the fully resolved session workspace or artifact
+//     directory. They use that root's confined preview origin rather than an
+//     automatable file: URL.
 //   - External http(s) URLs and host:port dev servers are kept verbatim.
 //
 // Every call bumps the session's preview revision, so re-running `ao preview`
@@ -1622,7 +1624,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 			}
 		} else if existing := strings.TrimSpace(sess.Metadata.PreviewURL); existing != "" {
 			var resolveErr error
-			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, existing, false)
+			previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, existing, false)
 			if resolveErr != nil {
 				writePreviewResolveError(w, r, resolveErr)
 				return
@@ -1633,7 +1635,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		var resolveErr error
-		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, previewURL, in.RequireWorkspaceFile)
+		previewURL, resolveErr = resolvePreviewTarget(r, sessionID(r), sess.Metadata.WorkspacePath, sess.Metadata.ArtifactDir, previewURL, in.RequireWorkspaceFile)
 		if resolveErr != nil {
 			writePreviewResolveError(w, r, resolveErr)
 			return
@@ -2802,16 +2804,16 @@ func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, ra
 	return resolved, true, err
 }
 
-func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, raw string, requireWorkspaceFile bool) (string, error) {
+func resolvePreviewTarget(r *http.Request, id domain.SessionID, workspacePath, artifactDir, raw string, requireWorkspaceFile bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if filePath, isFileURL, err := previewFileURLPath(raw); isFileURL {
 		if err != nil {
 			return "", err
 		}
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, filePath)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, filePath)
 	}
 	if isAbsolutePreviewPath(raw) {
-		return workspaceAbsolutePreviewURL(r, id, workspacePath, raw)
+		return absolutePreviewURL(r, id, workspacePath, artifactDir, raw)
 	}
 	if !hasURLScheme(raw) && containsParentPathSegment(raw) {
 		return "", errPreviewFileOutsideWorkspace
@@ -2865,20 +2867,16 @@ func previewFileURLPath(raw string) (string, bool, error) {
 	return filePath, true, nil
 }
 
-func workspaceAbsolutePreviewURL(
+// absolutePreviewURL opens an absolute file path only when its fully resolved
+// target is a file inside the fully resolved session workspace or session
+// artifact directory. Each root keeps its own isolated preview origin.
+func absolutePreviewURL(
 	r *http.Request,
 	id domain.SessionID,
 	workspacePath,
+	artifactDir,
 	filePath string,
 ) (string, error) {
-	workspaceAbs, err := filepath.Abs(workspacePath)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
-	workspaceResolved, err := filepath.EvalSymlinks(workspaceAbs)
-	if err != nil {
-		return "", errPreviewFileNotFound
-	}
 	fileAbs, err := filepath.Abs(filePath)
 	if err != nil {
 		return "", errPreviewFileNotFound
@@ -2887,20 +2885,50 @@ func workspaceAbsolutePreviewURL(
 	if err != nil {
 		return "", errPreviewFileNotFound
 	}
-	rel, err := filepath.Rel(workspaceResolved, fileResolved)
+	if root, rel, ok := resolvedRootRelative(workspacePath, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewFileURL(r, id, entry.Path)
+	}
+	// Deliverables live in the artifact directory, outside the workspace, and
+	// agents open them by their absolute path.
+	if root, rel, ok := resolvedRootRelative(artifactDir, fileResolved); ok {
+		entry, found := previewutil.EntryAtPath(root, rel)
+		if !found {
+			return "", errPreviewFileNotFound
+		}
+		return previewutil.ArtifactFileURL("http://"+r.Host, id, entry.Path)
+	}
+	return "", errPreviewFileOutsideWorkspace
+}
+
+// resolvedRootRelative returns root with its symlinks resolved and target's
+// slash path below it. It reports false for an empty or missing root and for a
+// target that is root itself or outside it.
+func resolvedRootRelative(root, target string) (string, string, bool) {
+	if root == "" {
+		return "", "", false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", false
+	}
+	rootResolved, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(rootResolved, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errPreviewFileOutsideWorkspace
+		return "", "", false
 	}
-	entry, ok := previewutil.EntryAtPath(workspaceResolved, filepath.ToSlash(rel))
-	if !ok {
-		return "", errPreviewFileNotFound
-	}
-	return previewFileURL(r, id, entry.Path)
+	return rootResolved, filepath.ToSlash(rel), true
 }
 
 func writePreviewResolveError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errPreviewFileOutsideWorkspace) {
-		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace", nil)
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "PREVIEW_FILE_OUTSIDE_WORKSPACE", "Preview files must stay inside the session workspace or artifact directory", nil)
 		return
 	}
 	if errors.Is(err, errPreviewFileNotFound) {

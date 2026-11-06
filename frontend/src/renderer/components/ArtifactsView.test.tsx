@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 	capture: vi.fn(),
 	deleteCloudArtifact: vi.fn(),
 	refreshCloudAccess: vi.fn(),
+	artifactFileChanges: vi.fn(),
 	hideShellTopbar: true,
 }));
 
@@ -66,6 +67,7 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, path, rawUrl, readOnly }: { cloud?: boolean; path: string; rawUrl?: string; readOnly?: boolean }) => <div data-testid="artifact-file-preview" data-cloud={cloud} data-path={path} data-raw-url={rawUrl} data-read-only={readOnly} />,
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: mocks.artifactFileChanges }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
@@ -140,13 +142,17 @@ const withoutArtifacts: WorkspaceSummary[] = [
 
 function renderView() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const tree = () => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
 				<ArtifactsView />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const view = render(tree());
+	/** Renders again, as a workspace refresh does. */
+	const refresh = () => view.rerender(tree());
+	return { ...view, refresh };
 }
 
 describe("ArtifactsView", () => {
@@ -172,6 +178,7 @@ describe("ArtifactsView", () => {
 		mocks.get.mockReset();
 		mocks.capture.mockReset();
 		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
+		mocks.artifactFileChanges.mockReset();
 		useUiStore.setState({ settingsModal: null });
 		useUiStore.getState().clearGlobalToast();
 	});
@@ -516,6 +523,43 @@ describe("ArtifactsView", () => {
 			path: "artifacts-user-flow.html",
 			source: "artifact",
 		});
+	});
+
+	it("reloads an open local page when its agent rewrites it", async () => {
+		const user = userEvent.setup();
+		const page = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		page.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		page.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		vi.stubGlobal("fetch", vi.fn(async () => new Response("<h1>Design review</h1>")));
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [page] }];
+		const { refresh } = renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "AO" })).getByRole("button", { name: /^page\.html/ }));
+		const dialog = screen.getByRole("dialog", { name: "page.html" });
+		const opened = dialog.querySelector("iframe");
+		expect(opened).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "ao-html", cloud: undefined }, true);
+
+		const rewritten = structuredClone(page);
+		rewritten.artifactFiles![0].updatedAt = "2026-10-11T10:05:00Z";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [rewritten] }];
+		refresh();
+
+		const reloaded = screen.getByRole("dialog", { name: "page.html" }).querySelector("iframe");
+		expect(reloaded).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(reloaded).not.toBe(opened);
+	});
+
+	it("follows a cloud preview's changes through its cloud session", async () => {
+		const user = userEvent.setup();
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
+		mocks.workspaces = [{ id: "cloud", name: "Cloud", path: "", kind: CLOUD_PROJECT_KIND, sessions: [cloud] }];
+		renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "Cloud" })).getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByRole("dialog", { name: "notes.md" })).toBeInTheDocument();
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "cloud-1", cloud: { orgId: "org-1" } }, true);
 	});
 
 	it("opens a Scratchpad artifact on the standalone session route", async () => {

@@ -925,6 +925,18 @@ describe("browser shortcut routing", () => {
 		expect(webContents.close).toHaveBeenCalledTimes(2);
 	});
 
+	it("reports a visible panel only while a page is on screen", async () => {
+		const { emit, host, invoke } = setupHost();
+		const state = await invoke("browser:ensure", "sess-1");
+		expect(host.hasVisiblePanel()).toBe(false);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		expect(host.hasVisiblePanel()).toBe(true);
+
+		emit("browser:setBounds", 1, { viewId: state.viewId, revision: 2, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: false });
+		expect(host.hasVisiblePanel()).toBe(false);
+	});
+
 	it("keeps browser shortcuts targeted after a blank-tab hide clears native focus", async () => {
 		const { emit, emitBeforeInput, emitShellBeforeInput, host, invoke, send, shellSend } = setupHost();
 		const state = await invoke("browser:ensure", "sess-1");
@@ -1480,13 +1492,17 @@ function setupTabHost(
 }
 
 function fakeBrowserProfileStore(
-	profile: BrowserProfile,
+	profile: BrowserProfile | BrowserProfile[],
 	bindings: Record<string, string | null>,
 	defaultProfileId: string | null = null,
 ): BrowserProfileStore {
+	const profiles = Array.isArray(profile) ? profile : [profile];
 	return {
-		profiles: [profile],
-		getProfile: (profileId: string) => (profileId === profile.id ? { ...profile } : undefined),
+		profiles,
+		getProfile: (profileId: string) => {
+			const found = profiles.find((candidate) => candidate.id === profileId);
+			return found ? { ...found } : undefined;
+		},
 		getSessionProfileId: (sessionId: string) => bindings[sessionId],
 		getDefaultProfileId: () => defaultProfileId,
 		// A binding of `null` is an explicit, durable choice of Temporary and
@@ -2711,7 +2727,8 @@ describe("browser profile partitions and replacement", () => {
 	});
 
 	it("falls back to the global default profile for a session with no binding of its own", async () => {
-		const store = fakeBrowserProfileStore(profile, {}, profile.id);
+		const firstProfile = { ...profile, id: "33333333-3333-4333-8333-333333333333", name: "Personal" };
+		const store = fakeBrowserProfileStore([firstProfile, profile], {}, profile.id);
 		const { host, invoke } = setupTabHost(store);
 		const ensured = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
 

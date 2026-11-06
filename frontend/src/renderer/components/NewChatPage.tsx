@@ -24,6 +24,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
+import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
@@ -355,7 +356,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => void task.refreshModels().catch(() => undefined)}>
+			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
 				{t("newTask.modelNotice.retry")}
 			</Button>
 		</div>
@@ -364,16 +365,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			{/* No session yet: the shared session frame with no tabs holds the header's
-			    place and surface, so nothing moves or changes colour at handoff. */}
-			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+			    place and surface, so nothing moves or changes colour at handoff. The
+			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
+			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
+			{/* The placeholder bar above is its drag region; without it (bar-less panel) this keeps the top edge draggable. */}
+			<BareTopbarDragStrip />
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above).
 				key={projectId}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				// The pending launch below tracks its own unanswered send.
+				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.
 				sessionTitle={echo ? echo.text.trim().slice(0, 100) : t("command.newTask")}
 				sessionRole="worker"
@@ -630,14 +636,16 @@ function MobileConnected() {
 	const live = data?.filter((device) => device.live) ?? [];
 	if (live.length === 0) return null;
 	return (
-		<button
+		<Button
 			type="button"
-			className={cn(TRIGGER_CLASS, "ml-auto inline-flex w-fit shrink-0 items-center gap-1.5")}
+			variant="quiet"
+			size="sm"
+			className="ml-auto w-fit"
 			title={live.map((device) => device.deviceName).filter(Boolean).join(", ") || undefined}
 			onClick={() => openGlobalSettings("mobile")}
 		>
 			<Smartphone aria-hidden="true" className="size-3.5 shrink-0" />
 			{t("newTask.phoneConnected", { count: live.length })}
-		</button>
+		</Button>
 	);
 }

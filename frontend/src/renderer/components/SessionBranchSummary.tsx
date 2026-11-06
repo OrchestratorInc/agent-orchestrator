@@ -24,6 +24,7 @@ import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode"
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const PENDING_MAX_MS = 10 * 60_000;
@@ -217,10 +218,9 @@ function GitStatusRow({
 	onClick: () => void;
 }) {
 	return (
-		<button
-			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+		<Pressable
+			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-sm transition-colors hover:bg-interactive-hover"
 			onClick={onClick}
-			type="button"
 		>
 			{icon}
 			<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
@@ -234,7 +234,7 @@ function GitStatusRow({
 				<span className="text-error">−{deletions}</span>
 			</span>
 			<ChevronRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />
-		</button>
+		</Pressable>
 	);
 }
 
