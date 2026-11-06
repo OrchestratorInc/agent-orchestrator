@@ -20,6 +20,11 @@ func paneServer(t *testing.T, status int, respBody string) (*httptest.Server, *p
 	t.Helper()
 	capture := &paneCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The CLI also reports its own telemetry; that is not a daemon API call.
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		capture.method, capture.path, capture.body = r.Method, r.URL.Path, string(body)
 		w.Header().Set("Content-Type", "application/json")
@@ -120,6 +125,10 @@ func paneTerminalServer(t *testing.T) (*httptest.Server, *[]string) {
 	var calls []string
 	screen := "$ "
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+string(body))
 		w.Header().Set("Content-Type", "application/json")

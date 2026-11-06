@@ -23,7 +23,7 @@ ao pane split terminal --side bottom       # ... or below it
 ao pane split terminal --run "ls -la"      # new terminal on the right, run a command in it, print its output
 ao pane run <terminal-key> "npm test"      # run a command in an existing terminal tab, print its output
 ao pane read <terminal-key>                # print what a terminal tab shows now
-ao pane send <terminal-key> y --no-enter   # type without Enter (prompt answers, TUI keys)
+ao pane send --no-enter <terminal-key> y   # type without Enter (prompt answers, TUI keys)
 ao pane interrupt <terminal-key>           # Ctrl-C
 ao pane split file:src/app.ts --beside session
 ao pane split <tab-key> --beside <tab-key> --side left
@@ -47,6 +47,9 @@ inside this session's workspace.
 
 ## Running commands in a terminal tab
 
+- For `run` and `send`, everything after the tab key is typed as is, dashes
+  included (`ao pane run <key> ls -la`). Put flags such as `--timeout`,
+  `--lines` or `--no-enter` before the tab key.
 - `run` and `split --run` type the command and press Enter, wait until the
   screen stops changing (`--timeout`, 15 s by default), then print the last
   `--lines` (60) lines. A long-running command (a dev server, a watcher) keeps
