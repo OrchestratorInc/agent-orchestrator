@@ -319,10 +319,13 @@ describe("useBrowserView", () => {
 		bridge.setBounds.mockClear();
 		rerender({ sessionId: "sess-1" });
 
-		// Same frame: the panel still shows the live page, and the native swap
+		// The panel keeps showing the live page, and the first frame's native swap
 		// shows the destination before hiding the departing view.
 		expect(result.current.viewId).toBe("42:sess-1");
 		expect(result.current.navState.url).toBe("http://localhost:3000/");
+		await waitFor(() =>
+			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true })),
+		);
 		const calls = bridge.setBounds.mock.calls.map(([input]) => [input.viewId, input.visible]);
 		const shown = calls.findIndex(([viewId, visible]) => viewId === "42:sess-1" && visible);
 		const hidden = calls.findIndex(([viewId, visible]) => viewId === "42:sess-2" && !visible);

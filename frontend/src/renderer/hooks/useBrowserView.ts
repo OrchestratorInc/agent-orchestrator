@@ -596,7 +596,9 @@ export function useBrowserView({
 				}
 				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
 					window.ao?.browser.destroy(id);
-				} else {
+				} else if (viewIdRef.current === id) {
+					// Otherwise a session switch already took over this view and
+					// hides it once the destination's view is shown.
 					sendHiddenBounds(id);
 				}
 			}
@@ -611,8 +613,11 @@ export function useBrowserView({
 		sessionId,
 	]);
 
-	// Swap native views before the destination session first paints: show its
+	// Swap native views as the destination session first paints: show its
 	// cached view, then hide the departing one, so no frame shows neither.
+	// Measure in that first frame, not at commit: the commit's layout is not
+	// final (the address bar renders inline until its top-bar host is known),
+	// and measuring there placed the page 36 px low for ~100 ms.
 	const shownSessionRef = useRef(sessionId);
 	useLayoutEffect(() => {
 		if (shownSessionRef.current === sessionId) return;
@@ -622,8 +627,17 @@ export function useBrowserView({
 		const previous = viewIdRef.current;
 		viewIdRef.current = cached.viewId;
 		activeRef.current = active;
-		measureAndSend();
-		if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+		let frame: number | null = window.requestAnimationFrame(() => {
+			frame = null;
+			if (viewIdRef.current !== cached.viewId) return;
+			measureAndSend();
+			if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+		});
+		return () => {
+			if (frame === null) return;
+			window.cancelAnimationFrame(frame);
+			if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+		};
 	}, [active, hasNativeBrowser, measureAndSend, sendHiddenBounds, sessionId, terminated]);
 
 	useEffect(() => {
