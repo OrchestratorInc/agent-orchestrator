@@ -59,6 +59,7 @@ type Service struct {
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
+	lastOrg        map[string]string
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
 }
@@ -103,7 +104,7 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{},
+		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]string{},
 	}
 }
 
@@ -132,6 +133,7 @@ type AccountView struct {
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
 	SameLoginAs string
+	OrgID       string
 }
 
 // List returns every account, the computer's own first per provider. refresh
@@ -153,10 +155,14 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		def, _ := s.defaultID(ctx, account.Provider)
 		s.mu.Lock()
 		r := s.readings[account.ID]
+		lastOrg := s.lastOrg[account.ID]
 		s.mu.Unlock()
-		view := AccountView{Account: account, Default: def == account.ID}
+		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			if r.identity.SignedIn && r.identity.OrgID != "" {
+				view.OrgID = r.identity.OrgID
+			}
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -176,12 +182,16 @@ func markSameLogin(views []AccountView) {
 			continue
 		}
 		for _, saved := range views {
-			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) {
+			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) && sameOrg(saved.OrgID, device.OrgID) {
 				device.SameLoginAs = saved.Account.ID
 				break
 			}
 		}
 	}
+}
+
+func sameOrg(a, b string) bool {
+	return a == "" || b == "" || a == b
 }
 
 func (s *Service) needsReading(id string, refresh bool) bool {
@@ -245,6 +255,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
+	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
+		s.lastOrg[account.ID] = r.identity.OrgID
+	}
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
@@ -603,7 +616,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 			continue
 		}
 		heldBy := view.SignedIn || (!view.Account.Device() && view.Account.Email != "")
-		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) {
+		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
@@ -776,6 +789,7 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	s.removeFolder(account.Home)
 	s.mu.Lock()
 	delete(s.readings, accountID)
+	delete(s.lastOrg, accountID)
 	s.mu.Unlock()
 	s.notifyDefaultChanged(account.Provider)
 	return nil
