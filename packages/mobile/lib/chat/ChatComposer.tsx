@@ -795,7 +795,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// the accent to send or dictate, red while the mic is open, and the stop
 	// control's quiet fill while it stops the turn.
 	roundTarget: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
-	roundDisc: { width: COMPOSER_DISC, height: COMPOSER_DISC, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+	// Unclipped: the faces swap in place, and Android skips drawing a clipping
+	// view's child that resized in the same update as the view's own fill, which
+	// left the dictate glyph blank after the stop glyph when a turn ended.
+	roundDisc: { width: COMPOSER_DISC, height: COMPOSER_DISC, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
 	roundAccent: { backgroundColor: t.accent },
 	roundStop: { backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
 	dictating: { backgroundColor: t.red },
