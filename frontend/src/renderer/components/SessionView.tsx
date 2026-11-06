@@ -1689,20 +1689,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
+	// ⌘D's action, set further down; tab menus reuse it.
+	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
 	// Tab menus split their tab beside the one on screen, as dropping it on
-	// that pane's edge does. Only while split panes are on.
+	// that pane's edge does; the tab on screen splits off a new terminal, as
+	// ⌘D does. Only while split panes are on.
 	const splitTabMenu = useMemo(() => {
 		if (!splitPanes) return undefined;
 		return (key: string): TabSplitActions => {
 			const anchor = selectedTabKey;
-			if (key === anchor || !splittableKeys.has(anchor) || !splittableKeys.has(key)) return {};
+			if (key === anchor) {
+				if (!session || isOrchestrator) return {};
+				return {
+					right: () => splitNewTerminalRef.current("right"),
+					down: () => splitNewTerminalRef.current("bottom"),
+					newTerminal: true,
+				};
+			}
+			if (!splittableKeys.has(anchor) || !splittableKeys.has(key)) return {};
 			const split = (side: "right" | "bottom") => () => {
 				updateGroups((current) => splitBeside(current, anchor, key, side));
 				selectTab(key);
 			};
 			return { right: split("right"), down: split("bottom") };
 		};
-	}, [selectTab, selectedTabKey, splitPanes, splittableKeys, updateGroups]);
+	}, [isOrchestrator, selectTab, selectedTabKey, session, splitPanes, splittableKeys, updateGroups]);
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
 	// Clicking into a pane focuses its member, as clicking its name does. This
 	// listens natively: terminals are portaled from the shared cache, so React
@@ -1915,7 +1926,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
 	// below it, splitting the tab on screen if it is not split yet.
-	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
 	splitNewTerminalRef.current = (side) => {
 		if (!session || isOrchestrator || !splitPanes) return;
 		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;

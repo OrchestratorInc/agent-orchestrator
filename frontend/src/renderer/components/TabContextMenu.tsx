@@ -6,8 +6,12 @@ import { isMacPlatform } from "../lib/platform";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
 import { useShortcutKeys } from "./ui/tooltip";
 
-/** Split this tab beside the one on screen; an absent action shows disabled. */
-export type TabSplitActions = { right?: () => void; down?: () => void };
+/**
+ * Split actions for one tab; an absent action shows disabled. Another tab
+ * splits beside the one on screen; the tab on screen splits off a new
+ * terminal (`newTerminal`), as ⌘D and ⌘⇧D do.
+ */
+export type TabSplitActions = { right?: () => void; down?: () => void; newTerminal?: boolean };
 
 /**
  * Provided only while split panes are on (a Developer Mode preview); tab menus
@@ -112,10 +116,12 @@ function TabSplitItems({ actions }: { actions: TabSplitActions }) {
 			<ContextMenuItem disabled={!actions.right} onSelect={actions.right}>
 				<Columns2 aria-hidden="true" />
 				{t("tabMenu.splitRight")}
+				{actions.newTerminal ? <TabMenuShortcut id="split-shell-terminal" /> : null}
 			</ContextMenuItem>
 			<ContextMenuItem disabled={!actions.down} onSelect={actions.down}>
 				<Rows2 aria-hidden="true" />
 				{t("tabMenu.splitDown")}
+				{actions.newTerminal ? <TabMenuShortcut id="split-shell-terminal-down" /> : null}
 			</ContextMenuItem>
 			<ContextMenuSeparator />
 		</>
