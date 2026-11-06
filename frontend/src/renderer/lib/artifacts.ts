@@ -23,6 +23,8 @@ export type ArtifactRow = {
 	cloud?: WorkspaceSession["cloud"];
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
+	/** The session's workspace, Scratchpad included: a share link's document is named by it. */
+	workspaceId: string;
 };
 
 /**
@@ -92,6 +94,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					sessionTitle: session.title,
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
+					workspaceId: session.workspaceId,
 				})),
 			)
 			.sort(newestFirst);

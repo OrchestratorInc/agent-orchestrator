@@ -22,6 +22,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
+import { ShareArtifactRowButton } from "./ShareArtifactPopover";
 import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
@@ -291,6 +292,8 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	);
 }
 
+const CARD_ACTION_CLASS = "bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 data-[state=open]:opacity-100";
+
 function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
@@ -298,6 +301,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
+	const actionClassName = cn(CARD_ACTION_CLASS, view === "list" ? "group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100" : "group-hover:opacity-100 group-focus-within:opacity-100");
 
 	const open = () => {
 		onPreview(row, projectName);
@@ -323,6 +327,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						</span>
 					</Pressable>
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
+						<ShareArtifactRowButton className={actionClassName} iconOnly row={row} />
 						<ArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
@@ -330,7 +335,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							onOpenInSession={openInSession}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
-							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
+							className={actionClassName}
 						/>
 					</div>
 					<time dateTime={row.updatedAt} className="pointer-events-none relative z-[1] w-20 shrink-0 text-right text-xs tabular-nums text-passive">
@@ -348,15 +353,18 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
 			actions={
-				<ArtifactActionsMenu
-					artifact={row}
-					session={{ id: row.sessionId, cloud: row.cloud }}
-					iconOnly
-					onOpenInSession={openInSession}
-					pinned={pinned}
-					onTogglePin={() => togglePinnedArtifact(id)}
-					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
-				/>
+				<>
+					<ShareArtifactRowButton className={actionClassName} iconOnly row={row} />
+					<ArtifactActionsMenu
+						artifact={row}
+						session={{ id: row.sessionId, cloud: row.cloud }}
+						iconOnly
+						onOpenInSession={openInSession}
+						pinned={pinned}
+						onTogglePin={() => togglePinnedArtifact(id)}
+						className={actionClassName}
+					/>
+				</>
 			}
 		/>
 	);

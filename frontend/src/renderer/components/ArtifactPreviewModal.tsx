@@ -6,7 +6,6 @@ import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -14,7 +13,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactRowButton } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -35,9 +34,6 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
-	// Only the person who started a cloud session shares its files.
-	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
-	const cloudOwner = Boolean(cloudUserId) && artifact?.cloud?.createdByUserId === cloudUserId;
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -62,18 +58,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
-							{/* A local file's project names its document: without one, sharing
-							    it here would make a second link for the same file. Only the
-							    person who started a cloud session publishes its files. */}
-							{(artifact.cloud && (artifact.cloud.shared || !cloudOwner)) || (!artifact.cloud && !artifact.projectId) ? null : (
-								<ShareArtifactButton
-									className="transition-none"
-									file={artifact.cloud
-										? { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" }
-										: { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
-									name={artifact.name}
-								/>
-							)}
+							<ShareArtifactRowButton className="transition-none" row={artifact} />
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}

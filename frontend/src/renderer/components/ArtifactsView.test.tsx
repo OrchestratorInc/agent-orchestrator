@@ -317,6 +317,36 @@ describe("ArtifactsView", () => {
 		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
 	});
 
+	it("offers Share on a card, without opening the preview", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const card = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		const share = await card.findByRole("button", { name: "Share: pricing.md" });
+		expect(share).not.toHaveTextContent("Share");
+		await user.click(share);
+		expect(await screen.findByText("Sign in to share")).toBeInTheDocument();
+		// The hover-only button stays visible while its popover is open.
+		expect(share).toHaveAttribute("data-state", "open");
+		expect(screen.queryByRole("dialog", { name: "pricing.md" })).toBeNull();
+	});
+
+	it("offers Share on a row in list view", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "List view" }));
+		expect(await within(screen.getByRole("region", { name: "agent-orchestrator" })).findByRole("button", { name: "Share: pricing.md" })).toBeInTheDocument();
+	});
+
+	it("offers no Share on the card of another member's cloud session file", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", kind: "markdown", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await screen.findByRole("button", { name: /^notes\.md/ });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("button", { name: "Share: notes.md" })).toBeNull();
+	});
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();
