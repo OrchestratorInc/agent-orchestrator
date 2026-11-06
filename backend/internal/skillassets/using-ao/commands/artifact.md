@@ -34,4 +34,7 @@ of the directory. If one of those is a deliverable, register it too.
 
 `ao report --artifact` does not register a file. Neither does keeping a render
 with `ao render --artifact` or `artifact: true` in `html_render`: run
-`ao artifact add` on the path it returns. A session can register up to 100 paths.
+`ao artifact add` on the path it returns.
+
+A session can register up to 100 paths. Paths whose files are gone make room when
+the list is full.

@@ -70,17 +70,46 @@ func TestRegisterArtifactsRefusesPathsOutsideTheDirectory(t *testing.T) {
 }
 
 func TestRegisterArtifactsPastTheLimit(t *testing.T) {
-	svc, st, _ := registrationFixture(t, "brand.html")
-	rec := st.sessions["mer-1"]
+	files := []string{"brand.html"}
 	for i := range domain.MaxRegisteredArtifactPaths {
-		rec.RegisteredArtifactPaths = append(rec.RegisteredArtifactPaths, fmt.Sprintf("f%d.md", i))
+		files = append(files, fmt.Sprintf("f%d.md", i))
 	}
+	svc, st, _ := registrationFixture(t, files...)
+	rec := st.sessions["mer-1"]
+	rec.RegisteredArtifactPaths = slices.Clone(files[1:])
 	st.sessions["mer-1"] = rec
 
 	_, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{"brand.html"})
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "ARTIFACT_REGISTRATION_LIMIT" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRegisterArtifactsFreesSlotsHeldByRenamedFiles(t *testing.T) {
+	svc, st, _ := registrationFixture(t, "keep.html", "brand-v2.html")
+	rec := st.sessions["mer-1"]
+	// keep.html is the oldest, so a careless drop would take it first.
+	rec.RegisteredArtifactPaths = []string{"keep.html"}
+	for i := 1; i < domain.MaxRegisteredArtifactPaths; i++ {
+		rec.RegisteredArtifactPaths = append(rec.RegisteredArtifactPaths, fmt.Sprintf("renamed-%d.html", i))
+	}
+	st.sessions["mer-1"] = rec
+
+	if _, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{"brand-v2.html"}); err != nil {
+		t.Fatalf("a list full of dead paths refused a new path: %v", err)
+	}
+	paths := st.sessions["mer-1"].RegisteredArtifactPaths
+	if len(paths) != domain.MaxRegisteredArtifactPaths {
+		t.Fatalf("len = %d, want %d", len(paths), domain.MaxRegisteredArtifactPaths)
+	}
+	for _, want := range []string{"keep.html", "brand-v2.html", "renamed-2.html"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("%s was dropped", want)
+		}
+	}
+	if slices.Contains(paths, "renamed-1.html") {
+		t.Error("the oldest dead path was kept")
 	}
 }
 
