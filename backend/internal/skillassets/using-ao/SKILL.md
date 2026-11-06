@@ -23,6 +23,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
 | `artifact` | Register files in the artifact directory as deliverables | Making a finished file appear as one of the session's artifacts | [commands/artifact.md](commands/artifact.md) |
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
+| `pane` | Show or split this session's tabs in the desktop window (Developer Mode preview) | Putting a terminal, file or reviewer beside the chat when the user asks for a split | [commands/pane.md](commands/pane.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
 | `browser` (remote host) | Drive the host's shared remote Chromium, used when `AO_AGENT_BROWSER_URL` is set | Same browser verification on a self-hosted remote host; one browser is shared across sessions | [commands/browser-remote.md](commands/browser-remote.md) |

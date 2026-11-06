@@ -823,6 +823,7 @@ func operations() []operation {
 	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
@@ -1069,6 +1070,38 @@ func computerUseOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+func paneOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes", id: "getSessionPanes", tag: "sessions",
+			summary:    "Read the split-pane layout the desktop window shows for a session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes", id: "commandSessionPanes", tag: "sessions",
+			summary:    "Ask the desktop window to split, unsplit or focus a session's tabs",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.PaneCommandRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+				{http.StatusGatewayTimeout, envelope.APIError{}},
 			},
 		},
 	}
