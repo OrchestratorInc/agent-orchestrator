@@ -22,7 +22,8 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
-import { readStoredSplitGroups, useSplitPanesEnabled, writeStoredSplitGroups } from "../lib/split-panes";
+import { useSplitPanesEnabled } from "../lib/split-panes";
+import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
@@ -34,17 +35,19 @@ import {
 	groupContaining,
 	groupTabKey,
 	halfOf,
-	insertBeside,
 	layoutBoxes,
 	layoutCss,
 	leafKeys,
+	newGroupId,
+	placeInGroup,
 	reconcileGroups,
-	removeLeaf,
 	SESSION_TAB_KEY,
 	setRatioAt,
+	splitBeside,
 	toClientRect,
+	ungroupById,
+	withoutTab,
 	type ClientRect,
-	type SplitNode,
 	type TabGroup,
 } from "../lib/pane-split";
 import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
@@ -982,11 +985,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
 	// pane, so terminals, chats and editors survive each move.
-	// Layouts are remembered across reloads; members that did not come back
-	// (a file tab, a closed shell) drop out when the tabs are reconciled.
-	const [groupsBySession, setGroupsBySession] = useState<Record<string, TabGroup[]>>(readStoredSplitGroups);
-	useEffect(() => writeStoredSplitGroups(groupsBySession), [groupsBySession]);
-	const storedGroups = groupsBySession[uiSessionId] ?? EMPTY_TAB_GROUPS;
+	// Layouts live in the split panes store and are remembered across reloads;
+	// members that did not come back (a file tab, a closed shell) drop out
+	// when the tabs are reconciled.
+	const storedGroups = useSessionSplitGroups(uiSessionId);
 	// A Cloud session shows one file view at a time, so its files are never split.
 	const splittableKeys = useMemo(
 		() => new Set([SESSION_TAB_KEY, ...resolvedAuxiliaryTabOrder.filter((key) => !(session?.cloud && key.startsWith("file:")))]),
@@ -1015,15 +1017,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return reconcileGroups(storedGroups, available, adoptedShellHandle);
 	}, [shellListKnown, splitPanes, splittableKeys, storedGroups]);
 	const updateGroups = useCallback(
-		(update: (current: TabGroup[]) => TabGroup[]) => {
-			setGroupsBySession((current) => {
-				const previous = current[uiSessionId] ?? EMPTY_TAB_GROUPS;
-				const next = update(previous);
-				if (next === previous) return current;
-				const { [uiSessionId]: _removed, ...rest } = current;
-				return next.length ? { ...rest, [uiSessionId]: next } : rest;
-			});
-		},
+		(update: (current: TabGroup[]) => TabGroup[]) => useSplitPanesStore.getState().updateGroups(uiSessionId, update),
 		[uiSessionId],
 	);
 	// A closed member leaves its group; a group of one becomes a plain tab.
@@ -1861,7 +1855,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					active={group === shownGroup}
 					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 					members={leafKeys(group.root).map(groupMember)}
-					onUngroup={() => updateGroups((current) => current.filter((candidate) => candidate.id !== group.id))}
+					onUngroup={() => updateGroups((current) => ungroupById(current, group.id))}
 				/>
 			),
 			onSelect: () => selectTab(groupFocus(group)),
@@ -1892,15 +1886,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
 		if (!shell) return;
 		const key = shell.handleId;
-		updateGroups((current) => {
-			const group = groupContaining(current, anchor);
-			if (group) {
-				return current.map((candidate) =>
-					candidate.id === group.id ? { ...candidate, root: insertBeside(candidate.root, anchor, key, side), focus: key } : candidate,
-				);
-			}
-			return [...current, { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, side), focus: key }];
-		});
+		updateGroups((current) => splitBeside(current, anchor, key, side));
 		setReviewerChatId(null);
 		setFileTabsBySession((current) => ({
 			...current,
@@ -2927,37 +2913,6 @@ type SplitDropState = {
 	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
 };
 
-let groupSequence = 0;
-function newGroupId(): string {
-	groupSequence += 1;
-	return `${Date.now().toString(36)}-${groupSequence}`;
-}
-
-/** The groups with one tab taken out; a group left with one tab dissolves. */
-function withoutTab(groups: TabGroup[], key: string): TabGroup[] {
-	let changed = false;
-	const next = groups.flatMap((group) => {
-		if (!leafKeys(group.root).includes(key)) return [group];
-		changed = true;
-		const root = removeLeaf(group.root, key);
-		return root?.type === "split" ? [{ ...group, root }] : [];
-	});
-	return changed ? next : groups;
-}
-
-/** Rebuilds one group's layout, taking the tab out of wherever it was before. */
-function placeInGroup(
-	groups: TabGroup[],
-	group: TabGroup,
-	key: string,
-	build: (root: SplitNode) => SplitNode,
-): TabGroup[] {
-	const latest = groups.find((candidate) => candidate.id === group.id) ?? group;
-	const others = withoutTab(groups.filter((candidate) => candidate.id !== latest.id), key);
-	const base = removeLeaf(latest.root, key) ?? latest.root;
-	return [...others, { ...latest, root: build(base) }];
-}
-
 /**
  * Where a dragged tab would land. Over the screen: beside the pane under the
  * pointer, on the edge it points at (an ungrouped screen counts as one pane).
@@ -2988,10 +2943,7 @@ function resolveSplitDrop(
 		return {
 			rect: halfOf(rect, edge),
 			commit: () => {
-				state.updateGroups((current) => [
-					...withoutTab(current, key),
-					{ id: newGroupId(), root: insertBeside({ type: "leaf", key: target }, target, key, edge) },
-				]);
+				state.updateGroups((current) => splitBeside(current, target, key, edge));
 				state.selectTab(key);
 			},
 		};
@@ -3005,7 +2957,7 @@ function resolveSplitDrop(
 		return {
 			rect: halfOf(paneRect, edge),
 			commit: () => {
-				state.updateGroups((current) => placeInGroup(current, shown, key, (root) => insertBeside(root, paneKey, key, edge)));
+				state.updateGroups((current) => splitBeside(current, paneKey, key, edge));
 				state.selectTab(key);
 			},
 		};

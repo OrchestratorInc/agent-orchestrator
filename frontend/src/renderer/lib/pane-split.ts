@@ -117,6 +117,60 @@ export function reconcileGroups(
 	return changed ? next : groups;
 }
 
+let groupSequence = 0;
+export function newGroupId(): string {
+	groupSequence += 1;
+	return `${Date.now().toString(36)}-${groupSequence}`;
+}
+
+/** The groups with one tab taken out; a group left with one tab dissolves. */
+export function withoutTab(groups: TabGroup[], key: string): TabGroup[] {
+	let changed = false;
+	const next = groups.flatMap((group) => {
+		if (!leafKeys(group.root).includes(key)) return [group];
+		changed = true;
+		const root = removeLeaf(group.root, key);
+		return root?.type === "split" ? [{ ...group, root }] : [];
+	});
+	return changed ? next : groups;
+}
+
+/** Rebuilds one group's layout, taking the tab out of wherever it was before. */
+export function placeInGroup(
+	groups: TabGroup[],
+	group: TabGroup,
+	key: string,
+	build: (root: SplitNode) => SplitNode,
+): TabGroup[] {
+	const latest = groups.find((candidate) => candidate.id === group.id) ?? group;
+	const others = withoutTab(groups.filter((candidate) => candidate.id !== latest.id), key);
+	const base = removeLeaf(latest.root, key) ?? latest.root;
+	return [...others, { ...latest, root: build(base) }];
+}
+
+/**
+ * Shows `key` on `side` of `anchor`, focused. If the anchor is already in a
+ * group the tab joins that group beside it; otherwise the two form a new
+ * group. The tab leaves any group it was in before. This is the one way a
+ * split is made, whether from a drop, a shortcut or an agent request.
+ */
+export function splitBeside(groups: TabGroup[], anchor: string, key: string, side: SplitSide): TabGroup[] {
+	if (anchor === key) return groups;
+	const group = groupContaining(groups, anchor);
+	if (group) {
+		return placeInGroup(groups, group, key, (root) => insertBeside(root, anchor, key, side)).map((candidate) =>
+			candidate.id === group.id ? { ...candidate, focus: key } : candidate,
+		);
+	}
+	return [...withoutTab(groups, key), { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, side), focus: key }];
+}
+
+/** Every tab of the group becomes a tab of its own again. */
+export function ungroupById(groups: TabGroup[], groupId: string): TabGroup[] {
+	const next = groups.filter((group) => group.id !== groupId);
+	return next.length === groups.length ? groups : next;
+}
+
 export type Box = { x: number; y: number; w: number; h: number };
 export type ClientRect = { left: number; top: number; width: number; height: number };
 

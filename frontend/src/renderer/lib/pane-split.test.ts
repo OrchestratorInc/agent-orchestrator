@@ -12,6 +12,8 @@ import {
 	leafKeys,
 	reconcileGroups,
 	removeLeaf,
+	splitBeside,
+	ungroupById,
 	trimStoredGroups,
 	setRatioAt,
 	type SplitNode,
@@ -146,5 +148,33 @@ describe("stored split layouts", () => {
 		expect(Object.keys(trimmed)).toHaveLength(MAX_STORED_SPLIT_SESSIONS);
 		expect(trimmed["sess-0"]).toBeUndefined();
 		expect(trimmed[`sess-${MAX_STORED_SPLIT_SESSIONS + 4}`]).toBeDefined();
+	});
+});
+
+describe("splitBeside", () => {
+	it("forms a group of the anchor and the tab, focused on the tab", () => {
+		const [group] = splitBeside([], "session", "sh-1", "right");
+		expect(leafKeys(group!.root)).toEqual(["session", "sh-1"]);
+		expect(group!.focus).toBe("sh-1");
+	});
+
+	it("joins the anchor's group beside it and moves the tab out of its old group", () => {
+		let groups = splitBeside([], "session", "sh-1", "right");
+		groups = splitBeside(groups, "file:a", "sh-2", "left");
+		groups = splitBeside(groups, "sh-1", "sh-2", "bottom");
+		expect(groups).toHaveLength(1);
+		expect(leafKeys(groups[0]!.root)).toEqual(["session", "sh-1", "sh-2"]);
+		expect(groups[0]!.focus).toBe("sh-2");
+	});
+
+	it("leaves the layout alone when a tab is split beside itself", () => {
+		const groups = splitBeside([], "session", "sh-1", "right");
+		expect(splitBeside(groups, "sh-1", "sh-1", "left")).toBe(groups);
+	});
+
+	it("ungroups by id", () => {
+		const groups = splitBeside([], "session", "sh-1", "right");
+		expect(ungroupById(groups, groups[0]!.id)).toEqual([]);
+		expect(ungroupById(groups, "missing")).toBe(groups);
 	});
 });
