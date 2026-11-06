@@ -161,6 +161,37 @@ function layoutRect(box: HTMLElement, element: HTMLElement): AppRect | null {
 	return { left, top, width: element.offsetWidth, height: element.offsetHeight };
 }
 
+const DRAWING_EDGE = "linear-gradient(to right, black 93%, rgb(0 0 0 / 0.6) 96.5%, transparent 100%)";
+
+/** Blur steps for DrawingBlur, softest first. Each comes in along a long ramp
+ * overlapping the next, so the blur deepens continuously towards the bottom
+ * edge with no band where a layer starts. */
+const BLUR_STEPS = [1, 2, 4, 8, 16] as const;
+/** The blur only starts this close to the window's bottom edge, so a part of
+ * the drawing that merely sits low (the phone) stays sharp; only what runs
+ * off the edge goes soft. */
+const BLUR_BAND = 96;
+
+/** The drawing goes soft towards the window's bottom edge instead of being
+ * cut: blur only, no fade. */
+function DrawingBlur() {
+	return (
+		<div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0" style={{ height: BLUR_BAND }}>
+			{BLUR_STEPS.map((blur, index) => {
+				const start = (index / BLUR_STEPS.length) * 70;
+				const mask = `linear-gradient(to bottom, transparent ${start}%, black ${start + 30}%)`;
+				return (
+					<div
+						key={blur}
+						className="absolute inset-0"
+						style={{ backdropFilter: `blur(${blur}px)`, WebkitBackdropFilter: `blur(${blur}px)`, maskImage: mask, WebkitMaskImage: mask }}
+					/>
+				);
+			})}
+		</div>
+	);
+}
+
 /** How far the camera may zoom past the fitted window, so text stays crisp. */
 /** How far the camera may zoom past the fitted window: enough to read a menu,
  * not so far that the window stops reading as the app. */
@@ -262,10 +293,22 @@ export function PreviewStage({
 		};
 	}
 	return (
-		<div ref={ref} aria-hidden="true" inert className="pointer-events-none relative min-h-0 flex-1 select-none overflow-hidden">
+		// Not clipped: the drawing runs on past the stage, under the copy and off
+		// the window's edges, like a sheet that keeps going.
+		<div ref={ref} aria-hidden="true" inert className="pointer-events-none relative min-h-0 flex-1 select-none">
 			<div data-opaque={opaque} className="onboarding-preview-stage absolute inset-y-0 left-0" style={{ width: size?.width ?? "100%" }}>
 			{size ? (
-				<motion.div className="absolute inset-0" initial={{ x: 0 }} animate={{ x: windowShift }} transition={transition}>
+				// Its own backdrop root (the no-op filter), so the blur below sees only
+				// the drawing, never the wallpaper behind it. A short soft edge at the
+				// stage's right boundary keeps a zoomed drawing from running under the
+				// copy; the rest of the drawing is never faded.
+				<motion.div
+					className="absolute inset-0"
+					style={{ filter: "blur(0px)", maskImage: DRAWING_EDGE, WebkitMaskImage: DRAWING_EDGE }}
+					initial={{ x: 0 }}
+					animate={{ x: windowShift }}
+					transition={transition}
+				>
 					<motion.div
 						ref={boxRef}
 						data-preview-box=""
@@ -282,6 +325,7 @@ export function PreviewStage({
 						</div>
 						{children}
 					</motion.div>
+					<DrawingBlur />
 				</motion.div>
 			) : null}
 			{size && phone != null ? (
@@ -701,6 +745,13 @@ export type PreviewCard = {
 	branch?: string;
 	/** The worker's open pull request, shown as the card's PR row. */
 	pr?: number;
+	/** The file the agent is in, and its change so far, for the detailed card. */
+	file?: string;
+	diff?: ReadonlyArray<readonly ["+" | "-", string]>;
+	added?: number;
+	removed?: number;
+	/** What the worker is asking you, while it waits on you. */
+	question?: string;
 };
 
 /**

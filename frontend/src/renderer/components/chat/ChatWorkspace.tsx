@@ -1994,7 +1994,14 @@ function ChatWorkspaceContent({
 									artifact={artifactSession}
 									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
-								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
+								{/* The guided tour's last stop, done once the chat has a message (GuidedTour). */}
+								<div
+									ref={composerBoxRef}
+									className="relative z-10"
+									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
+									data-tour="composer"
+									data-tour-sent={conversationEmpty ? undefined : ""}
+								>
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -5824,7 +5831,8 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					// padding inside, so it collapses with the height instead of snapping.
 					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
+					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
 						{prompts.map(({ prompt, chip, icon: Icon }) => (
 							<li key={prompt}>
 								<button

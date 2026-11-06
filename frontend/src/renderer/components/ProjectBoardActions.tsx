@@ -26,7 +26,8 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	const orchestratorButton = (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<span className="inline-flex" style={style}>
+				{/* The guided tour's second stop: the empty board's copy, else the header's (GuidedTour). */}
+				<span className="inline-flex" style={style} data-tour={header ? "orchestrator-header" : "orchestrator"}>
 					<TopbarButton
 						aria-label={activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel}
 						aria-busy={busy}

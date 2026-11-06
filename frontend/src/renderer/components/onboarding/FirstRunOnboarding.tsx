@@ -1,8 +1,7 @@
-import type { ProjectSource } from "@aoagents/product-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Cloud, FolderClosed, GitFork, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
-import { animate, AnimatePresence, motion, useIsPresent, useMotionValue, useReducedMotion } from "motion/react";
+import { ArrowLeft, ArrowRight, Cloud, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
 	useCallback,
@@ -12,10 +11,11 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	type ComponentProps,
 	type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
@@ -38,42 +38,39 @@ import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { freshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
-import { writeChatComposerText } from "../../lib/chat-drafts";
 import { useCloudSession } from "../../lib/cloud-session";
-import { sessionNavigateTarget } from "../../lib/navigate-to-session";
 import { useOnboardingStep } from "../../lib/onboarding-telemetry";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { useShell } from "../../lib/shell-context";
 import { cn } from "../../lib/utils";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
-import { CLOUD_PROJECT_KIND, findProjectOrchestrator, STANDALONE_PROJECT_KIND } from "../../types/workspace";
+import { STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
-import { ConfirmDialog } from "../ConfirmDialog";
-import { CreateProjectFlow, GitHubIcon } from "../CreateProjectFlow";
+import { GitHubIcon } from "../CreateProjectFlow";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
-import appIcon from "../../assets/app-icon.png";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
+import { startGuidedTour } from "./GuidedTour";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
-// Four pages: what Orchestrator is (with its three-part story playing in the
-// preview), the optional account, the tools a worker needs (GitHub CLI and a
-// coding agent), and the first project, which ends with the user's first
-// message to its orchestrator. Log in and Your tools are skipped when there is
-// nothing to do on them.
-const STEPS = ["welcome", "signin", "tools", "project"] as const;
+// Three pages: what Orchestrator is (with its three-part story playing in the
+// preview), the optional account, and the tools a worker needs (GitHub CLI and
+// a coding agent). Log in and Your tools are skipped when there is nothing to
+// do on them. The first project and task follow in the real app, as a guided
+// tour (GuidedTour).
+const STEPS = ["welcome", "signin", "tools"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
 const LEGACY_STEPS: Record<string, Step> = {
 	github: "tools",
 	agents: "tools",
-	orchestrator: "project",
-	start: "project",
+	orchestrator: "tools",
+	start: "tools",
+	project: "tools",
 };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
@@ -93,26 +90,6 @@ const INSTALL_POLL_MS = 1_000;
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
 const COPY_WIDTH = 520;
-const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.34, bounce: 0.04 } as const;
-/** The stage opening or closing (the copy column's width). */
-const COLLAPSE_MS = 340;
-const COLLAPSE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-/** The copy's left padding (pl-12). */
-const COPY_INSET_LEFT = 48;
-/** Pages that lead with the app icon. */
-const STEPS_WITH_ICON: ReadonlySet<Step> = new Set<Step>(["welcome", "signin"]);
-/** The icon (48px) and the gap under it (20px). */
-const ICON_SLOT_HEIGHT = 68;
-const IconSlotContext = createContext(false);
-/** The row's width when the page being left was centred across it (else 0),
- * so a left-aligned page arriving from it starts centred and slides over. */
-const PreviousCenteredContext = createContext(0);
-
-const STARTER_PROMPTS = [
-	{ label: "firstRun.startPromptImproveLabel", prompt: "firstRun.startPromptImprove" },
-	{ label: "firstRun.startPromptBugLabel", prompt: "firstRun.startPromptBug" },
-	{ label: "firstRun.startPromptTestsLabel", prompt: "firstRun.startPromptTests" },
-] as const;
 
 /** "How Orchestrator works": the three parts the welcome preview plays. */
 const ORCH_POINTS = [
@@ -123,6 +100,9 @@ const ORCH_POINTS = [
 ] as const;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
+/** The welcome captions: the outgoing one fades this fast, then the next comes in. */
+const CAPTION_OUT_S = 0.16;
+const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
 /** How long each part of the story holds before the next plays. */
 const POINT_HOLD_MS = [4200, 3800, 8800, 4600] as const;
 /** The order the example work settles (task indexes). The CI part settles the
@@ -164,6 +144,7 @@ export function FirstRunOnboarding() {
 	const { daemonStatus } = useShell();
 	const workspaceQuery = useWorkspaceQuery();
 	const migrationOffer = useMigrationOffer();
+	const navigate = useNavigate();
 	const [status, setStatus] = useState<"loading" | "pending" | "seen">("loading");
 	const [open, setOpen] = useState(false);
 	const setOnboardingOpen = useUiStore((state) => state.setFirstRunOnboardingOpen);
@@ -225,6 +206,9 @@ export function FirstRunOnboarding() {
 			onFinish={() => {
 				setOpen(false);
 				markSeen();
+				// The tour starts on Home, where projects are added.
+				startGuidedTour();
+				void navigate({ to: "/" });
 			}}
 		/>
 	);
@@ -244,8 +228,6 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	};
 	const index = STEPS.indexOf(step);
 	const reduceMotion = useReducedMotion();
-	const [footerSlot, setFooterSlot] = useState<HTMLDivElement | null>(null);
-	const [confirmingSkip, setConfirmingSkip] = useState(false);
 	// The window's width, for the copy column / stage split (stage from 900px).
 	const rowRef = useRef<HTMLDivElement>(null);
 	const [rowWidth, setRowWidth] = useState(0);
@@ -259,26 +241,6 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		return () => observer.disconnect();
 	}, []);
 	const wide = rowWidth >= 900;
-	const stageCollapsed = step === "project";
-	// Back from the project page: the stage opens first, then the phone slides
-	// in, so the two don't play over each other.
-	// Whether the page being left showed the app icon, so the next page's
-	// icon slot starts from it and collapses (or grows) instead of cutting.
-	const lastStep = useRef(step);
-	const previousHadIcon = STEPS_WITH_ICON.has(lastStep.current);
-	const previousCentered = wide && lastStep.current === "project" && step !== "project";
-	// Whether the phone was out when the project page opened (it came from Log
-	// in), so it stays there while the project page is up.
-	const [phoneWasShown, setPhoneWasShown] = useState(step === "signin");
-	useEffect(() => {
-		if (step !== "project") setPhoneWasShown(step === "signin");
-	}, [step]);
-	useEffect(() => {
-		lastStep.current = step;
-	}, [step]);
-	// Back from the project page: the stage opens first, then the phone slides
-	// in, so the two don't play over each other.
-	const phoneDelay = lastStep.current === "project" && step !== "project" ? COLLAPSE_MS / 1000 : 0;
 	// Pages with nothing to do are passed over in both directions, decided when
 	// the person moves (these checks start on the welcome page, so they have
 	// usually settled by then); a page still checking is shown, never flashed.
@@ -292,14 +254,12 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		candidate === "signin" ? cloud.status === "authenticated"
 		: candidate === "tools" ? ghReady && agentReady
 		: false;
+	// Past the last page with something to do, setup is over: the app takes
+	// over with the guided tour.
 	const goNext = () => {
-		for (let i = index + 1; i < STEPS.length; i++) {
-			const next = STEPS[i]!;
-			if (i === STEPS.length - 1 || !skips(next)) {
-				setStep(next);
-				return;
-			}
-		}
+		const next = STEPS.slice(index + 1).find((candidate) => !skips(candidate));
+		if (next) setStep(next);
+		else onFinish();
 	};
 	const goBack = () => {
 		for (let i = index - 1; i >= 0; i--) {
@@ -311,7 +271,6 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		}
 	};
 	useOnboardingStep("welcome", step === "welcome");
-	const first = step === "welcome";
 	// The welcome story plays on its own and loops; each loop replays the chat.
 	const [point, setPoint] = useState(0);
 	const [cycle, setCycle] = useState(0);
@@ -351,18 +310,17 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			sortBeat={sortBeat}
 			pickerAgents={toolAgents.pickerAgents}
 			selectedAgentId={toolAgents.selectedId}
-			// The phone stays put into the project page (the stage closes over
-			// it), so going back doesn't slide it in a second time.
-			phoneShown={step === "signin" || (step === "project" && phoneWasShown)}
-			phoneDelay={phoneDelay}
+			phoneShown={step === "signin"}
+			phoneDelay={0}
 			githubShown={githubShown}
 		/>
 	);
 
 	return (
-		<FooterSlotContext.Provider value={footerSlot}>
+		// Back on every page but the welcome, which has nothing before it.
+		<BackContext.Provider value={step === "welcome" ? undefined : goBack}>
 		<div
-			className={cn("fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
+			className={cn("onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
 			data-testid="first-run-onboarding"
 			role="dialog"
 			aria-modal="true"
@@ -373,22 +331,8 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			{/* The copy changes per step; the preview stage on the left stays
 			    mounted with one app window whose parts animate from step to step
 			    (OnboardingScene), so nothing in it is ever swapped out whole. */}
-			{/* On the project step the copy's column widens over the whole window
-			    (the stage column closes to nothing) so the setup sits centred; the
-			    stage keeps its full layout width meanwhile and is cropped, not
-			    rescaled. */}
-			<div ref={rowRef} className="flex min-h-0 flex-1 flex-row-reverse overflow-hidden">
-				{/* A CSS transition, not a JS spring: it always lands, even if frames
-				    are dropped while the next page mounts. */}
-				<div
-					className="relative min-h-0 shrink-0"
-					style={{
-						width: !wide ? "100%" : stageCollapsed ? rowWidth : COPY_WIDTH,
-						transition: reduceMotion ? undefined : `width ${COLLAPSE_MS}ms ${COLLAPSE_EASE}`,
-					}}
-				>
-					<IconSlotContext.Provider value={previousHadIcon}>
-					<PreviousCenteredContext.Provider value={previousCentered ? rowWidth : 0}>
+			<div ref={rowRef} className="relative flex min-h-0 flex-1 flex-row-reverse overflow-hidden">
+				<div className="relative z-10 min-h-0 shrink-0" style={{ width: wide ? COPY_WIDTH : "100%" }}>
 					<AnimatePresence initial={false}>
 						<motion.div
 							key={step}
@@ -400,14 +344,11 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							exit={{ opacity: 0, transition: { duration: 0 } }}
 							transition={FADE}
 						>
-							{step === "welcome" ? <WelcomeStep point={point} cycle={cycle} onNext={goNext} /> : null}
+							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
 							{step === "tools" ? <ToolsStep onNext={goNext} /> : null}
-							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
 						</motion.div>
 					</AnimatePresence>
-					</PreviousCenteredContext.Provider>
-					</IconSlotContext.Provider>
 				</div>
 				{wide ? (
 					<div className="flex min-h-0 min-w-0 flex-1">
@@ -421,36 +362,12 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 					</div>
 				) : null}
 			</div>
-			<div className="flex h-14 shrink-0 items-center justify-between gap-3 pl-12 pr-4">
+			{/* Progress floats over the bottom of the drawing; the actions sit under each step's copy. */}
+			<div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex h-14 items-center pl-12">
 				<Progress index={index} />
-				<div className="flex items-center gap-2">
-					{/* Only from the project page on: the earlier pages are quick, and
-					    skipping there would leave the app without tools. Kept in place
-					    (invisible) before then so nothing shifts when it appears. */}
-					<Button type="button" variant="ghost" className={cn("text-muted-foreground", step !== "project" && "invisible")} onClick={() => setConfirmingSkip(true)}>
-						{t("firstRun.skipSetup")}
-					</Button>
-					<Button type="button" variant="ghost" className={cn(first && "invisible")} onClick={goBack}>
-						{t("firstRun.back")}
-					</Button>
-					{/* Steps portal their one primary action here, outside the fade. */}
-					<div ref={setFooterSlot} className="contents" />
-				</div>
 			</div>
-			<ConfirmDialog
-				open={confirmingSkip}
-				title={t("firstRun.skipConfirmTitle")}
-				description={t("firstRun.skipConfirmBody")}
-				confirmLabel={t("firstRun.skipSetup")}
-				cancelLabel={t("firstRun.skipConfirmCancel")}
-				onConfirm={() => {
-					setConfirmingSkip(false);
-					onFinish();
-				}}
-				onOpenChange={setConfirmingSkip}
-			/>
 		</div>
-		</FooterSlotContext.Provider>
+		</BackContext.Provider>
 	);
 }
 
@@ -475,90 +392,74 @@ function Progress({ index }: { index: number }) {
 	);
 }
 
-const FooterSlotContext = createContext<HTMLDivElement | null>(null);
-/** Portals the step's own action into the bottom strip, which does not fade. */
+const ActionSlotContext = createContext<HTMLDivElement | null>(null);
+/** Portals the step's own actions into the action row under its copy, so they
+ * lead the row wherever they're declared among the step's children. */
 function StepAction({ children }: { children: ReactNode }) {
-	const slot = useContext(FooterSlotContext);
-	// The outgoing step stays mounted while it fades; only the current one owns the strip.
-	const present = useIsPresent();
-	if (!slot || !present) return null;
+	const slot = useContext(ActionSlotContext);
+	if (!slot) return null;
 	return createPortal(children, slot);
+}
+
+/** Back, owned by the flow but drawn in each step's action row. */
+const BackContext = createContext<(() => void) | undefined>(undefined);
+
+/** The step's actions, just under its content and flush right: Back, then the
+ * step's own, its primary last. */
+function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => void }) {
+	const { t } = useTranslation();
+	const onBack = useContext(BackContext);
+	return (
+		<div className="flex flex-wrap items-start justify-end gap-2 pt-8 [&_button]:h-11 [&_button]:rounded-xl [&_button]:px-5 [&_button]:text-base">
+			{onBack ? (
+				<Button type="button" variant="ghost" className="!w-11 !px-0" aria-label={t("firstRun.back")} title={t("firstRun.back")} onClick={onBack}>
+					<ArrowLeft className="!size-5" aria-hidden="true" />
+				</Button>
+			) : null}
+			<div ref={setSlot} className="contents" />
+		</div>
+	);
+}
+
+/** A step's primary action: the label, then an arrow in its own rounded
+ * square at the right end (a spinner there while it's busy). */
+function NextButton({ busy = false, children, ...props }: ComponentProps<typeof Button> & { busy?: boolean }) {
+	return (
+		<Button variant="primary" {...props} className="!pl-5 !pr-1.5 gap-3">
+			{children}
+			<span aria-hidden="true" className="flex size-8 items-center justify-center rounded-lg bg-primary-foreground text-primary">
+				{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" strokeWidth={2} />}
+			</span>
+		</Button>
+	);
 }
 
 /** One page's copy and controls. The app preview beside it is the flow's one
  * persistent scene (OnboardingScene), driven by the step. */
 function StepSplit({
-	icon,
 	title,
 	body,
 	children,
-	centered = false,
 }: {
-	/** Lead with the app icon. */
-	icon?: boolean;
-	/** The stage is closed on this step: centre the copy across the window. */
-	centered?: boolean;
 	title: string;
 	body?: ReactNode;
 	children?: ReactNode;
 }) {
-	// Arriving from the centred project page, a left-aligned page starts where
-	// the centred copy was and slides left as the column narrows, mirroring
-	// how the copy drifts to the middle on the way there.
-	const fromCenteredRow = useContext(PreviousCenteredContext);
-	const reduceMotion = useReducedMotion();
-	const contentRef = useRef<HTMLDivElement>(null);
-	const x = useMotionValue(0);
-	// Once, on arrival, before the first paint.
-	const [arrivedFrom] = useState(fromCenteredRow);
-	useLayoutEffect(() => {
-		if (centered || !arrivedFrom || reduceMotion) return;
-		const width = contentRef.current?.offsetWidth ?? 0;
-		x.set(Math.max(0, (arrivedFrom - width) / 2 - COPY_INSET_LEFT));
-		const slide = animate(x, 0, { duration: COLLAPSE_MS / 1000, ease: [0.32, 0.72, 0, 1] });
-		return () => slide.stop();
-	}, [arrivedFrom, centered, reduceMotion, x]);
+	const [actionSlot, setActionSlot] = useState<HTMLDivElement | null>(null);
 	return (
-		// Fixed top anchor: the title sits at the same height on every step,
-		// centred or not, so only what is under it changes and the copy only
-		// moves sideways as the stage closes (the column widens under it).
-		<div
-			className={cn(
-				"flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-10 pt-[max(5rem,18vh)]",
-				centered ? "items-center px-12" : "pl-12 pr-10",
-			)}
-		>
-			<motion.div ref={contentRef} className="flex w-full max-w-md flex-col" style={{ x }}>
-				<IconSlot shown={Boolean(icon)} />
+		// The copy and its actions sit centred in the column's height, a little
+		// below the middle (more padding on top than under it). my-auto rather
+		// than justify-center so a tall step still scrolls from its top.
+		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-14 pl-12 pr-10 pt-[max(6rem,16vh)]">
+			<div className="my-auto flex w-full max-w-md flex-col">
 				<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
 				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
-				{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
-			</motion.div>
+				<ActionSlotContext.Provider value={actionSlot}>
+					{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
+				</ActionSlotContext.Provider>
+				<StepActions setSlot={setActionSlot} />
+			</div>
 		</div>
-	);
-}
-
-/** The app icon over the title. Its height animates from the previous page's
- * (shown or not), so the title glides up or down instead of jumping. */
-function IconSlot({ shown }: { shown: boolean }) {
-	const previous = useContext(IconSlotContext);
-	const reduceMotion = useReducedMotion();
-	const [mountedWith] = useState(previous);
-	if (!shown && !mountedWith) return null;
-	const open = { height: ICON_SLOT_HEIGHT, opacity: 1, scale: 1 };
-	const closed = { height: 0, opacity: 0, scale: 0.9 };
-	return (
-		<motion.div
-			aria-hidden={!shown}
-			className="origin-top-left overflow-hidden"
-			initial={reduceMotion ? false : mountedWith ? open : closed}
-			animate={shown ? open : closed}
-			// Leaving is quick (it shouldn't linger over the next title);
-			// arriving takes the stage's pace.
-			transition={reduceMotion ? { duration: 0 } : shown ? COLLAPSE_SPRING : { duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
-		>
-			<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />
-		</motion.div>
 	);
 }
 
@@ -583,9 +484,13 @@ function RowSpinner() {
 /** One row of a shared list (settings card: filled, no outline, hairline
  * dividers): optional leading glyph, label, and a trailing state or the single
  * action that fixes it. */
+/** The steps' row lists: an opaque surface with a hairline edge, so the
+ * halftone wallpaper never shows through the rows. */
+const ROW_LIST = "overflow-hidden rounded-xl border border-border bg-(--schematic-solid)";
+
 function CheckRow({ icon, label, detail, trailing }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode }) {
 	return (
-		<li className="flex items-center gap-3 px-3 py-2 [&+&]:border-t [&+&]:border-border">
+		<li className="flex items-center gap-3 px-4 py-3 [&+&]:border-t [&+&]:border-border">
 			{icon ? <span className="flex shrink-0" aria-hidden="true">{icon}</span> : null}
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm text-foreground">{label}</span>
@@ -600,10 +505,47 @@ function CheckRow({ icon, label, detail, trailing }: { icon?: ReactNode; label: 
 function useExampleTasks() {
 	const { t } = useTranslation();
 	return useMemo(() => [
-		{ id: "example-1", title: t("firstRun.exampleTask1"), provider: "claude-code", branch: "tests/sign-in" },
-		{ id: "example-2", title: t("firstRun.exampleTask2"), provider: "codex", branch: "fix/auth-redirect" },
-		{ id: "example-3", title: t("firstRun.exampleTask3"), provider: "claude-code", branch: "docs/readme" },
-		{ id: "example-4", title: t("firstRun.exampleTask4"), provider: "codex", branch: "perf/search" },
+		{
+			id: "example-1",
+			title: t("firstRun.exampleTask1"),
+			provider: "claude-code",
+			branch: "tests/sign-in",
+			file: "signin.test.ts",
+			diff: [["+", "it(\"signs in\", async () => {"], ["+", "  await signIn(user)"]],
+			added: 48,
+			removed: 0,
+		},
+		{
+			id: "example-2",
+			title: t("firstRun.exampleTask2"),
+			provider: "codex",
+			branch: "fix/auth-redirect",
+			file: "redirect.ts",
+			diff: [["-", "return \"/\""], ["+", "return next ?? home"]],
+			added: 6,
+			removed: 2,
+			question: t("firstRun.syncQuestion"),
+		},
+		{
+			id: "example-3",
+			title: t("firstRun.exampleTask3"),
+			provider: "claude-code",
+			branch: "docs/readme",
+			file: "README.md",
+			diff: [["+", "## Getting started"], ["-", "TODO: setup steps"]],
+			added: 12,
+			removed: 3,
+		},
+		{
+			id: "example-4",
+			title: t("firstRun.exampleTask4"),
+			provider: "codex",
+			branch: "perf/search",
+			file: "search.ts",
+			diff: [["-", "items.filter(match)"], ["+", "index.query(term)"]],
+			added: 31,
+			removed: 9,
+		},
 	] as const, [t]);
 }
 
@@ -690,7 +632,7 @@ function OnboardingScene({
 			phoneShown={phoneShown}
 			phoneDelay={phoneDelay}
 			githubShown={githubShown}
-			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : "overview"}
+			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : step === "signin" ? "devices" : "overview"}
 		/>
 	);
 }
@@ -718,49 +660,41 @@ function ExamplePhone() {
 
 // ── 0. Welcome ──────────────────────────────────────────────────────────────
 
-function WelcomeStep({ point, cycle, onNext }: { point: number; cycle: number; onNext: () => void }) {
+function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
-	const current = ORCH_POINTS[point]!;
 	return (
 		<StepSplit
-			icon
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
 		>
-			{/* Narrates the preview: one caption for the part playing, under a
-			    three-segment timer that fills while it plays. */}
+			{/* Narrates the preview: one caption for the part playing. */}
 			<div className="flex flex-col gap-3 pt-6" aria-hidden="true">
-				<div className="flex gap-1">
-					{ORCH_POINTS.map(({ title }, i) => (
-						<span key={title} className="h-0.5 w-8 overflow-hidden rounded-full bg-muted">
-							{i < point ? <span className="block h-full w-full bg-foreground/60" /> : null}
-							{i === point ? (
-								<motion.span
-									key={`${cycle}-${point}`}
-									className="block h-full origin-left bg-foreground/60"
-									initial={{ scaleX: reduceMotion ? 1 : 0 }}
-									animate={{ scaleX: 1 }}
-									transition={reduceMotion ? { duration: 0 } : { duration: POINT_HOLD_MS[point] / 1000, ease: "linear" }}
-								/>
-							) : null}
-						</span>
-					))}
-				</div>
+				{/* Every caption stays mounted in one cell, so the block keeps the
+				    tallest one's height; the outgoing one is gone before the next
+				    comes in, so two never show at once. */}
 				<div className="grid">
-					<AnimatePresence initial={false}>
-						<motion.div
-							key={point}
-							className="col-start-1 row-start-1 flex flex-col gap-1"
-							initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: -8 }}
-							transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-						>
-							<span className="text-sm font-medium text-foreground">{t(current.title)}</span>
-							<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(current.body)}</span>
-						</motion.div>
-					</AnimatePresence>
+					{ORCH_POINTS.map(({ title, body }, i) => {
+						const shown = i === point;
+						return (
+							<motion.div
+								key={title}
+								className="col-start-1 row-start-1 flex flex-col gap-1"
+								initial={false}
+								animate={shown ? { opacity: [0, 1], y: [8, 0] } : { opacity: 0, y: -8 }}
+								transition={
+									reduceMotion
+										? { duration: 0 }
+										: shown
+											? { duration: 0.3, delay: CAPTION_OUT_S, ease: CAPTION_EASE }
+											: { duration: CAPTION_OUT_S, ease: CAPTION_EASE }
+								}
+							>
+								<span className="text-sm font-medium text-foreground">{t(title)}</span>
+								<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
+							</motion.div>
+						);
+					})}
 				</div>
 			</div>
 			{/* The whole story for assistive tech, which skips the animation. */}
@@ -770,7 +704,7 @@ function WelcomeStep({ point, cycle, onNext }: { point: number; cycle: number; o
 				))}
 			</ol>
 			<StepAction>
-				<Button variant="primary" onClick={onNext} autoFocus>{t("firstRun.getStarted")}</Button>
+				<NextButton onClick={onNext} autoFocus>{t("firstRun.getStarted")}</NextButton>
 			</StepAction>
 		</StepSplit>
 	);
@@ -806,13 +740,13 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 	};
 	return (
 		<StepSplit
-			icon
 			title={t("firstRun.signInTitle")}
+			body={t("firstRun.signInBody")}
 		>
 			{cloud.status === "loading" ? (
 				<Waiting>{t("firstRun.signInChecking")}</Waiting>
 			) : account ? (
-				<ul className="overflow-hidden rounded-lg bg-card">
+				<ul className={ROW_LIST}>
 					<CheckRow
 						label={accountName}
 						detail={account.user.displayName ? account.user.email : undefined}
@@ -821,7 +755,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 				</ul>
 			) : (
 				<>
-				<ul className="overflow-hidden rounded-lg bg-card">
+				<ul className={ROW_LIST}>
 					{SIGN_IN_PERKS.map(({ icon: Icon, title, detail }) => (
 						<CheckRow
 							key={title}
@@ -845,21 +779,33 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 			)}
 			{/* The local email/password dialog is only mounted by the cloud gate. */}
 			{localAuth.available && !cloudEnabled ? <CloudLocalSignInDialog /> : null}
-			{/* The page's actions live in the bottom bar: Continue once logged in,
-			    else Do later beside Log in. */}
+			{/* Continue once logged in, else Create account with a way to continue without one under it. */}
 			<StepAction>
 				{account ? (
-					<Button variant="primary" onClick={onNext}>{t("firstRun.continue")}</Button>
+					<NextButton onClick={onNext}>{t("firstRun.continue")}</NextButton>
 				) : cloud.status === "loading" ? null : (
-					<>
-						<Button variant="ghost" onClick={onNext}>
-							{t("firstRun.doLater")}
-						</Button>
-						<Button variant="primary" onClick={signIn} disabled={browserWaiting}>
-							{browserWaiting ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}
+					<div className="flex flex-col items-center gap-2">
+						<NextButton onClick={signIn} disabled={browserWaiting} busy={browserWaiting}>
 							{t("firstRun.signInBrowser")}
-						</Button>
-					</>
+						</NextButton>
+						{/* A sentence, not a button, with the way out underlined and in the
+						    body colour so it's plainly there without competing. */}
+						<p className="text-sm text-muted-foreground">
+							<Trans
+								t={t}
+								i18nKey="firstRun.doLater"
+								components={{
+									skip: (
+										<button
+											type="button"
+											className="!h-auto !rounded-sm !px-0 !text-sm text-foreground underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground"
+											onClick={onNext}
+										/>
+									),
+								}}
+							/>
+						</p>
+					</div>
 				)}
 			</StepAction>
 		</StepSplit>
@@ -1037,7 +983,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
 			) : (
 				<div className="flex flex-col gap-2">
-					<ul className="overflow-hidden rounded-lg bg-card">
+					<ul className={ROW_LIST}>
 						<CheckRow
 							icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
 							label={t("firstRun.githubTitle")}
@@ -1096,200 +1042,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			<StepAction>
 				{/* At least one ready agent is needed to orchestrate anything; GitHub
 				    stays optional (agents still work locally without it). */}
-				<Button variant="primary" onClick={onNext} disabled={!anyReady}>{t("firstRun.continue")}</Button>
-			</StepAction>
-		</StepSplit>
-	);
-}
-
-// ── 3. Your first project, then its first task ──────────────────────────────
-
-// Same tile as Add Project's source step (CreateProjectFlow), so this page
-// reads as the start of that flow.
-function SourceTile({ icon, label, hint, onClick }: { icon: ReactNode; label: string; hint: string; onClick: () => void }) {
-	return (
-		<button
-			type="button"
-			className="group flex items-center gap-3 rounded-lg bg-interactive-hover px-4 py-3 text-left hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
-			aria-label={label}
-			onClick={onClick}
-		>
-			<span className="flex shrink-0 text-muted-foreground group-hover:text-foreground">{icon}</span>
-			<span className="min-w-0">
-				<span className="block text-sm font-medium text-foreground">{label}</span>
-				<span className="mt-1 block text-pretty text-xs leading-row text-muted-foreground">{hint}</span>
-			</span>
-		</button>
-	);
-}
-
-/** The user's own local projects, for the sidebar previews. */
-type LocalProject = ReturnType<typeof useLocalProjects>[number];
-
-function useLocalProjects() {
-	return (useWorkspaceQuery().data ?? []).filter(
-		(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.kind !== CLOUD_PROJECT_KIND,
-	);
-}
-
-/** One page in two phases: add a project (open or clone a repo), and once it
- * exists the same page asks for the first task and hands it to the project's
- * orchestrator. The stage is closed here, so both phases sit centred. */
-function FirstProjectStep({ onFinish }: { onFinish: () => void }) {
-	const project = useLocalProjects()[0];
-	// TEMPORARY: the simulated fresh machine adds a pretend project; nothing is
-	// created on disk or in the daemon, and no orchestrator is spawned.
-	const [simulatedProject, setSimulatedProject] = useState<LocalProject | null>(null);
-	if (freshMachineSim) {
-		return simulatedProject
-			? <FirstTask project={simulatedProject} onFinish={onFinish} />
-			: <ProjectChooser onSimulatedAdd={(name) => setSimulatedProject({ id: "simulated-project", name } as LocalProject)} />;
-	}
-	return project ? <FirstTask project={project} onFinish={onFinish} /> : <ProjectChooser />;
-}
-
-/** The ready agent we integrate best with: Claude Code, then Codex, then the
- * default priority order (Cursor, OpenCode, OpenCode 2, Aider), then any other
- * ready agent. Undefined until one is ready, which leaves the usual agent
- * questions in place. */
-function useBestReadyAgent(): string | undefined {
-	const readiness = useAgentReadinessQuery();
-	return useMemo(() => {
-		const ready = (readiness.data?.agents ?? []).filter((agent) => agent.effectiveReadiness === "ready").map((agent) => agent.id as string);
-		const rank = (id: string) => DEFAULT_AGENT_PRIORITY_RANK.get(id) ?? Number.MAX_SAFE_INTEGER;
-		return ready.sort((a, b) => rank(a) - rank(b))[0];
-	}, [readiness.data]);
-}
-
-function ProjectChooser({ onSimulatedAdd }: { onSimulatedAdd?: (name: string) => void }) {
-	const { t } = useTranslation();
-	const { cloneProject, createProject, initializeProjectRepository } = useShell();
-	const projects = useWorkspaceQuery().data ?? [];
-	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource; nonce: number } | null>(null);
-	const request = (source: ProjectSource) =>
-		onSimulatedAdd ? onSimulatedAdd(source === "clone" ? "cloned-repo" : "my-project") : setSourceSignal({ source, nonce: Date.now() });
-	const creating = useUiStore((state) => state.projectCreationPending);
-	// No agent questions on the first project: the best ready agent runs both
-	// the workers and the orchestrator.
-	const agent = useBestReadyAgent();
-
-	return (
-		<StepSplit
-			centered
-			title={t("firstRun.projectTitle")}
-			body={t("firstRun.projectBody")}
-		>
-			{/* Adding a project moves the page on by itself; Continue holds the strip steady. */}
-			<StepAction>
-				<Button variant="primary" disabled>{t("firstRun.continue")}</Button>
-			</StepAction>
-			<div className="flex flex-col gap-2">
-				<SourceTile
-					icon={<FolderClosed className="size-5" aria-hidden="true" strokeWidth={1.75} />}
-					label={t("createProject.openLocal")}
-					hint={t("createProject.openLocalDesc")}
-					onClick={() => request("local")}
-				/>
-				<SourceTile
-					icon={<GitFork className="size-5" aria-hidden="true" strokeWidth={1.75} />}
-					label={t("createProject.cloneFromGit")}
-					hint={t("createProject.cloneFromGitDesc")}
-					onClick={() => request("clone")}
-				/>
-			</div>
-			<CreateProjectFlow
-				existingProjectNames={projects.map((project) => project.name)}
-				existingProjectPaths={projects.map((project) => project.path)}
-				mode="choose"
-				onCloneProject={cloneProject}
-				// The new project turns this page into the first-task composer.
-				onCreateProject={createProject}
-				onInitializeProject={initializeProjectRepository}
-				sourceSignal={sourceSignal}
-				autoAgent={agent}
-			/>
-			{creating ? <Waiting>{t("firstRun.projectCreating")}</Waiting> : null}
-		</StepSplit>
-	);
-}
-
-function FirstTask({ project, onFinish }: { project: LocalProject; onFinish: () => void }) {
-	const { t } = useTranslation();
-	const navigate = useNavigate();
-	const workspaces = useWorkspaceQuery().data ?? [];
-	const orchestrator = findProjectOrchestrator(workspaces, project.id);
-	const provisioning = useUiStore((state) => state.provisioningProjectIds.has(project.id));
-	const completeTask = useOnboardingStep("first_task", true);
-	const [prompt, setPrompt] = useState(() => t(STARTER_PROMPTS[0].prompt));
-
-	// Sends the first message to the orchestrator itself, then opens its chat
-	// so the person watches it start. If the orchestrator is still starting,
-	// the send waits for it; if sending fails, the text lands in its composer.
-	const [sending, setSending] = useState(false);
-	const sentRef = useRef(false);
-	const deliver = useCallback(async (session: NonNullable<typeof orchestrator>, message: string) => {
-		if (sentRef.current) return;
-		sentRef.current = true;
-		const { error } = await apiClient
-			.POST("/api/v1/sessions/{sessionId}/send", { params: { path: { sessionId: session.id } }, body: { message, userAuthored: true } })
-			.catch((thrown: unknown) => ({ error: thrown }));
-		// The live chat scopes its draft by session id + createdAt (ChatWorkspace).
-		if (error) writeChatComposerText({ sessionId: session.id, incarnation: session.createdAt ?? session.id }, message);
-		completeTask();
-		onFinish();
-		void navigate(sessionNavigateTarget(project.id, session.id));
-	}, [completeTask, navigate, onFinish, project.id]);
-	const send = () => {
-		// TEMPORARY: the simulated fresh machine sends nothing and spawns nothing.
-		if (freshMachineSim) {
-			console.info("[fresh-machine sim] would send the first task:", prompt.trim());
-			onFinish();
-			return;
-		}
-		setSending(true);
-		if (orchestrator) void deliver(orchestrator, prompt.trim());
-	};
-	useEffect(() => {
-		if (sending && orchestrator) void deliver(orchestrator, prompt.trim());
-	}, [sending, orchestrator, deliver, prompt]);
-
-	return (
-		<StepSplit
-			centered
-			title={t("firstRun.startTitle")}
-			body={t("firstRun.startBody", { project: project.name })}
-		>
-			<div className="flex flex-col gap-2">
-				<Label htmlFor="first-run-prompt">{t("firstRun.startPromptLabel")}</Label>
-				{/* No shared textarea primitive yet: Input's chrome at the textarea minimum height. */}
-				<textarea
-					id="first-run-prompt"
-					className="min-h-(--size-textarea-min) w-full min-w-0 resize-none rounded-md border border-transparent bg-input/50 px-3 py-2 text-sm text-foreground transition-[color,box-shadow,background-color] outline-none placeholder:text-muted-foreground focus-visible:outline-none"
-					value={prompt}
-					onChange={(event) => setPrompt(event.target.value)}
-				/>
-				<div className="flex flex-wrap gap-1.5">
-					{STARTER_PROMPTS.map((starter) => (
-						<button
-							key={starter.prompt}
-							className={cn(
-								"rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-focus focus-visible:ring-ring/60",
-								prompt === t(starter.prompt) && "bg-accent text-foreground",
-							)}
-							onClick={() => setPrompt(t(starter.prompt))}
-							type="button"
-						>
-							{t(starter.label)}
-						</button>
-					))}
-				</div>
-			</div>
-			{!freshMachineSim && (provisioning || !orchestrator) ? <Waiting>{t("firstRun.settingUp")}</Waiting> : null}
-			<StepAction>
-				<Button variant="primary" onClick={send} disabled={!prompt.trim() || sending}>
-					{sending ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}
-					{t("firstRun.openOrchestrator")}
-				</Button>
+				<NextButton onClick={onNext} disabled={!anyReady}>{t("firstRun.continue")}</NextButton>
 			</StepAction>
 		</StepSplit>
 	);
