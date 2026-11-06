@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -68,7 +69,8 @@ func (s *Service) InterruptSessionTerminal(ctx context.Context, sessionID domain
 }
 
 // SessionTerminalOutput returns the last lines one of the session's shell
-// terminals shows, as plain text.
+// terminals shows, as plain text: the rendered screen when the runtime keeps
+// one, else its raw output with control sequences removed.
 func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.SessionID, handleID string, lines int) (string, error) {
 	if lines <= 0 {
 		lines = 200
@@ -78,9 +80,25 @@ func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.Se
 	if err != nil {
 		return "", err
 	}
-	output, err := s.runtime.GetOutput(ctx, handle, lines)
-	if err != nil {
-		return "", apierr.Unavailable("PANE_TERMINAL_OUTPUT_UNAVAILABLE", "Could not read that terminal's screen")
+	var output string
+	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, lines); styledErr == nil {
+			output = terminalui.PlainTerminalText(rendered)
+		}
 	}
-	return strings.TrimRight(output, " \n\t\r"), nil
+	if output == "" {
+		raw, rawErr := s.runtime.GetOutput(ctx, handle, lines)
+		if rawErr != nil {
+			return "", apierr.Unavailable("PANE_TERMINAL_OUTPUT_UNAVAILABLE", "Could not read that terminal's screen")
+		}
+		output = terminalui.PlainTerminalText(raw)
+	}
+	trimmed := strings.Split(output, "\n")
+	for i, line := range trimmed {
+		trimmed[i] = strings.TrimRight(line, " \t\r")
+	}
+	if len(trimmed) > lines {
+		trimmed = trimmed[len(trimmed)-lines:]
+	}
+	return strings.TrimRight(strings.Join(trimmed, "\n"), "\n"), nil
 }

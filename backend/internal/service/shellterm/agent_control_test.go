@@ -59,10 +59,18 @@ func TestSessionTerminalControlInterruptsAndReads(t *testing.T) {
 	if sent := <-rt.sentCh; sent.input != "\x03" {
 		t.Fatalf("interrupt sent %q", sent.input)
 	}
-	rt.setOutput("$ ls\nREADME.md\n\n   \n")
+	// The rendered screen wins over raw output, and comes back as plain text.
+	rt.setOutput("raw \x1b[31mbytes\x1b[m")
+	rt.styledOutput = "$ ls   \n\x1b[34mREADME.md\x1b[m\n\n   \n"
 	output, err := svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
 	if err != nil || output != "$ ls\nREADME.md" {
 		t.Fatalf("output = %q, %v", output, err)
+	}
+	// Without a rendered screen, raw output is cleaned of control sequences.
+	rt.styledErr = errors.New("no surface")
+	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
+	if err != nil || output != "raw bytes" {
+		t.Fatalf("raw output = %q, %v", output, err)
 	}
 }
 
