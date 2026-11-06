@@ -94,3 +94,16 @@ func TestResolveUnixShellHonorsSelectedPath(t *testing.T) {
 		t.Fatalf("missing path argv = %v fallback = %v, want $SHELL with fallback", argv, fallback)
 	}
 }
+
+func TestResolveUnixShellIgnoresWindowsSelectors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell selection")
+	}
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("PATH", t.TempDir())
+	for _, selector := range []string{"git-bash", "powershell", "cmd", "wsl", "pwsh", "Git-Bash"} {
+		if argv, fallback := resolveUserLoginShell(selector); fallback || len(argv) != 1 || argv[0] != "/bin/sh" {
+			t.Fatalf("%q argv = %v fallback = %v, want $SHELL without an error", selector, argv, fallback)
+		}
+	}
+}

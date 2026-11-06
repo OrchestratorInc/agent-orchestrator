@@ -28,13 +28,27 @@ func resolveUserLoginShell(preference string) (argv []string, usedFallback bool)
 		return resolveWindowsShell(preference)
 	}
 	preference = strings.TrimSpace(preference)
-	if preference != "" && !strings.EqualFold(preference, "auto") {
-		if path, err := CheckShellPath(preference); err == nil {
+	if preference == "" || strings.EqualFold(preference, "auto") {
+		return defaultUnixShell(), false
+	}
+	if _, ok := windowsShellSelectors[strings.ToLower(preference)]; ok {
+		// A Windows selector reaching a macOS or Linux daemon (a stale or
+		// cross-platform setting) was ignored before shell selection applied
+		// here, so it keeps opening the default shell instead of failing.
+		if path, err := exec.LookPath(preference); err == nil {
 			return []string{path}, false
 		}
-		return defaultUnixShell(), true
+		return defaultUnixShell(), false
 	}
-	return defaultUnixShell(), false
+	if path, err := CheckShellPath(preference); err == nil {
+		return []string{path}, false
+	}
+	return defaultUnixShell(), true
+}
+
+// windowsShellSelectors are the named Windows choices; anything else is a path.
+var windowsShellSelectors = map[string]struct{}{
+	"git-bash": {}, "pwsh": {}, "powershell": {}, "cmd": {}, "wsl": {},
 }
 
 // defaultUnixShell is the shell a terminal opens when nothing is selected.
