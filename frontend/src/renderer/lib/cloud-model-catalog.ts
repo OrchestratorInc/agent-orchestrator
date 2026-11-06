@@ -40,31 +40,59 @@ export function listsLocalModelsForCloud(gap: CloudModelCatalogGap | undefined, 
  * using: the same ID in any case; a bracketed variant of a listed model
  * ("sonnet[1m]" of "sonnet"); a listed dated release named without its date
  * ("claude-opus-4-5" of "claude-opus-4-5-20251101") and a dated release of a
- * listed undated ID; a Claude model the list offers through the alias Claude
- * Code describes it by ("claude-opus-5-5" through "opus", described
- * "Opus 5.5 · ..."); and "opusplan" when the list offers opus. An empty id is
- * the agent's own default, which every list offers.
+ * listed undated ID; a Claude model the list offers through an alias
+ * (claudeOffersThroughAlias); and "opusplan" when the list offers opus. An
+ * empty id is the agent's own default, which every list offers.
  */
-export function cloudCatalogOffers(models: ReadonlyArray<{ id: string; description?: string }>, id: string): boolean {
+export function cloudCatalogOffers(models: ReadonlyArray<CatalogEntry>, id: string): boolean {
 	const wanted = id.trim();
 	if (!wanted) return true;
 	const open = wanted.indexOf("[");
 	const base = open > 0 && wanted.endsWith("]") ? wanted.slice(0, open) : wanted;
-	const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 	const datedReleaseOf = (listed: string, undated: string) =>
-		listed.length === undated.length + 9 && same(listed.slice(0, undated.length), undated) && /^-\d{8}$/.test(listed.slice(undated.length));
+		listed.length === undated.length + 9 && sameID(listed.slice(0, undated.length), undated) && /^-\d{8}$/.test(listed.slice(undated.length));
 	const listedByID = models.some((model) => {
 		const listed = model.id.trim();
 		if (!listed) return false;
-		return same(listed, wanted) || same(listed, base) || datedReleaseOf(listed, base) || datedReleaseOf(base, listed);
+		return sameID(listed, wanted) || sameID(listed, base) || datedReleaseOf(listed, base) || datedReleaseOf(base, listed);
 	});
-	if (listedByID) return true;
+	if (listedByID || claudeOffersThroughAlias(models, base)) return true;
+	return sameID(base, "opusplan") && cloudCatalogOffers(models, "opus");
+}
+
+type CatalogEntry = { id: string; description?: string; providerId?: string };
+
+const sameID = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Whether a list offers a full Claude ID (base, without a bracketed suffix)
+ * that it does not name, through an alias: the control plane's
+ * claudeOffersThroughAlias. On a list whose entries carry the provider's model
+ * (any entry has providerId), only a model the provider confirmed counts: the
+ * request without its release date is some entry's providerId, or that ID
+ * without its date. Claude Code describes an alias with the model it would run
+ * whether or not the account can. A list from before entries carried it is
+ * matched by the descriptions ("Opus 5.5 · ...").
+ */
+function claudeOffersThroughAlias(models: ReadonlyArray<CatalogEntry>, base: string): boolean {
 	const name = claudeModelName(base);
-	if (name && models.some((model) => {
+	if (!name) return false;
+	if (models.some((model) => model.providerId?.trim())) {
+		const wanted = withoutReleaseDate(base);
+		return models.some((model) => {
+			const provided = model.providerId?.trim();
+			return Boolean(provided) && (sameID(provided!, wanted) || sameID(withoutReleaseDate(provided!), wanted));
+		});
+	}
+	return models.some((model) => {
 		const described = describedModel(model.description);
-		return described !== "" && (same(described, name) || same(described, `Claude ${name}`));
-	})) return true;
-	return same(base, "opusplan") && cloudCatalogOffers(models, "opus");
+		return described !== "" && (sameID(described, name) || sameID(described, `Claude ${name}`));
+	});
+}
+
+/** id without a trailing release date ("-" and eight digits). */
+function withoutReleaseDate(id: string): string {
+	return /^.+-\d{8}$/.test(id) ? id.slice(0, -9) : id;
 }
 
 /**

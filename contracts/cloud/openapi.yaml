@@ -6349,6 +6349,20 @@ components:
           items:
             type: string
             enum: [default, accept-edits, auto, bypass-permissions]
+        providerId:
+          description: >-
+            The model the account's provider listed behind this entry: its own
+            ID, or the model an alias such as opus resolves to. Absent when the
+            provider did not confirm the entry for the account, or from an
+            older worker. Only such a confirmation says the account runs the
+            model an alias describes.
+          type: string
+        sessionOnly:
+          description: >-
+            On a session's own list, a model its worker added only so the
+            session keeps its own selection. The account's provider did not
+            list it, so it is not kept as the account's.
+          type: boolean
     ChatModelsResponse:
       type: object
       additionalProperties: false
@@ -6374,6 +6388,12 @@ components:
             On a session's list, true when its worker listed the models for
             the signed-in account rather than from the CLI's built-in list.
             Only such a list becomes the user's catalog.
+          type: boolean
+        sessionOnlyMarked:
+          description: >-
+            On a session's list, true when its worker marks the models it
+            added for the session (sessionOnly). A Claude Code list without it
+            does not become the user's catalog.
           type: boolean
     SendMessageInput:
       type: object
