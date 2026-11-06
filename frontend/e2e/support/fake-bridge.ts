@@ -413,6 +413,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						throw new Error("local auth is unavailable in e2e");
 					},
 					onSessionChanged: unsubscribe,
+					pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "uploading folders is unavailable in e2e" }),
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
@@ -1326,6 +1327,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error("local auth is unavailable in e2e");
 					},
 					onSessionChanged: unsubscribe,
+					pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "uploading folders is unavailable in e2e" }),
 				},
 				cloudCp: {
 					request: async () => ({ status: 401, headers: {}, body: "" }),
