@@ -55,6 +55,8 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "split-shell-terminal"
+	| "split-shell-terminal-down"
 	| "dictate"
 	| "open-orchestrator"
 	| "toggle-browser-devtools";
@@ -82,6 +84,11 @@ export type ShortcutDefinition = {
 
 export const SHORTCUT_CATEGORIES: readonly ShortcutCategory[] = ["General", "Navigation", "Session", "Panels"];
 
+/** Shortcuts that only act, and are only listed, while split panes are on. */
+export function isSplitPaneShortcut(id: AppShortcutId): boolean {
+	return id === "split-shell-terminal" || id === "split-shell-terminal-down";
+}
+
 // The user-facing shortcut catalog. Bindings live exclusively in
 // defaultShortcutBindings so runtime matching and displayed labels cannot drift.
 export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
@@ -100,6 +107,8 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "previous-tab", label: "Previous tab", category: "Navigation" },
 	{ id: "next-tab", label: "Next tab", category: "Navigation" },
 	{ id: "new-shell-terminal", label: "New terminal", category: "Session" },
+	{ id: "split-shell-terminal", label: "New terminal on the right", category: "Session" },
+	{ id: "split-shell-terminal-down", label: "New terminal below", category: "Session" },
 	{ id: "close-shell-terminal", label: "Close tab", category: "Session" },
 	{ id: "reopen-closed-tab", label: "Reopen closed tab", category: "Session" },
 	{ id: "archive-session", label: "Archive session", category: "Session" },
@@ -165,8 +174,11 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return isMac
 				? [binding("`", { ctrl: true, code: "Backquote" }), binding("j", { meta: true })]
 				: [binding("`", { ctrl: true, code: "Backquote" })];
+		// ⌘⇧D splits a terminal below on macOS, so the diff takes ⌥⇧D there.
+		// Option+letter types a character on macOS (⌥⇧D is "Î"), so the
+		// binding also matches the physical key.
 		case "toggle-diff":
-			return [binding("d", { ...primary, shift: true })];
+			return [isMac ? binding("d", { alt: true, shift: true, code: "KeyD" }) : binding("d", { ctrl: true, shift: true })];
 		case "jump-to-session":
 			return [binding("1-9", primary)];
 		case "previous-session":
@@ -201,9 +213,17 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
-		// Plain Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
+		// ⌘D splits a new terminal to the right and ⌘⇧D one below, as in macOS
+		// terminals. Elsewhere Ctrl+D is end-of-input in a terminal and
+		// Alt+Shift switches keyboard layouts, so they take Ctrl+Alt+Shift.
+		case "split-shell-terminal":
+			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true, shift: true })];
+		case "split-shell-terminal-down":
+			return [isMac ? binding("d", { meta: true, shift: true }) : binding("_", { ctrl: true, alt: true, shift: true })];
+		// ⌥D on macOS (it types "∂", so the physical key matches too). Plain
+		// Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
 		case "dictate":
-			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true })];
+			return [isMac ? binding("d", { alt: true, code: "KeyD" }) : binding("d", { ctrl: true, alt: true })];
 		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
 		// readline), so that platform takes G for "go to orchestrator".
 		case "open-orchestrator":

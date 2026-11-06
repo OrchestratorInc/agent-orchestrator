@@ -2060,6 +2060,7 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
+		captureChatFault(ctx, err, c.harness, "chat_turn", "send")
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {
@@ -3129,6 +3130,7 @@ func (c *Controller) projectUnit(
 	if err != nil && persistent {
 		c.log.Error("persistent chat projection stopped; provider retained for replay",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "stop")
 		c.mu.Lock()
 		c.preserveProviderOnStop = true
 		c.state = ports.ChatControllerStopped
@@ -3145,6 +3147,7 @@ func (c *Controller) projectUnit(
 		// internally consistent and a later provider replay may retry it.
 		c.log.Error("failed to project chat event",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
+		captureChatFault(ctx, err, c.harness, "chat_projection", "")
 	} else if projected {
 		c.afterProject(ctx, event, primaryTurn)
 	}
@@ -3676,6 +3679,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		message := "provider error"
 		if event.Err != nil {
 			message = event.Err.Error()
+			captureChatFault(ctx, event.Err, c.harness, "chat_provider_error", "")
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {
 			if err := c.recordAccount(ctx, ports.ChatAccount{

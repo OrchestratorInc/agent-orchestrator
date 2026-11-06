@@ -7,6 +7,7 @@ import {
 	getApiBaseUrl,
 	hasTrustedApiBaseUrl,
 	normalizeApiOperation,
+	reportingFetch,
 	setApiDaemonStatus,
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
@@ -24,6 +25,25 @@ vi.mock("./sentry", () => ({
 
 const captureMock = vi.mocked(captureRendererEvent);
 const sentryCaptureMock = vi.mocked(captureApiErrorToSentry);
+
+describe("remote daemon reporting fetch", () => {
+	afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+	it("reports a failure once and leaves the response body available", async () => {
+		const body = { code: "INTERNAL_ERROR", message: "private details" };
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 500 }));
+		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
+		expect(await response.json()).toEqual(body);
+		expect(sentryCaptureMock).toHaveBeenCalledExactlyOnceWith("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", undefined);
+	});
+
+	it("preserves cancellation without reporting an error", async () => {
+		const error = new DOMException("cancelled", "AbortError");
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+		await expect(reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"))).rejects.toBe(error);
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+	});
+});
 
 describe("apiClient runtime base URL", () => {
 	afterEach(() => {

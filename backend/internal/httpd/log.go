@@ -57,6 +57,9 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					attrs = append(attrs, "error", captured.Err)
 				}
 				log.Info("http request", attrs...)
+				if status := ww.Status(); status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+					captureFaultCode(r, status, captured, captureHTTPError)
+				}
 				if ww.Status() >= http.StatusInternalServerError {
 					route := telemetrymeta.RoutePattern(r)
 					path := route.String()
@@ -134,8 +137,20 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					}
 					// Sentry keeps safe diagnostic fields and stack frames, but
 					// replaces error text before sending.
-					// 503 (transient contention) is excluded by ShouldCaptureStatus.
+					// A plain 503 (transient contention) is excluded by
+					// ShouldCaptureStatus. A 503 is still captured when its code is
+					// a registered fault or its cause is a server-side deadline,
+					// because those are faults and hangs, not contention.
+					category := "http_5xx"
 					captureSentry := sentryobs.ShouldCaptureStatus(ww.Status())
+					if !captureSentry {
+						switch {
+						case sentryobs.IsFaultCode(errorCode):
+							captureSentry, category = true, "http_fault"
+						case sentryobs.IsServerTimeout(ww.Status(), capErr):
+							captureSentry, category = true, "http_timeout"
+						}
+					}
 					if capErr != nil && errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
 						captureSentry = false
 					}
@@ -150,7 +165,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							"method":     r.Method,
 							"path":       path,
 							"status":     strconv.Itoa(ww.Status()),
-							"category":   "http_5xx",
+							"category":   category,
 							"error_kind": errorKind,
 							"error_type": errorType,
 							"error_code": errorCode,
@@ -162,4 +177,41 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 			next.ServeHTTP(ww, r)
 		})
 	}
+}
+
+// captureFaultCode sends a registered daemon fault that answered with a 4xx to
+// Sentry. Ordinary 4xx (bad input, not found, expected conflicts) stay out:
+// only codes listed in sentryobs.IsFaultCode qualify. PostHog's ao.http.5xx is
+// untouched; these requests already carry their own product events.
+func captureFaultCode(r *http.Request, status int, captured envelope.CapturedError, captureHTTPError captureHTTPErrorFunc) {
+	errorKind, errorCode := "", captured.Code
+	if captured.Err != nil {
+		var code string
+		errorKind, code = telemetrymeta.ErrorKindAndCode(captured.Err)
+		if code != "" {
+			errorCode = code
+		}
+	}
+	if !sentryobs.IsFaultCode(errorCode) {
+		return
+	}
+	route := telemetrymeta.RoutePattern(r)
+	path := route.String()
+	err := captured.Err
+	if err == nil {
+		err = fmt.Errorf("HTTP %d %s %s", status, r.Method, path)
+	}
+	errorType := telemetrymeta.ErrorType(captured.Err)
+	captureHTTPError(r.Context(), err, map[string]string{
+		"component":  "httpd",
+		"operation":  "http_request",
+		"method":     r.Method,
+		"path":       path,
+		"status":     strconv.Itoa(status),
+		"category":   "http_fault",
+		"error_kind": errorKind,
+		"error_type": errorType,
+		"error_code": errorCode,
+		"area":       sentryobs.Area(captured.Err, errorCode),
+	}, telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, errorCode), route, captured.FailureSite)
 }

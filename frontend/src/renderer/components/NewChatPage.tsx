@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
@@ -287,7 +288,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
-			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
+			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
 	};
 

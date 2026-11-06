@@ -284,7 +284,7 @@ const AGENT_STATUS = {
 
 // The sidebar's status vocabulary: a spinner while the agent works, the red
 // alert while it waits on the user, and a dot for a finished turn not yet seen.
-function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+export function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
 	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
 	if (!state) return null;
