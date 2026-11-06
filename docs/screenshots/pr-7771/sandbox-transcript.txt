@@ -1,0 +1,47 @@
+PS> whoami
+    yash\codexsandboxoffline
+
+PS> icacls "C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon" | Select-String "CodexSandboxUsers|ACER"
+codex : C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon: Access is denied.
+At line:1 char:37
++ ... \evidence"; codex sandbox powershell -NoProfile -ExecutionPolicy Bypa ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\ACER\A...cess is denied.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+PS> icacls "C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18" | Select-String "CodexSandboxUsers|ACER"
+    C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18 YASH\CodexSandboxUsers:(I)(OI)(CI)(M)
+    YASH\ACER:(I)(OI)(CI)(F)
+
+--- before: main build (install directory pinned) ---
+
+PS> $env:PATH = "C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon;" + $env:PATH
+PS> ao status
+    CommandNotFoundException: The term 'ao' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+PS> Test-Path "C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\Programs\AO main\resources\daemon\ao.exe"
+Test-Path : Access is denied
+At C:\Users\ACER\AppData\Local\Temp\ao-7171\evidence\sandbox-evidence.ps1:27 char:23
++ try { Line ('    ' + (Test-Path ($install + '\ao.exe'))) } catch { Li ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (C:\Users\ACER\A...s\daemon\ao.exe:String) [Test-Path], UnauthorizedAc 
+   cessException
+    + FullyQualifiedErrorId : ItemExistsUnauthorizedAccessError,Microsoft.PowerShell.Commands.TestPathCommand
+ 
+    False
+
+--- after: this PR (data-directory shim pinned) ---
+
+PS> $env:PATH = "C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18;" + $env:PATH
+PS> where.exe ao
+    C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18\ao.cmd
+    C:\Users\ACER\.ao\dev\pr-7771-evidence\runtime\ao-path\3fd4cbb20f011375973b07c5acfb6b18\ao.exe
+
+PS> ao --version
+    ao version dev
+
+PS> ao status
+    AO daemon: stopped
+      run file: C:\Users\ACER\.ao\dev\pr-7771-evidence\running.json
+      data dir: C:\Users\ACER\.ao\dev\pr-7771-evidence
