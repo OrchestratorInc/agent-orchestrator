@@ -7,7 +7,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { LOCAL_HOST } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
-import { machinesNotSearched, mergeMachineSearchResults, type MachineSearchResult } from "../lib/session-search-machines";
+import { machinesNotSearched, mergeMachineSearchResults, mergeNewestFirst, type MachineSearchResult } from "../lib/session-search-machines";
 import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -104,7 +104,7 @@ export function SessionSearchView() {
 		return mergeMachineSearchResults([
 			{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localData.results ?? [], total: localData.total ?? 0 },
 			...remoteSearch.answers,
-		], sort === "recent" || localData.sort === "recent").slice(0, shown);
+		], mergeNewestFirst(localData, sort)).slice(0, shown);
 	}, [localData, remoteSearch, search.data, shown, sort]);
 	const notSearched = remoteSearch.settled ? machinesNotSearched(remoteSearch.answers, t) : [];
 	const coverage = search.data?.coverage;
@@ -144,6 +144,7 @@ export function SessionSearchView() {
 		// from route state.
 		revealSessionSearchMatch({
 			sessionId: result.sessionId,
+			hostId: result.hostId,
 			messageId: result.messageId,
 			snippet: result.snippet,
 			highlights: result.highlights,

@@ -65,6 +65,16 @@ export type MachineSearchResult = SessionSearchResult & {
  *
  * Sorted newest first, there is nothing to weigh: the lists merge by time.
  */
+/**
+ * Whether machines' lists merge newest first: when the daemon sorted by time.
+ * A typed `sort:` decides over a view's sort control on the daemon, so the merge
+ * follows the sort this machine reports it applied rather than the one the view
+ * asked for. Only an AO that does not report its sort falls back to the request.
+ */
+export function mergeNewestFirst(local: { sort?: string } | undefined, requested?: "relevance" | "recent"): boolean {
+	return (local?.sort ?? requested) === "recent";
+}
+
 export function mergeMachineSearchResults(
 	answers: readonly MachineSearchAnswer[],
 	newestFirst: boolean,

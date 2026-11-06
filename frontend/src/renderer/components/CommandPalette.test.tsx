@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { peekSessionSearchReveal, resetSessionSearchReveals } from "../lib/session-search-reveal";
+import { sessionUiKey } from "../lib/hosts";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -1572,7 +1573,9 @@ describe("CommandPalette session-text search", () => {
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId: "h_azure", projectId: "proj-1", sessionId: "w-fix" },
 		});
-		expect(peekSessionSearchReveal("w-fix")).toMatchObject({ messageId: "remote-msg" });
+		// The match is handed to that machine's session, keyed by host and id.
+		expect(peekSessionSearchReveal(sessionUiKey("w-fix", "h_azure"))).toMatchObject({ messageId: "remote-msg" });
+		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
 	});
 
 	it("keeps this machine's answer until every machine has answered", async () => {

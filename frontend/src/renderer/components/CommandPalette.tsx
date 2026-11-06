@@ -49,7 +49,7 @@ import { isMacPlatform } from "../lib/platform";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
 import { PALETTE_SESSION_SEARCH_LIMIT, usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
-import { machinesNotSearched, mergeMachineSearchResults } from "../lib/session-search-machines";
+import { machinesNotSearched, mergeMachineSearchResults, mergeNewestFirst } from "../lib/session-search-machines";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
@@ -278,7 +278,7 @@ export function CommandPalette() {
 		return mergeMachineSearchResults([
 			{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localSessionSearch.results ?? [], total: localSessionSearch.total ?? 0 },
 			...remoteSessionSearch.answers,
-		], false).slice(0, PALETTE_SESSION_SEARCH_LIMIT);
+		], mergeNewestFirst(localSessionSearch)).slice(0, PALETTE_SESSION_SEARCH_LIMIT);
 	}, [sessionSearchQuery.data, localSessionSearch, remoteSessionSearch]);
 	const sessionSearchMachinesNotSearched = useMemo(
 		() => (remoteSessionSearch.settled ? machinesNotSearched(remoteSessionSearch.answers, t) : []),

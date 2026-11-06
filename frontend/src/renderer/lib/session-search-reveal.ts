@@ -1,4 +1,5 @@
 import { useUiStore } from "../stores/ui-store";
+import { sessionUiKey, type HostId } from "./hosts";
 
 /**
  * Carries a search result's match into the session that result opens.
@@ -10,6 +11,11 @@ import { useUiStore } from "../stores/ui-store";
  *
  * A target is consumed exactly once: arriving at a session should scroll to the
  * match, but returning to that session later must not jump again.
+ *
+ * Targets are keyed by the session's UI key (sessionUiKey: the id for this
+ * machine, host and id for another), the key the session view and reviewer chat
+ * consume. A bare id would let an open local session with the same id take a
+ * remote session's target, and a remote reviewer chat would never see its own.
  */
 
 export type SessionSearchReveal = {
@@ -77,6 +83,8 @@ export function subscribeSessionSearchReveal(sessionId: string, listener: () => 
 /** One search result's target: the session, and the match inside it. */
 export type SessionSearchMatchTarget = {
 	sessionId: string;
+	/** The machine the session is on; absent for this machine. */
+	hostId?: HostId;
 	messageId?: string;
 	snippet: string;
 	/** Matched spans in the snippet (UTF-16 offsets, as the daemon returns them). */
@@ -114,11 +122,12 @@ export function sessionSearchMatchText(
 export function revealSessionSearchMatch(target: SessionSearchMatchTarget): void {
 	if (!target.messageId) return;
 	const text = sessionSearchMatchText(target.snippet, target.highlights);
+	const sessionKey = sessionUiKey(target.sessionId, target.hostId);
 	if (target.reviewId) {
-		useUiStore.getState().requestChatMessageFocus(target.sessionId, target.messageId, text, target.reviewId);
+		useUiStore.getState().requestChatMessageFocus(sessionKey, target.messageId, text, target.reviewId);
 		return;
 	}
-	requestSessionSearchReveal(target.sessionId, {
+	requestSessionSearchReveal(sessionKey, {
 		messageId: target.messageId,
 		text,
 		query: target.query,

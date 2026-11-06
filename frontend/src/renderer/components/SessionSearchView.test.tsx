@@ -38,6 +38,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 import { SessionSearchView } from "./SessionSearchView";
 import { peekSessionSearchReveal, resetSessionSearchReveals } from "../lib/session-search-reveal";
+import { sessionUiKey } from "../lib/hosts";
 import { useUiStore } from "../stores/ui-store";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -390,7 +391,10 @@ describe("SessionSearchView", () => {
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId: "h_azure", projectId: "proj", sessionId: "proj-1" },
 		});
-		expect(peekSessionSearchReveal("proj-1")).toMatchObject({ messageId: "remote-msg" });
+		// This machine also has a proj-1: the remote match is keyed by host and id,
+		// so the local session never takes it.
+		expect(peekSessionSearchReveal(sessionUiKey("proj-1", "h_azure"))).toMatchObject({ messageId: "remote-msg" });
+		expect(peekSessionSearchReveal("proj-1")).toBeUndefined();
 	});
 
 	it("asks the other machines with the same words and dates, and only this one for a project", async () => {

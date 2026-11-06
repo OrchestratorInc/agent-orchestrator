@@ -4,6 +4,7 @@ import {
 	classifyMachineSearchFailure,
 	machinesNotSearched,
 	mergeMachineSearchResults,
+	mergeNewestFirst,
 	type MachineSearchAnswer,
 } from "./session-search-machines";
 
@@ -54,6 +55,24 @@ describe("mergeMachineSearchResults", () => {
 		const offline: MachineSearchAnswer = { hostId: "h_off", label: "Laptop", outcome: "offline", results: [], total: 0 };
 		const merged = mergeMachineSearchResults([answer(LOCAL_HOST, "this mac", [result("a1", "2026-10-01T00:00:00Z")]), offline], false);
 		expect(merged.map((row) => row.sessionId)).toEqual(["a1"]);
+	});
+});
+
+// The daemon gives a typed `sort:` precedence over a view's sort control, and
+// reports the sort it applied. The merge follows that, not what the view asked:
+// Cmd+K's `retry sort:recent` merged by relevance, and the Search page's Recent
+// control overrode a typed `sort:relevance`.
+describe("mergeNewestFirst", () => {
+	it("follows the sort this machine's daemon applied", () => {
+		expect(mergeNewestFirst({ sort: "recent" })).toBe(true);
+		expect(mergeNewestFirst({ sort: "recent" }, "relevance")).toBe(true);
+		expect(mergeNewestFirst({ sort: "relevance" }, "recent")).toBe(false);
+	});
+
+	it("falls back to the requested sort only when the daemon does not report one", () => {
+		expect(mergeNewestFirst({}, "recent")).toBe(true);
+		expect(mergeNewestFirst(undefined, "recent")).toBe(true);
+		expect(mergeNewestFirst({})).toBe(false);
 	});
 });
 
