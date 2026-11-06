@@ -10,7 +10,6 @@ import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { HarnessDetailGroup } from "./harness/harness-ui";
-import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
 
 const providerNames = agentAccountProviderNames;
 
@@ -27,8 +26,6 @@ export type CliLoginControls = {
 	onLogout: () => void;
 };
 
-/** Every Claude Code and Codex account with all of its limits. Each account is
- * a config folder of the CLI itself; "This computer" is the CLI's own login. */
 /** One CLI's subscription accounts on its Harness Account tab: the CLI's own
  * login and the accounts added in AO, with their limits, default and sign-in. */
 export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls }) {
@@ -171,7 +168,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 	</div>;
 }
 
-/** The account's limit meters, shared by the Accounts page and the session summary. */
+/** The account's limit meters, shared by the Harness Account tab and the session summary. */
 export function AccountLimits({ account }: { account: AgentAccount }) {
 	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];
@@ -188,6 +185,34 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 			limit: formatMoney(extra.monthlyLimit, extra.currency, i18n.language),
 		})}</p> : null}
 	</div>;
+}
+
+function formatPlanName(plan: string | null | undefined): string | null {
+	const value = plan?.trim();
+	if (!value) return null;
+	const known: Record<string, string> = { free: "Free", plus: "Plus", pro: "Pro", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise" };
+	return known[value.toLowerCase()] ?? value;
+}
+
+function formatPercentage(value: number, locale?: string): string {
+	return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value)}%`;
+}
+
+function formatCompactNumber(value: number, locale: string): string {
+	return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+/** A reset time: the hour today, or day and hour later; `full` is the tooltip. */
+function formatResetTime(value: string | null | undefined, locale: string): { visible: string; full: string } | null {
+	if (!value) return null;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return null;
+	const now = new Date();
+	const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+	return {
+		visible: new Intl.DateTimeFormat(locale, sameDay ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date),
+		full: new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "long" }).format(date),
+	};
 }
 
 /** Formats an amount in the server's currency. A code Intl does not know

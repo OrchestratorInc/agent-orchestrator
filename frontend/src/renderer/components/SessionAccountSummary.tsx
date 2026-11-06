@@ -15,10 +15,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 export function SessionAccountSummary({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const provider = agentAccountProviderFor(session.provider);
-	const accounts = useAgentAccounts();
+	// Only a live local Claude Code or Codex session has an account to show; no
+	// other session polls the account list.
+	const shown = Boolean(provider) && !session.cloud && !session.isTerminated;
+	const accounts = useAgentAccounts(shown);
 	const current = useSessionAgentAccounts(provider ? session.id : undefined);
 	const actions = useAgentAccountActions();
-	const label = useAgentAccountLabel();
+	const label = useAgentAccountLabel(shown);
 	const { transition } = useSessionInterfaceTransitionStatus(provider ? session.id : undefined);
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
