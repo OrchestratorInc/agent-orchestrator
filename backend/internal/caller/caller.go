@@ -13,6 +13,11 @@ import (
 // Header names the calling AO session on a CLI request to the daemon.
 const Header = "X-AO-Caller-Session"
 
+// ShellTerminalEnv marks a shell the user opened in a session's terminal tab.
+// Those shells carry AO_SESSION_ID too, but a command typed there is not the
+// agent's, so the CLI sends no caller from them.
+const ShellTerminalEnv = "AO_SHELL_TERMINAL"
+
 // maxLen bounds the header value kept on the context; session ids are short.
 const maxLen = 128
 

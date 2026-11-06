@@ -3689,7 +3689,10 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		const groups = groupByTurn({ ...snapshot, items: timelineItems })
+		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
+		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
+		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const groups = groupByTurn({ ...snapshot, items })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
@@ -5907,6 +5910,19 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
+
+const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
+
+/** An AO action filed under a turn the timeline drops, as a turn-less row; anything else unchanged. */
+function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): ConversationItem {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || !item.turnId || !dropped.has(item.turnId)) return item;
+	let detached = detachedActions.get(item);
+	if (!detached) {
+		detached = { ...item, turnId: undefined };
+		detachedActions.set(item, detached);
+	}
+	return detached;
+}
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
 function rendersNothing(run: TimelineRun): boolean {
