@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import {
@@ -53,7 +53,7 @@ export function usePaletteSessionSearch(
 				// recency browse the daemon accepts.
 				params: { query: { q: trimmed, sort: trimmed ? undefined : "recent", limit: 8 } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Could not search past sessions"));
+			if (error) throw apiErrorException(error, "Could not search past sessions");
 			if (!data) throw new Error("Could not search past sessions");
 			return data;
 		},
@@ -107,7 +107,7 @@ export function useSessionSearchMatches(
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/search/matches", {
 				params: { path: { sessionId: sessionId! }, query: { q: trimmed } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Could not list matches"));
+			if (error) throw apiErrorException(error, "Could not list matches");
 			return data?.matches ?? [];
 		},
 	});

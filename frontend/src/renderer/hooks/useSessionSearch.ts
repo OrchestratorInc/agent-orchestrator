@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 
@@ -83,7 +83,7 @@ export function useSessionSearch(filters: SessionSearchFilters, hostId: HostId =
 					},
 				},
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Could not search past sessions"));
+			if (error) throw apiErrorException(error, "Could not search past sessions");
 			if (!data) throw new Error("Could not search past sessions");
 			return data;
 		},
