@@ -48,9 +48,9 @@ var (
 	watchRetryMax     = 30 * time.Second
 )
 
-// Manager holds one watch per tracked shell terminal. The terminal host
-// pushes a reading whenever the foreground program changes or starts or stops
-// drawing, so nothing polls.
+// Manager remembers shell terminals and watches them while a client subscribes.
+// The terminal host pushes readings when the foreground program changes or
+// starts or stops drawing, so nothing polls.
 type Manager struct {
 	rt     Runtime
 	styled ports.StyledTerminalOutputReader
@@ -87,6 +87,13 @@ func (m *Manager) TrackShellTerminal(handleID string) {
 	if _, ok := m.tracked[handleID]; ok || handleID == "" {
 		return
 	}
+	m.tracked[handleID] = nil
+	if len(m.subs) > 0 {
+		m.startWatchLocked(handleID)
+	}
+}
+
+func (m *Manager) startWatchLocked(handleID string) {
 	ctx, cancel := context.WithCancel(m.base)
 	m.tracked[handleID] = cancel
 	go m.watch(ctx, handleID)
@@ -111,16 +118,30 @@ func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 	id := m.nextSub
 	m.nextSub++
 	m.subs[id] = fn
+	if len(m.subs) == 1 {
+		for handleID := range m.tracked {
+			m.startWatchLocked(handleID)
+		}
+	}
 	fn(m.snapshotLocked())
 	return func() {
 		m.mu.Lock()
 		delete(m.subs, id)
+		if len(m.subs) == 0 {
+			for handleID, cancel := range m.tracked {
+				if cancel != nil {
+					cancel()
+				}
+				m.tracked[handleID] = nil
+			}
+			clear(m.current)
+		}
 		m.mu.Unlock()
 	}
 }
 
 func (m *Manager) watch(ctx context.Context, handleID string) {
-	defer m.apply(context.Background(), handleID, nil)
+	defer m.apply(ctx, handleID, nil)
 	handle := ports.RuntimeHandle{ID: handleID}
 	for backoff := watchRetryMin; ; backoff = min(backoff*2, watchRetryMax) {
 		err := m.rt.WatchTerminalForeground(ctx, handle, func(fg ports.TerminalForeground) {

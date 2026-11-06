@@ -4,6 +4,7 @@ import { Pressable } from "./ui/pressable";
 
 type TerminalTabFrameProps = {
 	active: boolean;
+	wide?: boolean;
 	icon: ReactNode;
 	label: string;
 	/** Takes the icon's slot on hover or focus: the tab's close button or menu. */
@@ -27,6 +28,7 @@ export const terminalTabActionClassName =
 // control that replaces the icon on hover, so they cannot drift apart.
 export function TerminalTabFrame({
 	active,
+	wide = false,
 	icon,
 	label,
 	action,
@@ -39,7 +41,8 @@ export function TerminalTabFrame({
 	return (
 		<span
 			className={cn(
-				"group relative inline-flex h-full min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch items-center border-r border-border",
+				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center border-r border-border",
+				wide ? "max-w-[192px]" : "max-w-shell-tab-max",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"

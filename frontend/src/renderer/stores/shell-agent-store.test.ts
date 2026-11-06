@@ -89,6 +89,17 @@ describe("shell agent connection", () => {
 		expect(FakeSocket.instances).toHaveLength(1);
 	});
 
+	it("closes the socket and clears status when the preview is disabled", () => {
+		const { rerender } = renderHook(({ enabled }) => useShellAgentStream(enabled), { initialProps: { enabled: true } });
+		const activeSocket = socket();
+		activeSocket.message({ ch: "shell-agents", type: "snapshot", agents: [entry("working")] });
+		rerender({ enabled: false });
+		expect(activeSocket.close).toHaveBeenCalledOnce();
+		expect(useShellAgentStore.getState().agents).toEqual({});
+		act(() => vi.advanceTimersByTime(5_000));
+		expect(FakeSocket.instances).toHaveLength(1);
+	});
+
 	it("clears status and retries after a network close", () => {
 		renderHook(() => useShellAgentStream(true));
 		socket().message({ ch: "shell-agents", type: "snapshot", agents: [entry("working")] });

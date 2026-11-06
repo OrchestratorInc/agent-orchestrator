@@ -7,6 +7,7 @@ import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
+import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
@@ -49,8 +50,9 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// Only the local daemon watches its shells for agents.
-	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
+	// The agent tab is a Developer Mode preview, like the simplified topbar.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const tracksAgent = developerMode && !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
@@ -176,6 +178,7 @@ export function ShellTerminalTab({
 		) : undefined;
 		return (
 			<TerminalTabFrame
+				wide={Boolean(agent)}
 				action={closeAction}
 				active={isActive}
 				buttonProps={{
@@ -217,7 +220,7 @@ export function ShellTerminalTab({
 			{isEditing ? (
 				<input
 					aria-label={t("terminal.rename", { title })}
-					className="min-w-flex-min max-w-shell-tab-max rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent"
+					className={cn("min-w-flex-min rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent", agent ? "max-w-[192px]" : "max-w-shell-tab-max")}
 					onBlur={commit}
 					onChange={(event) => setDraft(event.target.value)}
 					onKeyDown={(event) => {
@@ -238,8 +241,9 @@ export function ShellTerminalTab({
 					aria-current={isActive}
 					aria-selected={isActive}
 					className={cn(
-						"min-w-flex-min max-w-shell-tab-max cursor-pointer select-none truncate font-mono text-control font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
+						"min-w-flex-min cursor-pointer select-none truncate font-mono text-control font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
 						isActive ? "text-foreground" : "text-passive group-hover:text-foreground",
+						agent ? "max-w-[192px]" : "max-w-shell-tab-max",
 					)}
 					{...tabRenameHandlers}
 					{...renameKeyProps}

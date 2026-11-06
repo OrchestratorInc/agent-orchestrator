@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -143,8 +144,10 @@ type host struct {
 	// attaching after they scrolled out of the ring still receives them (see
 	// modeTracker). record updates it together with the ring under mu, so when
 	// handleConn snapshots the ring, the tracker is up to the same chunk.
-	modes *modeTracker
-	fg    *foregroundTracker // nil where the PTY cannot name its foreground
+	modes      *modeTracker
+	fg         *foregroundTracker // nil where the PTY cannot name its foreground
+	fgOnce     sync.Once
+	fgWatchers atomic.Int32
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -199,7 +202,6 @@ func (h *host) applyLargestLocked() {
 func (h *host) run(ctx context.Context) error {
 	// Pump PTY output to ring + broadcast.
 	go h.pumpPTY()
-	go h.fg.run(h.shutdownC, h.publishForeground)
 
 	// Watch for ctx cancellation and trigger shutdown.
 	go func() {
@@ -316,7 +318,9 @@ func (h *host) record(chunk []byte) {
 		h.enqueueAllLocked(frame)
 	}
 	h.mu.Unlock()
-	h.fg.noteOutput(time.Now())
+	if h.fgWatchers.Load() > 0 {
+		h.fg.noteOutput(time.Now())
+	}
 }
 
 func (h *host) publishForeground(state ForegroundPayload) {
@@ -469,6 +473,9 @@ func (h *host) removeClient(conn net.Conn, client *clientState) {
 	h.mu.Lock()
 	if h.clients[conn] == client {
 		delete(h.clients, conn)
+		if client.watcher {
+			h.fgWatchers.Add(-1)
+		}
 		h.applyLargestLocked()
 	}
 	h.mu.Unlock()
@@ -540,7 +547,9 @@ func (h *host) handleConn(conn net.Conn) {
 func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
-		h.fg.noteInput(time.Now())
+		if h.fgWatchers.Load() > 0 {
+			h.fg.noteInput(time.Now())
+		}
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			if n, err := h.cfg.PTY.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
@@ -551,7 +560,9 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			var rp ResizePayload
 			if err := json.Unmarshal(payload, &rp); err == nil && rp.Cols > 0 && rp.Rows > 0 {
-				h.fg.noteResize(time.Now())
+				if h.fgWatchers.Load() > 0 {
+					h.fg.noteResize(time.Now())
+				}
 				// Record this client's requested grid, then size the shared PTY to
 				// the largest client (see applyLargestLocked) rather than blindly
 				// applying this one — otherwise a small viewer shrinks every viewer.
@@ -600,10 +611,12 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	case MsgWatchForegroundReq:
 		// The watcher gets the current state at once, then each change.
 		h.mu.Lock()
-		if cs := h.clients[conn]; cs != nil {
+		if cs := h.clients[conn]; cs != nil && !cs.watcher {
 			cs.watcher = true
+			h.fgWatchers.Add(1)
 		}
 		h.mu.Unlock()
+		h.fgOnce.Do(func() { go h.fg.run(h.shutdownC, h.publishForeground) })
 		if state, ok := h.fg.current(); ok {
 			h.sendTo(conn, foregroundFrame(state))
 		}

@@ -1,20 +1,27 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { useShellAgentStore } from "../stores/shell-agent-store";
+import { useUiStore } from "../stores/ui-store";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { isWindowsPlatform } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false) }));
-vi.mock("../lib/platform", () => ({ isWindowsPlatform }));
+const { isWindowsPlatform, useShellAgentStream } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false), useShellAgentStream: vi.fn() }));
+vi.mock("../lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/platform")>()),
+	isWindowsPlatform,
+}));
 vi.mock("../stores/shell-agent-store", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../stores/shell-agent-store")>()),
-	useShellAgentStream: () => {},
+	useShellAgentStream,
 }));
 
 afterEach(() => {
+	cleanup();
 	isWindowsPlatform.mockReturnValue(false);
+	useShellAgentStream.mockClear();
 	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+	useUiStore.setState({ developerMode: false });
 });
 
 const shell: ShellTerminal = {
@@ -216,6 +223,30 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 
 describe("ShellTerminalTab agent name", () => {
 	const claude = { harness: "claude-code", state: "idle" } as const;
+	beforeEach(() => useUiStore.setState({ developerMode: true }));
+
+	it("shows a plain tab and does not subscribe when Developer Mode is off", () => {
+		useUiStore.setState({ developerMode: false });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-[192px]");
+	});
+
+	it("returns to the plain tab when Developer Mode is switched off", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-[192px]");
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-shell-tab-max");
+		act(() => useUiStore.setState({ developerMode: false }));
+		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
+	});
 
 	it("names a default-named tab after its agent", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });

@@ -15,9 +15,15 @@ import (
 type fakeRuntime struct {
 	readings chan ports.TerminalForeground
 	screen   string
+	started  chan struct{}
+	stopped  chan struct{}
 }
 
 func (f *fakeRuntime) WatchTerminalForeground(ctx context.Context, _ ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	if f.started != nil {
+		f.started <- struct{}{}
+		defer func() { f.stopped <- struct{}{} }()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -26,6 +32,45 @@ func (f *fakeRuntime) WatchTerminalForeground(ctx context.Context, _ ports.Runti
 			fn(fg)
 		}
 	}
+}
+
+func TestManagerWatchesOnlyWhileSubscribed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground), started: make(chan struct{}, 1), stopped: make(chan struct{}, 1)}
+	m := NewManager(ctx, rt, nil, nil)
+	m.TrackShellTerminal("shell-1")
+	select {
+	case <-rt.started:
+		t.Fatal("started watching before a client subscribed")
+	default:
+	}
+	unsubscribe := m.SubscribeShellAgents(func(json.RawMessage) {})
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("did not start watching after subscribe")
+	}
+	second := m.SubscribeShellAgents(func(json.RawMessage) {})
+	unsubscribe()
+	select {
+	case <-rt.stopped:
+		t.Fatal("stopped watching while another client is subscribed")
+	default:
+	}
+	second()
+	select {
+	case <-rt.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("watch did not stop after unsubscribe")
+	}
+	unsubscribe = m.SubscribeShellAgents(func(json.RawMessage) {})
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("watch did not restart after resubscribe")
+	}
+	unsubscribe()
 }
 
 func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
@@ -37,7 +82,9 @@ func newTestManager(t *testing.T) (*Manager, *fakeRuntime) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
-	return NewManager(ctx, rt, nil, nil), rt
+	m := NewManager(ctx, rt, nil, nil)
+	t.Cleanup(m.SubscribeShellAgents(func(json.RawMessage) {}))
+	return m, rt
 }
 
 func waitForState(t *testing.T, m *Manager, want State) {
