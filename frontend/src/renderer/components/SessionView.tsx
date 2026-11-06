@@ -23,6 +23,8 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
+import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
@@ -64,7 +66,7 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
-import { SessionFileTab } from "./SessionFileTabs";
+import { FileTabMenuItems, SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
@@ -1570,8 +1572,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				),
 				onSelect: () => activateCenterFile(path),
 				onClose: () => closeCenterFile(path),
+				menuItems: (
+					<FileTabMenuItems
+						path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
+						remote={Boolean(hostId || session?.cloud)}
+						sessionId={sessionId}
+						source={centerFileRequestsBySession[uiSessionId]?.[path]?.source}
+					/>
+				),
 			})),
-		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
+		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId, hostId, session?.cloud, sessionId],
 	);
 
 	// A group without the session's tab is selected like a workspace tab. With
@@ -1680,6 +1690,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
+	// ⌘D's action, set further down; tab menus reuse it.
+	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
+	// Tab menus split their tab beside the one on screen, as dropping it on
+	// that pane's edge does; the tab on screen splits off a new terminal, as
+	// ⌘D does. Only while split panes are on.
+	const splitTabMenu = useMemo(() => {
+		if (!splitPanes) return undefined;
+		return (key: string): TabSplitActions => {
+			const anchor = selectedTabKey;
+			if (key === anchor) {
+				if (!session || isOrchestrator) return {};
+				return {
+					right: () => splitNewTerminalRef.current("right"),
+					down: () => splitNewTerminalRef.current("bottom"),
+					newTerminal: true,
+				};
+			}
+			if (!splittableKeys.has(anchor) || !splittableKeys.has(key)) return {};
+			const split = (side: "right" | "bottom") => () => {
+				updateGroups((current) => splitBeside(current, anchor, key, side));
+				selectTab(key);
+			};
+			return { right: split("right"), down: split("bottom") };
+		};
+	}, [isOrchestrator, selectTab, selectedTabKey, session, splitPanes, splittableKeys, updateGroups]);
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
 	// Clicking into a pane focuses its member, as clicking its name does. This
 	// listens natively: terminals are portaled from the shared cache, so React
@@ -1860,6 +1895,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
 		};
+		// The focused member's own tab menu, below the group's Ungroup.
+		const memberMenu = (key: string, shown: boolean) => {
+			const filePath = key.startsWith("file:") ? key.slice("file:".length) : undefined;
+			const request = filePath ? centerFileRequestsBySession[uiSessionId]?.[filePath] : undefined;
+			const items = key === SESSION_TAB_KEY
+				? session ? <SessionContextMenuItems session={session} /> : undefined
+				: filePath
+					? <FileTabMenuItems path={request?.path ?? filePath} remote={Boolean(hostId || session?.cloud)} sessionId={sessionId} source={request?.source} />
+					: undefined;
+			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud && sessionIsActive(session);
+			return (
+				<TabMenuBody
+					closeShortcut={shown}
+					destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
+					items={items}
+					onClose={() => closePane(key)}
+					tabKey={key}
+				/>
+			);
+		};
 		return groups.map((group) => ({
 			key: groupTabKey(group),
 			content: (
@@ -1867,6 +1922,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					active={group === shownGroup}
 					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 					members={leafKeys(group.root).map(groupMember)}
+					menuItems={memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup)}
 					onUngroup={() => updateGroups((current) => ungroupById(current, group.id))}
 				/>
 			),
@@ -1877,9 +1933,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		closePane,
 		developerMode,
 		groups,
+		hostId,
+		isOrchestrator,
 		reviewerHarness,
 		selectTab,
 		selectedTabKey,
+		session,
+		sessionId,
 		sessionLabel,
 		sessionProvider,
 		shellTerminals,
@@ -1892,7 +1952,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
 	// below it, splitting the tab on screen if it is not split yet.
-	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
 	splitNewTerminalRef.current = (side) => {
 		if (!session || isOrchestrator || !splitPanes) return;
 		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
@@ -2470,6 +2529,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							    reviewer targets remain terminal surfaces in either mode. */}
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
+							<TabSplitMenuContext.Provider value={splitTabMenu}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
@@ -2609,6 +2669,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							)}
 							</div>
+							</TabSplitMenuContext.Provider>
 							</SplitHiddenTabKeysContext.Provider>
 							</SplitCloseFocusedContext.Provider>
 							{shownGroup

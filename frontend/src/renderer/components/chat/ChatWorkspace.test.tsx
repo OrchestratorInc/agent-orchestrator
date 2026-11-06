@@ -964,7 +964,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(onSessionRenamed).not.toHaveBeenCalled();
 	});
