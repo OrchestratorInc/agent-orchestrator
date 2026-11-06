@@ -1904,7 +1904,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: filePath
 					? <FileTabMenuItems path={request?.path ?? filePath} remote={Boolean(hostId || session?.cloud)} sessionId={sessionId} source={request?.source} />
 					: undefined;
-			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud?.shared;
+			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud && sessionIsActive(session);
 			return (
 				<TabMenuBody
 					closeShortcut={shown}

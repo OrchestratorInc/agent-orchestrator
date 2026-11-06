@@ -32,7 +32,7 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
@@ -822,8 +822,9 @@ export function SessionPaneTab({
 		/>
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
-	// The project orchestrator is archived with its project, not from here.
-	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud?.shared);
+	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions): an
+	// active local or remote worker. The orchestrator goes with its project.
+	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session));
 	return (
 		<TabContextMenu
 			destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}

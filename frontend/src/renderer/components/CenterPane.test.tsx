@@ -887,6 +887,18 @@ describe("CenterPane tab context menu", () => {
 		expect(right).toHaveBeenCalledOnce();
 	});
 
+	it("offers Archive only where the archive confirmation is mounted", async () => {
+		const { unmount } = renderCenterPane({ session: worker });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		unmount();
+
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
+	});
+
 	it("never closes the session's own tab", async () => {
 		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
 
