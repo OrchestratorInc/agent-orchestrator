@@ -212,7 +212,7 @@ describe("attachAppShortcuts", () => {
 		["macOS", true, "toggle-sidebar", { key: "b", meta: true }],
 		["macOS", true, "toggle-terminal", { key: "`", code: "Backquote", control: true }],
 		["macOS", true, "toggle-terminal", { key: "j", meta: true }],
-		["macOS", true, "toggle-diff", { key: "D", meta: true, shift: true }],
+		["macOS", true, "toggle-diff", { key: "Î", code: "KeyD", alt: true, shift: true }],
 		["macOS", true, "toggle-inspector", { key: "B", meta: true, shift: true }],
 		["macOS", true, "toggle-inspector", { key: "b", code: "KeyB", meta: true, alt: true }],
 		["macOS", true, "command-palette", { key: "k", meta: true }],

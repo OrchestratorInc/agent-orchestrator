@@ -174,8 +174,11 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return isMac
 				? [binding("`", { ctrl: true, code: "Backquote" }), binding("j", { meta: true })]
 				: [binding("`", { ctrl: true, code: "Backquote" })];
+		// ⌘⇧D splits a terminal below on macOS, so the diff takes ⌥⇧D there.
+		// Option+letter types a character on macOS (⌥⇧D is "Î"), so the
+		// binding also matches the physical key.
 		case "toggle-diff":
-			return [binding("d", { ...primary, shift: true })];
+			return [isMac ? binding("d", { alt: true, shift: true, code: "KeyD" }) : binding("d", { ctrl: true, shift: true })];
 		case "jump-to-session":
 			return [binding("1-9", primary)];
 		case "previous-session":
@@ -210,18 +213,17 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
-		// Split panes are a Developer mode preview. On macOS, ⌘D (dictate) and
-		// ⌘⇧D (toggle diff) stay where they are until it ships to everyone, so
-		// the split shortcuts have no default there yet and can be assigned in
-		// Keyboard shortcuts. Elsewhere Ctrl+D is end-of-input in a terminal and
+		// ⌘D splits a new terminal to the right and ⌘⇧D one below, as in macOS
+		// terminals. Elsewhere Ctrl+D is end-of-input in a terminal and
 		// Alt+Shift switches keyboard layouts, so they take Ctrl+Alt+Shift.
 		case "split-shell-terminal":
-			return isMac ? [] : [binding("d", { ctrl: true, alt: true, shift: true })];
+			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true, shift: true })];
 		case "split-shell-terminal-down":
-			return isMac ? [] : [binding("_", { ctrl: true, alt: true, shift: true })];
-		// Plain Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
+			return [isMac ? binding("d", { meta: true, shift: true }) : binding("_", { ctrl: true, alt: true, shift: true })];
+		// ⌥D on macOS (it types "∂", so the physical key matches too). Plain
+		// Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
 		case "dictate":
-			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true })];
+			return [isMac ? binding("d", { alt: true, code: "KeyD" }) : binding("d", { ctrl: true, alt: true })];
 		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
 		// readline), so that platform takes G for "go to orchestrator".
 		case "open-orchestrator":
