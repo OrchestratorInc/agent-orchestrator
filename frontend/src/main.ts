@@ -157,6 +157,7 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
+import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
@@ -3649,7 +3650,21 @@ const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
 const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
-function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
+// A sign-in completed through the website's return page also hands over that
+// visit's id (see CloudSignInContext). It waits here until the renderer takes
+// it, once: on the notification below, or when it mounts. A sign-in link that
+// starts the app arrives before any window listens (macOS sends open-url
+// before ready, and elsewhere the window may still be loading), and a context
+// sent then would be lost. A sign-out drops it.
+const pendingCloudSignIn = createPendingCloudSignIn();
+
+ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
+
+function notifyRenderersOfCloudSession(
+	account: import("./shared/cloud-account").CloudAccount | null,
+	signIn?: import("./shared/cloud-account").CloudSignInContext,
+): void {
+	pendingCloudSignIn.note(account, signIn);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
@@ -3717,9 +3732,9 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		return;
 	}
 	try {
-		const session = await handleCloudDeepLink(url, cloudDataDir());
-		if (!session) return;
-		notifyRenderersOfCloudSession(session);
+		const result = await handleCloudDeepLink(url, cloudDataDir());
+		if (!result) return;
+		notifyRenderersOfCloudSession(result.account, result.signIn);
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);
