@@ -199,10 +199,15 @@ export function readRenderLinkRequest(data: unknown): string | undefined {
 	return typeof url === "string" && /^https?:\/\//i.test(url) ? url : undefined;
 }
 
-/** An image the reader clicked in the page; only the sources the bootstrap sends. */
+/**
+ * An image the reader clicked in the page. Only a data: image: the viewer loads
+ * the URL in the app document, outside the page's sandbox, its CSP (an offline
+ * render has no network) and the local-network guard, and a page can post this
+ * message itself.
+ */
 export function readRenderImageRequest(data: unknown): { src: string; alt: string } | undefined {
 	const params = rpc(data, "ao/open-image");
 	const src = params?.src;
-	if (typeof src !== "string" || !/^(data:image\/|https:\/\/)/i.test(src)) return undefined;
+	if (typeof src !== "string" || !/^data:image\//i.test(src)) return undefined;
 	return { src, alt: typeof params?.alt === "string" ? params.alt : "" };
 }

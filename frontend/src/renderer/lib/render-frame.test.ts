@@ -111,9 +111,19 @@ describe("render-frame helpers", () => {
 		expect(readRenderLinkRequest({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "javascript:alert(1)" } })).toBeUndefined();
 		const image = (params: unknown) => readRenderImageRequest({ jsonrpc: "2.0", method: "ao/open-image", params });
 		expect(image({ src: "data:image/png;base64,AA==", alt: "Before" })).toEqual({ src: "data:image/png;base64,AA==", alt: "Before" });
-		expect(image({ src: "https://x.dev/a.png" })).toEqual({ src: "https://x.dev/a.png", alt: "" });
-		// The host must not load a page's daemon or local-network URL as the app.
-		for (const src of ["http://127.0.0.1:3001/api/v1/sessions", "data:text/html,<b>x</b>", "javascript:alert(1)", 7]) {
+		expect(image({ src: "DATA:IMAGE/svg+xml,<svg/>" })).toEqual({ src: "DATA:IMAGE/svg+xml,<svg/>", alt: "" });
+		// The app must not load anything a page names: no network URL (an offline
+		// render has none, and the local-network guard only judges agent frames).
+		for (const src of [
+			"https://evil.example/?d=secret",
+			"https://192.168.1.1/x.png",
+			"http://127.0.0.1:3001/api/v1/sessions",
+			"//evil.example/x.png",
+			"blob:null/1",
+			"data:text/html,<b>x</b>",
+			"javascript:alert(1)",
+			7,
+		]) {
 			expect(image({ src })).toBeUndefined();
 		}
 	});

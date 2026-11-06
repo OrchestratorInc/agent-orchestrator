@@ -141,14 +141,17 @@
     e.preventDefault();
     window.parent.postMessage({ jsonrpc: "2.0", id: "ao-link-" + (++seq), method: "ui/open-link", params: { url: url.href } }, "*");
   }, true);
-  // Bubble phase, after the page's own handlers: a page that handles the click
-  // itself (its own lightbox, a carousel) calls preventDefault and keeps it.
-  // Only data: and https: sources: the host shows the same URL in the app.
-  document.addEventListener("click", function (e) {
+  // On window, so it hears the click after every page handler, delegated ones
+  // on document included: a page that handles the click itself (its own
+  // lightbox, a carousel) calls preventDefault and keeps it.
+  // Only data: images. The host loads the URL in the app document, outside
+  // this page's sandbox, CSP and local-network rules, and ao render inlines
+  // local images as data: anyway.
+  window.addEventListener("click", function (e) {
     var img = e.target;
     if (!openImages || !e.isTrusted || e.defaultPrevented || !img || img.tagName !== "IMG" || img.closest("a[href],button")) return;
     var src = img.currentSrc || img.src;
-    if (!/^(data:image\/|https:)/i.test(src)) return;
+    if (!/^data:image\//i.test(src)) return;
     window.parent.postMessage({ jsonrpc: "2.0", method: "ao/open-image", params: { src: src, alt: img.alt } }, "*");
   });
   var last;
