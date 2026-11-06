@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,7 +82,8 @@ func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
 	for _, tc := range []struct {
 		name, resp, stdout, stderr string
 	}{
-		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\nto list it as an artifact, run: ao artifact add \"/ao/artifacts/aa-47/Turns by day.html\"\n", ""},
+		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Turns by day.html'\n", ""},
+		{"kept with shell characters", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Ada's $1M.html"}`, "saved as artifact: /ao/artifacts/aa-47/Ada's $1M.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Ada'\\''s $1M.html'\n", ""},
 		// The page is in the thread either way, so the command still succeeds.
 		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`, "", "warning: not saved as artifact: save render artifact: disk full\n"},
 	} {
@@ -260,5 +262,40 @@ func TestRenderCheckInlinesImagesAndListsTheMissingOnes(t *testing.T) {
 	// The paths come from the page, so they are marked untrusted like console text.
 	if want := browserUntrustedText("missing images: " + gone); !strings.Contains(stdout, want) {
 		t.Fatalf("stdout missing %q:\n%s", want, stdout)
+	}
+}
+
+// The agent runs the command this line gives it, and the path holds the page
+// title, so a real shell must read the path back unchanged and run nothing.
+func TestRenderArtifactLineCommandIsSafeInAShell(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no POSIX shell")
+	}
+	canary := filepath.Join(t.TempDir(), "ran")
+	for _, name := range []string{
+		"Revenue over $1M.html",
+		"Ada's report.html",
+		"$(touch " + canary + ").html",
+		"`touch " + canary + "`.html",
+		"a; touch " + canary + ".html",
+		"$HOME and 'quotes' \\ here.html",
+	} {
+		artifactPath := "/ao/artifacts/aa-47/" + name
+		line := renderArtifactLine(renderAPIResponse{ArtifactPath: artifactPath})
+		_, command, ok := strings.Cut(line, "run: ao artifact add ")
+		if !ok {
+			t.Fatalf("no command in %q", line)
+		}
+		out, err := exec.Command(sh, "-c", "printf %s "+command).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%q: %v: %s", name, err, out)
+		}
+		if string(out) != artifactPath {
+			t.Errorf("shell read %q, want %q", out, artifactPath)
+		}
+	}
+	if _, err := os.Stat(canary); err == nil {
+		t.Fatal("a page title ran as a command")
 	}
 }
