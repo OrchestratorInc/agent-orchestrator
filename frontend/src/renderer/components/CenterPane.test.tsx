@@ -164,7 +164,7 @@ describe("CenterPane toolbar session label", () => {
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 		const renameItem = await screen.findByRole("menuitem", { name: "Rename do the thing" });
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(renameItem).toHaveTextContent(/^RenameF2$/);
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
