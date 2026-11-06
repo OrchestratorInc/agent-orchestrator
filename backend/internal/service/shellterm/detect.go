@@ -116,8 +116,8 @@ func detectUnixShells(listed, dirs, names []string) ShellCatalog {
 			continue
 		}
 		key := candidate
-		if real, err := filepath.EvalSymlinks(candidate); err == nil {
-			key = real
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			key = resolved
 		}
 		if _, ok := seen[key]; ok {
 			continue
