@@ -78,8 +78,19 @@ async function syncPath(target: string): Promise<void> {
 	}
 }
 
-export function retainedBundledTmuxBinaryPath(stagedBinary: string): string {
-	return `${stagedBinary}.retained`;
+// The daemon runs AO's bundled tmux on this private socket (AO_TMUX_SOCKET_NAME).
+export const BUNDLED_TMUX_SOCKET_NAME = "ao";
+
+// Where staging captures the outgoing client before replacing a staged binary
+// in place. The Go runtime derives the same path from its own binary and socket
+// (retainedClientPath in backend/internal/adapters/runtime/tmux), so nothing
+// passes it through the environment that worker shells inherit, and a runtime
+// on any other socket never finds the client that belongs to the app's server.
+export function retainedBundledTmuxBinaryPath(
+	stagedBinary: string,
+	socketName: string = BUNDLED_TMUX_SOCKET_NAME,
+): string {
+	return `${stagedBinary}.${socketName}.retained`;
 }
 
 async function preserveOutgoingBinary(

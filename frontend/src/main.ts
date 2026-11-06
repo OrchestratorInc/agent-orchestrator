@@ -148,8 +148,8 @@ import {
 } from "./shared/shell-env";
 import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/ui-locale";
 import {
+	BUNDLED_TMUX_SOCKET_NAME,
 	bundledTmuxBinaryPath,
-	retainedBundledTmuxBinaryPath,
 	stableBundledTmuxBinaryPath,
 	stageBundledTmuxBinary,
 } from "./shared/bundled-tmux";
@@ -1629,12 +1629,9 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 			(app.isPackaged
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
+		// The daemon derives the retained client's path from these two values.
 		...(bundledTmuxBinary
-			? {
-					AO_TMUX_BINARY: bundledTmuxBinary,
-					AO_TMUX_RETAINED_BINARY: retainedBundledTmuxBinaryPath(bundledTmuxBinary),
-					AO_TMUX_SOCKET_NAME: "ao",
-				}
+			? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: BUNDLED_TMUX_SOCKET_NAME }
 			: {}),
 		// The packaged macOS app ships cloudflared, so turning on remote access
 		// never waits for an install. An explicit AO_CLOUDFLARED_PATH still wins.

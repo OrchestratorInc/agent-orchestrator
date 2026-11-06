@@ -74,6 +74,15 @@ describe("stageBundledTmuxBinary", () => {
 		await expect(readFile(retainedBundledTmuxBinaryPath(destination), "utf8")).resolves.toBe("tmux-old");
 	});
 
+	it("names the retained client after the staged binary and the daemon's socket", () => {
+		// Must match retainedClientPath in the Go tmux runtime, which derives it
+		// from AO_TMUX_BINARY and AO_TMUX_SOCKET_NAME rather than a separate variable.
+		expect(retainedBundledTmuxBinaryPath("/home/u/.ao/runtime/tmux/0.13.0-linux-x64/tmux")).toBe(
+			"/home/u/.ao/runtime/tmux/0.13.0-linux-x64/tmux.ao.retained",
+		);
+		expect(retainedBundledTmuxBinaryPath("/opt/tmux", "ao-dev")).toBe("/opt/tmux.ao-dev.retained");
+	});
+
 	it("never overwrites the first retained client across multiple content changes", async () => {
 		const { source, destination } = await fixture();
 		await writeFile(source, "tmux-a");

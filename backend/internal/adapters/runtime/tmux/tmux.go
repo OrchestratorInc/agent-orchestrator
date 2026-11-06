@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,7 +57,7 @@ var getenv = os.Getenv
 type Options struct {
 	Binary                string                // default configured/bundled/system tmux resolution
 	LegacyBinary          string                // default system tmux from PATH when SocketName is set; used only for pre-private-socket sessions
-	RetainedBinary        string                // default $AO_TMUX_RETAINED_BINARY; captured client from before an in-place bundled-binary replacement
+	RetainedBinary        string                // default retainedClientPath(Binary, SocketName); captured client from before an in-place bundled-binary replacement. Never read from the environment.
 	SocketName            string                // default $AO_TMUX_SOCKET_NAME; empty uses tmux's machine-wide default socket
 	Shell                 string                // default $SHELL else /bin/sh
 	Timeout               time.Duration         // default 5s
@@ -95,6 +96,12 @@ type Runtime struct {
 	clientMu         sync.RWMutex
 	compatibleClient string
 	confirmedClient  string
+	// serverExecutable names the binary a live tmux server process runs from.
+	// After an app-version upgrade it is the previous version's staged client.
+	serverExecutable func(ctx context.Context, pid int) (string, error)
+	versionMu        sync.Mutex
+	clientVersions   map[string]clientVersionEntry
+	unmatchedServer  string // "version pid" last reported with no matching client
 	socketMu         sync.RWMutex
 	sessionSockets   map[string]string
 }
@@ -345,13 +352,13 @@ func New(opts Options) *Runtime {
 	}
 	retainedBinary := strings.TrimSpace(opts.RetainedBinary)
 	if retainedBinary == "" {
-		retainedBinary = strings.TrimSpace(getenv("AO_TMUX_RETAINED_BINARY"))
+		retainedBinary = retainedClientPath(binary, socketName)
 	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Runtime{
+	r := &Runtime{
 		binary:         binary,
 		legacyBinary:   legacyBinary,
 		retainedBinary: retainedBinary,
@@ -365,8 +372,25 @@ func New(opts Options) *Runtime {
 		reapSessions:   killSessionsByPID,
 		clientStore:    opts.CompatibleClientStore,
 		log:            log,
+		clientVersions: make(map[string]clientVersionEntry),
 		sessionSockets: make(map[string]string),
 	}
+	r.serverExecutable = r.lookupServerExecutable
+	return r
+}
+
+// retainedClientPath is where desktop staging captures the outgoing client
+// before replacing binary in place (see retainedBundledTmuxBinaryPath in
+// frontend/src/shared/bundled-tmux.ts). It is derived from this runtime's own
+// binary and socket, never from the environment: worker shells inherit the
+// daemon's AO_TMUX_* variables, and a runtime on another socket must not find,
+// use, or delete the client that belongs to the app's server.
+func retainedClientPath(binary, socketName string) string {
+	if !filepath.IsAbs(binary) || socketName == "" || socketName == "." || socketName == ".." ||
+		strings.ContainsAny(socketName, `/\`) {
+		return ""
+	}
+	return binary + "." + socketName + ".retained"
 }
 
 // Create starts a new tmux session in the workspace, running the agent's
@@ -386,6 +410,16 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
 
+	if r.socketName != "" {
+		// Select the client for this server before creating anything. The probe
+		// always tries the current staged client, so a server started by it can
+		// retire an older retained client, while a surviving server that only a
+		// retained client can reach still gets new-session through that client.
+		// new-session itself is never replayed after an ambiguous failure.
+		if _, err := r.run(ctx, hasSessionArgs(id)...); errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+			return ports.RuntimeHandle{}, tmuxCreateFailure(fmt.Errorf("tmux runtime: select client to create session %s: %w", id, err))
+		}
+	}
 	launchCmd := buildLaunchCommand(cfg)
 	args := newSessionArgs(id, cfg.WorkspacePath, r.shell, launchCmd)
 	if _, err := r.run(ctx, args...); err != nil {
@@ -1080,6 +1114,16 @@ func (r *Runtime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandl
 // local PTY, sized rows x cols from birth when known. ctx cancellation closes
 // the PTY.
 func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, cols uint16) (ports.Stream, error) {
+	argv, err := r.prepareAttach(ctx, handle)
+	if err != nil {
+		return nil, err
+	}
+	return ptyexec.Spawn(ctx, argv, attachEnv(os.Environ()), rows, cols)
+}
+
+// prepareAttach selects the attach client for handle's server and returns the
+// attach-session argv Attach spawns.
+func (r *Runtime) prepareAttach(ctx context.Context, handle ports.RuntimeHandle) ([]string, error) {
 	id, err := handleID(handle)
 	if err != nil {
 		return nil, err
@@ -1092,9 +1136,13 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 		if _, err := r.runOnSocket(ctx, socketName, hasSessionArgs(id)...); err != nil {
 			return nil, fmt.Errorf("tmux runtime: select compatible client for attach session %s: %w", id, err)
 		}
+		// Running commands proves less than attaching: a tmux 3.7b client runs
+		// has-session against a 3.5a server but fails attach-session with "open
+		// terminal failed: not a terminal". Attach with a client whose version
+		// equals the server's whenever one is available.
+		r.selectAttachClient(ctx, socketName)
 	}
-	argv := r.attachCommandForSocket(id, socketName)
-	return ptyexec.Spawn(ctx, argv, attachEnv(os.Environ()), rows, cols)
+	return r.attachCommandForSocket(id, socketName), nil
 }
 
 // attachCommand returns the argv to attach a terminal to the session.
@@ -1182,9 +1230,9 @@ func (r *Runtime) runOnSocket(ctx context.Context, socketName string, args ...st
 		args = append([]string{"-L", "default"}, args...)
 	}
 	binary := r.compatibleBinaryForSocket(socketName)
-	// Compatibility probes always try the newly staged client first so a
-	// replacement server can retire an older retained client. Ordinary runtime
-	// operations use the client already confirmed for this live server.
+	// has-session always tries the newly staged client first so a replacement
+	// server can retire an older retained client. Every other operation,
+	// new-session included, uses the client already selected for this server.
 	if isCompatibilityProbe(rawArgs) {
 		binary = r.binaryForSocket(socketName)
 	}
@@ -1194,7 +1242,7 @@ func (r *Runtime) runOnSocket(ctx context.Context, socketName string, args ...st
 	}
 
 	if isCompatibilityProbe(rawArgs) && (err == nil || sessionMissingOutput(string(out))) {
-		r.confirmCompatibleClient(ctx, binary, "", false)
+		r.adoptCurrentClient(ctx, socketName, false)
 		return out, err
 	}
 	if err == nil {
@@ -1232,8 +1280,12 @@ type retainedClientCandidate struct {
 	managed bool
 }
 
+// isCompatibilityProbe reports whether args must run on the current staged
+// client rather than the selected one. Only has-session qualifies: it is
+// read-only, so it can always be replayed on a retained client, and Create runs
+// it before new-session (which can never be replayed after an ambiguous exit).
 func isCompatibilityProbe(args []string) bool {
-	return len(args) > 0 && (args[0] == "has-session" || args[0] == "new-session")
+	return len(args) > 0 && args[0] == "has-session"
 }
 
 // readOnlyCommand reports whether running args again cannot change server or
@@ -1286,7 +1338,14 @@ func (r *Runtime) runWithRetainedClient(ctx context.Context, socketName string, 
 		out, err := r.runCommand(ctx, candidate.path, args...)
 		switch {
 		case err == nil || sessionMissingOutput(string(out)):
-			r.confirmCompatibleClient(ctx, candidate.path, candidate.sha256, candidate.managed)
+			if candidate.path == r.binary {
+				// The selected client failed and the current one reached the server.
+				// That alone does not prove attach compatibility, so retained clients
+				// are retired only after the versions match.
+				r.adoptCurrentClient(ctx, socketName, true)
+			} else {
+				r.confirmCompatibleClient(ctx, candidate.path, candidate.sha256, candidate.managed)
+			}
 			return out, err
 		case serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)):
 			r.clearRetainedAssociation(ctx, candidate)
@@ -1396,10 +1455,11 @@ func (r *Runtime) confirmCompatibleClient(ctx context.Context, path, hash string
 	}
 
 	if path == r.binary {
-		// A current-client success proves the old incompatible server is gone.
-		// Remove the old managed copy before recording current compatibility so a
-		// crash can never leave a stale file blocking capture of the next outgoing
-		// client.
+		// Callers confirm the current client only when no other client exists or
+		// its version equals the live server's (see adoptCurrentClient), which
+		// proves the server the retained client served is gone. Remove the old
+		// managed copy before recording current compatibility so a crash can never
+		// leave a stale file blocking capture of the next outgoing client.
 		if err := r.removeManagedRetainedClients(ctx); err != nil {
 			r.log.Warn("tmux: remove obsolete retained client", "socket", r.socketName, "err", err)
 			return
@@ -1413,6 +1473,206 @@ func (r *Runtime) confirmCompatibleClient(ctx context.Context, path, hash string
 		}
 	}
 	r.confirmedClient = path
+}
+
+type clientVersionEntry struct {
+	info    os.FileInfo
+	version string
+}
+
+// adoptCurrentClient runs after the current staged client reached the live
+// private server. Reaching it proves the two share a command protocol, not that
+// the client can attach, so the current client replaces another candidate only
+// when its `tmux -V` equals the server's #{version}. Otherwise the client whose
+// version does match stays or becomes selected. With no match and no version
+// evidence the selection is left alone, and nothing is deleted, unless the
+// selected client has just failed (selectedFailed); then the working current
+// client is used for later commands without retiring anything.
+func (r *Runtime) adoptCurrentClient(ctx context.Context, socketName string, selectedFailed bool) {
+	if !r.otherClientMayServe(ctx) {
+		r.confirmCompatibleClient(ctx, r.binary, "", false)
+		return
+	}
+	if choice, ok := r.versionMatchedClient(ctx, socketName, r.binary); ok {
+		r.confirmCompatibleClient(ctx, choice.path, choice.sha256, choice.managed)
+		return
+	}
+	if selectedFailed {
+		r.clientMu.Lock()
+		r.compatibleClient = r.binary
+		r.clientMu.Unlock()
+	}
+}
+
+// selectAttachClient switches to a client whose version equals the live
+// server's before attach-session runs. After an app-version upgrade no
+// retained copy exists, so only this check finds the previous version's client,
+// through the server process's executable. Without version evidence the
+// current selection is kept.
+func (r *Runtime) selectAttachClient(ctx context.Context, socketName string) {
+	via := r.compatibleBinaryForSocket(socketName)
+	choice, ok := r.versionMatchedClient(ctx, socketName, via)
+	if !ok || choice.path == via {
+		return
+	}
+	r.confirmCompatibleClient(ctx, choice.path, choice.sha256, choice.managed)
+}
+
+// otherClientMayServe reports whether a client other than the current staged
+// one could be the right one for the live server, so adopting the current
+// client needs version evidence first.
+func (r *Runtime) otherClientMayServe(ctx context.Context) bool {
+	r.clientMu.RLock()
+	selected, confirmed := r.compatibleClient, r.confirmedClient
+	r.clientMu.RUnlock()
+	if selected != "" && selected != r.binary {
+		return true
+	}
+	if r.retainedBinary != "" {
+		if _, err := os.Stat(r.retainedBinary); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	if confirmed == r.binary || r.clientStore == nil {
+		return false
+	}
+	path, _, _, found, err := r.clientStore.GetTmuxServerClient(ctx, r.socketName)
+	return err != nil || (found && path != r.binary)
+}
+
+// versionMatchedClient returns a client whose version equals the server's, in
+// order of preference: the current staged client, the selected client, the
+// persisted association and the retained capture, then the executable the
+// server process itself runs from. via is the client used to read the server's
+// version. It reports false when the server version is unavailable or no
+// client matches.
+func (r *Runtime) versionMatchedClient(ctx context.Context, socketName, via string) (retainedClientCandidate, bool) {
+	serverVersion, serverPID, err := r.serverIdentity(ctx, socketName, via)
+	if err != nil {
+		r.log.Debug("tmux: read server version", "socket", socketName, "binary", via, "err", err)
+		return retainedClientCandidate{}, false
+	}
+	matches := func(path string) bool {
+		version, err := r.clientVersion(ctx, path)
+		return err == nil && version == serverVersion
+	}
+	if matches(r.binary) {
+		return retainedClientCandidate{path: r.binary}, true
+	}
+	r.clientMu.RLock()
+	selected, confirmed := r.compatibleClient, r.confirmedClient
+	r.clientMu.RUnlock()
+	if selected != "" && selected != r.binary && selected == confirmed && matches(selected) {
+		// Already confirmed, so confirmCompatibleClient keeps it without rehashing.
+		return retainedClientCandidate{path: selected}, true
+	}
+	candidates, _ := r.retainedClientCandidates(ctx, r.binary)
+	seen := map[string]struct{}{r.binary: {}}
+	for _, candidate := range candidates {
+		seen[candidate.path] = struct{}{}
+		if matches(candidate.path) {
+			return candidate, true
+		}
+	}
+	if exe, err := r.serverExecutable(ctx, serverPID); err == nil && filepath.IsAbs(exe) {
+		if _, ok := seen[exe]; !ok && matches(exe) {
+			if hash, err := fileSHA256(exe); err == nil {
+				// The server's own binary belongs to another app version; AO never
+				// deletes it, so it is recorded as unmanaged.
+				return retainedClientCandidate{path: exe, sha256: hash}, true
+			}
+		}
+	}
+	server := serverVersion + " " + strconv.Itoa(serverPID)
+	r.versionMu.Lock()
+	report := r.unmatchedServer != server
+	r.unmatchedServer = server
+	r.versionMu.Unlock()
+	if report {
+		r.log.Warn("tmux: no client matches the live server version; keeping the selected client",
+			"socket", socketName, "server_version", serverVersion, "server_pid", serverPID, "selected", selected)
+	}
+	return retainedClientCandidate{}, false
+}
+
+// serverIdentity reads the live server's version and pid through via. Formats
+// expand inside the server, so #{version} is the server's own version even when
+// via is a different release.
+func (r *Runtime) serverIdentity(ctx context.Context, socketName, via string) (string, int, error) {
+	out, err := r.runCommand(ctx, via, "-L", socketName, "display-message", "-p", "#{version} #{pid}")
+	if err != nil {
+		return "", 0, err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return "", 0, fmt.Errorf("unexpected server identity %q", strings.TrimSpace(string(out)))
+	}
+	pid, err := strconv.Atoi(fields[1])
+	if err != nil || pid <= 1 {
+		return "", 0, fmt.Errorf("unexpected server pid %q", fields[1])
+	}
+	return fields[0], pid, nil
+}
+
+// clientVersion returns path's `tmux -V` version without the "tmux " prefix.
+// Results are cached until the file at path changes.
+func (r *Runtime) clientVersion(ctx context.Context, path string) (string, error) {
+	resolved := path
+	if !filepath.IsAbs(resolved) {
+		found, err := exec.LookPath(resolved)
+		if err != nil {
+			return "", err
+		}
+		resolved = found
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	r.versionMu.Lock()
+	cached, ok := r.clientVersions[resolved]
+	r.versionMu.Unlock()
+	if ok && os.SameFile(cached.info, info) && cached.info.Size() == info.Size() && cached.info.ModTime().Equal(info.ModTime()) {
+		return cached.version, nil
+	}
+	out, err := r.runCommand(ctx, path, "-V")
+	if err != nil {
+		return "", err
+	}
+	version, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "tmux ")
+	if !ok || version == "" || strings.ContainsAny(version, " \t\n") {
+		return "", fmt.Errorf("unexpected tmux -V output %q", strings.TrimSpace(string(out)))
+	}
+	r.versionMu.Lock()
+	r.clientVersions[resolved] = clientVersionEntry{info: info, version: version}
+	r.versionMu.Unlock()
+	return version, nil
+}
+
+// lookupServerExecutable names the binary process pid runs from. A tmux
+// server is forked from the client that started it without exec, so this is
+// that client's path. On Linux a replaced binary reads as deleted and is not
+// returned; on macOS the path is returned and the version check rejects it.
+func (r *Runtime) lookupServerExecutable(ctx context.Context, pid int) (string, error) {
+	switch runtime.GOOS {
+	case "linux":
+		exe, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+		if err != nil {
+			return "", err
+		}
+		if strings.HasSuffix(exe, " (deleted)") {
+			return "", fmt.Errorf("server executable %q was replaced", exe)
+		}
+		return exe, nil
+	case "darwin":
+		out, err := r.runCommand(ctx, "ps", "-o", "comm=", "-p", strconv.Itoa(pid))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	default:
+		return "", errors.ErrUnsupported
+	}
 }
 
 func (r *Runtime) removeManagedRetainedClients(ctx context.Context) error {
