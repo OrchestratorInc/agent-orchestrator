@@ -25,10 +25,21 @@ import type {
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AccessMenu, CapMenu } from "./share/AccessMenu";
 import { defaultCap, effectiveAccessText, listNames, roleLabel, type ShareModeCap, type ShareScope } from "./share/accessLabels";
-import { CopyLinkButton } from "./share/CopyLinkButton";
+import { canCopy, CopyLinkButton } from "./share/CopyLinkButton";
 import { GeneralAccessCard } from "./share/GeneralAccessCard";
 import { LinkSettings } from "./share/LinkSettings";
-import { anyoneSentence, DEFAULT_EXPIRY, isPersonalWorkspace, MISSING_URL, restrictedSentence, type ShareExpiry, useLinkAccess } from "./share/linkAccess";
+import {
+	anyoneSentence,
+	DEFAULT_EXPIRY,
+	isPersonalWorkspace,
+	type LinkAccess,
+	LinkRevokeError,
+	linkErrorMessage,
+	narrows,
+	restrictedSentence,
+	type ShareExpiry,
+	useLinkAccess,
+} from "./share/linkAccess";
 import { UndoNotice, useUndoNotice } from "./share/UndoNotice";
 import { NewTeamDialog } from "./teams/NewTeamDialog";
 import { PeopleField, recipientKey, type Recipient } from "./teams/PeopleField";
@@ -180,8 +191,28 @@ function withoutGrants(data: AccessData | undefined, grantIds: ReadonlySet<strin
 /** Confirmation the link card asks for before a change it can't undo. */
 type LinkConfirm =
 	| { kind: "off" }
-	| { kind: "change"; role: CloudCpShareRole; modeCap: ShareModeCap }
+	/** copy: Copy link asked, for a Trusted link made elsewhere, which only a new link can stand in for. */
+	| { kind: "change"; role: CloudCpShareRole; modeCap: ShareModeCap; copy?: boolean }
 	| { kind: "revoke"; link: CloudCpShareLink };
+
+/** Where Link settings was opened from, to go back to when it closes. */
+const SETTINGS_OPENERS = { gear: "[data-share-settings]", card: "[data-share-link-settings]" } as const;
+type SettingsOpener = keyof typeof SETTINGS_OPENERS;
+
+/** The link a confirmation is about, as the links last read have it. */
+function confirmLink(confirm: Extract<LinkConfirm, { kind: "revoke" }>, links: LinkAccess): CloudCpShareLink {
+	return links.links.find((link) => link.id === confirm.link.id) ?? confirm.link;
+}
+
+/** How many people joined by the links a confirmation would turn off. */
+function confirmJoined(confirm: LinkConfirm, links: LinkAccess): number {
+	return confirm.kind === "revoke" ? confirmLink(confirm, links).joinedCount ?? 0 : links.joined;
+}
+
+/** Whether a confirmation offers to remove the people who joined: the control plane can, and someone did. */
+function offersRemoveJoined(confirm: LinkConfirm, links: LinkAccess): boolean {
+	return links.canRemoveJoined && confirmJoined(confirm, links) > 0;
+}
 
 /**
  * Shares this cloud session, or its whole project, the way Google Docs does:
@@ -229,6 +260,20 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const fieldInputRef = useRef<HTMLInputElement>(null);
 	const copyButtonRef = useRef<HTMLButtonElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
+	const backButtonRef = useRef<HTMLButtonElement>(null);
+	// The control that opened Link settings, which gets focus back when it closes.
+	const settingsOpener = useRef<SettingsOpener>("gear");
+	// After a link is revoked in Link settings, focus goes to the next row's Revoke (its place), or Back.
+	const revokeFocus = useRef<{ id: string; index: number } | null>(null);
+	// A link whose revoke is reading the links first, to count who joined by it.
+	const [checkingRevoke, setCheckingRevoke] = useState<string | null>(null);
+	// Copy link waiting on the confirmation that replaces a Trusted link.
+	const replaceCopy = useRef<((url: string | undefined) => void) | null>(null);
+	const settleReplaceCopy = (url: string | undefined) => {
+		const resolve = replaceCopy.current;
+		replaceCopy.current = null;
+		resolve?.(url);
+	};
 	// After a row is stopped, focus goes to the next row's menu (its row key), or the field.
 	const focusAfter = useRef<{ stopped: string; target: string } | null>(null);
 	const openRef = useRef(open);
@@ -414,6 +459,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		stop.reset();
 		restore.reset();
 		for (const mutation of [links.turnOn, links.turnOff, links.replace, links.copyNew, links.revoke]) mutation.reset();
+		revokeFocus.current = null;
+		setCheckingRevoke(null);
+		settleReplaceCopy(undefined);
 		undoNotice.clearFailure();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
@@ -423,6 +471,36 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		setView("main");
 		resetStaging();
 	};
+	const openSettings = (from: SettingsOpener) => {
+		settingsOpener.current = from;
+		setView("settings");
+	};
+	const closeSettings = () => setView("main");
+	// Focus follows the view: into Link settings on Back, and out of it to
+	// what opened it, so it never drops to the page behind the dialog.
+	const shownView = useRef(view);
+	useLayoutEffect(() => {
+		const was = shownView.current;
+		shownView.current = view;
+		if (!open || was === view) return;
+		if (view === "settings") {
+			backButtonRef.current?.focus();
+			return;
+		}
+		const content = contentRef.current;
+		const opener = content?.querySelector<HTMLElement>(SETTINGS_OPENERS[settingsOpener.current]) ?? content?.querySelector<HTMLElement>(SETTINGS_OPENERS.gear);
+		opener?.focus();
+	}, [open, view]);
+	// Once a revoked link's row has gone, focus the Revoke now in its place, else the one above, else Back.
+	const linkIds = links.links.map((link) => link.id).join(" ");
+	useLayoutEffect(() => {
+		const pending = revokeFocus.current;
+		if (!pending || view !== "settings" || links.links.some((link) => link.id === pending.id)) return;
+		revokeFocus.current = null;
+		const revokes = [...(contentRef.current?.querySelectorAll<HTMLElement>("[data-share-revoke]") ?? [])];
+		(revokes[Math.min(pending.index, revokes.length - 1)] ?? backButtonRef.current)?.focus();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [linkIds, view]);
 	const submitShare = () => {
 		if (!ready || staged.length === 0 || share.isPending) return;
 		const request: ShareRequest = { key: accessKey, scope, sessionId: scopeSession, recipients: staged, role: stagedRole, modeCap: stagedCap };
@@ -464,31 +542,62 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		undoNotice.clearFailure();
 		links.turnOn.mutate({ role: "viewer", modeCap: "read-only", expiry });
 	};
+	// Each confirmation that counts who joined by a link reads the links again
+	// first: someone may have joined since the dialog opened. It can't be
+	// confirmed until the list is back (links.fetching).
 	const askTurnOff = () => {
 		setRemoveJoined(false);
 		setConfirm({ kind: "off" });
+		void links.refresh();
 	};
-	const askChange = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => {
-		setRemoveJoined(false);
-		setConfirm({ kind: "change", ...next });
+	const askChange = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }, copy = false) => {
+		// Narrowing access offers to remove the people who joined with the wider access, ticked.
+		setRemoveJoined(narrows(links.broadest, next));
+		setConfirm({ kind: "change", ...next, ...(copy ? { copy } : {}) });
+		void links.refresh();
 	};
-	const askRevoke = (link: CloudCpShareLink) => {
+	// Copy link on a Trusted link made elsewhere: a new link can't be Trusted, so it replaces it with a Can write one, after asking.
+	const askReplaceCopy = () => new Promise<string | undefined>((resolve) => {
+		settleReplaceCopy(undefined);
+		replaceCopy.current = resolve;
+		askChange({ role: "editor", modeCap: "standard" }, true);
+	});
+	const askRevoke = async (link: CloudCpShareLink, index: number) => {
+		revokeFocus.current = { id: link.id, index };
+		setCheckingRevoke(link.id);
+		let fresh: CloudCpShareLink[];
+		try {
+			fresh = await links.refresh();
+		} finally {
+			setCheckingRevoke(null);
+		}
+		const current = fresh.find((other) => other.id === link.id);
+		// Gone already: the list now says so.
+		if (!current) return;
 		// A link nobody joined by stops at once; otherwise the owner chooses about them.
-		if (!links.canRemoveJoined || !link.joinedCount) {
-			links.revoke.mutate({ link, removeJoined: false });
+		if (typeof current.joinedCount !== "number" || current.joinedCount === 0) {
+			links.revoke.mutate({ link: current, removeJoined: false }, { onError: () => { revokeFocus.current = null; } });
 			return;
 		}
 		setRemoveJoined(false);
-		setConfirm({ kind: "revoke", link });
+		setConfirm({ kind: "revoke", link: current });
+	};
+	const cancelConfirm = () => {
+		if (confirm?.kind === "revoke") revokeFocus.current = null;
+		if (confirm?.kind === "change" && confirm.copy) settleReplaceCopy(undefined);
+		setConfirm(null);
 	};
 	const runConfirm = () => {
 		const current = confirm;
 		if (!current) return;
+		// Only what was offered: a control plane that can't remove them is never asked to.
+		const remove = removeJoined && offersRemoveJoined(current, links);
+		const joined = remove ? confirmJoined(current, links) : 0;
 		setConfirm(null);
+		undoNotice.clearFailure();
 		if (current.kind === "off") {
-			const joined = removeJoined ? links.joined : 0;
 			const count = links.links.length;
-			links.turnOff.mutate({ removeJoined }, {
+			links.turnOff.mutate({ removeJoined: remove }, {
 				onSuccess: () => undoNotice.show({
 					message: joined > 0
 						? t("share.general.turnedOffRemoved", { count: joined })
@@ -496,24 +605,33 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				}),
 			});
 		} else if (current.kind === "change") {
-			links.replace.mutate({ role: current.role, modeCap: current.modeCap });
+			links.replace.mutate({ role: current.role, modeCap: current.modeCap, removeJoined: remove }, {
+				onSuccess: (url) => {
+					if (current.copy) settleReplaceCopy(url);
+				},
+				// The new link exists even when an old one couldn't be turned off; it can still be copied.
+				onError: (failure) => {
+					if (current.copy) settleReplaceCopy(failure instanceof LinkRevokeError ? failure.url : undefined);
+				},
+			});
 		} else {
-			links.revoke.mutate({ link: current.link, removeJoined });
+			links.revoke.mutate({ link: confirmLink(current, links), removeJoined: remove }, { onError: () => { revokeFocus.current = null; } });
 		}
 	};
 	const announceCopy = () => {
 		const link = links.broadest;
 		const sentence = link ? anyoneSentence(t, scope, link.role) : "";
 		// Changing the text each time makes the region speak again for a second copy.
-		setAnnouncement((before) => `${t("share.linkCopied")}. ${sentence}${before.endsWith("​") ? "" : "​"}`);
+		setAnnouncement((before) => `${t("share.linkCopiedSentence", { sentence })}${before.endsWith("​") ? "" : "​"}`);
 	};
 
 	const staging = staged.length > 0;
 	const linkError = links.turnOn.error ?? links.turnOff.error ?? links.replace.error ?? links.copyNew.error ?? links.revoke.error ?? links.error;
-	const failure = share.error ?? update.error ?? stop.error ?? access.error ?? linkError;
+	const failure = share.error ?? update.error ?? stop.error ?? access.error;
 	const error = failure
-		? failure instanceof Error ? (failure.message === MISSING_URL ? t("share.noToken") : failure.message) : String(failure)
-		: undoNotice.failed ? t("share.undoFailed") : null;
+		? failure instanceof Error ? failure.message : String(failure)
+		: linkError ? linkErrorMessage(t, linkError)
+			: undoNotice.failed ? t("share.undoFailed") : null;
 	const title = scope === "project"
 		? projectName ? t("share.projectTitleNamed", { name: projectName }) : t("share.projectTitle")
 		: sessionName ? t("share.titleNamed", { name: sessionName }) : t("share.title");
@@ -529,18 +647,25 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				onInteractOutside={(event) => {
 					if (event.target instanceof Element && event.target.closest("[data-global-toast]")) event.preventDefault();
 				}}
-				// Opens ready to type a name; links only, on Copy link.
+				// Opens ready to type a name. Links only: on Copy link when it can copy,
+				// else on General access; while that loads, on the first control. Focus
+				// must never stay on the page behind, where keys would reach the terminal.
 				onOpenAutoFocus={(event) => {
+					const target = peopleAvailable && fieldInputRef.current
+						? fieldInputRef.current
+						: canCopy(links) && copyButtonRef.current
+							? copyButtonRef.current
+							: contentRef.current?.querySelector<HTMLElement>("[data-general-access-menu]");
+					if (!target) return;
 					event.preventDefault();
-					if (peopleAvailable) fieldInputRef.current?.focus();
-					else copyButtonRef.current?.focus();
+					target.focus();
 				}}
 				onCloseAutoFocus={restoreFocusOnClose}
 				onEscapeKeyDown={(event) => {
 					// Esc steps back before it closes: out of link settings, then out of the confirm step.
 					if (view === "settings") {
 						event.preventDefault();
-						setView("main");
+						closeSettings();
 					} else if (staging) {
 						event.preventDefault();
 						cancelStaging();
@@ -551,7 +676,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 px-5 pt-4 pb-0")}>
 					<div className="flex items-center gap-1">
 						{view === "settings" ? (
-							<Button type="button" variant="quiet" size="icon-sm" className="-ml-1.5" aria-label={t("share.back")} onClick={() => setView("main")} data-share-back="">
+							<Button ref={backButtonRef} type="button" variant="quiet" size="icon-sm" className="-ml-1.5" aria-label={t("share.back")} onClick={closeSettings} data-share-back="">
 								<ArrowLeft className="size-3.5" aria-hidden="true" />
 							</Button>
 						) : null}
@@ -561,7 +686,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 						{view === "main" && !staging ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("share.general.linkSettings")} onClick={() => setView("settings")} data-share-settings="">
+									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("share.general.linkSettings")} onClick={() => openSettings("gear")} data-share-settings="">
 										<Settings2 className="size-3.5" aria-hidden="true" />
 									</Button>
 								</TooltipTrigger>
@@ -600,7 +725,18 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				</div>
 				<div className={cn(settingsDialogBodyClass, "gap-3.5 px-5 pt-4 pb-5")}>
 					{view === "settings" ? (
-						<LinkSettings scope={scope} access={links} expiry={expiry} onExpiryChange={setExpiry} onRevoke={askRevoke} locale={i18n.language} />
+						<>
+							<LinkSettings
+								scope={scope}
+								access={links}
+								expiry={expiry}
+								onExpiryChange={setExpiry}
+								onRevoke={(link, index) => void askRevoke(link, index)}
+								busy={links.revoke.isPending || checkingRevoke !== null}
+								locale={i18n.language}
+							/>
+							{error ? <p role="alert" className="text-caption leading-4 text-error">{error}</p> : null}
+						</>
 					) : (
 						<>
 							{peopleAvailable ? (
@@ -685,7 +821,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 									onTurnOn={turnOnLinks}
 									onTurnOff={askTurnOff}
 									onChangeRole={askChange}
-									onOpenSettings={() => setView("settings")}
+									onOpenSettings={() => openSettings("card")}
 								/>
 							)}
 						</>
@@ -717,10 +853,10 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 					) : (
 						<>
 							{view === "main" ? (
-								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} buttonRef={copyButtonRef} />
+								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} onReplace={askReplaceCopy} buttonRef={copyButtonRef} />
 							) : <span />}
 							{view === "settings" ? (
-								<Button type="button" variant="footer-primary" onClick={() => setView("main")} data-share-done="">
+								<Button type="button" variant="footer-primary" onClick={closeSettings} data-share-done="">
 									{t("share.done")}
 								</Button>
 							) : (
@@ -758,7 +894,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 					removeJoined={removeJoined}
 					onRemoveJoinedChange={setRemoveJoined}
 					onConfirm={runConfirm}
-					onCancel={() => setConfirm(null)}
+					onCancel={cancelConfirm}
 				/>
 			</DialogContent>
 		</Dialog>
@@ -767,14 +903,15 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 
 /**
  * The questions General access asks before a change that can't be taken back:
- * turning link access off (and whether the people who joined by it go too),
- * letting anyone with the link write, and making a new link, which every
- * change to a link's access does.
+ * turning link access off, letting anyone with the link write, and making a
+ * new link, which every change to a link's access does. Each offers to remove
+ * the people who joined by the links that stop, when the control plane can.
+ * It counts them from the links just read again, so it waits for that read.
  */
 function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoinedChange, onConfirm, onCancel }: {
 	confirm: LinkConfirm | null;
 	scope: ShareScope;
-	links: ReturnType<typeof useLinkAccess>;
+	links: LinkAccess;
 	removeJoined: boolean;
 	onRemoveJoinedChange: (value: boolean) => void;
 	onConfirm: () => void;
@@ -783,26 +920,30 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 	const { t } = useTranslation();
 	if (!confirm) return null;
 	const count = links.links.length;
-	const joined = confirm.kind === "revoke" ? confirm.link.joinedCount ?? 0 : links.joined;
-	const offerRemove = confirm.kind !== "change" && links.canRemoveJoined && joined > 0;
+	const joined = confirmJoined(confirm, links);
+	const offerRemove = offersRemoveJoined(confirm, links);
+	const copy = confirm.kind === "change" && confirm.copy === true;
 	const widening = confirm.kind === "change" && confirm.role === "editor" && links.broadest?.role !== "editor";
 	const title = confirm.kind === "off"
 		? t("share.confirm.offTitle")
 		: confirm.kind === "revoke"
 			? t("share.confirm.revokeTitle")
-			: widening ? t("share.confirm.writeTitle") : t("share.confirm.changeTitle");
+			: copy ? t("share.confirm.trustedTitle") : widening ? t("share.confirm.writeTitle") : t("share.confirm.changeTitle");
+	const stops = confirm.kind === "off"
+		? t("share.confirm.offLinks", { count })
+		: confirm.kind === "revoke"
+			? t("share.confirm.revokeLink")
+			: t("share.confirm.changeLinks", { count });
+	// Who keeps access, said when they can't be removed. A control plane that
+	// counts them and counts nobody has nobody to keep it.
+	const keeps = offerRemove || (links.canRemoveJoined && joined === 0)
+		? undefined
+		: confirm.kind !== "revoke" && count > 1 ? t("share.confirm.keepJoinedSeveral") : t("share.confirm.keepJoined");
 	const description = (
 		<div className="flex flex-col gap-2">
 			{widening ? <p>{scope === "project" ? t("share.confirm.writeProject") : t("share.confirm.writeSession")}</p> : null}
-			<p>
-				{confirm.kind === "off"
-					? t("share.confirm.offLinks", { count })
-					: confirm.kind === "revoke"
-						? t("share.confirm.revokeLink")
-						: t("share.confirm.changeLinks", { count })}
-				{" "}
-				{offerRemove ? null : t("share.confirm.keepJoined")}
-			</p>
+			{copy ? <p>{t("share.confirm.trustedCopy")}</p> : null}
+			<p>{keeps ? t("share.twoSentences", { first: stops, second: keeps }) : stops}</p>
 		</div>
 	);
 	return (
@@ -812,6 +953,8 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 			description={description}
 			confirmLabel={confirm.kind === "off" ? t("share.confirm.offAction") : confirm.kind === "revoke" ? t("share.revoke") : widening ? t("share.confirm.writeAction") : t("share.confirm.changeAction")}
 			destructive={confirm.kind !== "change"}
+			// The count of who joined is only as good as the list it came from.
+			confirmDisabled={links.fetching}
 			onConfirm={onConfirm}
 			onOpenChange={(next) => {
 				if (!next) onCancel();
@@ -820,7 +963,11 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 			{offerRemove ? (
 				<label className="flex items-start gap-2 text-control leading-5 text-foreground" data-share-remove-joined="">
 					<Checkbox className="mt-0.5" checked={removeJoined} onCheckedChange={(value) => onRemoveJoinedChange(value === true)} />
-					<span>{t("share.confirm.removeJoined", { count: joined })}</span>
+					<span>
+						{confirm.kind === "revoke"
+							? t("share.confirm.removeJoined", { count: joined })
+							: t("share.confirm.removeJoinedViaLink", { count: joined })}
+					</span>
 				</label>
 			) : null}
 		</ConfirmDialog>

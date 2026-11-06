@@ -31,6 +31,11 @@ export interface CloudCpOrganization {
 	role: string;
 	/** This org's own offering (`/me` organizations[i].offering); absent on an older control plane. */
 	offering?: CloudCpOffering;
+	/**
+	 * Whose workspace this is: "personal" (one person's own), "team" or
+	 * "enterprise". Absent on an older control plane.
+	 */
+	kind?: string;
 }
 
 /** Sandbox providers a control plane offers (`/me` sandboxProviders). */

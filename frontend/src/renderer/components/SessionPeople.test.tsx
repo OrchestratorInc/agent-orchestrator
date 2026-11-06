@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	dialog: vi.fn(),
 	teams: true,
 	links: [] as CloudCpShareLink[],
+	createShareLink: vi.fn(),
 }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
 vi.mock("../hooks/useCloudCp", () => ({
@@ -20,7 +21,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 		userId: "me",
 		ready: true,
 		baseUrl: "https://cp.test",
-		client: { listShareLinks: async () => ({ links: mocks.links }), createShareLink: vi.fn(), revokeShareLink: vi.fn() },
+		client: { listShareLinks: async () => ({ links: mocks.links }), createShareLink: mocks.createShareLink, revokeShareLink: vi.fn() },
 	}),
 }));
 vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => mocks.live }));
@@ -92,6 +93,7 @@ describe("SessionPeopleControl", () => {
 		mocks.dialog.mockClear();
 		mocks.teams = true;
 		mocks.links = [];
+		mocks.createShareLink.mockReset();
 		useUiStore.setState({ globalToasts: [] });
 	});
 	afterEach(() => vi.restoreAllMocks());
@@ -131,6 +133,24 @@ describe("SessionPeopleControl", () => {
 		expect(toast?.title).toBe("Link copied");
 		expect(toast?.body).toContain("Anyone signed in to Orchestrator.inc with the link can watch this session");
 		expect(toast?.action?.label).toBe("Manage");
+	});
+
+	it("opens the Share dialog instead of making a link when this device doesn't have it", async () => {
+		mocks.links = [{
+			id: "0c927f48-7214-4fb1-833a-7c1af5b7bf80", orgId: "org", projectId: "project", sessionId: "session", role: "editor", status: "active", accessScope: "anyone",
+			recipients: [], interaction: "interact", modeCap: "standard", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
+		}];
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
+		const item = await screen.findByRole("menuitem", { name: /Copy new link…/ });
+		await waitFor(() => expect(item).not.toHaveAttribute("data-disabled"));
+		expect(item).toHaveTextContent("Made on another device");
+		await userEvent.click(item);
+		expect(await screen.findByTestId("share-dialog")).toBeTruthy();
+		expect(mocks.createShareLink).not.toHaveBeenCalled();
+		expect(writeText).not.toHaveBeenCalled();
 	});
 
 	it("says link access is off in the menu instead of copying", async () => {

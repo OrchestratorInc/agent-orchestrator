@@ -4,11 +4,12 @@ import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSessionLive } from "../hooks/useCloudSessionLive";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
+import { aoBridge } from "../lib/bridge";
 import { orderSessionPeople, personInitials, SESSION_PEOPLE_SHOWN, sessionPeopleFromLive, type SessionPerson } from "../lib/session-people";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
-import { copyGeneralLink } from "./share/CopyLinkButton";
-import { anyoneSentence, MISSING_URL, useLinkAccess } from "./share/linkAccess";
+import { canCopy } from "./share/CopyLinkButton";
+import { anyoneSentence, useLinkAccess } from "./share/linkAccess";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TopbarButton } from "./TopbarButton";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -180,9 +181,11 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 
 /**
  * The chevron beside Share: Copy link and Share…, as Google Docs' Share
- * button has. Copy link follows the dialog's rules: the link this device
- * made, else a new one with the same access; with link access off there is
- * nothing to copy, so it says so. The toast names who the link lets in.
+ * button has. Copy link copies the link this device made. One made on
+ * another device can't be shown again, and a new one is a new credential, so
+ * that is made in the Share dialog, where its access and expiry show: the
+ * item opens it. With link access off there is nothing to copy, so it says
+ * so. The toast names who the link lets in.
  */
 function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, joined }: {
 	orgId: string;
@@ -197,20 +200,24 @@ function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, 
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const access = useLinkAccess({ orgId, projectId, sessionId, scope: "session", enabled: open });
-	const off = !access.loading && !access.broadest;
+	const { mode } = access.copy;
+	const off = mode === "off";
+	// Made on another device: the dialog makes a new one, never this menu.
+	const elsewhere = mode === "new" || mode === "replace";
 	const copy = async () => {
-		try {
-			const { url, copied } = await copyGeneralLink(access);
-			const sentence = access.broadest ? anyoneSentence(t, "session", access.broadest.role) : undefined;
-			if (!copied) {
-				showGlobalToast(t("share.copyFailedTitle"), url, { tone: "error" });
-				return;
-			}
-			showGlobalToast(t("share.linkCopied"), sentence, { action: { label: t("share.manage"), run: onManage } });
-		} catch (error) {
-			const message = error instanceof Error && error.message !== MISSING_URL ? error.message : t("share.noToken");
-			showGlobalToast(t("share.copyFailedTitle"), message, { tone: "error" });
+		const url = access.url;
+		if (!url) {
+			onManage();
+			return;
 		}
+		const sentence = access.broadest ? anyoneSentence(t, "session", access.broadest.role) : undefined;
+		try {
+			await aoBridge.clipboard.writeText(url);
+		} catch {
+			showGlobalToast(t("share.copyFailedTitle"), url, { tone: "error" });
+			return;
+		}
+		showGlobalToast(t("share.linkCopied"), sentence, { action: { label: t("share.manage"), run: onManage } });
 	};
 	return (
 		<DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
@@ -226,15 +233,16 @@ function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, 
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuItem
-					disabled={off || access.loading}
+					disabled={!canCopy(access)}
 					onSelect={() => void copy()}
 					className="items-start py-1.5"
-					data-share-menu-copy=""
+					data-share-menu-copy={mode}
 				>
 					<Link2 className="mt-0.5" aria-hidden="true" />
 					<span className="flex min-w-0 flex-1 flex-col">
-						<span>{access.broadest && !access.url && !access.urlsLoading ? t("share.copyNewLink") : t("share.copyLink")}</span>
+						<span>{elsewhere ? t("share.copyNewLinkEllipsis") : t("share.copyLink")}</span>
 						{off ? <span className="text-xs text-muted-foreground">{t("share.menuLinkOff")}</span> : null}
+						{elsewhere ? <span className="text-xs text-muted-foreground">{t("share.menuLinkElsewhere")}</span> : null}
 					</span>
 				</DropdownMenuItem>
 				<DropdownMenuItem onSelect={onManage} data-share-menu-manage="">

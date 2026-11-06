@@ -3,8 +3,8 @@ import type { CloudCpShareLink } from "../../lib/cloud-cp";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { roleLabel, type ShareScope } from "./accessLabels";
-import { expiryText, type LinkAccess, type ShareExpiry } from "./linkAccess";
+import { capLabel, roleLabel, type ShareScope } from "./accessLabels";
+import { actualLinkCap, expiryText, type LinkAccess, type ShareExpiry } from "./linkAccess";
 
 /**
  * The link settings behind the gear: how long a new link lasts, and every
@@ -12,15 +12,24 @@ import { expiryText, type LinkAccess, type ShareExpiry } from "./linkAccess";
  * several, made at different times with different access; general access
  * describes the broadest.
  */
-export function LinkSettings({ scope, access, expiry, onExpiryChange, onRevoke, locale }: {
+export function LinkSettings({ scope, access, expiry, onExpiryChange, onRevoke, busy, locale }: {
 	scope: ShareScope;
 	access: LinkAccess;
 	expiry: ShareExpiry;
 	onExpiryChange: (expiry: ShareExpiry) => void;
-	onRevoke: (link: CloudCpShareLink) => void;
+	/** The link and its row's place, so focus can move to the next row once it is gone. */
+	onRevoke: (link: CloudCpShareLink, index: number) => void;
+	/** A revoke is running or being checked: Revoke waits, but keeps focus. */
+	busy: boolean;
 	locale: string;
 }) {
 	const { t } = useTranslation();
+	// Standard is what writing means; another cap (a Trusted link made before links stopped offering it) is named.
+	const accessText = (link: CloudCpShareLink) => {
+		const cap = actualLinkCap(link.role, link.modeCap);
+		const level = roleLabel(t, link.role, scope);
+		return link.role === "editor" && cap !== "standard" ? `${level} · ${capLabel(t, cap)}` : level;
+	};
 	const date = (value: string) => new Date(value).toLocaleDateString(locale, { month: "short", day: "numeric" });
 	return (
 		<div className="flex flex-col gap-4" data-share-link-settings-view="">
@@ -45,11 +54,11 @@ export function LinkSettings({ scope, access, expiry, onExpiryChange, onRevoke, 
 					<p className="text-xs leading-5 text-muted-foreground" data-share-no-links="">{t("share.settings.noLinks")}</p>
 				) : (
 					<ul className="flex flex-col divide-y divide-border rounded-md bg-muted/40" data-share-active-links="">
-						{access.links.map((link) => (
+						{access.links.map((link, index) => (
 							<li key={link.id} className="flex min-h-11 items-center gap-2.5 py-1.5 pr-1.5 pl-2.5" data-share-link-row={link.id}>
 								<div className="min-w-0 flex-1">
 									<p className="truncate text-control text-foreground">
-										{roleLabel(t, link.role, scope)}
+										{accessText(link)}
 										{access.urls[link.id] ? <span className="text-muted-foreground">{` · ${t("share.settings.onThisDevice")}`}</span> : null}
 									</p>
 									<p className="truncate text-xs text-muted-foreground">
@@ -60,7 +69,17 @@ export function LinkSettings({ scope, access, expiry, onExpiryChange, onRevoke, 
 										].filter(Boolean).join(" · ")}
 									</p>
 								</div>
-								<Button type="button" variant="destructive-ghost" size="sm" disabled={access.revoke.isPending} onClick={() => onRevoke(link)}>
+								<Button
+									type="button"
+									variant="destructive-ghost"
+									size="sm"
+									className="aria-disabled:cursor-default aria-disabled:opacity-50"
+									aria-disabled={busy || undefined}
+									onClick={() => {
+										if (!busy) onRevoke(link, index);
+									}}
+									data-share-revoke={link.id}
+								>
 									{t("share.revoke")}
 								</Button>
 							</li>

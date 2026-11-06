@@ -1,5 +1,5 @@
 import { Check, Link2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
@@ -10,53 +10,56 @@ import type { LinkAccess } from "./linkAccess";
 /** How long the button says "Link copied". */
 export const COPIED_MS = 2_000;
 
-export type CopyOutcome = { url: string; copied: boolean };
+/** Whether Copy link can act now: there is a link, nothing is changing the links, and this device's URLs are known. */
+export function canCopy(access: LinkAccess): boolean {
+	const { mode, busy } = access.copy;
+	return !busy && (mode === "ready" || mode === "new" || mode === "replace");
+}
 
 /**
  * Copies the link general access describes. A link this device made is
  * copied as it is; one made elsewhere can't be shown again, so the button
- * makes a new link with the same access ("Copy new link"). With link access
- * off there is nothing to copy, and the button says how to get one.
+ * makes a new link with the same access ("Copy new link"), except for a
+ * Trusted link, which no new link can match: that one is replaced, after
+ * asking. With link access off there is nothing to copy, and the button says
+ * how to get one. It stays focusable while it can't copy, so focus never
+ * drops out of the dialog and the reason can be read.
  */
-export async function copyGeneralLink(access: LinkAccess): Promise<CopyOutcome> {
-	const url = access.url ?? await access.copyNew.mutateAsync();
-	try {
-		await aoBridge.clipboard.writeText(url);
-		return { url, copied: true };
-	} catch {
-		return { url, copied: false };
-	}
-}
-
-export function CopyLinkButton({ access, people, onCopied, buttonRef }: {
+export function CopyLinkButton({ access, people, onCopied, onReplace, buttonRef }: {
 	access: LinkAccess;
 	/** Whether people can be added in this dialog, for the hint when link access is off. */
 	people: boolean;
 	/** Announces the copy, with who the link lets in. */
 	onCopied: () => void;
+	/** Asks to replace a Trusted link made elsewhere with a Can write one; resolves to the new URL, or undefined. */
+	onReplace: () => Promise<string | undefined>;
 	buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
 	const { t } = useTranslation();
+	const hintId = useId();
 	const [state, setState] = useState<"idle" | "copied">("idle");
 	// The URL to select by hand when the clipboard refused it.
 	const [fallback, setFallback] = useState<string>();
 	const timer = useRef<number | undefined>(undefined);
 	useEffect(() => () => window.clearTimeout(timer.current), []);
-	const off = !access.broadest;
-	const fresh = !off && !access.url && !access.urlsLoading;
-	const pending = access.copyNew.isPending;
+	const { mode } = access.copy;
+	const available = canCopy(access);
 
 	const copy = async () => {
+		if (!available) return;
 		setFallback(undefined);
-		let outcome: CopyOutcome;
+		let url: string | undefined;
 		try {
-			outcome = await copyGeneralLink(access);
+			url = mode === "ready" ? access.url : mode === "new" ? await access.copyNew.mutateAsync() : await onReplace();
 		} catch {
 			// The error shows with the dialog's others.
 			return;
 		}
-		if (!outcome.copied) {
-			setFallback(outcome.url);
+		if (!url) return;
+		try {
+			await aoBridge.clipboard.writeText(url);
+		} catch {
+			setFallback(url);
 			return;
 		}
 		setState("copied");
@@ -65,19 +68,22 @@ export function CopyLinkButton({ access, people, onCopied, buttonRef }: {
 		timer.current = window.setTimeout(() => setState("idle"), COPIED_MS);
 	};
 
-	const label = state === "copied" ? t("share.linkCopied") : fresh ? t("share.copyNewLink") : t("share.copyLink");
-	const hint = off ? (people ? t("share.copyNeedsLinkAccess") : t("share.copyNeedsLinkAccessNoPeople")) : fresh ? t("share.copyNewLinkHint") : undefined;
+	const label = state === "copied" ? t("share.linkCopied") : mode === "new" || mode === "replace" ? t("share.copyNewLink") : t("share.copyLink");
+	const hint = mode === "off"
+		? people ? t("share.copyNeedsLinkAccess") : t("share.copyNeedsLinkAccessNoPeople")
+		: mode === "new" ? t("share.copyNewLinkHint") : mode === "replace" ? t("share.copyReplaceHint") : undefined;
 	const button = (
 		<Button
 			ref={buttonRef}
 			type="button"
 			variant="footer"
 			// Wide enough for every label, so the footer doesn't move as it changes.
-			className="min-w-34 gap-1.5"
-			disabled={off || pending}
-			aria-disabled={off || undefined}
+			className="min-w-34 gap-1.5 aria-disabled:cursor-default aria-disabled:opacity-50"
+			aria-disabled={!available || undefined}
+			aria-describedby={hint ? hintId : undefined}
 			onClick={() => void copy()}
-			data-share-copy-link={state === "copied" ? "copied" : fresh ? "new" : off ? "off" : "ready"}
+			data-share-copy-link={state === "copied" ? "copied" : mode}
+			data-share-copy-busy={access.copy.busy || undefined}
 		>
 			{state === "copied" ? <Check className="size-3.5" aria-hidden="true" /> : <Link2 className="size-3.5" aria-hidden="true" />}
 			{label}
@@ -86,13 +92,14 @@ export function CopyLinkButton({ access, people, onCopied, buttonRef }: {
 	return (
 		<div className="flex min-w-0 flex-col items-start gap-1.5">
 			{hint ? (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						{/* A disabled button gets no pointer events; the wrapper keeps its tooltip reachable. */}
-						<span className="inline-flex" tabIndex={off ? 0 : undefined}>{button}</span>
-					</TooltipTrigger>
-					<TooltipContent className="max-w-64">{hint}</TooltipContent>
-				</Tooltip>
+				<>
+					<Tooltip>
+						<TooltipTrigger asChild>{button}</TooltipTrigger>
+						<TooltipContent className="max-w-64">{hint}</TooltipContent>
+					</Tooltip>
+					{/* The reason, read with the button whether or not the tooltip is showing. */}
+					<span id={hintId} className="sr-only">{hint}</span>
+				</>
 			) : button}
 			{fallback ? (
 				<div className="flex w-80 max-w-full flex-col gap-1" data-share-copy-fallback="">

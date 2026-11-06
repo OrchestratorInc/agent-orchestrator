@@ -8,9 +8,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Skeleton } from "../ui/skeleton";
 import { AccessMenu } from "./AccessMenu";
 import type { ShareModeCap, ShareScope } from "./accessLabels";
-import { anyoneSentence, expiryText, type LinkAccess, linkCap } from "./linkAccess";
+import { actualLinkCap, anyoneSentence, expiryText, isTrustedLink, type LinkAccess } from "./linkAccess";
 
 const LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard"];
+/** A link made before links stopped offering Trusted shows it, checked; choosing another cap replaces the link. */
+const TRUSTED_LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "trusted"];
 
 /**
  * General access: who the link lets in, as one sentence under the choice.
@@ -93,9 +95,9 @@ export function GeneralAccessCard({ scope, access, restricted, locale, onTurnOn,
 								{link ? (
 									<AccessMenu
 										role={link.role}
-										modeCap={linkCap(link.role, link.modeCap)}
+										modeCap={actualLinkCap(link.role, link.modeCap)}
 										scope={scope}
-										caps={LINK_CAPS}
+										caps={isTrustedLink(link) ? TRUSTED_LINK_CAPS : LINK_CAPS}
 										onChange={onChangeRole}
 										disabled={busy}
 										describedBy={sentenceId}
@@ -103,8 +105,7 @@ export function GeneralAccessCard({ scope, access, restricted, locale, onTurnOn,
 								) : null}
 							</div>
 							<p id={sentenceId} className="pr-2 text-xs leading-5 text-muted-foreground" data-general-access-sentence="">
-								{sentence}
-								{viaProject ? ` ${t("share.general.projectLinkToo")}` : null}
+								{viaProject ? t("share.twoSentences", { first: sentence, second: t("share.general.projectLinkToo") }) : sentence}
 							</p>
 							{link ? (
 								<p className="flex flex-wrap items-baseline gap-x-1 text-xs leading-5 text-muted-foreground">
