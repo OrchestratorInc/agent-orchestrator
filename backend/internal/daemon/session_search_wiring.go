@@ -30,8 +30,8 @@ const sessionSearchStartupDelay = 5 * time.Second
 // It never fails daemon startup: a machine with no provider transcripts, or a
 // data directory the indexer cannot read, still serves search over the sessions
 // it can see. Every failure is a logged warning, never a boot error.
-func startSessionSearch(ctx context.Context, store *sqlite.Store, logger *slog.Logger) *sessionsearch.Service {
-	roots, err := sessionSearchRoots()
+func startSessionSearch(ctx context.Context, store *sqlite.Store, stateDir string, logger *slog.Logger) *sessionsearch.Service {
+	roots, err := sessionSearchRoots(stateDir)
 	if err != nil {
 		logger.Warn("session search: transcript roots unavailable; native transcripts will not be indexed", "err", err)
 	}
@@ -61,7 +61,7 @@ func hostLabel() string {
 // mirror the usage collector's roots so both features read the same files, but
 // they are resolved here rather than shared: usage may legitimately be disabled
 // while search still wants the transcripts.
-func sessionSearchRoots() (sessionsearch.TranscriptRoots, error) {
+func sessionSearchRoots(stateDir string) (sessionsearch.TranscriptRoots, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return sessionsearch.TranscriptRoots{}, err
@@ -87,6 +87,7 @@ func sessionSearchRoots() (sessionsearch.TranscriptRoots, error) {
 		CodexArchived:  filepath.Join(codexHome, "archived_sessions"),
 		OpenCodeData:   dataHome,
 		OpenCodeV2Data: filepath.Join(dataHome, "opencode-v2-home"),
+		AOStateDir:     stateDir,
 	}, nil
 }
 

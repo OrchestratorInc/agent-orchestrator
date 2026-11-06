@@ -796,7 +796,8 @@ func (s *Store) CountSessionSearchSourcesByState(ctx context.Context) (map[domai
 func (s *Store) ListSessionSearchTargets(ctx context.Context) ([]domain.SessionSearchTarget, error) {
 	rows, err := s.readDB.QueryContext(ctx, `
 SELECT id, COALESCE(project_id, ''), harness, kind, display_name, prompt, latest_user_prompt,
-       workspace_path, branch, session_mode, is_terminated, hibernated_at IS NOT NULL, created_at
+       workspace_path, branch, session_mode, is_terminated, hibernated_at IS NOT NULL, created_at,
+       agent_session_id, native_transcript_path
 FROM sessions
 ORDER BY created_at, id`)
 	if err != nil {
@@ -812,6 +813,7 @@ ORDER BY created_at, id`)
 			&target.ID, &target.ProjectID, &harness, &target.Kind, &target.DisplayName,
 			&target.Prompt, &target.LatestPrompt, &target.WorkspacePath, &target.Branch, &mode,
 			&target.IsTerminated, &target.Hibernated, &createdAt,
+			&target.NativeSessionID, &target.NativeTranscriptPath,
 		); err != nil {
 			return nil, fmt.Errorf("scan session search target: %w", err)
 		}

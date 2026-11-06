@@ -110,7 +110,9 @@ func (s *Service) indexNativeSession(ctx context.Context, target domain.SessionS
 	// the provider's whole transcript tree, and doing that per session on every
 	// 30-second sweep is the single most expensive thing an idle sweep can do.
 	path := ""
-	if hadPrevious && previous.Path != "" {
+	if recorded, ok := s.recordedTranscript(target); ok && hadPrevious && recorded == previous.Path {
+		path = recorded
+	} else if hadPrevious && previous.Path != "" {
 		for _, root := range s.transcriptRootsFor(target.Harness) {
 			safe, ok := withinRoot(root, previous.Path)
 			if !ok {
@@ -296,11 +298,26 @@ func (s *Service) transcriptRootsFor(harness domain.AgentHarness) []string {
 // the durable path AO recorded and falling back to the provider's own naming
 // convention. Any resolved path must stay inside the configured root.
 func (s *Service) locateTranscript(target domain.SessionSearchTarget) (string, error) {
+	if target.Harness != domain.HarnessClaudeCode && target.Harness != domain.HarnessCodex {
+		return "", nil
+	}
+	// A provider names its transcript by its own session id, which AO records,
+	// along with the path its hooks report. The path comes first: it also finds
+	// a transcript under an AO-managed account's config directory, outside the
+	// default roots. A session that never recorded either falls back to its AO
+	// id, which is what older sessions were named by.
+	if path, ok := s.recordedTranscript(target); ok {
+		return path, nil
+	}
+	nativeID := strings.TrimSpace(target.NativeSessionID)
+	if nativeID == "" {
+		nativeID = string(target.ID)
+	}
 	switch target.Harness {
 	case domain.HarnessClaudeCode:
-		return s.locateClaudeTranscript(string(target.ID), target.WorkspacePath)
+		return s.locateClaudeTranscript(nativeID, target.WorkspacePath)
 	case domain.HarnessCodex:
-		return s.locateCodexTranscript(string(target.ID))
+		return s.locateCodexTranscript(nativeID)
 	case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
 		// OpenCode history lives in its own SQLite store, read by
 		// indexOpenCodeSession rather than by a JSONL parser.
@@ -308,6 +325,32 @@ func (s *Service) locateTranscript(target domain.SessionSearchTarget) (string, e
 	default:
 		return "", nil
 	}
+}
+
+// recordedTranscript is the transcript path the provider's hooks reported, if
+// it is still a regular JSONL file inside a provider root or AO's own state
+// directory (where an AO-managed account keeps its transcripts). Like every
+// other transcript it is only read; the root and the suffix are checked after
+// symlinks resolve, so a recorded path cannot lead the reader anywhere else.
+func (s *Service) recordedTranscript(target domain.SessionSearchTarget) (string, bool) {
+	recorded := strings.TrimSpace(target.NativeTranscriptPath)
+	if recorded == "" || !filepath.IsAbs(recorded) {
+		return "", false
+	}
+	roots := append(append([]string{}, s.transcriptRootsFor(target.Harness)...), s.roots.AOStateDir)
+	for _, root := range roots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		safe, ok := withinRoot(root, recorded)
+		if !ok || filepath.Ext(safe) != ".jsonl" {
+			continue
+		}
+		if info, err := os.Stat(safe); err == nil && info.Mode().IsRegular() {
+			return safe, true
+		}
+	}
+	return "", false
 }
 
 // locateClaudeTranscript finds ~/.claude/projects/<project-key>/<native-id>.jsonl.

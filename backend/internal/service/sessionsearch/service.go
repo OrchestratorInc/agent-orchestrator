@@ -106,6 +106,12 @@ type TranscriptRoots struct {
 	OpenCodeData string
 	// OpenCodeV2Data is the isolated v2 data home.
 	OpenCodeV2Data string
+	// AOStateDir is AO's own state directory. An AO-managed provider account
+	// keeps its config, and so its transcripts, under it (agent-accounts/,
+	// harnesses/codex/accounts/), outside the provider's default root. A
+	// transcript path a session recorded is read only inside a provider root
+	// or this directory.
+	AOStateDir string
 }
 
 // Options configures a Service.

@@ -174,6 +174,14 @@ type SessionSearchTarget struct {
 	IsTerminated bool
 	Hibernated   bool
 	CreatedAt    time.Time
+	// NativeSessionID is the provider's own session id (agent_session_id): the
+	// id a Claude transcript or Codex rollout is named by. The AO session id
+	// names no file. Empty for a Chat session, whose history AO stores itself.
+	NativeSessionID string
+	// NativeTranscriptPath is the transcript path the provider's hooks reported
+	// for the session. It also finds a transcript under an AO-managed account's
+	// own config directory, which the default provider roots do not cover.
+	NativeTranscriptPath string
 }
 
 // SessionSearchConversation is one Chat conversation and its active branch.
