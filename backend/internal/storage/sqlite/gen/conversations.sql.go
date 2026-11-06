@@ -1484,6 +1484,82 @@ func (q *Queries) LatestVisibleUserTurnSettled(ctx context.Context, arg LatestVi
 	return exists, err
 }
 
+const listConversationBatchSteers = `-- name: ListConversationBatchSteers :many
+SELECT id, detail_json
+FROM conversation_activities
+WHERE conversation_id = ?1
+  AND json_extract(detail_json, '$.event') = 'steer'
+  AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array'
+`
+
+type ListConversationBatchSteersRow struct {
+	ID         string
+	DetailJson string
+}
+
+// Steers that carried queued turns, with the detail naming those turns.
+func (q *Queries) ListConversationBatchSteers(ctx context.Context, conversationID string) ([]ListConversationBatchSteersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationBatchSteers, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationBatchSteersRow{}
+	for rows.Next() {
+		var i ListConversationBatchSteersRow
+		if err := rows.Scan(&i.ID, &i.DetailJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationBatchedTurns = `-- name: ListConversationBatchedTurns :many
+SELECT id, promoted_to_turn_id
+FROM conversation_turns
+WHERE conversation_id = ?1
+  AND batched_input = 1
+  AND promoted_to_turn_id IS NOT NULL
+`
+
+type ListConversationBatchedTurnsRow struct {
+	ID               string
+	PromotedToTurnID sql.NullString
+}
+
+// The queued turns AO batched into another turn's provider input: a queue drain
+// or a steer. The snapshot turn queries leave them out, so the client reads the
+// delivery link here.
+func (q *Queries) ListConversationBatchedTurns(ctx context.Context, conversationID string) ([]ListConversationBatchedTurnsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationBatchedTurns, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationBatchedTurnsRow{}
+	for rows.Next() {
+		var i ListConversationBatchedTurnsRow
+		if err := rows.Scan(&i.ID, &i.PromotedToTurnID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInterruptedSessions = `-- name: ListInterruptedSessions :many
 WITH wanted_session AS (
     SELECT CAST(j.value AS TEXT) AS session_id

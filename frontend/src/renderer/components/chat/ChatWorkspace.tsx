@@ -3933,8 +3933,8 @@ export function Timeline({
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
 	const batchedReports = useMemo(
-		() => workerUpdates ? placeBatchedReports(snapshot.turns, snapshot.items) : NO_BATCHED_REPORTS,
-		[snapshot.items, snapshot.turns, workerUpdates],
+		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
+		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
 	);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);

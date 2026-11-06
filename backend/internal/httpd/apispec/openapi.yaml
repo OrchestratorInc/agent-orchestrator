@@ -17559,8 +17559,6 @@ components:
           type:
           - "null"
           - string
-        deliveredWithTurnId:
-          type: string
         diff:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
@@ -18067,6 +18065,18 @@ components:
       required:
       - state
       - lastActivityAt
+      type: object
+    DomainConversationBatchedDelivery:
+      properties:
+        deliveredWithTurnId:
+          type: string
+        steerActivityId:
+          type: string
+        turnId:
+          type: string
+      required:
+      - turnId
+      - deliveredWithTurnId
       type: object
     DomainReviewerConfig:
       properties:

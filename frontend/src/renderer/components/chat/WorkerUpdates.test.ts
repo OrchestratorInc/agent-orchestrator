@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationTurn } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import {
 	isWorkerLead,
 	isDuplicateSpawnAction,
@@ -122,33 +122,42 @@ describe("worker updates", () => {
 });
 
 describe("placeBatchedReports", () => {
-	const turn = (id: string, deliveredWithTurnId?: string) => ({ id, state: "completed", requestedAt: createdAt, deliveredWithTurnId }) as ConversationTurn;
-	const human = (id: string, turnId: string) => message({ id, turnId, origin: "human", text: "hi" });
-	const report = (id: string, turnId: string) => message({ id, turnId, text: batch });
+	const drained = (turnId: string, deliveredWithTurnId: string) => ({ turnId, deliveredWithTurnId });
+	const human = (id: string, turnId: string, sequence: number) => message({ id, turnId, sequence, origin: "human", text: "hi" });
+	const report = (id: string, turnId: string, sequence: number) => message({ id, turnId, sequence, text: batch });
+	const steer = (id: string): ConversationActivity => ({
+		kind: "activity", id, sequence: 9, revision: 0, activityKind: "system", status: "completed", summary: "go",
+		detail: { event: "steer" }, createdAt, turnId: "running",
+	});
 
 	it("puts a drained report under the batch's last human message and hides its turn", () => {
 		const placed = placeBatchedReports(
-			[turn("lead"), turn("t-human", "lead"), turn("t-report", "lead")],
-			[report("r0", "lead"), human("h1", "t-human"), report("r1", "t-report")],
+			[drained("t-human", "lead"), drained("t-report", "lead")],
+			[report("r0", "lead", 1), human("h1", "t-human", 2), report("r1", "t-report", 3)],
 		);
 		expect(placed.under.get("h1")?.map((update) => update.key)).toEqual(["r1:0", "r1:1"]);
 		expect([...placed.moved]).toEqual(["t-report"]);
 	});
 
 	it("puts a steered report under the steer that carried it, not the turn's prompt", () => {
-		const steer: ConversationActivity = {
-			kind: "activity", id: "steer-1", sequence: 9, revision: 0, activityKind: "system", status: "completed", summary: "go",
-			detail: { event: "steer", providerInputSourceTurnIds: ["t-report"] }, createdAt, turnId: "running",
-		};
 		const placed = placeBatchedReports(
-			[turn("running"), turn("t-report", "running")],
-			[human("h0", "running"), steer, report("r1", "t-report")],
+			[{ turnId: "t-report", deliveredWithTurnId: "running", steerActivityId: "steer-1" }],
+			[human("h0", "running", 1), steer("steer-1"), report("r1", "t-report", 10)],
 		);
 		expect([...placed.under.keys()]).toEqual(["steer-1"]);
 	});
 
+	it("keeps a steered report on its own line when the steer is not loaded", () => {
+		const placed = placeBatchedReports(
+			[{ turnId: "t-report", deliveredWithTurnId: "running", steerActivityId: "steer-1" }],
+			[human("h0", "running", 1), report("r1", "t-report", 10)],
+		);
+		expect(placed.under.size).toBe(0);
+		expect(placed.moved.size).toBe(0);
+	});
+
 	it("leaves a report batched with no human message on its own line", () => {
-		const placed = placeBatchedReports([turn("lead"), turn("t-report", "lead")], [report("r0", "lead"), report("r1", "t-report")]);
+		const placed = placeBatchedReports([drained("t-report", "lead")], [report("r0", "lead", 1), report("r1", "t-report", 2)]);
 		expect(placed.moved.size).toBe(0);
 	});
 });
