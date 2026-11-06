@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,19 @@ type paneCommandAPIRequest struct {
 	Beside *string `json:"beside,omitempty"`
 	Side   *string `json:"side,omitempty"`
 	Group  *string `json:"group,omitempty"`
+}
+
+type paneInputAPIRequest struct {
+	Tab       string  `json:"tab"`
+	Text      *string `json:"text,omitempty"`
+	Enter     *bool   `json:"enter,omitempty"`
+	Interrupt bool    `json:"interrupt,omitempty"`
+}
+
+type paneOutputDTO struct {
+	SessionID string `json:"sessionId"`
+	Tab       string `json:"tab"`
+	Output    string `json:"output"`
 }
 
 type paneTabDTO struct {
@@ -73,6 +87,10 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
   ao pane split terminal
   ao pane split terminal --side bottom
   ao pane split file:src/app.ts --beside session --side right
+  ao pane split terminal --run "npm test"
+  ao pane run <terminal-key> "ls -la"
+  ao pane read <terminal-key>
+  ao pane interrupt <terminal-key>
   ao pane focus session
   ao pane remove <tab-key>
   ao pane ungroup`,
@@ -94,7 +112,8 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		},
 	})
 
-	var beside, side string
+	var beside, side, runAfterSplit string
+	var runWait runWaitFlags
 	split := &cobra.Command{
 		Use:   "split <tab>",
 		Short: "Show a tab beside another: a tab key, terminal (a new shell) or file:<path>",
@@ -112,12 +131,79 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 				}
 				req.Side = &side
 			}
-			return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, req, asJSON)
+			if runAfterSplit == "" {
+				return ctx.paneCommand(cmd.Context(), cmd.OutOrStdout(), sessionFlag, req, asJSON)
+			}
+			if args[0] == "session" || strings.HasPrefix(args[0], "file:") || strings.HasPrefix(args[0], "reviewer") {
+				return usageError{fmt.Errorf("--run needs a terminal: split terminal, or an existing terminal tab")}
+			}
+			layout, err := ctx.paneCommandLayout(cmd.Context(), sessionFlag, req)
+			if err != nil {
+				return err
+			}
+			// The split focuses the tab it placed, so the selection is the terminal.
+			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), sessionFlag, layout.Layout.Selected, runAfterSplit, runWait)
 		},
 	}
 	split.Flags().StringVar(&beside, "beside", "", "key of the tab to split beside (defaults to the tab on screen)")
 	split.Flags().StringVar(&side, "side", "", "left, right, top or bottom (defaults to right)")
+	split.Flags().StringVar(&runAfterSplit, "run", "", "a command to run in the split terminal, then print its output")
+	runWait.register(split)
 	cmd.AddCommand(split)
+
+	var runFlags runWaitFlags
+	run := &cobra.Command{
+		Use:   "run <terminal-tab> <command>",
+		Short: "Run a command in one of this session's terminal tabs and print what it shows",
+		Long: "Types the command into the terminal tab and presses Enter, then waits until\n" +
+			"the screen stops changing (or --timeout passes) and prints its last lines.\n" +
+			"A long-running command keeps running; read it later with `ao pane read`.",
+		Args: usageArgs(cobra.MinimumNArgs(2)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), sessionFlag, args[0], strings.Join(args[1:], " "), runFlags)
+		},
+	}
+	runFlags.register(run)
+	cmd.AddCommand(run)
+
+	var readLines int
+	read := &cobra.Command{
+		Use:   "read <terminal-tab>",
+		Short: "Print what one of this session's terminal tabs shows",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, err := ctx.readPane(cmd.Context(), sessionFlag, args[0], readLines)
+			if err != nil {
+				return err
+			}
+			return writePaneOutput(cmd.OutOrStdout(), out, asJSON)
+		},
+	}
+	read.Flags().IntVar(&readLines, "lines", 200, "how many of the last lines to print (at most 2000)")
+	cmd.AddCommand(read)
+
+	var noEnter bool
+	send := &cobra.Command{
+		Use:   "send <terminal-tab> <text>",
+		Short: "Type text into a terminal tab, pressing Enter unless --no-enter",
+		Args:  usageArgs(cobra.MinimumNArgs(2)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			text := strings.Join(args[1:], " ")
+			enter := !noEnter
+			return ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Text: &text, Enter: &enter})
+		},
+	}
+	send.Flags().BoolVar(&noEnter, "no-enter", false, "type the text without pressing Enter (answers to prompts, TUI keys)")
+	cmd.AddCommand(send)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "interrupt <terminal-tab>",
+		Short: "Send Ctrl-C to a terminal tab",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Interrupt: true})
+		},
+	})
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "remove <tab>",
@@ -176,15 +262,112 @@ func (c *commandContext) showPanes(ctx context.Context, w io.Writer, sessionFlag
 }
 
 func (c *commandContext) paneCommand(ctx context.Context, w io.Writer, sessionFlag string, req paneCommandAPIRequest, asJSON bool) error {
+	out, err := c.paneCommandLayout(ctx, sessionFlag, req)
+	if err != nil {
+		return err
+	}
+	return writePaneLayout(w, out, asJSON)
+}
+
+func (c *commandContext) paneCommandLayout(ctx context.Context, sessionFlag string, req paneCommandAPIRequest) (paneLayoutResponseDTO, error) {
+	path, err := sessionPanesPath(sessionFlag)
+	if err != nil {
+		return paneLayoutResponseDTO{}, err
+	}
+	var out paneLayoutResponseDTO
+	err = c.postJSON(ctx, path, req, &out)
+	return out, err
+}
+
+func (c *commandContext) sendPaneInput(ctx context.Context, sessionFlag string, req paneInputAPIRequest) error {
 	path, err := sessionPanesPath(sessionFlag)
 	if err != nil {
 		return err
 	}
-	var out paneLayoutResponseDTO
-	if err := c.postJSON(ctx, path, req, &out); err != nil {
+	return c.postJSON(ctx, path+"/input", req, nil)
+}
+
+func (c *commandContext) readPane(ctx context.Context, sessionFlag, tab string, lines int) (paneOutputDTO, error) {
+	path, err := sessionPanesPath(sessionFlag)
+	if err != nil {
+		return paneOutputDTO{}, err
+	}
+	query := url.Values{"tab": {tab}}
+	if lines > 0 {
+		query.Set("lines", fmt.Sprint(lines))
+	}
+	var out paneOutputDTO
+	err = c.getJSON(ctx, path+"/output?"+query.Encode(), &out)
+	return out, err
+}
+
+// runWaitFlags controls how long `run` waits for a command's output.
+type runWaitFlags struct {
+	timeout time.Duration
+	lines   int
+	noWait  bool
+}
+
+func (f *runWaitFlags) register(cmd *cobra.Command) {
+	cmd.Flags().DurationVar(&f.timeout, "timeout", 15*time.Second, "longest to wait for the screen to settle")
+	cmd.Flags().IntVar(&f.lines, "lines", 60, "how many of the last lines to print")
+	cmd.Flags().BoolVar(&f.noWait, "no-wait", false, "return right after typing the command")
+}
+
+// paneSettleInterval is how long the screen must stay unchanged before `run`
+// treats the command's output as settled.
+var paneSettleInterval = 700 * time.Millisecond
+
+// runInPane types a command into a terminal tab, waits for its screen to
+// settle and prints its last lines.
+func (c *commandContext) runInPane(ctx context.Context, w io.Writer, sessionFlag, tab, command string, wait runWaitFlags) error {
+	if strings.TrimSpace(command) == "" {
+		return usageError{errors.New("nothing to run")}
+	}
+	enter := true
+	if err := c.sendPaneInput(ctx, sessionFlag, paneInputAPIRequest{Tab: tab, Text: &command, Enter: &enter}); err != nil {
 		return err
 	}
-	return writePaneLayout(w, out, asJSON)
+	if wait.noWait {
+		fmt.Fprintf(w, "Ran in %s: %s\n", tab, command)
+		return nil
+	}
+	deadline := time.Now().Add(wait.timeout)
+	previous, settledSince := "", time.Time{}
+	var out paneOutputDTO
+	for {
+		timer := time.NewTimer(paneSettleInterval / 2)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		next, err := c.readPane(ctx, sessionFlag, tab, wait.lines)
+		if err != nil {
+			return err
+		}
+		out = next
+		now := time.Now()
+		if out.Output != previous || settledSince.IsZero() {
+			previous, settledSince = out.Output, now
+		} else if now.Sub(settledSince) >= paneSettleInterval {
+			break
+		}
+		if now.After(deadline) {
+			fmt.Fprintf(w, "(still changing after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
+			break
+		}
+	}
+	return writePaneOutput(w, out, false)
+}
+
+func writePaneOutput(w io.Writer, out paneOutputDTO, asJSON bool) error {
+	if asJSON {
+		return writeJSON(w, out)
+	}
+	_, err := fmt.Fprintln(w, out.Output)
+	return err
 }
 
 func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error {
