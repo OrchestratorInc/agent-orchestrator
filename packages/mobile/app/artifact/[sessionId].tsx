@@ -76,15 +76,10 @@ function ArtifactViewerContent() {
 	const { artifacts, loading } = useSessionArtifacts(hostMatches ? sessionId : "");
 	// A listed file's modified time, so a document's regenerated image is not served from cache.
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
-	// The page on screen: the file the route opened, until a swipe moves on. A
-	// link to another file while this is open replaces the route's path; the
-	// viewer then goes to that file.
+	// The page on screen: the file the route opened, until a swipe moves on, or
+	// a link replaces the route's path (below).
 	const [currentPath, setCurrentPath] = useState(path);
 	const [openedPath, setOpenedPath] = useState(path);
-	if (openedPath !== path) {
-		setOpenedPath(path);
-		setCurrentPath(path);
-	}
 	// The pages keep the order they had on open: the list is newest first, so a
 	// file the agent rewrites would otherwise jump to the front and remount.
 	const pageOrder = useRef<string[]>(undefined);
@@ -137,6 +132,22 @@ function ArtifactViewerContent() {
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string>();
 	const [notice, setNotice] = useState<string>();
+	// A link to another file while this is open replaces the route's path. The
+	// viewer goes to that file and, as a swipe does, closes a comment opened on
+	// the previous one, so it is never sent against the new file.
+	if (openedPath !== path) {
+		setOpenedPath(path);
+		setCurrentPath(path);
+		setAsk(null);
+		setActionError(undefined);
+	}
+	// Android keeps the keyboard up after the composer's input unmounts.
+	const routedPath = useRef(path);
+	useEffect(() => {
+		if (routedPath.current === path) return;
+		routedPath.current = path;
+		Keyboard.dismiss();
+	}, [path]);
 	useEffect(() => {
 		if (!notice) return;
 		AccessibilityInfo.announceForAccessibility(notice);
