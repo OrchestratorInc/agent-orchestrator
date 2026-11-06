@@ -6293,10 +6293,65 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	background-color: color-mix(in srgb, var(--background) 100%, transparent);
 }
 
+/* The onboarding's wallpaper covers the whole window, under the drawing and
+ * the copy, as a halftone: seen only through a grid of dots, edge to edge,
+ * that grows from small light dots on the right to heavy, nearly touching
+ * ones on the left. ::before is light + (bold x ramp); ::after adds the heavy
+ * dots on the left (heavy x ramp). Every grid shares one 7px pitch. Both are
+ * multiplied by a soft quiet zone where the copy sits, so its text reads over
+ * a few faint dots instead of the full pattern. */
+.onboarding-backdrop {
+	isolation: isolate;
+}
+
+.onboarding-backdrop::before,
+.onboarding-backdrop::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
+	background:
+		linear-gradient(#0a1428, #0a1428),
+		linear-gradient(#7fb4f5, #7fb4f5),
+		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
+	background-blend-mode: screen, multiply, normal;
+}
+
+/* Light theme inverts the wallpaper: its lightness flips and its blue stays,
+ * so the dots are pale on the light page instead of near-black. */
+:root[data-theme="light"] .onboarding-backdrop::before,
+:root[data-theme="light"] .onboarding-backdrop::after {
+	filter: invert(1) hue-rotate(180deg);
+}
+
+.onboarding-backdrop::before {
+	-webkit-mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	-webkit-mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	-webkit-mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over, source-in, source-over;
+	mask-composite: intersect, add, intersect, add;
+}
+
+.onboarding-backdrop::after {
+	-webkit-mask-image: radial-gradient(circle, black 2.6px, transparent 3.2px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	mask-image: radial-gradient(circle, black 2.6px, transparent 3.2px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	-webkit-mask-size: 7px 7px, 100% 100%;
+	mask-size: 7px 7px, 100% 100%;
+	-webkit-mask-repeat: repeat, no-repeat;
+	mask-repeat: repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over;
+	mask-composite: intersect, add;
+}
+
 /* Onboarding illustration style: a black-and-white line drawing. Strokes
  * only: every fill is clear, so the drawing sits on the onboarding page, and
  * one thin line weight in the page's own foreground draws every edge (white
- * on black in dark theme, black on white in light). No colour, glow or
+ * on black in dark theme, black on white in light). No glow or
  * shadow; labels are monospace. Scoped to the stage, so the real app is
  * untouched. Utilities read the leaf tokens directly (@theme inline), so the
  * leaves are set here. */
@@ -6307,6 +6362,16 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	--schematic-page: var(--color-bg-primary);
 	--schematic-solid: var(--solid-bg-primary, var(--color-bg-primary));
 	--schematic-fg: var(--foreground);
+	/* The drawing's only colour, on AO Cloud's sessions: a diff's added and
+	 * removed lines, and the agent's live activity. */
+	--schematic-add: var(--color-success);
+	--schematic-del: var(--color-error);
+	--schematic-live: var(--color-status-working);
+	--schematic-add-tint: color-mix(in srgb, var(--color-success) 14%, transparent);
+	--schematic-del-tint: color-mix(in srgb, var(--color-error) 14%, transparent);
+	/* The cloud cut into AO Cloud's platform: its lit far wall and its floor. */
+	--schematic-wall: color-mix(in srgb, var(--foreground) 14%, var(--schematic-solid));
+	--schematic-floor: color-mix(in srgb, var(--schematic-solid) 60%, black);
 }
 
 .onboarding-preview-stage {

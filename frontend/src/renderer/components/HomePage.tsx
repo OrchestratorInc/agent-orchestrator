@@ -78,7 +78,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel, tourTarget }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; tourTarget?: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -92,6 +92,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
+			data-tour={tourTarget}
 			type="button"
 		>
 			<NavRowHighlight className="bg-card" />
@@ -222,7 +223,8 @@ function HomePageContent() {
 							</button>
 						</div>
 
-						<div className="grid grid-cols-2 gap-3">
+						{/* The guided tour's first stop (GuidedTour). */}
+						<div className="grid grid-cols-2 gap-3" data-tour="add-project">
 							<HomeActionCard
 								icon={<GitFork strokeWidth={1.8} />}
 								label={t("createProject.cloneFromGit")}
@@ -257,10 +259,12 @@ function HomePageContent() {
 						{/* Same section as the grid so the gap matches the grid's gap-3. */}
 						{recentProjects.length > 0 && (
 							<div>
-								{recentProjects.map((project) => (
+								{recentProjects.map((project, index) => (
 									<ProjectRow
 										key={project.id}
 										project={project}
+										// The guided tour offers the latest project before adding one (GuidedTour).
+										tourTarget={index === 0 ? "recent-project" : undefined}
 										onClick={() => {
 										if (project.kind === STANDALONE_PROJECT_KIND) {
 											const session = project.sessions.find((candidate) => candidate.kind === "worker");

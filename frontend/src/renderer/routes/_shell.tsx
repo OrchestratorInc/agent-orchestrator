@@ -17,6 +17,7 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
@@ -1450,6 +1451,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				) : null}
 				<NewTaskNavigator />
 				<FirstRunOnboarding />
+				<GuidedTour />
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				{quitConfirmDialog}
