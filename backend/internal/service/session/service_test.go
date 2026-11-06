@@ -3391,7 +3391,7 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+	if sink.events[0].Name != "ao.sessions.spawned" || sink.events[1].Name != "ao.sessions.first_spawned" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(0) {
@@ -3408,8 +3408,8 @@ func TestStandaloneSessionTelemetryKind(t *testing.T) {
 	st.sessions[rec.ID] = rec
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
-	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	svc.emitSpawned(rec, 1, 1, false, false, spawnFacts{createdBy: domain.SessionCreatedByUser})
+	svc.emitSpawnFailed(spawnFailure{kind: domain.KindWorker, harness: domain.HarnessCodex}, errors.New("launch failed"), 1, 1)
 	originalCapture := captureRelaunchError
 	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
 	t.Cleanup(func() { captureRelaunchError = originalCapture })
@@ -3695,7 +3695,7 @@ func TestSpawnFailedEmitsDuration(t *testing.T) {
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err == nil {
 		t.Fatal("Spawn should fail")
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" {
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.sessions.spawn_failed" {
 		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(1500) {
@@ -3738,7 +3738,7 @@ func TestSpawnEmitsTelemetryOnSuccess(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawned" || ev.Source != "session_service" {
+	if ev.Name != "ao.sessions.spawned" || ev.Source != "session_service" {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID == nil || *ev.SessionID != "mer-9" {
@@ -3770,7 +3770,7 @@ func TestSpawnEmitsTelemetryOnFailure(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
+	if ev.Name != "ao.sessions.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID != nil {
@@ -4043,11 +4043,11 @@ func TestEmitSpawnFailedClassifiesRawStageSentinel(t *testing.T) {
 	})
 
 	raw := fmt.Errorf("spawn mer-1: %w: tmux runtime: create session mer-1: boom", sessionmanager.ErrRuntimeCreate)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{
-		ProjectID: "mer",
-		Kind:      domain.KindWorker,
-		Harness:   domain.HarnessCodex,
-	}, raw, 42)
+	svc.emitSpawnFailed(spawnFailure{
+		projectID: "mer",
+		kind:      domain.KindWorker,
+		harness:   domain.HarnessCodex,
+	}, raw, 42, 42)
 
 	if len(ts.events) != 1 {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
@@ -6298,12 +6298,12 @@ func (m memMilestones) Claim(name string) (bool, bool) {
 func spawnedFirstForInstall(t *testing.T, sink *fakeTelemetrySink) (any, bool) {
 	t.Helper()
 	for i := len(sink.events) - 1; i >= 0; i-- {
-		if sink.events[i].Name == "ao.session.spawned" {
+		if sink.events[i].Name == "ao.sessions.spawned" {
 			v, ok := sink.events[i].Payload["first_for_install"]
 			return v, ok
 		}
 	}
-	t.Fatalf("no ao.session.spawned in %#v", sink.events)
+	t.Fatalf("no ao.sessions.spawned in %#v", sink.events)
 	return nil, false
 }
 
@@ -6329,7 +6329,7 @@ func TestSpawnFirstForInstallIsDurableNotTableEmpty(t *testing.T) {
 	}
 	var legacy int
 	for _, ev := range sink.events {
-		if ev.Name == "ao.onboarding.first_session_spawned" {
+		if ev.Name == "ao.sessions.first_spawned" {
 			legacy++
 		}
 	}
@@ -6455,7 +6455,7 @@ func TestSpawnFirstForInstallSurvivesALaterSpawnFinishingFirst(t *testing.T) {
 	got := map[domain.SessionID]any{}
 	sink.mu.Lock()
 	for _, ev := range sink.events {
-		if ev.Name == "ao.session.spawned" {
+		if ev.Name == "ao.sessions.spawned" {
 			got[*ev.SessionID] = ev.Payload["first_for_install"]
 		}
 	}

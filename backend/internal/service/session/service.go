@@ -214,6 +214,7 @@ type Service struct {
 	usageArchiveFlush   func(context.Context)
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
+	asyncSpawns         asyncSpawnAttempts
 	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
@@ -295,7 +296,7 @@ type Deps struct {
 	DataDir   string
 	Telemetry ports.EventSink
 	// Milestones durably records the install's first spawned session, so
-	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
+	// ao.sessions.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
 	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
 	// nil, neither is reported from this service.
@@ -338,6 +339,9 @@ func NewWithDeps(d Deps) *Service {
 	}
 	if s.clock == nil {
 		s.clock = time.Now
+	}
+	if setter, ok := d.Manager.(provisionObserverSetter); ok {
+		setter.SetProvisionObserver(s.observeProvision)
 	}
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
@@ -442,7 +446,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 }
 
 // spawnWithTelemetry is the only path from the service into manager.Spawn, so
-// every created session emits ao.session.spawned or ao.session.spawn_failed
+// every created session emits ao.sessions.spawned or ao.sessions.spawn_failed
 // exactly once. Client-request replays return before reaching it.
 func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectRecord) (domain.SessionRecord, int, int, error) {
 	// CLI and orchestrator workers use this same naming policy as desktop tasks.
@@ -460,18 +464,31 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// sees that row cannot take this spawn's first_for_install claim.
 	s.firstSession.begin(firstSession)
 	createdBy := s.spawnCreatedBy(ctx, cfg)
-	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	// An asynchronous Chat start answers before it is usable; the provision
+	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
+	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
+	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
 	if err != nil {
+		if acc.deferred && !s.abandonAsyncSpawn(acc) {
+			// The background start already settled this attempt.
+			return domain.SessionRecord{}, 0, 0, err
+		}
 		s.firstSession.finish(s.milestones, firstSession, false)
-		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
+		elapsed := s.now().Sub(start).Milliseconds()
+		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
+	}
+	s.recordCreatedBy(ctx, rec.ID, createdBy)
+	if acc.deferred {
+		return rec, promptBytes, systemPromptBytes, nil
 	}
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
-	s.recordCreatedBy(ctx, rec.ID, createdBy)
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
+	elapsed := s.now().Sub(start).Milliseconds()
+	facts := s.spawnFactsFromRequest(ctx, createdBy)
+	s.emitSpawned(rec, elapsed, elapsed, firstForInstall, firstKnown, facts)
 	if firstSession {
-		s.emitFirstSessionSpawned(ctx, rec, project)
+		s.emitFirstSessionSpawned(rec, project, facts.requestID)
 	}
 	return rec, promptBytes, systemPromptBytes, nil
 }
@@ -531,7 +548,7 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// firstSessionClaims decides first_for_install on ao.session.spawned. The
+// firstSessionClaims decides first_for_install on ao.sessions.spawned. The
 // prior-session check runs before Spawn, which persists a seed row before
 // provisioning, so a spawn that saw an empty install (eligible) can still be
 // provisioning when a later spawn that saw its row (ineligible) finishes.
@@ -570,36 +587,44 @@ func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeed
 	return ports.FirstForInstall(m, "session_spawned", eligible)
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
+// emitSpawned reports a session that became usable. durationMs keeps its
+// original meaning, the time until the spawn request was answered (negative
+// omits it); spawnDurationMs runs from acceptance to the usable harness.
+func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDurationMs int64, firstForInstall, firstKnown bool, facts spawnFacts) {
 	if s.telemetry == nil {
 		return
 	}
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
-		"harness":     string(rec.Harness),
-		"duration_ms": durationMs,
-		"created_by":  string(createdBy),
+		"kind":              telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
+		"harness":           string(rec.Harness),
+		"spawn_duration_ms": nonNegativeMs(spawnDurationMs),
+	}
+	if durationMs >= 0 {
+		payload["duration_ms"] = durationMs
+	}
+	if facts.createdBy.Valid() {
+		payload["created_by"] = string(facts.createdBy)
 	}
 	// Absent for spawns that no client request started (schedules, intake).
-	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
-		payload["surface"] = string(surface)
+	if facts.surface != "" {
+		payload["surface"] = string(facts.surface)
 	}
 	if firstKnown {
 		payload["first_for_install"] = firstForInstall
 	}
-	if actor, ok := s.githubActor(ctx); ok {
-		payload["github_actor"] = actor
+	if facts.githubActor != "" {
+		payload["github_actor"] = facts.githubActor
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
 		SessionID:  &sessionID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  facts.requestID,
 		Payload:    payload,
 	})
 }
@@ -622,8 +647,8 @@ func (s *Service) githubActor(ctx context.Context) (string, bool) {
 
 // emitFirstSessionSpawned is deprecated: it fires whenever the sessions table is
 // empty, so it repeats after a user clears their sessions. Use
-// ao.session.spawned with first_for_install=true. Kept for dashboard continuity.
-func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) {
+// ao.sessions.spawned with first_for_install=true. Kept for dashboard continuity.
+func (s *Service) emitFirstSessionSpawned(rec domain.SessionRecord, project domain.ProjectRecord, requestID string) {
 	if s.telemetry == nil {
 		return
 	}
@@ -637,43 +662,57 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 		payload["since_first_project_ms"] = s.now().Sub(project.RegisteredAt).Milliseconds()
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_session_spawned",
+		Name:       "ao.sessions.first_spawned",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelInfo,
 		ProjectID:  &projectID,
 		SessionID:  &sessionID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  requestID,
 		Payload:    payload,
 	})
 }
 
-func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, err error, durationMs int64) {
+// spawnFailure names the attempt a spawn_failed describes.
+type spawnFailure struct {
+	kind      domain.SessionKind
+	harness   domain.AgentHarness
+	projectID domain.ProjectID
+	requestID string
+}
+
+// emitSpawnFailed reports one failed start attempt. durationMs keeps its
+// original meaning (negative omits it); spawnDurationMs runs from acceptance
+// to the failure, measured on the same boundary as a success.
+func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDurationMs int64) {
 	if s.telemetry == nil {
 		return
 	}
-	projectID := cfg.ProjectID
+	projectID := f.projectID
 	apiErr := toSpawnAPIError(err)
 	errorKind, errorCode := telemetrymeta.ErrorKindAndCode(apiErr)
 	payload := map[string]any{
-		"component":   "session_service",
-		"operation":   "spawn_session",
-		"kind":        telemetrymeta.SessionKind(cfg.Kind, cfg.ProjectID),
-		"harness":     string(cfg.Harness),
-		"duration_ms": durationMs,
-		"error_kind":  errorKind,
-		"fingerprint": telemetrymeta.Fingerprint("session_service", "spawn_session", string(cfg.Kind), string(cfg.Harness), errorKind, errorCode),
+		"component":         "session_service",
+		"operation":         "spawn_session",
+		"kind":              telemetrymeta.SessionKind(f.kind, f.projectID),
+		"harness":           string(f.harness),
+		"spawn_duration_ms": nonNegativeMs(spawnDurationMs),
+		"error_kind":        errorKind,
+		"fingerprint":       telemetrymeta.Fingerprint("session_service", "spawn_session", string(f.kind), string(f.harness), errorKind, errorCode),
+	}
+	if durationMs >= 0 {
+		payload["duration_ms"] = durationMs
 	}
 	if errorCode != "" {
 		payload["error_code"] = errorCode
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawn_failed",
+		Name:       "ao.sessions.spawn_failed",
 		Source:     "session_service",
 		OccurredAt: s.now(),
 		Level:      ports.TelemetryLevelError,
 		ProjectID:  &projectID,
-		RequestID:  reqid.FromContext(ctx),
+		RequestID:  f.requestID,
 		Payload:    payload,
 	})
 }

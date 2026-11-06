@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import {
+	boundCloudUserId,
 	bootstrapDistinctId,
 	buildTelemetryBootstrap,
+	claimFirstOpen,
 	defaultDataDir,
 	EXPERIMENT_COHORT_BUCKETS,
 	loadOrAssignExperimentCohort,
@@ -256,4 +258,37 @@ test("buildTelemetryBootstrap carries the experiment cohort", async () => {
 	await writeFile(path.join(dir, "telemetry_experiment_cohort"), "13\n");
 	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.0.0", "darwin", "/home/test", true, enabledPolicy);
 	expect(bootstrap?.experimentCohort).toBe(13);
+});
+
+test("claimFirstOpen claims once, for a fresh install only", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-first-open-"));
+	tempDirs.push(dir);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 1 })).toBe(false);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 3 })).toBe(false);
+	expect(await claimFirstOpen(dir, {})).toBe(false);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe(true);
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe(false);
+});
+
+test("claimFirstOpen never claims on an upgrade that already recorded the old install event", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-first-open-"));
+	tempDirs.push(dir);
+	// Builds that sent ao.install.created wrote the install ID here.
+	await writeFile(path.join(dir, "telemetry_first_open_emitted"), "ins_existing\n");
+	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe(false);
+});
+
+test("boundCloudUserId reads only a plain, well-formed binding file", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-bound-"));
+	tempDirs.push(dir);
+	const file = path.join(dir, "telemetry_bound_user");
+	expect(await boundCloudUserId(dir)).toBeNull();
+	await writeFile(file, "user_01H\n");
+	expect(await boundCloudUserId(dir)).toBe("user_01H");
+	await writeFile(file, "../../etc/passwd\n");
+	expect(await boundCloudUserId(dir)).toBeNull();
+	await rm(file);
+	await writeFile(path.join(dir, "target"), "user_01H\n");
+	await symlink(path.join(dir, "target"), file);
+	expect(await boundCloudUserId(dir)).toBeNull();
 });

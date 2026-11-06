@@ -1,0 +1,182 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+)
+
+// asyncCommander behaves like an asynchronous Chat start: Spawn writes
+// "provisioning" through the observer on the request goroutine and answers;
+// the test then settles the start the way the background goroutine would.
+type asyncCommander struct {
+	*fakeCommander
+	observer sessionmanager.ProvisionObserver
+	clock    *fakeClock
+	answerIn time.Duration
+	// settleDuringSpawn settles the start before Spawn answers (a fast start).
+	settleDuringSpawn  domain.SessionProvisionState
+	spawnErrAfterAsync error
+}
+
+func (a *asyncCommander) SetProvisionObserver(fn sessionmanager.ProvisionObserver) { a.observer = fn }
+
+func (a *asyncCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	rec := domain.SessionRecord{ID: "chat-1", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, ProvisionState: domain.SessionProvisionProvisioning}
+	a.clock.advance(a.answerIn)
+	a.observer(ctx, rec, domain.SessionProvisionProvisioning, nil)
+	if a.settleDuringSpawn != "" {
+		a.observer(context.Background(), rec, a.settleDuringSpawn, nil)
+	}
+	if a.spawnErrAfterAsync != nil {
+		return domain.SessionRecord{}, 0, 0, a.spawnErrAfterAsync
+	}
+	return rec, 0, 0, nil
+}
+
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func newAsyncSpawnService(t *testing.T) (*Service, *asyncCommander, *fakeTelemetrySink, *fakeStore, memMilestones) {
+	t.Helper()
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	cmd := &asyncCommander{fakeCommander: &fakeCommander{}, clock: clock, answerIn: 40 * time.Millisecond}
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Milestones: milestones, Clock: func() time.Time { return clock.now }})
+	return svc, cmd, sink, st, milestones
+}
+
+func named(sink *fakeTelemetrySink, name string) []ports.TelemetryEvent {
+	var out []ports.TelemetryEvent
+	for _, ev := range sink.events {
+		if ev.Name == name {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func settle(cmd *asyncCommander, state domain.SessionProvisionState, cause error) {
+	cmd.observer(context.Background(), domain.SessionRecord{ID: "chat-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}, state, cause)
+}
+
+func TestAsyncChatSpawnReportsSpawnedOnlyWhenUsable(t *testing.T) {
+	svc, cmd, sink, _, _ := newAsyncSpawnService(t)
+	ctx := telemetrymeta.WithSurface(context.Background(), domain.RequestSurfaceDesktop)
+	if _, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := named(sink, "ao.sessions.spawned"); len(got) != 0 {
+		t.Fatalf("spawned before the session was usable: %#v", got)
+	}
+	cmd.clock.advance(9 * time.Second)
+	settle(cmd, domain.SessionProvisionReady, nil)
+	settle(cmd, domain.SessionProvisionReady, nil) // a repeated write settles nothing more
+	spawned := named(sink, "ao.sessions.spawned")
+	if len(spawned) != 1 {
+		t.Fatalf("spawned = %d, want exactly one", len(spawned))
+	}
+	p := spawned[0].Payload
+	if p["spawn_duration_ms"] != int64(9040) || p["duration_ms"] != int64(40) {
+		t.Fatalf("durations = %#v / %#v, want 9040 to ready and 40 to answer", p["spawn_duration_ms"], p["duration_ms"])
+	}
+	if p["harness"] != "codex" || p["surface"] != "desktop" || p["created_by"] != "user" || p["first_for_install"] != true {
+		t.Fatalf("acceptance context lost: %#v", p)
+	}
+	if len(named(sink, "ao.sessions.first_spawned")) != 1 || len(named(sink, "ao.sessions.spawn_failed")) != 0 {
+		t.Fatalf("events = %#v", sink.events)
+	}
+}
+
+func TestAsyncChatSpawnFailureKeepsFirstSessionClaimForTheRetry(t *testing.T) {
+	svc, cmd, sink, st, milestones := newAsyncSpawnService(t)
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	st.sessions["chat-1"] = domain.SessionRecord{ID: "chat-1", ProjectID: "mer"}
+	cmd.clock.advance(2 * time.Second)
+	settle(cmd, domain.SessionProvisionFailed, sessionmanager.ErrWorkspaceCreate)
+	failed := named(sink, "ao.sessions.spawn_failed")
+	if len(failed) != 1 || failed[0].Payload["spawn_duration_ms"] != int64(2040) || failed[0].Payload["harness"] != "codex" {
+		t.Fatalf("spawn_failed = %#v", failed)
+	}
+	if len(named(sink, "ao.sessions.spawned")) != 0 || milestones["session_spawned"] {
+		t.Fatal("a failed start must not report spawned or spend the first_for_install claim")
+	}
+
+	// The user retries the failed start: a new attempt, timed from the retry.
+	cmd.observer(context.Background(), domain.SessionRecord{ID: "chat-1", ProjectID: "mer"}, domain.SessionProvisionProvisioning, nil)
+	cmd.clock.advance(3 * time.Second)
+	settle(cmd, domain.SessionProvisionReady, nil)
+	spawned := named(sink, "ao.sessions.spawned")
+	if len(spawned) != 1 {
+		t.Fatalf("spawned = %d, want one for the successful retry", len(spawned))
+	}
+	p := spawned[0].Payload
+	if p["spawn_duration_ms"] != int64(3000) || p["first_for_install"] != true {
+		t.Fatalf("retry payload = %#v", p)
+	}
+	if _, ok := p["duration_ms"]; ok {
+		t.Fatalf("a retry has no request answer time: %#v", p)
+	}
+}
+
+func TestAsyncChatSpawnSettledBeforeAnswerReportsOnce(t *testing.T) {
+	svc, cmd, sink, _, _ := newAsyncSpawnService(t)
+	cmd.settleDuringSpawn = domain.SessionProvisionReady
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := len(named(sink, "ao.sessions.spawned")); got != 1 {
+		t.Fatalf("spawned = %d, want 1", got)
+	}
+}
+
+func TestAsyncChatSpawnErrorAfterGoingAsyncReportsOneFailure(t *testing.T) {
+	svc, cmd, sink, _, _ := newAsyncSpawnService(t)
+	cmd.spawnErrAfterAsync = errors.New("commit failed")
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err == nil {
+		t.Fatal("Spawn succeeded")
+	}
+	settle(cmd, domain.SessionProvisionFailed, nil)
+	if got := len(named(sink, "ao.sessions.spawn_failed")); got != 1 || len(named(sink, "ao.sessions.spawned")) != 0 {
+		t.Fatalf("events = %#v, want exactly one spawn_failed", sink.events)
+	}
+}
+
+// A start interrupted by a daemon restart is marked failed by the new process,
+// which never opened that attempt: nothing is reported, and no duration is invented.
+func TestUnopenedAttemptReportsNothing(t *testing.T) {
+	_, cmd, sink, _, _ := newAsyncSpawnService(t)
+	settle(cmd, domain.SessionProvisionFailed, nil)
+	settle(cmd, domain.SessionProvisionReady, nil)
+	if len(sink.events) != 0 {
+		t.Fatalf("events = %#v, want none", sink.events)
+	}
+}
+
+func TestSyncSpawnReportsSpawnDuration(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	clock := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	cmd := &fakeCommander{spawnHook: func(context.Context) { clock.advance(1200 * time.Millisecond) }}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Clock: func() time.Time { return clock.now }})
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	p := named(sink, "ao.sessions.spawned")[0].Payload
+	if p["spawn_duration_ms"] != int64(1200) || p["duration_ms"] != int64(1200) || p["harness"] != "claude-code" {
+		t.Fatalf("payload = %#v", p)
+	}
+}

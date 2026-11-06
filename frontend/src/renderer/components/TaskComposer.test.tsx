@@ -1385,7 +1385,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("File attachments are not supported for cloud tasks yet.");
 		expect(onCreated).not.toHaveBeenCalled();
 		expect(h.post).not.toHaveBeenCalled();
-		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { project_id: "cloud-1" });
+		expect(h.capture).toHaveBeenCalledWith("ao.tasks.create_failed", { project_id: "cloud-1" });
 	});
 
 	it("starts a cloud task in the default session mode, as a local task does", async () => {
@@ -1822,7 +1822,7 @@ describe("TaskComposer", () => {
 		fireEvent.change(task(), { target: { value: "Say hello" } });
 		fireEvent.click(screen.getByText("Start task"));
 		expect(await screen.findByRole("alert")).toHaveTextContent("no session");
-		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { scope: "standalone" });
+		expect(h.capture).toHaveBeenCalledWith("ao.tasks.create_failed", { scope: "standalone" });
 	});
 
 	it("reports dirty then clears it on unmount", () => {

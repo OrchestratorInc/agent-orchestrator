@@ -16,6 +16,7 @@ const posthogStub = {
 	setPersonProperties: vi.fn(),
 	opt_in_capturing: vi.fn(),
 	opt_out_capturing: vi.fn(),
+	featureFlags: { setReloadingPaused: vi.fn() },
 };
 
 function mockPosthog() {
@@ -48,6 +49,32 @@ describe("initTelemetry recovery", () => {
 		posthogStub.capture.mockClear();
 		return captureRendererEvent;
 	}
+
+	it("captures every renamed event under its new name and never an old one", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { LEGACY_EVENT_NAMES } = await import("./telemetry");
+		for (const name of Object.keys(LEGACY_EVENT_NAMES)) {
+			posthogStub.capture.mockClear();
+			expect(await captureRendererEvent(name, { phase: "download", error_category: "network", to_version: "9.9.9", surface: "home" }), name).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event), name).toContain(name);
+		}
+		const legacy = new Set(Object.values(LEGACY_EVENT_NAMES).flat());
+		expect(posthogStub.capture.mock.calls.some(([event]) => legacy.has(String(event)))).toBe(false);
+	});
+
+	it("writes log-only events to the console instead of PostHog", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		try {
+			for (const name of ["ao.renderer.agents_available", "ao.renderer.cloud_offering_resolved"]) {
+				expect(await captureRendererEvent(name, { installed_count: 2, org_kind: "b2c" })).toBe(true);
+				expect(info).toHaveBeenCalledWith(`[telemetry] ${name}`, expect.any(Object));
+			}
+			expect(posthogStub.capture).not.toHaveBeenCalled();
+		} finally {
+			info.mockRestore();
+		}
+	});
 
 	it("retries init after a transient thrown failure instead of caching it", async () => {
 		let calls = 0;
@@ -116,12 +143,12 @@ describe("initTelemetry recovery", () => {
 	it("deduplicates updater failures at the real capture boundary", async () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
-		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
-		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
-		expect(await captureRendererEvent("ao.renderer.update_downloaded", failure)).toBe(true);
-		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+		expect(await captureRendererEvent("ao.updates.downloaded", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
 		expect(posthogStub.capture.mock.calls.map(([name]) => name)).toEqual([
-			"ao.renderer.update_failed", "ao.renderer.update_downloaded", "ao.renderer.update_failed",
+			"ao.updates.failed", "ao.updates.downloaded", "ao.updates.failed",
 		]);
 	});
 
@@ -130,14 +157,14 @@ describe("initTelemetry recovery", () => {
 		const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000);
 		try {
 			for (let index = 0; index < 5; index++) {
-				expect(await captureRendererEvent("ao.renderer.update_failed", {
+				expect(await captureRendererEvent("ao.updates.failed", {
 					phase: "download", error_category: "network", to_version: `2.0.${index}`,
 				})).toBe(true);
 			}
 			const sixth = { phase: "download", error_category: "network", to_version: "2.0.5" };
-			expect(await captureRendererEvent("ao.renderer.update_failed", sixth)).toBe(false);
+			expect(await captureRendererEvent("ao.updates.failed", sixth)).toBe(false);
 			clock.mockReturnValue(1_000_060_001);
-			expect(await captureRendererEvent("ao.renderer.update_failed", sixth)).toBe(true);
+			expect(await captureRendererEvent("ao.updates.failed", sixth)).toBe(true);
 			expect(posthogStub.capture).toHaveBeenCalledTimes(6);
 		} finally {
 			clock.mockRestore();
@@ -150,13 +177,13 @@ describe("initTelemetry recovery", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
 			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
-			expect(posthogStub.capture.mock.calls.at(-1)?.[0]).toBe("ao.renderer.update_failures_daily");
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[0]).toBe("ao.usage.update_failures_daily");
 			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ day: "2026-10-20", failure_count: 2 });
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -169,16 +196,16 @@ describe("initTelemetry recovery", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
 			await applyAnalyticsOptOut(true);
 			posthogStub.capture.mockImplementation(() => undefined);
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
 			posthogStub.capture.mockImplementation(() => ({}));
 			await applyAnalyticsOptOut(false);
 			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
 			posthogStub.capture.mockClear();
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
-			expect(posthogStub.capture.mock.calls.map(([event]) => event)).toEqual(["ao.renderer.update_failed"]);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event)).toEqual(["ao.updates.failed"]);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -191,13 +218,13 @@ describe("initTelemetry recovery", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
 			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
 			posthogStub.capture.mockImplementationOnce(() => {
 				void applyAnalyticsOptOut(true);
 				return undefined;
 			});
-			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
 			expect(localStorage.getItem("ao.telemetry.updateFailures.v1")).toBeNull();
 		} finally {
 			vi.useRealTimers();
@@ -208,13 +235,13 @@ describe("initTelemetry recovery", () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const rejected = { phase: "download", error_category: "network", to_version: "2.0.0" };
 		posthogStub.capture.mockImplementationOnce(() => undefined);
-		expect(await captureRendererEvent("ao.renderer.update_failed", rejected)).toBe(false);
-		expect(await captureRendererEvent("ao.renderer.update_failed", rejected)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", rejected)).toBe(false);
+		expect(await captureRendererEvent("ao.updates.failed", rejected)).toBe(true);
 
 		const thrown = { phase: "download", error_category: "network", to_version: "2.0.1" };
 		posthogStub.capture.mockImplementationOnce(() => { throw new Error("capture failed"); });
-		await expect(captureRendererEvent("ao.renderer.update_failed", thrown)).rejects.toThrow("capture failed");
-		expect(await captureRendererEvent("ao.renderer.update_failed", thrown)).toBe(true);
+		await expect(captureRendererEvent("ao.updates.failed", thrown)).rejects.toThrow("capture failed");
+		expect(await captureRendererEvent("ao.updates.failed", thrown)).toBe(true);
 	});
 });
 
@@ -238,78 +265,31 @@ describe("PostHog identity and opt-out", () => {
 		vi.clearAllMocks();
 	});
 
-	it("reserves app open and next-day return once across renderer restarts", async () => {
+	it("sends app open only for the bootstrap that claimed it and never a next-day event", async () => {
 		localStorage.clear();
 		vi.useFakeTimers();
 		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
 		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
 		try {
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0, firstOpen: true }));
 			const first = await import("./telemetry");
 			await first.initTelemetry();
 			const names = posthogStub.capture.mock.calls.map(([name]) => name);
 			expect(names.filter((name) => name === "ao.app.first_opened")).toHaveLength(1);
-			expect(names.filter((name) => name === "ao.app.next_day_returned")).toHaveLength(0);
-			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
+			expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 0, days_since_install: 0 }));
 			vi.resetModules();
 			posthogStub.capture.mockClear();
-			vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
-			const second = await import("./telemetry");
-			await second.initTelemetry();
-			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
-			vi.resetModules();
-			posthogStub.capture.mockClear();
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
-			const third = await import("./telemetry");
-			await third.initTelemetry();
-			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened" || name === "ao.app.next_day_returned")).toBe(false);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("records a next-day return when an open renderer becomes active after midnight", async () => {
-		localStorage.clear();
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-10-20T23:50:00.000Z"));
-		const addWindowListener = vi.spyOn(window, "addEventListener");
-		try {
-			const installedAt = new Date("2026-10-20T23:40:00.000Z").getTime();
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
-			const { initTelemetry } = await import("./telemetry");
-			await initTelemetry();
-			posthogStub.capture.mockClear();
-			const focus = addWindowListener.mock.calls.findLast(([type]) => type === "focus")?.[1] as EventListener;
-
-			vi.setSystemTime(new Date("2026-10-21T00:10:00.000Z"));
-			focus(new Event("focus"));
-			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
-			focus(new Event("focus"));
-			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
-
-			vi.resetModules();
-			posthogStub.capture.mockClear();
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
+			// Main hands out the durable claim once; later bootstraps omit it.
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0 }));
 			const restarted = await import("./telemetry");
 			await restarted.initTelemetry();
-			expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(0);
-		} finally {
-			addWindowListener.mockRestore();
-			vi.useRealTimers();
-		}
-	});
-
-	it("does not label a later return as the next-day milestone", async () => {
-		localStorage.clear();
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-10-30T10:00:00.000Z"));
-		try {
-			localStorage.setItem("ao.telemetry.activeSlotsByDate", JSON.stringify({ date: "2026-10-29" }));
-			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 10, installTimestampMs: new Date("2026-10-20T10:00:00.000Z").getTime() }));
-			const { initTelemetry } = await import("./telemetry");
-			await initTelemetry();
-			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.next_day_returned")).toBe(false);
+			vi.resetModules();
+			vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, installTimestampMs: installedAt, lifetimeSessions: 2 }));
+			const nextDay = await import("./telemetry");
+			await nextDay.initTelemetry();
+			// Next-day return is computed in PostHog retention, not sent.
+			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened" || /next_day/.test(String(name)))).toBe(false);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -327,19 +307,101 @@ describe("PostHog identity and opt-out", () => {
 			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 0);
 			posthogStub.capture.mockClear();
 			vi.setSystemTime(new Date("2026-10-21T11:00:00.000Z"));
-			expect(await captureRendererEvent("ao.renderer.loaded")).toBe(true);
+			expect(await captureRendererEvent("ao.app.loaded")).toBe(true);
 			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 1);
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	it("stamps sign-in only after the renderer learns the account state", async () => {
+	it("boots identified as the bound Cloud user, resets on sign-out and re-identifies on sign-in", async () => {
 		localStorage.clear();
-		mockBridge(async () => bootstrap);
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
 		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
 		await initTelemetry();
-		expect(withTelemetryContext({})).not.toHaveProperty("is_signed_in");
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "user_01H", isIdentifiedID: true } }));
+		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
+		// Launch events go out identified, with install_id still attached.
+		const launchEvents = posthogStub.capture.mock.calls.map(([, properties]) => properties);
+		expect(launchEvents.length).toBeGreaterThan(0);
+		for (const properties of launchEvents) {
+			expect(properties).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+			expect(properties).not.toHaveProperty("$process_person_profile", false);
+		}
+		// The runtime still sets the person properties once, without a reset.
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.reset).not.toHaveBeenCalled();
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		clearCloudUser();
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, $process_person_profile: false, install_id: "ins_test" });
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.identify).toHaveBeenCalledTimes(2);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+	});
+
+	it("boots anonymous without a verified Cloud binding", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch" }));
+		const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+		expect(withTelemetryContext({})).toMatchObject({ $process_person_profile: false });
+	});
+
+	it("does not boot identified after this launch already saw a sign-out", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
+		const { initTelemetry, clearCloudUser } = await import("./telemetry");
+		clearCloudUser();
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+	});
+
+	it("fills lifetime_sessions in once the daemon answers when the bootstrap had none", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		try {
+			mockPosthog();
+			const getLifetimeSessions = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(7);
+			vi.doMock("./bridge", () => ({
+				aoBridge: {
+					telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null), getLifetimeSessions },
+					updateSettings: { get: vi.fn(async () => ({})) },
+				},
+			}));
+			const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+			await initTelemetry();
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 7);
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(getLifetimeSessions).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("pauses feature flag reloads on an in-session analytics opt-out and resumes on opt-in", async () => {
+		localStorage.clear();
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		await initTelemetry();
+		await applyAnalyticsOptOut(true);
+		expect(posthogStub.featureFlags.setReloadingPaused).toHaveBeenLastCalledWith(true);
+		expect(posthogStub.opt_out_capturing).toHaveBeenCalled();
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.featureFlags.setReloadingPaused).toHaveBeenLastCalledWith(false);
+	});
+
+	it("stamps is_signed_in, days_since_install and lifetime_sessions on every event", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, installTimestampMs: Date.now() - 3 * 86_400_000, lifetimeSessions: 4 }));
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, days_since_install: 3, lifetime_sessions: 4 });
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", true);
 		clearCloudUser();
@@ -363,7 +425,7 @@ describe("PostHog identity and opt-out", () => {
 			expect(props).not.toHaveProperty("email");
 		}
 		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		const captured = posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>];
 		expect(JSON.stringify(captured)).not.toContain("dev@example.com");
 		expect(captured[1]).not.toHaveProperty("$process_person_profile");
@@ -395,13 +457,13 @@ describe("PostHog identity and opt-out", () => {
 	it("keeps events anonymous before sign-in and after sign-out", async () => {
 		mockBridge(async () => bootstrap);
 		const { identifyCloudUser, clearCloudUser, captureRendererEvent } = await import("./telemetry");
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		clearCloudUser();
 		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
-		await captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: true });
+		await captureRendererEvent("ao.mobile.connect_opened", { bridge_enabled: true });
 		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 	});
 
@@ -469,7 +531,7 @@ describe("PostHog identity and opt-out", () => {
 		await applyAnalyticsOptOut(false);
 		expect(posthogStub.opt_in_capturing).toHaveBeenLastCalledWith({ captureEventName: false });
 		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", expect.objectContaining({ email: "dev@example.com" }));
-		await captureRendererEvent("ao.renderer.support_opened", { install_id: "spoofed" });
+		await captureRendererEvent("ao.support.opened", { install_id: "spoofed" });
 		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1].install_id).toBe("ins_test");
 	});
 
@@ -624,7 +686,7 @@ describe("linking a website visit at sign-in", () => {
 		const { noteCloudSignInWebVisitor, identifyCloudUser, captureRendererEvent } = await load();
 		noteCloudSignInWebVisitor(userA.id, webDistinctId);
 		await identifyCloudUser(userA);
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
 		expect(posthogStub.alias).not.toHaveBeenCalled();
 		expect(linkEvents()).toHaveLength(0);
@@ -701,7 +763,7 @@ describe("linking a website visit at sign-in", () => {
 		posthogStub.alias.mockImplementation(() => undefined);
 		noteCloudSignInWebVisitor(userA.id, VISITOR);
 		await identifyCloudUser(userA);
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
 		expect(linkEvents()).toHaveLength(0);
 	});
