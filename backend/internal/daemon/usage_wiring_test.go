@@ -30,6 +30,7 @@ func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 		CodexArchived:       t.TempDir(),
 		KimiHome:            kimiHome,
 		PiSessions:          t.TempDir(),
+		PiAgentSessions:     t.TempDir(),
 		QwenUsage:           t.TempDir(),
 		OMPSessions:         t.TempDir(),
 		KimchiSessions:      t.TempDir(),
