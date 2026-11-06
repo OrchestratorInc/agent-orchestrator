@@ -1,5 +1,5 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Clipboard, FileText, LoaderCircle, RefreshCw, ShieldCheck, Square, TerminalSquare } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, ChevronDown, Clipboard, ExternalLink, FileText, LoaderCircle, RefreshCw, ShieldCheck, Square, TerminalSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
@@ -8,6 +8,7 @@ import type { AgentReadinessSnapshot } from "../../../hooks/useAgentReadinessQue
 import { toWorkspaceSession, workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiClient, apiErrorMessage } from "../../../lib/api-client";
+import { subscribeArtifactFileChanges } from "../../../lib/artifact-file-events";
 import { aoBridge } from "../../../lib/bridge";
 import { STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
 import { useResolvedTheme } from "../../../stores/ui-store";
@@ -16,9 +17,9 @@ import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
 import { HarnessStateText } from "./harness-ui";
 import {
-	collectTroubleshootingSnapshot, TROUBLESHOOTING_CLAIMS, TROUBLESHOOTING_HELPERS,
-	troubleshootingIssueDraft, troubleshootingNextStep, troubleshootingPrompt,
-	type TroubleshootingCheckStage, type TroubleshootingClaim, type TroubleshootingHelper, type TroubleshootingSession, type TroubleshootingSnapshot,
+	collectTroubleshootingSnapshot, fetchTroubleshootingFindings, TROUBLESHOOTING_CLAIMS, TROUBLESHOOTING_HELPERS,
+	troubleshootingFindingsQueryKey, troubleshootingIssueDraft, troubleshootingIssueUrl, troubleshootingNextStep, troubleshootingPrompt, troubleshootingReportAdvice,
+	type TroubleshootingCheckStage, type TroubleshootingClaim, type TroubleshootingFindings, type TroubleshootingHelper, type TroubleshootingSession, type TroubleshootingSnapshot,
 } from "./harness-troubleshooting";
 
 type TroubleshootingState = {
@@ -26,9 +27,11 @@ type TroubleshootingState = {
 	before?: TroubleshootingSnapshot;
 	after?: TroubleshootingSnapshot;
 	session?: TroubleshootingSession;
+	/** The harness the launched helper runs, named in its findings. */
+	helperHarness?: string;
 	stopped?: boolean;
 	busy?: boolean;
-	operation?: "checking" | "starting" | "stopping" | "copying";
+	operation?: "checking" | "starting" | "stopping" | "copying" | "opening";
 	error?: string;
 	draft?: string;
 	draftSource?: string;
@@ -47,6 +50,34 @@ function update(agentId: AgentId, patch: Partial<TroubleshootingState>) {
 	} }));
 }
 
+const actionClass = "h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-left focus-visible:ring-2 focus-visible:ring-ring";
+const summaryClass = "flex cursor-pointer list-none items-center gap-2 rounded text-xs text-settings-muted outline-none hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden";
+
+/** The helper's own account of its investigation, labeled as a hypothesis rather than AO's verdict. */
+function HelperFindings({ findings, status, failed, refreshing, onRefresh }: {
+	findings?: TroubleshootingFindings; status?: "missing" | "invalid" | "ready"; failed: boolean; refreshing: boolean; onRefresh: () => void;
+}) {
+	const { t } = useTranslation();
+	const list = (label: string, items: string[]) => items.length ? <div className="space-y-1"><p className="text-xs text-settings-muted">{label}</p><ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-settings-label">{items.map((item, index) => <li key={index} className="break-words">{item}</li>)}</ul></div> : null;
+	return <section className="space-y-3 rounded-lg border border-border bg-(--color-bg-secondary) p-4" aria-label={t("settings.harness.troubleshoot.findings.title")}>
+		<div className="flex flex-wrap items-center justify-between gap-2">
+			<h4 className="text-sm font-medium text-settings-label">{t("settings.harness.troubleshoot.findings.title")}</h4>
+			<Button className={actionClass} size="sm" variant="ghost" disabled={refreshing} onClick={onRefresh}>{refreshing ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}{t("settings.harness.troubleshoot.findings.refresh")}</Button>
+		</div>
+		{findings ? <>
+			<div className="space-y-1">
+				<p className="font-medium text-settings-label">{t(`settings.harness.troubleshoot.findings.cause.${findings.cause}`)}</p>
+				<p className="max-w-prose break-words text-xs leading-5 text-settings-label">{findings.summary}</p>
+				<p className="max-w-prose text-xs leading-5 text-settings-muted">{t(`settings.harness.troubleshoot.findings.outcome.${findings.outcome}`)}</p>
+			</div>
+			{list(t("settings.harness.troubleshoot.findings.repairs"), findings.repairs)}
+			{findings.evidence.length ? <details className="group"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.findings.evidence", { total: findings.evidence.length })}</summary><div className="mt-2">{list(t("settings.harness.troubleshoot.findings.evidenceList"), findings.evidence)}</div></details> : null}
+			{findings.uncertainty ? <p className="max-w-prose break-words text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.findings.uncertainty", { text: findings.uncertainty })}</p> : null}
+			<p className="max-w-prose text-caption text-settings-muted">{t("settings.harness.troubleshoot.findings.hypothesis")}</p>
+		</> : <p className="max-w-prose text-xs leading-5 text-settings-muted">{t(failed ? "settings.harness.troubleshoot.findings.unavailable" : status === "invalid" ? "settings.harness.troubleshoot.findings.invalid" : "settings.harness.troubleshoot.findings.waiting")}</p>}
+	</section>;
+}
+
 export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy, onOpenAccount }: {
 	agentId: AgentId; agents: AgentReadinessSnapshot[]; installationBusy: boolean; onOpenAccount: (id: AgentId) => void;
 }) {
@@ -58,6 +89,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 	const [helperChoice, setHelperChoice] = useState<TroubleshootingHelper>();
 	const [copied, setCopied] = useState<"prompt" | "draft">();
 	const [replacementDraft, setReplacementDraft] = useState<string>();
+	const [pasteRequired, setPasteRequired] = useState(false);
 	const draftRef = useRef<HTMLTextAreaElement>(null);
 	const draftOpen = state?.draft !== undefined;
 	useEffect(() => {
@@ -74,6 +106,17 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 	const busy = Boolean(state?.busy);
 	const pendingLaunch = state?.launchRequest;
 	const latest = state?.after ?? state?.before;
+	const helperSessionId = state?.session?.id;
+	// The helper writes its findings as a session artifact; the artifact stream
+	// rereads them as it works, and they remain readable after it stops.
+	const findingsQuery = useQuery({
+		queryKey: troubleshootingFindingsQueryKey(helperSessionId ?? ""),
+		queryFn: ({ signal }) => fetchTroubleshootingFindings(helperSessionId ?? "", signal),
+		enabled: Boolean(helperSessionId),
+	});
+	const helperRunning = Boolean(helperSessionId && !state?.stopped);
+	useEffect(() => helperSessionId && helperRunning ? subscribeArtifactFileChanges(helperSessionId, queryClient) : undefined, [helperRunning, helperSessionId, queryClient]);
+	const findings = findingsQuery.data?.status === "ready" ? findingsQuery.data.findings : undefined;
 	const run = async (operation: NonNullable<TroubleshootingState["operation"]>, action: () => Promise<void>) => {
 		if (useHarnessTroubleshooting.getState().entries[agentId]?.busy) return;
 		update(agentId, { busy: true, operation, claim, error: undefined });
@@ -87,6 +130,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 		const snapshot = await collectTroubleshootingSnapshot(agentId, queryClient, version, document.documentElement.dataset.aoPlatform ?? "unknown", (checkStage) => update(agentId, { checkStage }));
 		const current = useHarnessTroubleshooting.getState().entries[agentId];
 		update(agentId, { ...(current?.before ? { after: snapshot } : { before: snapshot }), verificationFailed: false });
+		if (current?.session) void queryClient.invalidateQueries({ queryKey: troubleshootingFindingsQueryKey(current.session.id) });
 	});
 	const start = () => run("starting", async () => {
 		const current = useHarnessTroubleshooting.getState().entries[agentId];
@@ -102,7 +146,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 		update(agentId, { launchRequest: request });
 		const { data, error } = await apiClient.POST("/api/v1/sessions", { body: request });
 		if (error || !data) throw new Error(apiErrorMessage(error, t("settings.harness.troubleshoot.failed")));
-		update(agentId, { session: data.session, stopped: data.session.isTerminated, launchRequest: undefined });
+		update(agentId, { session: data.session, helperHarness: request.harness, stopped: data.session.isTerminated, launchRequest: undefined });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	});
 	const stop = () => run("stopping", async () => {
@@ -118,11 +162,27 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 	});
 	const prepareDraft = () => {
 		if (!state?.before) return;
-		const draft = troubleshootingIssueDraft(claim, state.before, state.after, state.verificationFailed);
+		const helperName = state.helperHarness ? agentLabel(state.helperHarness as AgentId) : undefined;
+		const draft = troubleshootingIssueDraft(claim, state.before, state.after, state.verificationFailed, findings, helperName);
 		if (draftOpen && state.draft !== state.draftSource) { setReplacementDraft(draft); return; }
 		setCopied(undefined);
+		setPasteRequired(false);
 		update(agentId, { draft, draftSource: draft });
 	};
+	// Opens GitHub's new-issue page for the user to review and submit; AO never files it.
+	const openIssue = () => run("opening", async () => {
+		const draft = useHarnessTroubleshooting.getState().entries[agentId]?.draft ?? "";
+		const issue = troubleshootingIssueUrl(draft);
+		if (issue.pasteRequired) {
+			await aoBridge.clipboard.writeText(draft);
+			setCopied("draft");
+		}
+		setPasteRequired(issue.pasteRequired);
+		await aoBridge.app.openExternal(issue.url);
+	});
+	const adviceFromChecks = latest ? troubleshootingReportAdvice(latest, findings, Boolean(state?.session && state.after)) : undefined;
+	// Earlier passing checks do not confirm the current state after a failed recheck.
+	const reportAdvice = state?.verificationFailed && adviceFromChecks === "not_needed" ? "optional" : adviceFromChecks;
 	const session = state?.session ? toWorkspaceSession(state.session, { id: STANDALONE_WORKSPACE_ID, name: "" }) : undefined;
 	const checking = state?.operation === "checking";
 	const progress = checking ? t(`settings.harness.troubleshoot.progress.${state?.checkStage ?? "installation"}`) : state?.operation === "starting" ? t("settings.harness.troubleshoot.startingProgress") : state?.operation === "stopping" ? t("settings.harness.troubleshoot.stoppingProgress") : undefined;
@@ -131,8 +191,6 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 	const authenticationOK = latest?.authentication.freshness === "fresh" && ["authorized", "not_applicable"].includes(latest.authentication.state);
 	const authState = latest?.authentication.state;
 	const selectClass = "block w-full min-w-0 rounded-md border border-border bg-surface px-3 py-2 text-sm text-settings-label outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
-	const actionClass = "h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-left focus-visible:ring-2 focus-visible:ring-ring";
-	const summaryClass = "flex cursor-pointer list-none items-center gap-2 rounded text-xs text-settings-muted outline-none hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden";
 	return <section className="space-y-5 pb-3 text-sm" aria-label={t("settings.harness.troubleshoot.title")}>
 		<p className="max-w-prose text-pretty text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.description")}</p>
 		<p className="flex max-w-prose items-start gap-2 text-xs leading-5 text-settings-muted"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{t("settings.harness.troubleshoot.localChecks")}</p>
@@ -181,6 +239,7 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 					</div>
 					<div className="h-[min(540px,55vh)] min-h-80 overflow-hidden rounded-b-lg bg-terminal" data-settings-inline-edit=""><TerminalPane key={session.id} session={session} terminalTarget={{ kind: "worker" }} theme={theme} daemonReady fontSize={12} onTerminalStateChange={(status) => { if (status === "exited" && useHarnessTroubleshooting.getState().entries[agentId]?.session?.id === session.id) update(agentId, { stopped: true }); }} /></div>
 				</div> : null}
+				{session ? <HelperFindings findings={findings} status={findingsQuery.data?.status} failed={findingsQuery.isError} refreshing={findingsQuery.isFetching} onRefresh={() => void findingsQuery.refetch()} /> : null}
 				<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
 					<Button className={actionClass} size="sm" variant={!helper && !session && !pendingLaunch ? "primary" : "ghost"} aria-label={t("settings.harness.troubleshoot.copyPrompt")} disabled={busy} onClick={() => void copy("prompt", troubleshootingPrompt(claim, latest))}>{copied === "prompt" ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}<span aria-live="polite">{t(copied === "prompt" ? "settings.harness.troubleshoot.copied" : "settings.harness.troubleshoot.copyPrompt")}</span></Button>
 					{session ? <details className="group max-w-prose"><summary className={summaryClass}><ChevronDown className="size-3.5 shrink-0 group-open:rotate-180" aria-hidden="true" />{t("settings.harness.troubleshoot.sessionDetails")}</summary><p className="mt-2 text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.sessionLifetime")}</p></details> : null}
@@ -188,8 +247,14 @@ export function HarnessTroubleshootingPanel({ agentId, agents, installationBusy,
 			</>}
 		</section>
 		{latest ? <section className="space-y-3 border-t border-border pt-4" aria-label={t("settings.harness.troubleshoot.stepReport")}>
-			<div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-medium text-settings-label"><FileText className="size-4 text-settings-muted" aria-hidden="true" />{t("settings.harness.troubleshoot.stepReport")}</h3><Button className={actionClass} size="sm" variant="outline" disabled={busy} onClick={prepareDraft}>{t(draftOpen ? "settings.harness.troubleshoot.regenerate" : "settings.harness.troubleshoot.draft")}</Button></div>
-			{draftOpen ? <><label className="block space-y-1.5"><span className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.reviewDraft")}</span><textarea ref={draftRef} className="block min-h-64 w-full rounded-md border border-border bg-surface p-3 font-mono text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring" value={state?.draft} onChange={(event) => { setCopied(undefined); update(agentId, { draft: event.target.value }); }} /></label><p className="max-w-prose text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.draftHelp")}</p><Button className={actionClass} size="sm" variant="outline" aria-label={t("settings.harness.troubleshoot.copyDraft")} disabled={busy} onClick={() => void copy("draft", state?.draft ?? "")}>{copied === "draft" ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}<span aria-live="polite">{t(copied === "draft" ? "settings.harness.troubleshoot.copied" : "settings.harness.troubleshoot.copyDraft")}</span></Button></> : null}
+			<div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-medium text-settings-label"><FileText className="size-4 text-settings-muted" aria-hidden="true" />{t("settings.harness.troubleshoot.stepReport")}</h3><Button className={actionClass} size="sm" variant={reportAdvice === "recommended" && !draftOpen ? "primary" : reportAdvice === "not_needed" ? "ghost" : "secondary"} disabled={busy} onClick={prepareDraft}>{t(draftOpen ? "settings.harness.troubleshoot.regenerate" : "settings.harness.troubleshoot.draft")}</Button></div>
+			{reportAdvice ? <p className={reportAdvice === "recommended" ? "max-w-prose rounded-md border border-border bg-surface p-3 text-xs leading-5 text-settings-label" : "max-w-prose text-xs leading-5 text-settings-muted"} data-advice={reportAdvice}>{t(`settings.harness.troubleshoot.report.${reportAdvice}`)}</p> : null}
+			{draftOpen ? <><label className="block space-y-1.5"><span className="text-xs text-settings-muted">{t("settings.harness.troubleshoot.reviewDraft")}</span><textarea ref={draftRef} className="block min-h-64 w-full rounded-md border border-border bg-surface p-3 font-mono text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring" value={state?.draft} onChange={(event) => { setCopied(undefined); setPasteRequired(false); update(agentId, { draft: event.target.value }); }} /></label><p className="max-w-prose text-xs leading-5 text-settings-muted">{t("settings.harness.troubleshoot.draftHelp")}</p>
+				<div className="flex flex-wrap items-center gap-2">
+					<Button className={actionClass} size="sm" variant="accent" disabled={busy || !state?.draft?.trim()} onClick={() => void openIssue()}>{state?.operation === "opening" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <ExternalLink aria-hidden="true" />}{t("settings.harness.troubleshoot.openIssue")}</Button>
+					<Button className={actionClass} size="sm" variant="secondary" aria-label={t("settings.harness.troubleshoot.copyDraft")} disabled={busy} onClick={() => void copy("draft", state?.draft ?? "")}>{copied === "draft" ? <Check aria-hidden="true" /> : <Clipboard aria-hidden="true" />}<span aria-live="polite">{t(copied === "draft" ? "settings.harness.troubleshoot.copied" : "settings.harness.troubleshoot.copyDraft")}</span></Button>
+				</div>
+				<p className="max-w-prose text-xs leading-5 text-settings-muted" aria-live="polite">{t(pasteRequired ? "settings.harness.troubleshoot.issuePasteRequired" : "settings.harness.troubleshoot.openIssueHelp")}</p></> : null}
 		</section> : null}
 		<ConfirmDialog open={replacementDraft !== undefined} title={t("settings.harness.troubleshoot.replaceDraftTitle")} description={t("settings.harness.troubleshoot.replaceDraftDescription")} confirmLabel={t("settings.harness.troubleshoot.regenerate")} onOpenChange={(open) => { if (!open) setReplacementDraft(undefined); }} onConfirm={() => { if (replacementDraft !== undefined) { update(agentId, { draft: replacementDraft, draftSource: replacementDraft }); setCopied(undefined); setReplacementDraft(undefined); } }} />
 	</section>;

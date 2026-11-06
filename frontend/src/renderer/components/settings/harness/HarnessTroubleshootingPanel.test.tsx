@@ -17,9 +17,14 @@ vi.mock("../../../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	toWorkspaceSession: (session: { id: string; displayName: string }) => ({ id: session.id, title: session.displayName }),
 }));
+const artifactSubscriptions = vi.hoisted(() => [] as string[]);
+vi.mock("../../../lib/artifact-file-events", () => ({ subscribeArtifactFileChanges: (sessionId: string) => { artifactSubscriptions.push(sessionId); return () => {}; } }));
 
 const openAccount = vi.fn();
-beforeEach(() => { useHarnessTroubleshooting.setState({ entries: {} }); terminalCallbacks.length = 0; openAccount.mockClear(); });
+beforeEach(() => {
+	useHarnessTroubleshooting.setState({ entries: {} }); terminalCallbacks.length = 0; artifactSubscriptions.length = 0; openAccount.mockClear();
+	vi.spyOn(troubleshooting, "fetchTroubleshootingFindings").mockResolvedValue({ status: "missing" });
+});
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function setup(agents = [agentReadiness("claude-code"), agentReadiness("codex")]) {
@@ -221,6 +226,48 @@ it("uses the installation symptom for a harness AO cannot find", async () => {
 	await screen.findByTestId("helper-terminal");
 	expect(post.mock.calls[0][1]?.body?.prompt).toContain("I installed this harness");
 	expect(within(screen.getByTestId("helper-controls")).getByRole("button", { name: "Verify again" })).toBeVisible();
+});
+
+it("shows helper findings, recommends reporting a suspected AO bug and opens a prefilled issue", async () => {
+	const checks = mockChecks();
+	mockSessionPost();
+	const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+	const findings = vi.mocked(troubleshooting.fetchTroubleshootingFindings);
+	setup();
+	await collect();
+	fireEvent.click(screen.getByRole("button", { name: "Troubleshoot with agent" }));
+	await screen.findByText("Your helper has not recorded findings yet. They appear here while it works.");
+	expect(artifactSubscriptions).toEqual(["helper-1"]);
+	expect(findings).toHaveBeenCalledWith("helper-1", expect.anything());
+	findings.mockResolvedValue({ status: "ready", findings: {
+		cause: "suspected_ao_bug", outcome: "not_fixed", nativeCliWorks: true, summary: "codex login status succeeds, but AO reports signed out.",
+		evidence: ["codex login status exits 0"], repairs: [], uncertainty: "Whether the daemon reads a different home directory.",
+	} });
+	const failing = troubleshooting.troubleshootingSnapshot(agentReadiness("codex", "Codex", { authentication: "unauthorized" }), "0.13.0", "darwin");
+	failing.installationVerification = "succeeded";
+	checks.mockResolvedValue(failing);
+	fireEvent.click(within(screen.getByTestId("helper-controls")).getByRole("button", { name: "Verify again" }));
+	await screen.findByText("Likely cause: a problem in AO");
+	expect(screen.getByText("codex login status succeeds, but AO reports signed out.")).toBeVisible();
+	expect(screen.getByText("This looks like a problem in AO. Please report it so we can fix it.")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Prepare issue draft" }));
+	const draft = screen.getByRole("textbox", { name: "Review and edit issue draft" });
+	expect((draft as HTMLTextAreaElement).value).toMatch(/^AO does not recognize a valid codex login/);
+	expect((draft as HTMLTextAreaElement).value).toContain("Helper findings (written by");
+	fireEvent.click(screen.getByRole("button", { name: "Open GitHub issue" }));
+	await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1));
+	const url = new URL(openExternal.mock.calls[0][0]);
+	expect(url.hostname).toBe("github.com");
+	expect(url.searchParams.get("title")).toBe("AO does not recognize a valid codex login");
+	expect(url.searchParams.get("body")).toContain("codex login status exits 0");
+});
+
+it("does not recommend a report when checks pass and the helper found nothing", async () => {
+	mockChecks();
+	setup();
+	await collect();
+	expect(screen.getByText(/so a report is usually not needed/)).toBeVisible();
+	expect(screen.getByRole("button", { name: "Prepare issue draft" })).toBeEnabled();
 });
 
 it("requires confirmation before replacing an edited issue draft", async () => {
