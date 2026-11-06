@@ -52,7 +52,7 @@ func TestPaneListsTabsAndSplits(t *testing.T) {
 	if capture.method != http.MethodGet || capture.path != "/api/v1/sessions/aa-47/panes" {
 		t.Fatalf("hit %s %s", capture.method, capture.path)
 	}
-	for _, want := range []string{"Split panes: on", "On screen: sh-1", "Terminal 1 (claude-code)", "g1 (on screen)", "50% wide", "focused"} {
+	for _, want := range []string{"Split panes: on", "On screen: sh-1", "Terminal 1 (claude-code)", "g1 (on screen)", "50% wide", "focused", "ao pane run sh-1 <command>"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
