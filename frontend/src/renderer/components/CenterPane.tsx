@@ -753,7 +753,7 @@ export function SessionPaneTab({
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = provider ? agentLabel(provider) : undefined;
-	const tabIcon = !provider ? icon : providerIcon ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : undefined;
+	const tabIcon = provider && providerIcon ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
