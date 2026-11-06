@@ -2737,7 +2737,12 @@ const SessionRow = memo(function SessionRow({
 	// A session shared from another organization is the sharer's to name.
 	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		if (renamable) rename.begin();
+		if (!renamable) return;
+		// The editor replaces the row, unmounting a context menu that is still
+		// open. Radix reports that close from an effect the unmount skips, so
+		// contextMenuOpen would stay true and keep the preview off for good.
+		setContextMenuOpen(false);
+		rename.begin();
 	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
