@@ -16,13 +16,14 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const { t } = useTranslation();
 	const provider = agentAccountProviderFor(session.provider);
 	// Only a live local Claude Code or Codex session has an account to show; no
-	// other session polls the account list.
+	// other session asks the local daemon for accounts, its account or a move.
 	const shown = Boolean(provider) && !session.cloud && !session.isTerminated;
+	const shownId = shown ? session.id : undefined;
 	const accounts = useAgentAccounts(shown);
-	const current = useSessionAgentAccounts(provider ? session.id : undefined);
+	const current = useSessionAgentAccounts(shownId);
 	const actions = useAgentAccountActions();
 	const label = useAgentAccountLabel(shown);
-	const { transition } = useSessionInterfaceTransitionStatus(provider ? session.id : undefined);
+	const { transition } = useSessionInterfaceTransitionStatus(shownId);
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
 	const accountMove = transition?.targetAccountId ? transition : undefined;

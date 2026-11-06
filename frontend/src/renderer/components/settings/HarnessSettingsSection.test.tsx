@@ -994,6 +994,30 @@ describe("HarnessSettingsSection", () => {
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
 
+	// The CLI login does not depend on the accounts list: when it fails, the
+	// panel says so and still offers the CLI's own login.
+	it("shows a failed accounts list and keeps the CLI login on the Account tab", async () => {
+		accountMocks.enabled = true;
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/accounts"
+			? { error: { message: "accounts unavailable" } } as never
+			: get(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth" ? { data: {
+			agentId: "codex", action: "login", terminal: { handleId: "auth-codex", workingDir: "/tmp", title: "Codex login", createdAt: "2026-10-07T00:00:00Z" },
+		} } as never : post(path, options));
+		renderSection();
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("accounts unavailable")).toBeInTheDocument();
+		expect(within(page).getByText("Codex CLI login")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
+		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
+	});
+
 	it("offers to log in again for a signed-in harness", async () => {
 		mockInstalledOperations("npm");
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;

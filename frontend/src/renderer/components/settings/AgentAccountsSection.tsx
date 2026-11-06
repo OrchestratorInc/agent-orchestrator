@@ -98,7 +98,13 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		>
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
+			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
+			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
+			{cliLogin && !rows.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+				<p className="truncate text-sm font-medium text-foreground">{t("settings.agentAccounts.cliLoginOf", { provider: providerNames[provider] })}</p>
+				<Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.harness.login")}</Button>
+			</div> : null}
 			{rows.map((account) => <AccountRow
 				key={account.id}
 				account={account}
