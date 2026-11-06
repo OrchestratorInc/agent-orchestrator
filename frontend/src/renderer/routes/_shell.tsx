@@ -1214,34 +1214,29 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		workspaceStartupState,
 	]);
 
-	// Keep Electron's nativeTheme in step with the shell so the embedded preview
-	// WebContentsView (which follows prefers-color-scheme) flips at the same time.
-	// Send the preference, not the resolved theme, so "system" keeps both surfaces
-	// following the OS instead of freezing matchMedia to a forced value.
-	useEffect(() => {
-		void aoBridge.theme?.set(themePreference);
-	}, [themePreference]);
-
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.
 	useEffect(() => {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// macOS Appearance preference: the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && windowTranslucency;
+
 	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read.
+	// data-theme has been applied before the token is read. A translucent window
+	// paints no background, and the read forces a whole-document style recalc
+	// mid-switch, so it is skipped there.
 	useEffect(() => {
+		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
 			const color = resolveCssColorToHex("--sidebar");
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme]);
-
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
+	}, [resolvedTheme, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
