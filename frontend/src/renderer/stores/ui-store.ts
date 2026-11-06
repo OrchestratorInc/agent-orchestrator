@@ -181,6 +181,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
+	splitPanes: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -262,6 +264,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
@@ -336,6 +339,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
@@ -438,6 +442,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
@@ -512,6 +517,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
+	},
+	setSplitPanes: (splitPanes) => {
+		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
+		set({ splitPanes });
 	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));

@@ -40,6 +40,7 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -111,6 +112,7 @@ export function CommandPalette() {
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
+	const splitPanes = useSplitPanesEnabled();
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -309,10 +311,10 @@ export function CommandPalette() {
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
 			}, t),
-			...buildShortcutCommands(t),
+			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
