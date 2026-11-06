@@ -2624,6 +2624,11 @@ export interface components {
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
             offering?: components["schemas"]["Offering"];
+            /**
+             * @description Whether this is someone's own workspace or a team's. Only /me reports it; an older control plane leaves it out.
+             * @enum {string}
+             */
+            kind?: "personal" | "team" | "enterprise";
         };
         PutOrgSandboxProviderInput: {
             /** @description A provider from the organization's offering, or empty to clear the choice. */

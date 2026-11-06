@@ -4301,6 +4301,12 @@ components:
           $ref: "#/components/schemas/OrganizationRole"
         offering:
           $ref: "#/components/schemas/Offering"
+        kind:
+          type: string
+          enum: [personal, team, enterprise]
+          description: >-
+            Whether this is someone's own workspace or a team's. Only /me
+            reports it; an older control plane leaves it out.
     PutOrgSandboxProviderInput:
       type: object
       additionalProperties: false
