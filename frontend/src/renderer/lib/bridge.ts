@@ -51,6 +51,10 @@ export const aoBridge: AoBridge =
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
 		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
+		},
 		window: {
 			getZoomFactor: async () => 1,
 			onZoomFactor: () => () => undefined,
@@ -154,6 +158,9 @@ export const aoBridge: AoBridge =
 				throw new Error("Desktop app is required to open a workspace.");
 			},
 			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
+			openArtifactInBrowser: async () => {
 				throw new Error("Desktop app is required to open artifacts.");
 			},
 			copyWorkspacePath: async () => {
