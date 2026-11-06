@@ -6053,10 +6053,10 @@ export interface components {
         };
         ControllersPaneCommandRequest: {
             /**
-             * @description split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen.
+             * @description split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen; close closes a terminal tab.
              * @enum {string}
              */
-            action: "split" | "remove" | "ungroup" | "focus";
+            action: "split" | "remove" | "ungroup" | "focus" | "close";
             /** @description For split: key of the tab to split beside. Defaults to the tab on screen. */
             beside?: null | string;
             /** @description For ungroup: group id. Defaults to the group on screen. */

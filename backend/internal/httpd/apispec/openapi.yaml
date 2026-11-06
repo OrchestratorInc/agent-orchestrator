@@ -17632,12 +17632,14 @@ components:
       properties:
         action:
           description: split shows tab beside another; remove takes a tab out of its
-            group; ungroup dissolves a group; focus brings a tab on screen.
+            group; ungroup dissolves a group; focus brings a tab on screen; close
+            closes a terminal tab.
           enum:
           - split
           - remove
           - ungroup
           - focus
+          - close
           type: string
         beside:
           description: 'For split: key of the tab to split beside. Defaults to the

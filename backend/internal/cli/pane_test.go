@@ -199,3 +199,49 @@ func TestPaneSplitRunRefusesANonTerminalTab(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestPaneCloseGoesThroughTheWindowAndFallsBackToTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		windowCode int
+		windowBody string
+		wantInput  bool
+	}{
+		{"window shows the session", http.StatusOK, paneLayoutBody, false},
+		{"no window shows it", http.StatusConflict, `{"code":"SESSION_NOT_ON_SCREEN","message":"not on screen"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "aa-47")
+			cfg := setConfigEnv(t)
+			var calls []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/internal/") {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				body, _ := io.ReadAll(r.Body)
+				calls = append(calls, r.URL.Path+" "+string(body))
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/sessions/aa-47/panes/input" {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				w.WriteHeader(tc.windowCode)
+				_, _ = io.WriteString(w, tc.windowBody)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "close", "sh-1"); err != nil {
+				t.Fatalf("close: %v\nstderr=%s", err, errOut)
+			}
+			if !strings.Contains(calls[0], `"action":"close"`) {
+				t.Fatalf("first call = %s, want the window close", calls[0])
+			}
+			usedDaemon := len(calls) == 2 && strings.Contains(calls[1], `"close":true`)
+			if usedDaemon != tc.wantInput {
+				t.Fatalf("calls = %v, want daemon fallback = %v", calls, tc.wantInput)
+			}
+		})
+	}
+}
