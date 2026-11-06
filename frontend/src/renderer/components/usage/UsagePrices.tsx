@@ -28,6 +28,11 @@ const RATE_LABELS = {
 	cacheWriteUsdPerMillion: "usage.type.cacheWrite",
 } as const satisfies Record<(typeof RATE_FIELDS)[number], string>;
 
+/** A row with a price or a target set; one without either is left out on save. */
+function hasValues(row: Draft): boolean {
+	return row.priceAs.trim() !== "" || RATE_FIELDS.some((field) => row[field].trim() !== "");
+}
+
 let nextKey = 0;
 function draftOf(override: Partial<UsagePriceOverride>): Draft {
 	nextKey += 1;
@@ -66,6 +71,8 @@ export function UsagePricesDialog({
 	const [drafts, setDrafts] = useState<Draft[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Set by a save that found priced rows with no model; those rows stay marked until named.
+	const [checked, setChecked] = useState(false);
 	const listId = useId();
 	const loaded = prices.data;
 
@@ -77,11 +84,18 @@ export function UsagePricesDialog({
 		if (rows.length === 0) rows.push(draftOf({}));
 		setDrafts(rows);
 		setError(null);
+		setChecked(false);
 	}, [open, loaded, model]);
 
 	const update = (key: number, field: Exclude<keyof Draft, "key">, value: string) =>
 		setDrafts((rows) => rows.map((row) => (row.key === key ? { ...row, [field]: value } : row)));
+	const unnamed = (row: Draft) => row.modelId.trim() === "" && hasValues(row);
+	const missingModel = checked && drafts.some(unnamed);
 	const submit = async () => {
+		if (drafts.some(unnamed)) {
+			setChecked(true);
+			return;
+		}
 		setBusy(true);
 		setError(null);
 		try {
@@ -152,6 +166,7 @@ export function UsagePricesDialog({
 												placeholder={t("usage.prices.modelPlaceholder")}
 												list={`${listId}-seen`}
 												maxLength={256}
+												aria-invalid={checked && unnamed(row) ? true : undefined}
 												value={row.modelId}
 												disabled={busy}
 												onChange={(event) => update(row.key, "modelId", event.target.value)}
@@ -206,6 +221,7 @@ export function UsagePricesDialog({
 						</Button>
 						<span className="text-xs text-muted-foreground">{t("usage.prices.unit")}</span>
 					</div>
+					{missingModel ? <p role="alert" className="text-caption leading-4 text-error">{t("usage.prices.modelRequired")}</p> : null}
 					{error ? <p role="alert" className="text-caption leading-4 text-error">{error}</p> : null}
 				</div>
 				<div className={settingsDialogFooterClass}>

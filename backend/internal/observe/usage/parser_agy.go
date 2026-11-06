@@ -157,7 +157,10 @@ func readAgyGenerations(ctx context.Context, db *sql.DB, _ string, after int64, 
 }
 
 // stampAgyCalls gives each call the time of the step that recorded its
-// response, matched by response ID.
+// response, matched by response ID. A call no step records (a cache hit, a
+// retry) takes the time of the call before it, or of the first stamped call
+// after it, or else the conversation's latest step: an untimed event would
+// count toward no period of the usage report.
 func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]jsonlRecord, error) {
 	rows, err := db.QueryContext(ctx, `SELECT metadata FROM steps WHERE metadata IS NOT NULL`)
 	if err != nil {
@@ -165,30 +168,33 @@ func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]js
 	}
 	defer func() { _ = rows.Close() }()
 	times := make(map[string]int64)
+	var latest int64
 	for rows.Next() {
 		var metadata []byte
 		if err := rows.Scan(&metadata); err != nil {
 			return nil, err
 		}
-		usage, ok := protoFirstBytes(metadata, agyStepModelUsage)
-		if !ok {
-			continue
-		}
-		responseID, ok := protoFirstBytes(usage, agyUsageResponseID)
-		if !ok || len(responseID) == 0 {
-			continue
-		}
 		at, ok := agyTimestamp(metadata, agyStepCompletedAt)
 		if !ok {
 			at, ok = agyTimestamp(metadata, agyStepCreatedAt)
 		}
-		if ok {
+		if !ok {
+			continue
+		}
+		latest = max(latest, at)
+		usage, ok := protoFirstBytes(metadata, agyStepModelUsage)
+		if !ok {
+			continue
+		}
+		if responseID, ok := protoFirstBytes(usage, agyUsageResponseID); ok && len(responseID) > 0 {
 			times[string(responseID)] = at
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	calls := make([]*agyCallRecord, len(records))
+	var last int64
 	for index, record := range records {
 		var call agyCallRecord
 		if string(record.Data) == `{}` || json.Unmarshal(record.Data, &call) != nil {
@@ -196,12 +202,36 @@ func stampAgyCalls(ctx context.Context, db *sql.DB, records []jsonlRecord) ([]js
 		}
 		if at, ok := times[call.ResponseID]; ok {
 			call.CreatedAt = at
-			encoded, err := json.Marshal(call)
-			if err != nil {
-				return nil, err
-			}
-			records[index].Data = encoded
 		}
+		if call.CreatedAt > 0 {
+			last = call.CreatedAt
+		} else {
+			call.CreatedAt = last
+		}
+		calls[index] = &call
+	}
+	// Only calls before the first stamped one are still untimed.
+	next := latest
+	for index := len(calls) - 1; index >= 0; index-- {
+		call := calls[index]
+		if call == nil {
+			continue
+		}
+		if call.CreatedAt > 0 {
+			next = call.CreatedAt
+			continue
+		}
+		call.CreatedAt = next
+	}
+	for index, call := range calls {
+		if call == nil {
+			continue
+		}
+		encoded, err := json.Marshal(call)
+		if err != nil {
+			return nil, err
+		}
+		records[index].Data = encoded
 	}
 	return records, nil
 }
@@ -360,7 +390,15 @@ func decodeAgyUsage(usage []byte) (agyCallRecord, bool) {
 }
 
 func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *parseResult) {
+	// rowCall counts the calls already read from the row at rowOffset, so two
+	// calls of one row without IDs keep distinct keys.
+	rowOffset, rowCall := int64(-1), 0
 	for _, record := range records {
+		if record.Offset == rowOffset {
+			rowCall++
+		} else {
+			rowOffset, rowCall = record.Offset, 0
+		}
 		if string(record.Data) == `{}` {
 			continue
 		}
@@ -397,6 +435,9 @@ func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *p
 		}
 		if key == "" {
 			key = "idx-" + strconv.FormatInt(record.Offset, 10)
+			if rowCall > 0 {
+				key += "-" + strconv.Itoa(rowCall)
+			}
 		}
 		var createdAt time.Time
 		if call.CreatedAt > 0 {
@@ -411,7 +452,7 @@ func parseAgy(source domain.UsageSourceContext, records []jsonlRecord, result *p
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
 			ProviderUsageJSON:     boundedProviderUsage(providerUsage),
-			ProviderMessageID:     strings.TrimSpace(call.ResponseID),
+			ProviderMessageID:     providerMessageID(call.ResponseID),
 			SourceEventKey:        stableSourceEventKey("agy", source.NativeRootID, key),
 		})
 	}

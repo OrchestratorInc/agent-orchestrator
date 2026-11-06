@@ -157,7 +157,7 @@ export function usageByModel(rows: readonly UsageReportRow[], unit: UsageUnit): 
 		.sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens) || b.tokens - a.tokens || a.model.localeCompare(b.model) || a.harness.localeCompare(b.harness));
 }
 
-export type PeriodUsage = { period: string; costNanos: number; tokens: number; events: number };
+export type PeriodUsage = { period: string; costNanos: number; tokens: number; events: number; pricedEvents: number };
 
 /** Periods with usage, newest first. */
 export function usageByPeriod(report: Pick<UsageReport, "periods" | "rows">): PeriodUsage[] {
@@ -165,18 +165,19 @@ export function usageByPeriod(report: Pick<UsageReport, "periods" | "rows">): Pe
 	for (const row of report.rows) {
 		let found = byPeriod.get(row.period);
 		if (!found) {
-			found = { period: row.period, costNanos: 0, tokens: 0, events: 0 };
+			found = { period: row.period, costNanos: 0, tokens: 0, events: 0, pricedEvents: 0 };
 			byPeriod.set(row.period, found);
 		}
 		found.costNanos += row.costNanos;
 		found.tokens += rowTokens(row);
 		found.events += row.events;
+		found.pricedEvents += row.pricedEvents;
 	}
 	const order = new Map(report.periods.map((period, index) => [period, index]));
 	return [...byPeriod.values()].sort((a, b) => (order.get(b.period) ?? 0) - (order.get(a.period) ?? 0));
 }
 
-export type ProjectUsage = { projectId: string; sessions: number; costNanos: number; tokens: number };
+export type ProjectUsage = { projectId: string; sessions: number; costNanos: number; tokens: number; pricedEvents: number };
 
 export function usageByProject(sessions: readonly UsageReportSession[], unit: UsageUnit): ProjectUsage[] {
 	const byProject = new Map<string, ProjectUsage>();
@@ -184,12 +185,13 @@ export function usageByProject(sessions: readonly UsageReportSession[], unit: Us
 		const projectId = session.projectId ?? "";
 		let found = byProject.get(projectId);
 		if (!found) {
-			found = { projectId, sessions: 0, costNanos: 0, tokens: 0 };
+			found = { projectId, sessions: 0, costNanos: 0, tokens: 0, pricedEvents: 0 };
 			byProject.set(projectId, found);
 		}
 		found.sessions += 1;
 		found.costNanos += session.costNanos;
 		found.tokens += session.tokens;
+		found.pricedEvents += session.pricedEvents;
 	}
 	return [...byProject.values()].sort((a, b) => (unit === "cost" ? b.costNanos - a.costNanos : b.tokens - a.tokens) || a.projectId.localeCompare(b.projectId));
 }

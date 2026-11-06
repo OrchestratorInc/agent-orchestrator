@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"slices"
@@ -62,8 +64,26 @@ type piSessionRecord struct {
 		Provider      string          `json:"provider"`
 		Model         string          `json:"model"`
 		ResponseModel string          `json:"responseModel"`
+		ResponseID    string          `json:"responseId"`
 		Usage         json.RawMessage `json:"usage"`
 	} `json:"message"`
+}
+
+// piProviderMessageID names the call an entry bills across files. Pi's /fork
+// writes the parent's entries, unchanged, into a new session file that AO
+// reads as one more source, so the entry's ID and time (which the copy keeps)
+// name the call. Entry IDs are unique only within a session, hence the hash
+// with the time. They come before the provider's response ID because the
+// gateways Pi calls need not issue unique ones, and the index is global.
+func piProviderMessageID(native piSessionRecord, dialect piDialect) string {
+	if native.ID != "" && native.Timestamp != "" {
+		sum := sha256.Sum256([]byte(native.Type + "\x00" + native.ID + "\x00" + native.Timestamp))
+		return dialect.eventKeyPrefix + "-entry:" + hex.EncodeToString(sum[:16])
+	}
+	if native.Message != nil {
+		return providerMessageID(native.Message.ResponseID)
+	}
+	return ""
 }
 
 // piNativeUsage is Pi's provider-neutral usage: Pi normalizes every provider
@@ -171,6 +191,7 @@ func parsePiFamily(source domain.UsageSourceContext, records []jsonlRecord, dial
 			MeasurementKind:       domain.UsageMeasurementNativeReported,
 			Tokens:                tokens,
 			ProviderUsageJSON:     providerUsageWithCacheWrite(usageRaw, &usage.CacheWrite, usage.CacheWrite1H),
+			ProviderMessageID:     piProviderMessageID(native, dialect),
 			CreatedAt:             parseUsageTimestamp(native.Timestamp),
 			SourceEventKey: stableSourceEventKey(
 				dialect.eventKeyPrefix, source.NativeRootID, native.Type, identity,

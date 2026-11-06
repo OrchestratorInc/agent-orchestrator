@@ -99,9 +99,13 @@ func (r *LegacyRepairer) repairServiceTiers(ctx context.Context) error {
 }
 
 // replaySource rereads a source from its start and hands visit every event the
-// parser yields. A transcript that is gone, or a kind with no parser, yields
+// parser yields. A transcript that is gone, a kind with no parser, or a source
+// read by row cursor (a database or rewritten snapshot, not JSONL) yields
 // nothing.
 func (r *LegacyRepairer) replaySource(ctx context.Context, source domain.UsageSourceContext, visit func(domain.ModelUsageEvent)) error {
+	if sqliteUsageSource(source.Source.Kind) {
+		return nil
+	}
 	reader, closeReader, err := openUsageArtifact(source.Source.ArtifactPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

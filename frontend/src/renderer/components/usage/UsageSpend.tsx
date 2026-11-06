@@ -262,12 +262,19 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 	const seenModels = useMemo(() => [...new Set(report.rows.map((row) => row.model))].sort(), [report.rows]);
 	const fraction = (cost: number, tokens: number) => (total > 0 ? (unit === "cost" ? cost : tokens) / total : 0);
 	// A bar in the agent's colour where the row belongs to one agent, neutral where it mixes them.
-	const share = (cost: number, tokens: number, harness?: string) => (
-		<span className="flex items-center justify-end gap-2">
-			<ShareBar fraction={fraction(cost, tokens)} tone={harness ? agentTone(harness) : undefined} className="w-14" />
-			<span className="w-12 text-end">{formatShare(fraction(cost, tokens), locale)}</span>
-		</span>
-	);
+	// A row with no priced usage has no cost share: unknown is not 0%.
+	const share = (cost: number, tokens: number, pricedEvents: number, harness?: string) =>
+		unit === "cost" && pricedEvents === 0 ? (
+			<span className="block text-end">—</span>
+		) : (
+			<span className="flex items-center justify-end gap-2">
+				<ShareBar fraction={fraction(cost, tokens)} tone={harness ? agentTone(harness) : undefined} className="w-14" />
+				<span className="w-12 text-end">{formatShare(fraction(cost, tokens), locale)}</span>
+			</span>
+		);
+	// An unpriced row reads "Not priced", as the agent list and model table do, never $0.00.
+	const costCell = (costNanos: number, pricedEvents: number) =>
+		pricedEvents === 0 ? <span className="text-muted-foreground">{t("usage.notPriced")}</span> : formatUsd(costNanos, locale);
 	const projectName = (projectId: string | undefined) => (projectId ? projectNames.get(projectId) ?? projectId : t("usage.noProject"));
 	const models = breakdown === "model" ? usageByModel(report.rows, unit) : [];
 	const periods = breakdown === "day" ? usageByPeriod(report) : [];
@@ -340,7 +347,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 										</span>
 									) : formatUsd(model.costNanos, locale)}
 								</td>
-							<td className="py-2.5 ps-6 text-muted-foreground">{share(model.costNanos, model.tokens, model.harness)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(model.costNanos, model.tokens, model.pricedEvents, model.harness)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(model.tokens, locale)}</td>
 						</tr>
 					))}
@@ -348,8 +355,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 						<tr key={period.period} className="border-t border-border/60">
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="py-2.5 text-foreground">{formatPeriod(period.period, locale, "long")}</td>
-							<td className="py-2.5 text-end text-foreground">{formatUsd(period.costNanos, locale)}</td>
-							<td className="py-2.5 ps-6 text-muted-foreground">{share(period.costNanos, period.tokens)}</td>
+							<td className="py-2.5 text-end text-foreground">{costCell(period.costNanos, period.pricedEvents)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(period.costNanos, period.tokens, period.pricedEvents)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(period.tokens, locale)}</td>
 						</tr>
 					))}
@@ -358,8 +365,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="truncate py-2.5 text-foreground">{projectName(project.projectId)}</td>
 							<td className="py-2.5 text-end text-muted-foreground">{project.sessions.toLocaleString(locale)}</td>
-							<td className="py-2.5 text-end text-foreground">{formatUsd(project.costNanos, locale)}</td>
-							<td className="py-2.5 ps-6 text-muted-foreground">{share(project.costNanos, project.tokens)}</td>
+							<td className="py-2.5 text-end text-foreground">{costCell(project.costNanos, project.pricedEvents)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(project.costNanos, project.tokens, project.pricedEvents)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(project.tokens, locale)}</td>
 						</tr>
 					))}
@@ -379,8 +386,8 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 									</span>
 								</button>
 							</td>
-							<td className="py-2.5 text-end text-foreground">{formatUsd(session.costNanos, locale)}</td>
-							<td className="py-2.5 ps-6 text-muted-foreground">{share(session.costNanos, session.tokens, session.harness)}</td>
+							<td className="py-2.5 text-end text-foreground">{costCell(session.costNanos, session.pricedEvents)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(session.costNanos, session.tokens, session.pricedEvents, session.harness)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(session.tokens, locale)}</td>
 						</tr>
 					))}

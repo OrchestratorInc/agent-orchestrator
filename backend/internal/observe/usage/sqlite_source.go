@@ -100,17 +100,28 @@ func (i *Ingestor) ingestSQLite(
 	var records []jsonlRecord
 	if readSnapshot, snapshot := snapshotUsageReaders[source.Source.Kind]; snapshot {
 		// The agent replaces the whole file after each turn, so its identity
-		// changes by design; the turn cursor alone says what is new.
-		var err error
-		records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
-		if err != nil {
-			if ctx.Err() != nil {
-				return result, ctx.Err()
+		// changes by design; the turn cursor alone says what is new. A file
+		// with the size and mtime of a read that left nothing unread holds
+		// nothing new, and decoding it again can cost hundreds of MiB.
+		stamp, statErr := snapshotStampOf(path)
+		if seen, ok := i.snapshots.Load(source.Source.ID); statErr != nil || !ok || seen != stamp {
+			var err error
+			records, err = readSnapshot(ctx, path, source.Source.NativeSessionID, source.Source.ByteOffset, limit)
+			if err != nil {
+				i.snapshots.Delete(source.Source.ID)
+				if ctx.Err() != nil {
+					return result, ctx.Err()
+				}
+				if errors.Is(err, os.ErrNotExist) {
+					return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
+				}
+				return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
 			}
-			if errors.Is(err, os.ErrNotExist) {
-				return i.retrySource(ctx, source.Source, domain.UsageErrorArtifactMissing, now, nil)
+			if statErr == nil && len(records) < limit {
+				i.snapshots.Store(source.Source.ID, stamp)
+			} else {
+				i.snapshots.Delete(source.Source.ID)
 			}
-			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage snapshot: %w", err))
 		}
 	} else {
 		read := sqliteUsageReaders[source.Source.Kind]
@@ -148,7 +159,9 @@ func (i *Ingestor) ingestSQLite(
 	}
 	nextOffset := source.Source.ByteOffset
 	for _, record := range records {
-		if record.Offset <= nextOffset {
+		// Calls billed in one row share its cursor, so a record may repeat the
+		// one before it; none may go back or repeat the stored cursor.
+		if record.Offset < nextOffset || record.Offset == source.Source.ByteOffset {
 			return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, errors.New("usage rows are not ordered by row id"))
 		}
 		nextOffset = record.Offset
@@ -190,10 +203,20 @@ func (i *Ingestor) ingestSQLite(
 			result.RetryAt = &settleAt
 		}
 	}
-	if done, err := i.applyParsedChunk(ctx, source, &parsed, nil, &result, now); err != nil || done {
-		return result, err
+	// A poll that found nothing new writes nothing: every active source is
+	// polled, and a write to a shared database's WAL queues every source on it.
+	unchanged := !progressed && len(parsed.Events) == 0 &&
+		parsed.Cursor.State == source.Source.State &&
+		parsed.Cursor.ParserStateJSON == source.Source.ParserStateJSON &&
+		parsed.Cursor.AnomalyCount == source.Source.AnomalyCount &&
+		source.Source.FailureCount == 0 && source.Source.LastErrorCode == "" &&
+		sameRetryTime(parsed.Cursor.NextRetryAt, source.Source.NextRetryAt)
+	if !unchanged {
+		if done, err := i.applyParsedChunk(ctx, source, &parsed, nil, &result, now); err != nil || done {
+			return result, err
+		}
+		i.notifyLateRouteEvidence(ctx, source.Source.ID)
 	}
-	i.notifyLateRouteEvidence(ctx, source.Source.ID)
 	if parsed.Cursor.State == domain.UsageSourceComplete {
 		return result, i.completeBinding(ctx, source.Source.BindingID, now)
 	}
@@ -204,4 +227,26 @@ func (i *Ingestor) ingestSQLite(
 		result.RetryAt = &next
 	}
 	return result, nil
+}
+
+// snapshotStamp is the size and mtime of a snapshot file, which the agent
+// changes whenever it rewrites the file.
+type snapshotStamp struct {
+	size    int64
+	modTime int64
+}
+
+func snapshotStampOf(path string) (snapshotStamp, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return snapshotStamp{}, err
+	}
+	return snapshotStamp{size: info.Size(), modTime: info.ModTime().UnixNano()}, nil
+}
+
+func sameRetryTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }

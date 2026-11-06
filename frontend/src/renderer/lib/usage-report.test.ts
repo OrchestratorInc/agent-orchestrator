@@ -22,7 +22,7 @@ const rows = [
 const report = {
 	periods: ["2026-10-23", "2026-10-24", "2026-10-25"],
 	rows,
-	sessions: [session({ sessionId: "a", costNanos: 780, tokens: 1010 }), session({ sessionId: "b", harness: "claude-code", projectId: "web", costNanos: 1600, tokens: 705 }), session({ sessionId: "c", costNanos: 0, tokens: 320 })],
+	sessions: [session({ sessionId: "a", costNanos: 780, tokens: 1010 }), session({ sessionId: "b", harness: "claude-code", projectId: "web", costNanos: 1600, tokens: 705 }), session({ sessionId: "c", costNanos: 0, tokens: 320, pricedEvents: 0 })],
 };
 
 describe("usage report aggregation", () => {
@@ -70,10 +70,11 @@ describe("usage report aggregation", () => {
 	});
 
 	it("lists periods with usage newest first and groups sessions by project", () => {
-		expect(usageByPeriod(report).map((entry) => entry.period)).toEqual(["2026-10-25", "2026-10-24"]);
+		// The priced counts let a day or project with no priced usage read "Not priced", not $0.00.
+		expect(usageByPeriod(report).map((entry) => [entry.period, entry.pricedEvents])).toEqual([["2026-10-25", 1], ["2026-10-24", 1]]);
 		expect(usageByProject(report.sessions, "cost")).toEqual([
-			{ projectId: "web", sessions: 1, costNanos: 1600, tokens: 705 },
-			{ projectId: "app", sessions: 2, costNanos: 780, tokens: 1330 },
+			{ projectId: "web", sessions: 1, costNanos: 1600, tokens: 705, pricedEvents: 1 },
+			{ projectId: "app", sessions: 2, costNanos: 780, tokens: 1330, pricedEvents: 1 },
 		]);
 	});
 

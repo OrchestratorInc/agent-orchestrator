@@ -204,7 +204,7 @@ func parseDeepSeek(source domain.UsageSourceContext, records []jsonlRecord, resu
 			Tokens:                tokens,
 			ProviderUsageJSON:     boundedProviderUsage(providerUsage),
 			CreatedAt:             time.UnixMilli(reply.Time).UTC(),
-			ProviderMessageID:     strings.TrimSpace(reply.MessageID),
+			ProviderMessageID:     providerMessageID(reply.MessageID),
 			SourceEventKey:        stableSourceEventKey("deepseek", source.NativeRootID, messageKey),
 		}
 		result.Events = append(result.Events, event)

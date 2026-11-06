@@ -12,6 +12,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
 const deepseekTestSessionID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"
@@ -84,5 +85,56 @@ func TestReadAndParseDeepSeekSessionLog(t *testing.T) {
 	if pro.ModelID != "deepseek-v4-pro" || tokenValue(pro.Tokens.InputTokens) != 15807 ||
 		tokenValue(pro.Tokens.OutputTokens) != 90 || flash.SourceEventKey == pro.SourceEventKey {
 		t.Fatalf("pro event = %+v", pro)
+	}
+}
+
+// Break caught: every 15 s poll decompressed the whole DeepSeek log, up to
+// 512 MiB decoded, and wrote the unchanged cursor back. A log with the size
+// and mtime of a read that left nothing unread is not decoded again, and a
+// pass that finds nothing new writes nothing.
+func TestIngestorSkipsUnchangedDeepSeekLog(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Unix(1700000000, 0).UTC()
+	path := filepath.Join(t.TempDir(), "--repo--", deepseekTestSessionID, "session.v4.jsonl.zstd")
+	writeDeepSeekTestLog(t, path, deepseekTestFrames)
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessDeepSeek, domain.ActivityActive, deepseekTestSessionID, clock,
+	)
+	binding := seedUsageTestBinding(t, store, session, deepseekTestSessionID, domain.UsageBindingActive, clock)
+	identity, err := usagesvc.SourceIdentity(ctx, path)
+	mustNoError(t, err)
+	source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceDeepSeekSession,
+		NativeSessionID: deepseekTestSessionID,
+		ArtifactPath:    path,
+		FileIdentity:    identity,
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       clock,
+	})
+	mustNoError(t, err)
+	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return clock }})
+
+	_, err = ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	assertTokenAggregate(t, store, session.ID, 15556+137+15807+90)
+	first, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	mustNoError(t, err)
+	if !ok || first.Source.ByteOffset != 29 {
+		t.Fatalf("first cursor = %+v", first.Source)
+	}
+
+	// Same size and mtime, undecodable bytes: a reread would fail the source.
+	info, err := os.Stat(path)
+	mustNoError(t, err)
+	mustNoError(t, os.WriteFile(path, bytes.Repeat([]byte{0xff}, int(info.Size())), 0o600))
+	mustNoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+	clock = clock.Add(time.Minute)
+	_, err = ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	second, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	mustNoError(t, err)
+	if !ok || second.Source.LastErrorCode != "" || !second.Source.UpdatedAt.Equal(first.Source.UpdatedAt) {
+		t.Fatalf("unchanged log pass = %+v, want no read and no write after %+v", second.Source, first.Source)
 	}
 }

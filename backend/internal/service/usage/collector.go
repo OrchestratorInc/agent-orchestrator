@@ -69,9 +69,14 @@ type SourceRoots struct {
 	CodexArchived  string
 	KimiHome       string
 	PiSessions     string
-	QwenUsage      string
-	OMPSessions    string
-	KimchiSessions string
+	// PiAgentSessions is Pi's own sessions folder, under PI_CODING_AGENT_DIR
+	// (default ~/.pi/agent). pi-acp starts Pi without a session directory, so
+	// Chat sessions write here, as does a terminal session restored without
+	// --session-dir.
+	PiAgentSessions string
+	QwenUsage       string
+	OMPSessions     string
+	KimchiSessions  string
 	// PrimeAgentSessions is the --session-dir AO starts prime-agent with.
 	PrimeAgentSessions string
 	GooseSessions      string
@@ -123,6 +128,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		CodexArchived:       filepath.Join(codexHome, "archived_sessions"),
 		KimiHome:            filepath.Join(dataDir, "kimi"),
 		PiSessions:          filepath.Join(dataDir, "pi", "sessions"),
+		PiAgentSessions:     filepath.Join(piFamilyAgentDir(home, "PI_CODING_AGENT_DIR", ".pi", "agent"), "sessions"),
 		QwenUsage:           filepath.Join(qwenRuntime, "usage"),
 		OMPSessions:         filepath.Join(ompAgentDir, "sessions"),
 		KimchiSessions:      filepath.Join(kimchiAgentDir, "sessions"),
@@ -996,13 +1002,16 @@ func (c *Collector) backfillPiFamilyPaths(
 			break
 		}
 	}
-	root := c.piFamilyRoot(family)
-	if !hasLive || root == "" {
+	if !hasLive {
 		return nil
 	}
-	paths, err := newestPiPaths(ctx, family, root, 256)
-	if err != nil {
-		return err
+	var paths []string
+	for _, root := range c.piFamilyRoots(family) {
+		found, err := newestPiPaths(ctx, family, root, 256)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, found...)
 	}
 	var errs []error
 	for _, path := range paths {
@@ -1180,17 +1189,27 @@ func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Pi and OMP both honour PI_CODING_AGENT_DIR, so one folder can be both
+	// families' root; each family binds only its own sessions, so try all.
+	piFamily := false
+	var piErrs []error
 	for _, family := range piFamilyHarnesses {
-		root := c.piFamilyRoot(family)
-		candidate := false
-		if root != "" && filepath.IsAbs(path) {
-			rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-			candidate = err == nil && rel != ".." &&
-				!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		for _, root := range c.piFamilyRoots(family) {
+			candidate := false
+			if filepath.IsAbs(path) {
+				rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+				candidate = err == nil && rel != ".." &&
+					!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+			}
+			if candidate || pathWithinRoot(ctx, path, root) {
+				piFamily = true
+				piErrs = append(piErrs, c.reconcilePiFamilyPath(ctx, family, path, nil))
+				break
+			}
 		}
-		if candidate || pathWithinRoot(ctx, path, root) {
-			return c.reconcilePiFamilyPath(ctx, family, path, nil)
-		}
+	}
+	if piFamily {
+		return errors.Join(piErrs...)
 	}
 
 	resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessCodex, "", path)
@@ -2772,7 +2791,7 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.KimiHome}
 	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent, domain.HarnessDeepSeek:
 		family, _ := piFamilyForHarness(harness)
-		return []string{c.piFamilyRoot(family)}
+		return c.piFamilyRoots(family)
 	case domain.HarnessQwen:
 		return []string{c.roots.QwenUsage}
 	case domain.HarnessGoose:
@@ -3096,21 +3115,23 @@ func isPiFamilyHarness(harness domain.AgentHarness) bool {
 	return ok
 }
 
-func (c *Collector) piFamilyRoot(family piFamilyHarness) string {
+// piFamilyRoots are the folders a family's transcripts are written under; an
+// unset root is left out, so it never globs the daemon's working directory.
+func (c *Collector) piFamilyRoots(family piFamilyHarness) []string {
+	var roots []string
 	switch family.harness {
 	case domain.HarnessPi:
-		return c.roots.PiSessions
+		roots = []string{c.roots.PiSessions, c.roots.PiAgentSessions}
 	case domain.HarnessOMP:
-		return c.roots.OMPSessions
+		roots = []string{c.roots.OMPSessions}
 	case domain.HarnessKimchi:
-		return c.roots.KimchiSessions
+		roots = []string{c.roots.KimchiSessions}
 	case domain.HarnessPrimeAgent:
-		return c.roots.PrimeAgentSessions
+		roots = []string{c.roots.PrimeAgentSessions}
 	case domain.HarnessDeepSeek:
-		return c.roots.DeepSeekSessions
-	default:
-		return ""
+		roots = []string{c.roots.DeepSeekSessions}
 	}
+	return slices.DeleteFunc(roots, func(root string) bool { return root == "" })
 }
 
 type piSessionMeta struct {
@@ -3181,13 +3202,13 @@ func readPiFamilySessionMeta(ctx context.Context, path string, family piFamilyHa
 }
 
 func (c *Collector) discoverPiFamilyPath(ctx context.Context, family piFamilyHarness, nativeID string) (string, error) {
-	root := c.piFamilyRoot(family)
-	if root == "" {
-		return "", nil // An unset root must not glob the daemon's working directory.
-	}
-	paths, err := newestPiPaths(ctx, family, root, 256)
-	if err != nil {
-		return "", err
+	var paths []string
+	for _, root := range c.piFamilyRoots(family) {
+		found, err := newestPiPaths(ctx, family, root, 256)
+		if err != nil {
+			return "", err
+		}
+		paths = append(paths, found...)
 	}
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {

@@ -260,11 +260,13 @@ func costSplits(snapshot *pricing.Snapshot, events []domain.UsageReportEvent) ma
 	}
 	for key, sum := range sums {
 		event := func(tier string, cached, uncached int64) domain.ModelUsageEvent {
-			input := cached + uncached
+			// InputTokens stays nil: it only picks a long-context row, and these
+			// sums span many requests, so their total says nothing about the
+			// size of any one of them.
 			return domain.ModelUsageEvent{
 				ProviderID: key.provider, BillingProviderID: key.billing, ModelID: key.model, ServiceTier: tier,
 				Tokens: domain.UsageTokenMetrics{
-					InputTokens: &input, CachedInputTokens: &cached, UncachedInputTokens: &uncached, OutputTokens: &sum.output,
+					CachedInputTokens: &cached, UncachedInputTokens: &uncached, OutputTokens: &sum.output,
 				},
 				ProviderUsageJSON: syntheticProviderUsage(sum.write, sum.write1h),
 			}

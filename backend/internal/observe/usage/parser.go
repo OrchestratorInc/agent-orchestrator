@@ -431,7 +431,7 @@ func emitClaudeEvent(
 		Tokens:                tokens,
 		ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
 		ServiceTier:           reportedServiceTier(jsonString(usage.Speed)),
-		ProviderMessageID:     strings.TrimSpace(native.Message.ID),
+		ProviderMessageID:     providerMessageID(native.Message.ID),
 		CreatedAt:             parseUsageTimestamp(native.Timestamp),
 		SourceEventKey: stableSourceEventKey(
 			"claude",
@@ -1080,4 +1080,16 @@ func firstNonEmpty(values ...string) string {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+// providerMessageID is the provider's response ID as an event's
+// provider_message_id. The column holds at most 256 bytes, so a longer ID is
+// hashed: a copy of the response still matches, and the row still inserts.
+func providerMessageID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 256 {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

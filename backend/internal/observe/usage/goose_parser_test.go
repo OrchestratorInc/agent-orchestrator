@@ -188,7 +188,15 @@ func TestIngestorReadsGooseLedgerIncrementally(t *testing.T) {
 	if !ok || persisted.Source.ByteOffset != 2 || persisted.Source.State != domain.UsageSourceActive {
 		t.Fatalf("source cursor = %+v", persisted.Source)
 	}
+	// A poll with no new rows writes nothing: each write to a shared
+	// database's WAL would queue every source on it again.
+	now = now.Add(time.Minute)
 	_, err = ingestor.Ingest(ctx, source.ID)
 	mustNoError(t, err)
 	assertTokenAggregate(t, store, session.ID, 164)
+	polled, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	mustNoError(t, err)
+	if !ok || !polled.Source.UpdatedAt.Equal(persisted.Source.UpdatedAt) {
+		t.Fatalf("empty poll rewrote the cursor: %+v after %+v", polled.Source, persisted.Source)
+	}
 }

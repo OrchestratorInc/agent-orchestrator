@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -77,6 +78,9 @@ type Ingestor struct {
 	requestRepair    func()
 	openTranscript   func(string) (*os.File, error)
 	afterRead        func()
+	// snapshots holds, per snapshot source ID, the file stamp of the last read
+	// that left nothing unread, so an unchanged file is not decoded again.
+	snapshots sync.Map
 }
 
 // NewIngestor constructs a bounded transcript ingestor.

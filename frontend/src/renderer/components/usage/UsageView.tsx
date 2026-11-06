@@ -47,6 +47,7 @@ export function UsageView() {
 	const [chosenTab, setTab] = useState<UsageTab>("spend");
 	// The experimental Windows tab, and the readings behind it, exist only in Developer Mode.
 	const developerMode = useUiStore((state) => state.developerMode);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const tab = chosenTab === "windows" && !developerMode ? "spend" : chosenTab;
 	const [unit, setUnit] = useState<UsageUnit>("cost");
 	const [days, setDays] = useState(7);
@@ -65,6 +66,8 @@ export function UsageView() {
 		() => new Map(projects.map((project) => [project.id, project.id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : project.name])),
 		[projects, t],
 	);
+	// Standalone sessions carry no project ID, so the report cannot filter to them; All projects includes them.
+	const filterProjects = useMemo(() => projects.filter((project) => project.id !== STANDALONE_WORKSPACE_ID), [projects]);
 	const hasCursorSessions = useMemo(
 		() => projects.some((project) => project.sessions.some((session) => session.provider === "cursor")),
 		[projects],
@@ -88,11 +91,17 @@ export function UsageView() {
 		setRefreshingLimits(true);
 		try {
 			await accountActions.refresh();
+		} catch (error) {
+			showGlobalToast(t("usage.limits.refreshFailed"), error instanceof Error ? error.message : undefined, "error");
 		} finally {
 			setRefreshingLimits(false);
 		}
 	};
 	const refreshing = isWindows ? limitWindows.isFetching : isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
+	const loading = <p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>;
+	const failed = (error: Error) => <p role="alert" className="py-16 text-center text-sm text-destructive">{error.message}</p>;
+	// A failed refetch keeps the data it had: say so above it rather than replace the page (and any open dialog).
+	const staleError = (error: Error | null) => (error ? <p role="alert" className="mb-4 text-xs text-destructive">{error.message}</p> : null);
 	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
 
 	return (
@@ -101,11 +110,11 @@ export function UsageView() {
 				lead={<PageTopbarTitle as="h1" icon={<Gauge className="size-icon-md" aria-hidden="true" />}>{t("usage.title")}</PageTopbarTitle>}
 				actions={
 					<>
-						{tab === "spend" && projects.length > 0 ? (
+						{tab === "spend" && filterProjects.length > 0 ? (
 							<SettingsOptionMenu
 								aria-label={t("usage.projectFilter")}
 								value={projectFilter}
-								options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...projects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
+								options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...filterProjects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
 								onChange={setProjectFilter}
 								menuAlign="end"
 								menuClassName="max-h-72"
@@ -174,33 +183,44 @@ export function UsageView() {
 						<div className="mx-auto w-full max-w-6xl px-6 py-6">
 							{tab === "spend" ? <UsageCursor hasCursorSessions={hasCursorSessions} /> : null}
 							{isWindows ? (
-								limitWindows.isLoading ? (
-									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+								limitWindows.data ? (
+									<>
+										{staleError(limitWindows.error)}
+										<UsageWindows history={limitWindows.data} now={now} />
+									</>
+								) : limitWindows.isLoading ? (
+									loading
 								) : limitWindows.error ? (
-									<p role="alert" className="py-16 text-center text-sm text-destructive">{limitWindows.error.message}</p>
-								) : limitWindows.data ? (
-									<UsageWindows history={limitWindows.data} now={now} />
+									failed(limitWindows.error)
 								) : null
 							) : isLimits ? (
-								accounts.isLoading ? (
-									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+								accounts.data ? (
+									<>
+										{staleError(accounts.error)}
+										<UsageLimits accounts={accounts.data} now={now} />
+									</>
+								) : accounts.isLoading ? (
+									loading
 								) : accounts.error ? (
-									<p role="alert" className="py-16 text-center text-sm text-destructive">{accounts.error.message}</p>
+									failed(accounts.error)
 								) : (
-									<UsageLimits accounts={accounts.data ?? []} now={now} />
+									<UsageLimits accounts={[]} now={now} />
 								)
+							) : report.data && report.data.rows.length > 0 ? (
+								<>
+									{staleError(report.error)}
+									<div className={cn("transition-opacity", report.isPlaceholderData && "opacity-60")}>
+										<UsageSpend report={report.data} unit={unit} onUnitChange={setUnit} projectNames={projectNames} />
+									</div>
+								</>
 							) : report.isLoading ? (
-								<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+								loading
 							) : report.error ? (
-								<p role="alert" className="py-16 text-center text-sm text-destructive">{report.error.message}</p>
-							) : !report.data || report.data.rows.length === 0 ? (
+								failed(report.error)
+							) : (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("usage.empty.title")}</p>
 									<p className="max-w-sm text-xs text-muted-foreground">{t("usage.empty.body")}</p>
-								</div>
-							) : (
-								<div className={cn("transition-opacity", report.isPlaceholderData && "opacity-60")}>
-									<UsageSpend report={report.data} unit={unit} onUnitChange={setUnit} projectNames={projectNames} />
 								</div>
 							)}
 						</div>

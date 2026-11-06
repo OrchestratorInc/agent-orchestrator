@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
 const agyTestConversationID = "7e58d1c1-4a55-4e47-8393-fb6413f594fe"
@@ -65,30 +66,40 @@ func agyStep(responseID string, at time.Time) []byte {
 	return agyConcat(agyBytes(1, stamp), agyBytes(8, stamp), agyBytes(9, agyBytes(11, []byte(responseID))))
 }
 
+var agyTestStepAt = time.Date(2026, 11, 4, 11, 6, 3, 250_000_000, time.UTC)
+
+// agyFixtureDB creates a conversation database whose first call's response has
+// a step at agyTestStepAt, and returns an insert for its gen_metadata rows.
+func agyFixtureDB(t *testing.T) (string, func(idx int64, data []byte)) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), agyTestConversationID+".db")
+	writer, err := sql.Open("sqlite", path)
+	mustNoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	_, err = writer.Exec(`CREATE TABLE gen_metadata (idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx))`)
+	mustNoError(t, err)
+	_, err = writer.Exec(`CREATE TABLE steps (idx integer, step_type integer NOT NULL DEFAULT 0, metadata blob, PRIMARY KEY (idx))`)
+	mustNoError(t, err)
+	_, err = writer.Exec(`INSERT INTO steps (idx, step_type, metadata) VALUES (0, 15, ?)`, agyStep("yFLbauGaL", agyTestStepAt))
+	mustNoError(t, err)
+	return path, func(idx int64, data []byte) {
+		t.Helper()
+		_, err := writer.Exec(`INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, ?)`, idx, data, len(data))
+		mustNoError(t, err)
+	}
+}
+
 // Break caught: an Antigravity conversation read as JSON, or its later calls
 // left without a model. The agy CLI keeps one protobuf gen_metadata row per
 // call and names the model only on the conversation's first calls, so the
 // reader learns the name from those, prices cache reads as input, strips the
 // thinking level for the catalog, counts a retry once unless it billed apart,
-// takes each call's time from its step, waits on a newest row without usage,
+// takes each call's time from its step (or from the call before it, so no call
+// is left out of every report period), waits on a newest row without usage,
 // and never skips the conversation's first call, whose idx is 0.
 func TestReadAndParseAgyConversation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), agyTestConversationID+".db")
-	writer, err := sql.Open("sqlite", path)
-	mustNoError(t, err)
-	defer func() { _ = writer.Close() }()
-	_, err = writer.Exec(`CREATE TABLE gen_metadata (idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx))`)
-	mustNoError(t, err)
-	_, err = writer.Exec(`CREATE TABLE steps (idx integer, step_type integer NOT NULL DEFAULT 0, metadata blob, PRIMARY KEY (idx))`)
-	mustNoError(t, err)
-	stepAt := time.Date(2026, 11, 4, 11, 6, 3, 250_000_000, time.UTC)
-	_, err = writer.Exec(`INSERT INTO steps (idx, step_type, metadata) VALUES (0, 15, ?)`, agyStep("yFLbauGaL", stepAt))
-	mustNoError(t, err)
-	insert := func(idx int64, data []byte) {
-		t.Helper()
-		_, err := writer.Exec(`INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, ?)`, idx, data, len(data))
-		mustNoError(t, err)
-	}
+	path, insert := agyFixtureDB(t)
+	stepAt := agyTestStepAt
 	insert(0, agyGeneration(1318, 8214, 532, 0, 485, "yFLbauGaL", "gemini-3.8-flash-high"))
 	insert(1, agyGeneration(1318, 7678, 75, 16627, 19, "2VLbaordO", "",
 		agyUsage(1318, 7000, 0, 0, 0, "failedFirstTry")))
@@ -117,8 +128,22 @@ func TestReadAndParseAgyConversation(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	first, cached, retry, unknown := result.Events[0], result.Events[1], result.Events[2], result.Events[3]
-	if !first.CreatedAt.Equal(stepAt) || !cached.CreatedAt.IsZero() {
-		t.Fatalf("call times = %v, %v; want the matching step's time only", first.CreatedAt, cached.CreatedAt)
+	for _, event := range result.Events {
+		if !event.CreatedAt.Equal(stepAt) {
+			t.Fatalf("call %s at %v, want the step's time or the previous call's", event.SourceEventKey, event.CreatedAt)
+		}
+	}
+	// A later read whose calls match no step takes the conversation's latest.
+	later, err := readAgyGenerations(ctx, db, agyTestConversationID, 1, 10)
+	mustNoError(t, err)
+	laterResult := parseRecords(source, later, later[len(later)-1].Offset, time.Now())
+	if len(laterResult.Events) != 3 {
+		t.Fatalf("later events = %+v", laterResult.Events)
+	}
+	for _, event := range laterResult.Events {
+		if !event.CreatedAt.Equal(stepAt) {
+			t.Fatalf("unstamped call %s at %v, want the latest step's time", event.SourceEventKey, event.CreatedAt)
+		}
 	}
 	if retry.ProviderMessageID != "failedFirstTry" || tokenValue(retry.Tokens.InputTokens) != 7000 {
 		t.Fatalf("separately billed retry = %+v", retry)
@@ -135,5 +160,45 @@ func TestReadAndParseAgyConversation(t *testing.T) {
 	if unknown.ModelID != "agy-model-4242" || unknown.BillingProviderID != "" ||
 		first.SourceEventKey == cached.SourceEventKey {
 		t.Fatalf("unknown-model call = %+v", unknown)
+	}
+}
+
+// Break caught: a gen_metadata row whose call also billed a retry apart yields
+// two records with the row's cursor. The SQLite source rejected the repeated
+// cursor as out of order and retried the same read forever, so the
+// conversation stored nothing, its earlier rows included.
+func TestIngestorReadsAgyRowWithSeparatelyBilledRetry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	path, insert := agyFixtureDB(t)
+	insert(0, agyGeneration(1318, 8214, 532, 0, 485, "yFLbauGaL", "gemini-3.8-flash-high"))
+	insert(1, agyGeneration(1318, 7678, 75, 16627, 19, "2VLbaordO", "",
+		agyUsage(1318, 7000, 0, 0, 0, "failedFirstTry")))
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessAgy, domain.ActivityActive, agyTestConversationID, now,
+	)
+	binding := seedUsageTestBinding(t, store, session, agyTestConversationID, domain.UsageBindingActive, now)
+	identity, err := usagesvc.SourceIdentity(ctx, path)
+	mustNoError(t, err)
+	source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceAgyConversation,
+		NativeSessionID: agyTestConversationID,
+		ArtifactPath:    path,
+		FileIdentity:    identity,
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       now,
+	})
+	mustNoError(t, err)
+	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
+
+	_, err = ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	// 8214+532, then 7678+16627+75 and the retry's 7000.
+	assertTokenAggregate(t, store, session.ID, 40126)
+	persisted, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	mustNoError(t, err)
+	if !ok || persisted.Source.ByteOffset != 2 || persisted.Source.LastErrorCode != "" {
+		t.Fatalf("source cursor = %+v, want past both rows with no error", persisted.Source)
 	}
 }

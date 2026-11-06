@@ -206,3 +206,44 @@ func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
 		t.Fatalf("sessions = %+v", report.Sessions)
 	}
 }
+
+// Break caught: cache savings priced at a long-context rate no request paid.
+// The split sums a model's tokens across events, and two 200k requests sum
+// past 272k, so the synthetic estimate took gpt-5.5's #above272k row and
+// doubled the saving per cached token.
+func TestReportCacheSavingsIgnoreSummedLongContext(t *testing.T) {
+	snapshot := repoCatalog(t)
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	const providerUsage = `{"last_token_usage":{"cache_write_input_tokens":0}}`
+	request := pricedEvent(t, snapshot, domain.UsageReportEvent{
+		CreatedAt: now.Add(-30 * time.Minute), ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: "gpt-5.5",
+		Tokens:  domain.UsageTokenMetrics{CachedInputTokens: int64p(180_000), UncachedInputTokens: int64p(20_000), OutputTokens: int64p(100)},
+		Harness: domain.HarnessCodex, SessionID: "app-1", ProjectID: "app", CacheWriteTokens: int64p(0),
+	}, providerUsage)
+	// What caching saved one request: its input all uncached, less its cost.
+	input := int64(200_000)
+	uncachedOnly, err := snapshot.Estimate(domain.ModelUsageEvent{
+		ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: "gpt-5.5",
+		Tokens: domain.UsageTokenMetrics{
+			InputTokens: &input, CachedInputTokens: int64p(0), UncachedInputTokens: &input, OutputTokens: int64p(100),
+		},
+		ProviderUsageJSON: providerUsage,
+	})
+	if err != nil || uncachedOnly.TotalNanos == nil {
+		t.Fatalf("uncached estimate: %+v, %v", uncachedOnly, err)
+	}
+	saved := *uncachedOnly.TotalNanos - *request.Costs.EstimatedCostNanos
+
+	reader := NewReportReader(&reportStoreStub{events: []domain.UsageReportEvent{request, request}}, snapshotStub{snapshot})
+	reader.now = func() time.Time { return now }
+	report, err := reader.Report(context.Background(), 1, 0, "UTC", "")
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if len(report.Rows) != 1 {
+		t.Fatalf("rows = %+v", report.Rows)
+	}
+	if got := report.Rows[0].CacheSavingsNanos; got < 2*saved-2 || got > 2*saved+2 {
+		t.Fatalf("cache savings = %d, want %d at the base row's rates", got, 2*saved)
+	}
+}

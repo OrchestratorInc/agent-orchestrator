@@ -24,12 +24,56 @@ func TestDefaultSourceRootsIncludesPiSessions(t *testing.T) {
 	dataDir := filepath.Join(home, "ao-data")
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 
 	got, err := DefaultSourceRoots(context.Background(), dataDir)
 	mustNoError(t, err)
 	if got.PiSessions != filepath.Join(dataDir, "pi", "sessions") {
 		t.Fatalf("Pi sessions = %q, want %q", got.PiSessions, filepath.Join(dataDir, "pi", "sessions"))
 	}
+	if want := filepath.Join(home, ".pi", "agent", "sessions"); got.PiAgentSessions != want {
+		t.Fatalf("Pi agent sessions = %q, want %q", got.PiAgentSessions, want)
+	}
+}
+
+// Break caught: Pi Chat sessions recording no usage. pi-acp starts Pi without
+// a session directory, so its transcripts land in Pi's own agent folder
+// (PI_CODING_AGENT_DIR/sessions/<cwd>/), which AO neither searched nor
+// accepted; a terminal session restored without --session-dir reported a hook
+// path there and was rejected with artifact_path_rejected.
+func TestCollectorBindsPiTranscriptsInPiAgentFolder(t *testing.T) {
+	ctx := context.Background()
+	store := collectorTestStore(t)
+	agentRoot := t.TempDir()
+	collector := NewCollector(store, SourceRoots{PiSessions: t.TempDir(), PiAgentSessions: agentRoot}, nil)
+	assertSource := func(sessionID domain.SessionID, path string) {
+		t.Helper()
+		bindings, err := store.ListUsageBindingsForSession(ctx, sessionID)
+		if err != nil || len(bindings) != 1 {
+			t.Fatalf("bindings=%+v err=%v", bindings, err)
+		}
+		sources, err := store.ListUsageSourcesForBinding(ctx, bindings[0].ID)
+		if err != nil || len(sources) != 1 || sources[0].Kind != domain.UsageSourcePiSession ||
+			sources[0].ArtifactPath != canonicalUsagePath(t, path) {
+			t.Fatalf("sources=%+v err=%v", sources, err)
+		}
+	}
+
+	const chatID = "pi-chat-session"
+	chat := collectorTestChatSession(t, store, domain.HarnessPi, chatID, false)
+	chatPath := filepath.Join(agentRoot, "--repo--", "2026-11-06T10-00-00-000Z_"+chatID+".jsonl")
+	writeUsageFixture(t, chatPath, `{"type":"session","id":"`+chatID+`","cwd":"/repo","version":3}`+"\n")
+	mustNoError(t, collector.ReconcilePath(ctx, chatPath))
+	assertSource(chat.ID, chatPath)
+
+	const restoredID = "pi-restored-session"
+	restored := collectorTestSession(t, store, domain.HarnessPi, restoredID, false)
+	restoredPath := filepath.Join(agentRoot, "--repo--", "2026-11-06T10-05-00-000Z_"+restoredID+".jsonl")
+	writeUsageFixture(t, restoredPath, `{"type":"session","id":"`+restoredID+`","cwd":"/repo","version":3}`+"\n")
+	mustNoError(t, collector.RecordHook(ctx, restored.ID, HookSignal{
+		Harness: domain.HarnessPi, Event: "session-start", NativeSessionID: restoredID, TranscriptPath: restoredPath,
+	}))
+	assertSource(restored.ID, restoredPath)
 }
 
 // TestCollectorDiscoversPiSessionByHeaderID catches filename-only discovery:

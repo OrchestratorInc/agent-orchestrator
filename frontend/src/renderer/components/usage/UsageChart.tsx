@@ -59,7 +59,7 @@ export function UsageBarChart({
 										<div
 											tabIndex={0}
 											aria-label={t("usage.chart.barLabel", { period: formatPeriodLong(period), value: formatValue(total) })}
-											className="group flex h-full min-w-0 flex-1 flex-col justify-end rounded-sm outline-none hover:bg-foreground/5 focus-visible:bg-foreground/5"
+											className="group flex h-full min-w-0 flex-1 flex-col justify-end rounded-sm outline-none hover:bg-foreground/5 focus-visible:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
 										>
 											<div className="flex flex-col-reverse overflow-hidden rounded-t-sm" style={{ height: `${(total / max) * 100}%` }}>
 												{series.values[periodIndex].map((value, harnessIndex) => (
