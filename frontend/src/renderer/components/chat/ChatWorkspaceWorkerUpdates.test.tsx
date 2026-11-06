@@ -111,6 +111,34 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
 	});
 
+	it("keeps an action filed under a rolled-back turn on its own line", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-9", turnId: "t2", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(2),
+			detail: { action: "session.spawned", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace
+						snapshot={{
+							...chatFixtureEmpty, latestSequence: 25,
+							items: [automation("t1", 1, "Check usage."), reply("t1", 1, "Checked."), action],
+							turns: [
+								{ id: "t1", state: "completed", providerTurnId: "provider-t1", requestedAt: at(1), completedAt: at(1) },
+								{ id: "t2", state: "completed", providerTurnId: "provider-t2", requestedAt: at(2), completedAt: at(2), rolledBack: true },
+							],
+						}}
+						sessionRole="orchestrator"
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
 	it("hides the matching action as soon as the command completes during a running turn", () => {
 		const spawn = {
 			...command("t1", 1, "ao spawn --project proj"),

@@ -200,8 +200,7 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	// The daemon files an action this call takes under the caller's running turn.
-	if callerID := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); callerID != "" {
+	if callerID := callerSession(); callerID != "" {
 		req.Header.Set(caller.Header, callerID)
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
@@ -271,4 +270,14 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// callerSession is the agent session running this command, so the daemon can
+// file the action it takes under that agent's running turn. A shell the user
+// opened in the session's terminal tab has none.
+func callerSession() string {
+	if os.Getenv(caller.ShellTerminalEnv) != "" {
+		return ""
+	}
+	return strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 }

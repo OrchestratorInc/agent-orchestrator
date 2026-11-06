@@ -74,3 +74,40 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 		}
 	}
 }
+
+// Rolling back does not undo a spawn or a kill, so an AO action filed under a
+// rolled-back turn stays in the snapshot while that turn's own work leaves it.
+func TestAOActionOutlivesItsRolledBackTurn(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	seedTurn(t, s, conversation, session, "turn-1", "first", histClock)
+	seedTurn(t, s, conversation, session, "turn-2", "second", histClock.Add(time.Minute))
+	action := domain.ConversationActivity{
+		ID: "ao-action:session.spawned:proj-9", Kind: domain.ActivityKindAOAction, Status: domain.ActivityStatusCompleted,
+		Summary: "Spawned an agent", ProviderItemID: "ao-action:session.spawned:proj-9",
+		Detail: json.RawMessage(`{"action":"session.spawned","operationId":"proj-9"}`),
+	}
+	if err := s.UpsertActivity(ctx, conversation, "provider-turn-2", action, histClock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RollbackTurns(ctx, conversation, "turn-2", histClock.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	full, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, activities := range map[string][]domain.ConversationActivity{"full": full.Activities, "page": page.Activities} {
+		var ids []string
+		for _, activity := range activities {
+			ids = append(ids, activity.ID)
+		}
+		if len(ids) != 2 || ids[0] != "turn-1-act" || ids[1] != action.ID {
+			t.Fatalf("%s activities = %v, want turn-1's step and the action", name, ids)
+		}
+	}
+}
