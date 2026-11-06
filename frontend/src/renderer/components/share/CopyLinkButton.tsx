@@ -19,20 +19,23 @@ export function canCopy(access: LinkAccess): boolean {
 /**
  * Copies the link general access describes. A link this device made is
  * copied as it is; one made elsewhere can't be shown again, so the button
- * makes a new link with the same access ("Copy new link"), except for a
- * Trusted link, which no new link can match: that one is replaced, after
- * asking. With link access off there is nothing to copy, and the button says
+ * makes a new link with the same access ("Copy new link"), asking first
+ * when that link can write, as turning writing on does. A Trusted link, which
+ * no new link can match, is replaced, after asking. With link access off there is nothing to copy, and the button says
  * how to get one. It stays focusable while it can't copy, so focus never
  * drops out of the dialog and the reason can be read.
  */
-export function CopyLinkButton({ access, people, onCopied, onReplace, buttonRef }: {
+export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
 	access: LinkAccess;
 	/** Whether people can be added in this dialog, for the hint when link access is off. */
 	people: boolean;
 	/** Announces the copy, with who the link lets in. */
 	onCopied: () => void;
-	/** Asks to replace a Trusted link made elsewhere with a Can write one; resolves to the new URL, or undefined. */
-	onReplace: () => Promise<string | undefined>;
+	/**
+	 * Asks before making a link that can write: one replacing a Trusted link
+	 * made elsewhere, or a copy of a Can write one. Resolves to the new URL, or undefined.
+	 */
+	onAsk: () => Promise<string | undefined>;
 	buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
 	const { t } = useTranslation();
@@ -50,7 +53,9 @@ export function CopyLinkButton({ access, people, onCopied, onReplace, buttonRef 
 		setFallback(undefined);
 		let url: string | undefined;
 		try {
-			url = mode === "ready" ? access.url : mode === "new" ? await access.copyNew.mutateAsync() : await onReplace();
+			url = mode === "ready"
+				? access.url
+				: mode === "new" && access.broadest?.role !== "editor" ? await access.copyNew.mutateAsync() : await onAsk();
 		} catch {
 			// The error shows with the dialog's others.
 			return;

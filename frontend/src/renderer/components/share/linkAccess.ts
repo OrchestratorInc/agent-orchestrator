@@ -49,11 +49,6 @@ function accessRank(role: CloudCpShareRole, cap: ShareModeCap | string | undefin
 	return (ROLE_RANK[role] ?? 0) * 10 + (CAP_RANK[actualLinkCap(role, cap)] ?? 0);
 }
 
-/** Whether new access lets people do less than this link does: watching instead of writing, or a lower cap. */
-export function narrows(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefined, next: { role: CloudCpShareRole; modeCap: ShareModeCap }): boolean {
-	return link !== undefined && accessRank(next.role, next.modeCap) < accessRank(link.role, link.modeCap);
-}
-
 /** Whether a live link is Trusted, which a new link can never be. */
 export function isTrustedLink(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefined): boolean {
 	return link !== undefined && actualLinkCap(link.role, link.modeCap) === "trusted";
@@ -107,21 +102,25 @@ export function broadestLink(links: readonly CloudCpShareLink[]): CloudCpShareLi
 }
 
 /**
- * Whether a link is as good as another to copy: the same access, ending
- * within the hour a copy of it ends in (see remainingHours).
+ * Whether a link is as good as another to copy: the same access, and either
+ * ending within the hour a copy of it ends in (see remainingHours), or made
+ * after it and ending no later, as Copy new link makes one. That second test
+ * uses only the control plane's own times: a copy's hours are counted on this
+ * device's clock, so with the two clocks apart it can end well over an hour
+ * sooner, and Copy new link would then make another on every click.
  */
 function copyOf(link: CloudCpShareLink, of: CloudCpShareLink): boolean {
 	if (link.role !== of.role || actualLinkCap(link.role, link.modeCap) !== actualLinkCap(of.role, of.modeCap)) return false;
 	const [a, b] = [endsAt(link), endsAt(of)];
-	return a === b || Math.abs(a - b) < HOUR;
+	if (a === b || Math.abs(a - b) < HOUR) return true;
+	return a <= b && Date.parse(link.createdAt) >= Date.parse(of.createdAt);
 }
 
 /**
  * The URL to copy for the broadest link: its own when this device made it,
- * else that of a link this device made with the same access and end (a copy
- * of it made here, which ends at most an hour sooner). Without this, the
- * copy would rank below the link it copies, and Copy new link would make
- * another on every click.
+ * else that of a link this device made with the same access standing in for
+ * it (see copyOf), the one that ends last. Without this, the copy would rank
+ * below the link it copies, and Copy new link would make another on every click.
  */
 export function urlForBroadest(
 	broadest: CloudCpShareLink | undefined,
@@ -159,28 +158,20 @@ export function anyoneSentence(t: TFunction, scope: ShareScope, role: CloudCpSha
 
 /**
  * Whether a workspace is someone's own rather than a team's, so "people in
- * <it>" would read oddly ("people in Asha's organization"). The control plane
- * says which it is (`kind`). An older one doesn't, and the offering can't
- * tell (a team can run on Freestyle only), so then only the name gives it
- * away: one made from the account (its email, the email's name, the person's
- * name) or "<name>'s organization". When unsure it is a team's: naming the
- * workspace's people never understates who can open the session.
+ * <it>" would read oddly ("people in Asha's organization"). Only the control
+ * plane's word for it (`kind`) counts: a name or an offering can't tell (a
+ * team can be named after a person, or run on Freestyle only). Unknown (an
+ * older control plane, or the workspace still loading) is a team's: naming
+ * the workspace's people never understates who can open the session.
  */
-export function isPersonalWorkspace(
-	org: { displayName: string; kind?: string } | undefined,
-	user: { email?: string; displayName?: string } | undefined,
-): boolean {
-	if (!org) return false;
-	if (org.kind) return org.kind === "personal";
-	const name = org.displayName.trim().toLowerCase();
-	const email = user?.email?.trim().toLowerCase() ?? "";
-	const own = [email, email.split("@")[0] ?? "", user?.displayName?.trim().toLowerCase() ?? ""].filter(Boolean);
-	return own.includes(name) || /['’]s (organization|organisation|workspace)$/.test(name);
+export function isPersonalWorkspace(org: { kind?: string } | undefined): boolean {
+	return org?.kind === "personal";
 }
 
 /** "Only people with access" in words that fit the workspace. */
 export function restrictedSentence(t: TFunction, { scope, workspaceName, personal, people }: {
 	scope: ShareScope;
+	/** Undefined while it loads or when it couldn't be read. */
 	workspaceName: string | undefined;
 	/** A personal workspace has nobody else in it: "people in Asha's organization" reads oddly. */
 	personal: boolean;
@@ -188,8 +179,9 @@ export function restrictedSentence(t: TFunction, { scope, workspaceName, persona
 	people: boolean;
 }): string {
 	const project = scope === "project";
-	if (!people) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
-	if (personal || !workspaceName) return project ? t("share.general.restrictedProjectPersonal") : t("share.general.restrictedSessionPersonal");
+	if (personal && people) return project ? t("share.general.restrictedProjectPersonal") : t("share.general.restrictedSessionPersonal");
+	// Without a workspace to name, the plain sentence: "only you" could understate a team's.
+	if (!people || !workspaceName) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
 	return project
 		? t("share.general.restrictedProject", { workspace: workspaceName })
 		: t("share.general.restrictedSession", { workspace: workspaceName });
@@ -340,14 +332,21 @@ export function useLinkAccess({ orgId, projectId, sessionId, scope, enabled }: {
 		if (!made) throw new Error(MISSING_URL);
 		// Kept even when the copy below fails: the person can copy it again.
 		await remember(link.id, made);
+		// Listed at once, without its secrets: a list read that fails afterwards
+		// must not leave Copy new link offering to make it again.
+		const { token: _token, url: _url, code: _code, shortUrl: _shortUrl, ...listed } = link;
+		queryClient.setQueryData<CloudCpShareLink[]>(linksKey, (data) => (data && !data.some((other) => other.id === link.id) ? [...data, listed] : data));
 		return made;
 	};
 	/**
 	 * Turns every link off, each whatever happens to the others. One already
 	 * revoked (on another device, or by a list read before) counts as off. The
-	 * URLs of the links that ended are forgotten; those still working are one error.
+	 * URLs of the links that ended are forgotten; those still working are one
+	 * error. Resolves to how many grants removing who joined changed, as the
+	 * control plane counted them; undefined when it didn't say (a plain revoke,
+	 * or an older control plane).
 	 */
-	const revokeAll = async (targets: readonly CloudCpShareLink[], removeJoined: boolean) => {
+	const revokeAll = async (targets: readonly CloudCpShareLink[], removeJoined: boolean): Promise<number | undefined> => {
 		const results = await Promise.allSettled(
 			targets.map((link) => client.revokeShareLink(orgId, projectId, link.id, removeJoined ? { removeJoined: true } : undefined)),
 		);
@@ -358,6 +357,8 @@ export function useLinkAccess({ orgId, projectId, sessionId, scope, enabled }: {
 		const failures = results.flatMap((result) => (result.status === "rejected" && !alreadyRevoked(result.reason) ? [result.reason as unknown] : []));
 		if (ended.length > 0) await forget(ended.map((link) => link.id));
 		if (failures.length > 0) throw new LinkRevokeError(failures.length, failures[0]);
+		const counts = results.flatMap((result) => (result.status === "fulfilled" && typeof result.value?.removedGrants === "number" ? [result.value.removedGrants] : []));
+		return counts.length > 0 ? counts.reduce((sum, count) => sum + count, 0) : undefined;
 	};
 	const hoursLeft = (link: CloudCpShareLink): number | undefined => {
 		const hours = remainingHours(link, Date.now());
@@ -450,6 +451,19 @@ export function useLinkAccess({ orgId, projectId, sessionId, scope, enabled }: {
 		refresh: async (): Promise<CloudCpShareLink[]> => {
 			const result = await all.refetch();
 			return scopeLinks(result.data ?? [], scope, sessionId, Date.now());
+		},
+		/**
+		 * Reads the links again and resolves to the broadest of them with the URL
+		 * to copy for it; undefined when the read fails, no link is live, or this
+		 * device has no URL for it. The links last read may hold one revoked elsewhere since.
+		 */
+		freshUrl: async (): Promise<{ link: CloudCpShareLink; url: string } | undefined> => {
+			const result = await all.refetch();
+			if (result.isError || !result.data) return undefined;
+			const fresh = scopeLinks(result.data, scope, sessionId, Date.now());
+			const link = broadestLink(fresh);
+			const url = urlForBroadest(link, fresh, known);
+			return link && url ? { link, url } : undefined;
 		},
 		turnOn,
 		turnOff,

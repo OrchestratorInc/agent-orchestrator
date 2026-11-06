@@ -3842,6 +3842,7 @@
 	"share.manage": "管理",
 	"share.menu": "その他の共有オプション",
 	"share.menuLinkOff": "リンクでのアクセスはオフです",
+	"share.menuProjectLinkOn": "プロジェクト全体へのリンクだけがオンです",
 	"share.shareEllipsis": "共有…",
 	"share.removeAccess": "アクセスを削除",
 	"share.removed": "{{name}} のアクセスを削除しました",

@@ -158,6 +158,7 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 	protectedStorageAvailable,
+	readAuthStore,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -3345,12 +3346,13 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
-// Session and project share links this device made, so Copy link works again later.
+// Session and project share links this device made, so Copy link works again
+// later; only the signed-in account's, which the file names.
 const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
 	available: protectedStorageAvailable,
 	encrypt: (text) => safeStorage.encryptString(text),
 	decrypt: (value) => safeStorage.decryptString(value),
-});
+}, async () => (await readAuthStore(cloudDataDir())).session?.user.id);
 registerSessionShareUrlsIpc(ipcMain, sessionShareUrls);
 registerAgentLoginIpc({
 	ipcMain,
@@ -3692,7 +3694,10 @@ function notifyRenderersOfCloudSession(
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
 	pendingCloudSignIn.note(account, signIn);
-	// Share URLs belong to the account that made them: they go when it signs out or someone else signs in.
+	// Share URLs belong to the account that made them: they go when it signs
+	// out or someone else signs in. The first notice of a run has no account
+	// to compare with; the store itself never shows another account's (its
+	// file names the owner), so one who signed in since the last run never sees them.
 	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
 		void sessionShareUrls.clear().catch(() => undefined);
 	}

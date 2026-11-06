@@ -181,11 +181,14 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 
 /**
  * The chevron beside Share: Copy link and Share…, as Google Docs' Share
- * button has. Copy link copies the link this device made. One made on
- * another device can't be shown again, and a new one is a new credential, so
- * that is made in the Share dialog, where its access and expiry show: the
- * item opens it. With link access off there is nothing to copy, so it says
- * so. The toast names who the link lets in.
+ * button has. Copy link copies the link this device made, once the links are
+ * read again: the list it opened with may hold one revoked elsewhere since,
+ * and then (or when the read fails) it opens the Share dialog instead. One
+ * made on another device can't be shown again, and a new one is a new
+ * credential, so that is made in the Share dialog, where its access and
+ * expiry show: the item opens it. With link access off there is nothing to
+ * copy, so it says so, or that only the whole project's link is on. The
+ * toast names who the link lets in.
  */
 function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, joined }: {
 	orgId: string;
@@ -202,15 +205,18 @@ function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, 
 	const access = useLinkAccess({ orgId, projectId, sessionId, scope: "session", enabled: open });
 	const { mode } = access.copy;
 	const off = mode === "off";
+	// This session's own link access is off, but a link to the whole project opens it.
+	const viaProject = off && access.projectLinks.length > 0;
 	// Made on another device: the dialog makes a new one, never this menu.
 	const elsewhere = mode === "new" || mode === "replace";
 	const copy = async () => {
-		const url = access.url;
-		if (!url) {
+		const fresh = access.url ? await access.freshUrl() : undefined;
+		if (!fresh) {
 			onManage();
 			return;
 		}
-		const sentence = access.broadest ? anyoneSentence(t, "session", access.broadest.role) : undefined;
+		const { url } = fresh;
+		const sentence = anyoneSentence(t, "session", fresh.link.role);
 		try {
 			await aoBridge.clipboard.writeText(url);
 		} catch {
@@ -241,7 +247,7 @@ function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, 
 					<Link2 className="mt-0.5" aria-hidden="true" />
 					<span className="flex min-w-0 flex-1 flex-col">
 						<span>{elsewhere ? t("share.copyNewLinkEllipsis") : t("share.copyLink")}</span>
-						{off ? <span className="text-xs text-muted-foreground">{t("share.menuLinkOff")}</span> : null}
+						{off ? <span className="text-xs text-muted-foreground">{viaProject ? t("share.menuProjectLinkOn") : t("share.menuLinkOff")}</span> : null}
 						{elsewhere ? <span className="text-xs text-muted-foreground">{t("share.menuLinkElsewhere")}</span> : null}
 					</span>
 				</DropdownMenuItem>

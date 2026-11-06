@@ -3824,6 +3824,7 @@
 	"share.manage": "管理",
 	"share.menu": "更多共享选项",
 	"share.menuLinkOff": "链接访问已关闭",
+	"share.menuProjectLinkOn": "仅整个项目的链接已开启",
 	"share.shareEllipsis": "共享…",
 	"share.removeAccess": "移除访问权限",
 	"share.removed": "已移除 {{name}} 的访问权限",

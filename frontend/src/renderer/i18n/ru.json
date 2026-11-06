@@ -3973,6 +3973,7 @@
 	"share.manage": "Управлять",
 	"share.menu": "Другие параметры доступа",
 	"share.menuLinkOff": "Доступ по ссылке выключен",
+	"share.menuProjectLinkOn": "Включена только ссылка на весь проект",
 	"share.shareEllipsis": "Поделиться…",
 	"share.removeAccess": "Закрыть доступ",
 	"share.removed": "Доступ для {{name}} закрыт",

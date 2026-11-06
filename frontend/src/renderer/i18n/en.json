@@ -3823,6 +3823,7 @@
 	"share.manage": "Manage",
 	"share.menu": "More sharing options",
 	"share.menuLinkOff": "Link access is off",
+	"share.menuProjectLinkOn": "Only the whole project's link is on",
 	"share.shareEllipsis": "Share…",
 	"share.removeAccess": "Remove access",
 	"share.stopSharingWith": "Stop sharing with {{name}}",

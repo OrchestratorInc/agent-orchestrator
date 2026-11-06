@@ -29,13 +29,13 @@ import { canCopy, CopyLinkButton } from "./share/CopyLinkButton";
 import { GeneralAccessCard } from "./share/GeneralAccessCard";
 import { LinkSettings } from "./share/LinkSettings";
 import {
+	actualLinkCap,
 	anyoneSentence,
 	DEFAULT_EXPIRY,
 	isPersonalWorkspace,
 	type LinkAccess,
 	LinkRevokeError,
 	linkErrorMessage,
-	narrows,
 	restrictedSentence,
 	type ShareExpiry,
 	useLinkAccess,
@@ -193,6 +193,8 @@ type LinkConfirm =
 	| { kind: "off" }
 	/** copy: Copy link asked, for a Trusted link made elsewhere, which only a new link can stand in for. */
 	| { kind: "change"; role: CloudCpShareRole; modeCap: ShareModeCap; copy?: boolean }
+	/** Copy new link for a link made elsewhere that can write: another link that can write. */
+	| { kind: "copy-new" }
 	| { kind: "revoke"; link: CloudCpShareLink };
 
 /** Where Link settings was opened from, to go back to when it closes. */
@@ -209,9 +211,20 @@ function confirmJoined(confirm: LinkConfirm, links: LinkAccess): number {
 	return confirm.kind === "revoke" ? confirmLink(confirm, links).joinedCount ?? 0 : links.joined;
 }
 
-/** Whether a confirmation offers to remove the people who joined: the control plane can, and someone did. */
+/** Whether a confirmation offers to remove the people who joined: a link stops, the control plane can, and someone did. */
 function offersRemoveJoined(confirm: LinkConfirm, links: LinkAccess): boolean {
-	return links.canRemoveJoined && confirmJoined(confirm, links) > 0;
+	return confirm.kind !== "copy-new" && links.canRemoveJoined && confirmJoined(confirm, links) > 0;
+}
+
+/**
+ * Whether a change lets anyone with the link write where they couldn't: to a
+ * Can write link from a watch-only one, or from Read only agent permissions
+ * to Standard. It asks first, naming the sandbox and its secrets.
+ */
+function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefined, next: { role: CloudCpShareRole; modeCap: ShareModeCap }): boolean {
+	if (next.role !== "editor") return false;
+	if (link?.role !== "editor") return true;
+	return actualLinkCap(link.role, link.modeCap) === "read-only" && actualLinkCap(next.role, next.modeCap) !== "read-only";
 }
 
 /**
@@ -240,10 +253,12 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const me = useCloudSession().session?.user;
 	const myEmail = me?.email?.toLowerCase() ?? "";
 	// A project belongs to its workspace: the access list names it on top.
+	// Undefined while it loads or when it couldn't be read.
 	const { org } = useCloudOrg(open);
-	const workspaceName = org?.id === orgId ? org.displayName : undefined;
+	const workspace = org?.id === orgId ? org : undefined;
+	const workspaceName = workspace?.displayName;
 	// A personal workspace has nobody else in it, so "people in <it>" reads oddly.
-	const personal = org?.id === orgId && isPersonalWorkspace(org, me);
+	const personal = isPersonalWorkspace(workspace);
 	const queryClient = useQueryClient();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const [scope, setScope] = useState<ShareScope>("session");
@@ -267,11 +282,11 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const revokeFocus = useRef<{ id: string; index: number } | null>(null);
 	// A link whose revoke is reading the links first, to count who joined by it.
 	const [checkingRevoke, setCheckingRevoke] = useState<string | null>(null);
-	// Copy link waiting on the confirmation that replaces a Trusted link.
-	const replaceCopy = useRef<((url: string | undefined) => void) | null>(null);
-	const settleReplaceCopy = (url: string | undefined) => {
-		const resolve = replaceCopy.current;
-		replaceCopy.current = null;
+	// Copy link waiting on a confirmation: one that replaces a Trusted link, or makes another that can write.
+	const pendingCopy = useRef<((url: string | undefined) => void) | null>(null);
+	const settlePendingCopy = (url: string | undefined) => {
+		const resolve = pendingCopy.current;
+		pendingCopy.current = null;
 		resolve?.(url);
 	};
 	// After a row is stopped, focus goes to the next row's menu (its row key), or the field.
@@ -461,7 +476,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		for (const mutation of [links.turnOn, links.turnOff, links.replace, links.copyNew, links.revoke]) mutation.reset();
 		revokeFocus.current = null;
 		setCheckingRevoke(null);
-		settleReplaceCopy(undefined);
+		settlePendingCopy(undefined);
 		undoNotice.clearFailure();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
@@ -551,16 +566,27 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		void links.refresh();
 	};
 	const askChange = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }, copy = false) => {
-		// Narrowing access offers to remove the people who joined with the wider access, ticked.
-		setRemoveJoined(narrows(links.broadest, next));
+		// Removing the people who joined is only ever chosen, never ticked for
+		// them: someone who joined by link alone would lose access outright.
+		setRemoveJoined(false);
 		setConfirm({ kind: "change", ...next, ...(copy ? { copy } : {}) });
 		void links.refresh();
 	};
-	// Copy link on a Trusted link made elsewhere: a new link can't be Trusted, so it replaces it with a Can write one, after asking.
-	const askReplaceCopy = () => new Promise<string | undefined>((resolve) => {
-		settleReplaceCopy(undefined);
-		replaceCopy.current = resolve;
-		askChange({ role: "editor", modeCap: "standard" }, true);
+	/**
+	 * Copy link that has to ask first. A Trusted link made elsewhere: a new
+	 * link can't be Trusted, so it replaces it with a Can write one. Any other
+	 * that can write: Copy new link makes another link that can write, which
+	 * asks as turning writing on does. Resolves to the URL to copy, or undefined.
+	 */
+	const askCopy = () => new Promise<string | undefined>((resolve) => {
+		settlePendingCopy(undefined);
+		pendingCopy.current = resolve;
+		if (links.copy.mode === "replace") {
+			askChange({ role: "editor", modeCap: "standard" }, true);
+		} else {
+			setRemoveJoined(false);
+			setConfirm({ kind: "copy-new" });
+		}
 	});
 	const askRevoke = async (link: CloudCpShareLink, index: number) => {
 		revokeFocus.current = { id: link.id, index };
@@ -584,7 +610,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	};
 	const cancelConfirm = () => {
 		if (confirm?.kind === "revoke") revokeFocus.current = null;
-		if (confirm?.kind === "change" && confirm.copy) settleReplaceCopy(undefined);
+		if ((confirm?.kind === "change" && confirm.copy) || confirm?.kind === "copy-new") settlePendingCopy(undefined);
 		setConfirm(null);
 	};
 	const runConfirm = () => {
@@ -592,26 +618,31 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		if (!current) return;
 		// Only what was offered: a control plane that can't remove them is never asked to.
 		const remove = removeJoined && offersRemoveJoined(current, links);
-		const joined = remove ? confirmJoined(current, links) : 0;
 		setConfirm(null);
 		undoNotice.clearFailure();
 		if (current.kind === "off") {
 			const count = links.links.length;
 			links.turnOff.mutate({ removeJoined: remove }, {
-				onSuccess: () => undoNotice.show({
-					message: joined > 0
-						? t("share.general.turnedOffRemoved", { count: joined })
+				// Who lost access as the control plane counted it, not as the dialog last read it.
+				onSuccess: (removed) => undoNotice.show({
+					message: remove && removed !== undefined && removed > 0
+						? t("share.general.turnedOffRemoved", { count: removed })
 						: t("share.general.turnedOff", { count }),
 				}),
+			});
+		} else if (current.kind === "copy-new") {
+			links.copyNew.mutate(undefined, {
+				onSuccess: (url) => settlePendingCopy(url),
+				onError: () => settlePendingCopy(undefined),
 			});
 		} else if (current.kind === "change") {
 			links.replace.mutate({ role: current.role, modeCap: current.modeCap, removeJoined: remove }, {
 				onSuccess: (url) => {
-					if (current.copy) settleReplaceCopy(url);
+					if (current.copy) settlePendingCopy(url);
 				},
 				// The new link exists even when an old one couldn't be turned off; it can still be copied.
 				onError: (failure) => {
-					if (current.copy) settleReplaceCopy(failure instanceof LinkRevokeError ? failure.url : undefined);
+					if (current.copy) settlePendingCopy(failure instanceof LinkRevokeError ? failure.url : undefined);
 				},
 			});
 		} else {
@@ -853,7 +884,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 					) : (
 						<>
 							{view === "main" ? (
-								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} onReplace={askReplaceCopy} buttonRef={copyButtonRef} />
+								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} onAsk={askCopy} buttonRef={copyButtonRef} />
 							) : <span />}
 							{view === "settings" ? (
 								<Button type="button" variant="footer-primary" onClick={closeSettings} data-share-done="">
@@ -903,10 +934,12 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 
 /**
  * The questions General access asks before a change that can't be taken back:
- * turning link access off, letting anyone with the link write, and making a
- * new link, which every change to a link's access does. Each offers to remove
- * the people who joined by the links that stop, when the control plane can.
- * It counts them from the links just read again, so it waits for that read.
+ * turning link access off, letting anyone with the link write (a wider link,
+ * or another one that can write), and making a new link, which every change
+ * to a link's access does. When links stop, each offers to remove the people
+ * who joined by them, when the control plane can, never ticked: removing is
+ * the owner's choice. It counts them from the links just read again, so it
+ * waits for that read.
  */
 function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoinedChange, onConfirm, onCancel }: {
 	confirm: LinkConfirm | null;
@@ -923,7 +956,8 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 	const joined = confirmJoined(confirm, links);
 	const offerRemove = offersRemoveJoined(confirm, links);
 	const copy = confirm.kind === "change" && confirm.copy === true;
-	const widening = confirm.kind === "change" && confirm.role === "editor" && links.broadest?.role !== "editor";
+	const copyNew = confirm.kind === "copy-new";
+	const widening = copyNew || (confirm.kind === "change" && widensToWrite(links.broadest, confirm));
 	const title = confirm.kind === "off"
 		? t("share.confirm.offTitle")
 		: confirm.kind === "revoke"
@@ -934,16 +968,18 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 		: confirm.kind === "revoke"
 			? t("share.confirm.revokeLink")
 			: t("share.confirm.changeLinks", { count });
-	// Who keeps access, said when they can't be removed. A control plane that
-	// counts them and counts nobody has nobody to keep it.
-	const keeps = offerRemove || (links.canRemoveJoined && joined === 0)
+	// Who keeps access: everyone who joined, unless the owner ticks removing
+	// them. A control plane that counts them and counts nobody has nobody to keep it.
+	const keeps = (offerRemove && removeJoined) || (links.canRemoveJoined && joined === 0)
 		? undefined
 		: confirm.kind !== "revoke" && count > 1 ? t("share.confirm.keepJoinedSeveral") : t("share.confirm.keepJoined");
 	const description = (
 		<div className="flex flex-col gap-2">
-			{widening ? <p>{scope === "project" ? t("share.confirm.writeProject") : t("share.confirm.writeSession")}</p> : null}
+			{widening || copy ? <p>{scope === "project" ? t("share.confirm.writeProject") : t("share.confirm.writeSession")}</p> : null}
 			{copy ? <p>{t("share.confirm.trustedCopy")}</p> : null}
-			<p>{keeps ? t("share.twoSentences", { first: stops, second: keeps }) : stops}</p>
+			{copyNew
+				? <p>{t("share.copyNewLinkHint")}</p>
+				: <p>{keeps ? t("share.twoSentences", { first: stops, second: keeps }) : stops}</p>}
 		</div>
 	);
 	return (
@@ -952,7 +988,7 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 			title={title}
 			description={description}
 			confirmLabel={confirm.kind === "off" ? t("share.confirm.offAction") : confirm.kind === "revoke" ? t("share.revoke") : widening ? t("share.confirm.writeAction") : t("share.confirm.changeAction")}
-			destructive={confirm.kind !== "change"}
+			destructive={confirm.kind === "off" || confirm.kind === "revoke"}
 			// The count of who joined is only as good as the list it came from.
 			confirmDisabled={links.fetching}
 			onConfirm={onConfirm}

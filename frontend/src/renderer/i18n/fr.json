@@ -3911,6 +3911,7 @@
 	"share.manage": "Gérer",
 	"share.menu": "Plus d'options de partage",
 	"share.menuLinkOff": "L'accès par lien est désactivé",
+	"share.menuProjectLinkOn": "Seul le lien vers tout le projet est actif",
 	"share.shareEllipsis": "Partager…",
 	"share.removeAccess": "Retirer l'accès",
 	"share.removed": "Accès de {{name}} retiré",

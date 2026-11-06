@@ -3842,6 +3842,7 @@
 	"share.manage": "Verwalten",
 	"share.menu": "Weitere Freigabeoptionen",
 	"share.menuLinkOff": "Linkzugriff ist aus",
+	"share.menuProjectLinkOn": "Nur der Link zum ganzen Projekt ist an",
 	"share.shareEllipsis": "Teilen…",
 	"share.removeAccess": "Zugriff entfernen",
 	"share.removed": "Zugriff von {{name}} entfernt",

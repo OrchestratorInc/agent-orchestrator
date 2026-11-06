@@ -153,6 +153,39 @@ describe("SessionPeopleControl", () => {
 		expect(writeText).not.toHaveBeenCalled();
 	});
 
+	it("opens the Share dialog instead of copying a link revoked elsewhere since the menu read the links", async () => {
+		const id = "0c927f48-7214-4fb1-833a-7c1af5b7bf80";
+		const link: CloudCpShareLink = {
+			id, orgId: "org", projectId: "project", sessionId: "session", role: "viewer", status: "active", accessScope: "anyone",
+			recipients: [], interaction: "view", modeCap: "read-only", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
+		};
+		mocks.links = [link];
+		vi.spyOn(aoBridge.sessionShareUrls, "recall").mockResolvedValue({ [id]: "https://orchestrator.inc/s/k7Hq2x9PmB4wR5tY8uI0oP" });
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
+		const item = await screen.findByRole("menuitem", { name: "Copy link" });
+		await waitFor(() => expect(item).not.toHaveAttribute("data-disabled"));
+		// Revoked on another device while the menu showed the list it read.
+		mocks.links = [{ ...link, status: "revoked" }];
+		await userEvent.click(item);
+		expect(await screen.findByTestId("share-dialog")).toBeTruthy();
+		expect(writeText).not.toHaveBeenCalled();
+	});
+
+	it("says only the whole project's link is on when this session has none of its own", async () => {
+		mocks.links = [{
+			id: "0c927f48-7214-4fb1-833a-7c1af5b7bf80", orgId: "org", projectId: "project", role: "viewer", status: "active", accessScope: "anyone",
+			recipients: [], interaction: "view", modeCap: "read-only", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
+		}];
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
+		await screen.findByText("Only the whole project's link is on");
+		expect(screen.queryByText("Link access is off")).toBeNull();
+	});
+
 	it("says link access is off in the menu instead of copying", async () => {
 		mocks.live = live([{ userId: "me", name: "Mohak" }]);
 		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);

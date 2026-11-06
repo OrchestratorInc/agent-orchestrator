@@ -3842,6 +3842,7 @@
 	"share.manage": "관리",
 	"share.menu": "공유 옵션 더보기",
 	"share.menuLinkOff": "링크 액세스가 꺼져 있습니다",
+	"share.menuProjectLinkOn": "프로젝트 전체 링크만 켜져 있습니다",
 	"share.shareEllipsis": "공유…",
 	"share.removeAccess": "액세스 제거",
 	"share.removed": "{{name}}의 액세스를 제거했습니다",

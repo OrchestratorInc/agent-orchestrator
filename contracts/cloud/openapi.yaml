@@ -613,6 +613,122 @@ paths:
                 $ref: "#/components/schemas/CueEnvelope"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectShareLinks
+      tags: [Projects]
+      description: >-
+        The project's share links, newest first, revoked ones included. No
+        link carries its token, url, code or shortUrl: only the create
+        response does. joinedCount says how many people the link still gives
+        more than what was shared with them directly.
+      responses:
+        "200":
+          description: The project's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareLinkList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectShareLink
+      tags: [Projects]
+      description: >-
+        Mint a share link for the whole project, or one of its sessions with
+        sessionId. Omitted fields default to role viewer, accessScope anyone
+        and interaction view. 400 invalid_request for a body that is not
+        JSON or names an unknown field; 422 validation_error for a role,
+        accessScope, interaction or modeCap outside its enum, or a recipient
+        that is not an email address. The response is the only one that
+        carries the link's token and url, and its code and shortUrl when the
+        control plane issues short codes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShareLinkInput"
+      responses:
+        "201":
+          description: The created share link, with its secrets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedShareLinkEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares/{linkId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+      - name: linkId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: revokeProjectShareLink
+      tags: [Projects]
+      description: >-
+        Turn a share link off. Without a body, or with removeJoined false,
+        only the link stops working: what it already granted stays, and a
+        link that is unknown or already revoked is 404 not_found. With
+        removeJoined true the people who joined by the link lose what it
+        gave them too (access it alone gave is revoked; access also shared
+        directly drops back to that level), the answer is 200 with how many
+        grants changed, and a link already revoked is processed the same
+        way: only an unknown link is 404.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeShareLinkInput"
+      responses:
+        "200":
+          description: The link was revoked and the grants it gave were removed (removeJoined true).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeShareLinkResult"
+        "204":
+          description: The link was revoked; grants it gave are kept.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/share-links/redeem:
+    post:
+      operationId: redeemShareLink
+      tags: [Projects]
+      description: >-
+        Redeem a share link, by its short code or by its organization and
+        token, into the caller's own access grant (an existing one is only
+        ever raised). Someone already in the project's organization gets no
+        grant: member is true and grant is empty. 400 invalid_request for a
+        code that is not 22 letters and digits, or without a code, an orgId
+        that is not a UUID or an empty token. 404 not_found for an unknown,
+        revoked or expired link, or an archived project. 403 forbidden when
+        the caller created the link, or the link is restricted to recipients
+        that do not include the caller's email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemShareLinkInput"
+      responses:
+        "200":
+          description: Where the link leads, and the caller's grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SharedProjectEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/cues/{cueId}:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -5354,6 +5470,269 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
+    ShareRole:
+      type: string
+      enum: [viewer, editor]
+    ShareModeCap:
+      type: string
+      enum: [read-only, standard, trusted]
+    ShareLink:
+      type: object
+      additionalProperties: false
+      required: [id, orgId, projectId, role, status, accessScope, recipients, interaction, deniedCommands, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+          description: The one session the link shares; absent, the whole project.
+        role:
+          $ref: "#/components/schemas/ShareRole"
+        status:
+          type: string
+          enum: [active, revoked]
+        accessScope:
+          type: string
+          enum: [anyone, restricted]
+          description: anyone redeems the link; restricted, only the recipients.
+        recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Lowercased email addresses; empty unless accessScope is restricted.
+        interaction:
+          type: string
+          enum: [view, interact]
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+          description: Absent when there is no cap beyond the session's own mode.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: Absent when the link never expires.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        joinedCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many people the link still gives more than what was shared
+            with them directly: the grants a revoke with removeJoined changes.
+            0 on a link just created. Absent from control planes that predate
+            it, which also ignore removeJoined.
+    CreatedShareLink:
+      description: >-
+        A share link as its create returns it, the only time its secrets are
+        sent: the store keeps only their hashes.
+      allOf:
+        - $ref: "#/components/schemas/ShareLink"
+        - type: object
+          required: [token, url]
+          properties:
+            token:
+              type: string
+              description: The link's raw token; with orgId it redeems the link.
+            url:
+              type: string
+              format: uri
+              description: >-
+                <scheme>://<host>/share/<orgId>/<token>, built from the host
+                this request reached (X-Forwarded-* when present). A
+                convenience for non-browser callers; browsers build the link
+                from their own origin and token.
+            code:
+              type: string
+              pattern: "^[A-Za-z0-9]{22}$"
+              description: >-
+                The link's short code, which redeems it on its own. Present
+                only when the control plane issues codes
+                (AO_CLOUD_SHARE_LINK_CODES); the client then shares a
+                /s/<code> link instead of the token.
+            shortUrl:
+              type: string
+              format: uri
+              description: >-
+                <origin>/s/<code> on the public share-link origin
+                (AO_CLOUD_SHARE_LINK_ORIGIN). Present only with a code and
+                when that origin is configured; the client shares it as is.
+    ShareLinkList:
+      type: object
+      additionalProperties: false
+      required: [links]
+      properties:
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareLink"
+    CreatedShareLinkEnvelope:
+      type: object
+      additionalProperties: false
+      required: [link]
+      properties:
+        link:
+          $ref: "#/components/schemas/CreatedShareLink"
+    CreateShareLinkInput:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: Shares one session of the project; omitted, the whole project.
+        role:
+          $ref: "#/components/schemas/ShareRole"
+          description: Defaults to viewer.
+        accessScope:
+          type: string
+          enum: [anyone, restricted]
+          description: Defaults to anyone. restricted lets only the recipients redeem it.
+        recipients:
+          type: array
+          items:
+            type: string
+            format: email
+        interaction:
+          type: string
+          enum: [view, interact]
+          description: Defaults to view.
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+          description: Omitted, no cap beyond the session's own mode.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+        expiresInHours:
+          type: integer
+          description: Hours until the link expires; omitted, zero or negative, it never expires.
+    RevokeShareLinkInput:
+      type: object
+      additionalProperties: false
+      properties:
+        removeJoined:
+          type: boolean
+          description: Also remove what the link gave the people who joined by it.
+    RevokeShareLinkResult:
+      type: object
+      additionalProperties: false
+      required: [removedGrants]
+      properties:
+        removedGrants:
+          type: integer
+          minimum: 0
+          description: How many grants were revoked or dropped back to their direct level.
+    RedeemShareLinkInput:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [code]
+          properties:
+            code:
+              type: string
+              pattern: "^[A-Za-z0-9]{22}$"
+              description: The link's short code; it names the organization itself.
+        - type: object
+          additionalProperties: false
+          required: [orgId, token]
+          properties:
+            orgId:
+              type: string
+              format: uuid
+            token:
+              type: string
+              minLength: 1
+    SharedProjectGrant:
+      type: object
+      additionalProperties: false
+      required: [id, role, status, deniedCommands, redeemedAt]
+      description: >-
+        The caller's grant. Empty when member is true: id, role and status
+        are empty strings, deniedCommands is null and redeemedAt is the zero
+        time.
+      properties:
+        id:
+          type: string
+          description: The grant's UUID, or empty when member is true.
+        role:
+          type: string
+          enum: [viewer, editor, ""]
+        status:
+          type: string
+          enum: [active, revoked, ""]
+        userEmail:
+          type: string
+        userDisplayName:
+          type: string
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+        deniedCommands:
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        redeemedAt:
+          type: string
+          format: date-time
+    SharedProject:
+      type: object
+      additionalProperties: false
+      required: [grant, project]
+      description: A project, or one of its sessions, shared with the caller.
+      properties:
+        grant:
+          $ref: "#/components/schemas/SharedProjectGrant"
+        project:
+          $ref: "#/components/schemas/Project"
+        member:
+          type: boolean
+          description: >-
+            True when the caller already belongs to the project's
+            organization and needs no grant; the link only says where to go.
+        sessionId:
+          type: string
+          format: uuid
+          description: The shared session; absent when the whole project is shared.
+        sessionName:
+          type: string
+        sharedByEmail:
+          type: string
+        sharedByName:
+          type: string
+        viaTeamId:
+          type: string
+          format: uuid
+          description: The team this reaches the caller through, when not shared with them directly.
+        viaTeamName:
+          type: string
+        source:
+          type: string
+          enum: [link, direct, team]
+          description: How the caller got it. Absent when member is true.
+    SharedProjectEnvelope:
+      type: object
+      additionalProperties: false
+      required: [shared]
+      properties:
+        shared:
+          $ref: "#/components/schemas/SharedProject"
     GitHubInstallationStatus:
       type: string
       enum: [active, suspended, removed]

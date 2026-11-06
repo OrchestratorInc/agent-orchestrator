@@ -85,7 +85,7 @@ describe("general access", () => {
 		mocks.org = { id: ORG, displayName: "Northwind", offering: { kind: "b2b" } };
 		mocks.client.listShareLinks.mockReset().mockResolvedValue({ links: [] });
 		mocks.client.createShareLink.mockReset().mockResolvedValue({ link: shareLink({ id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT }) });
-		mocks.client.revokeShareLink.mockReset().mockResolvedValue(undefined);
+		mocks.client.revokeShareLink.mockReset().mockResolvedValue({});
 		mocks.client.getShareAccess.mockReset().mockImplementation(async () => ({ entries: [] }));
 		forgetUrlsMadeHere();
 	});
@@ -110,27 +110,44 @@ describe("general access", () => {
 		["an enterprise workspace", { displayName: "Northwind", kind: "enterprise" }, false],
 		["a personal workspace", { displayName: "Northwind", kind: "personal" }, true],
 		["a team workspace named like someone's", { displayName: "Pritom's organization", kind: "team" }, false],
-		// An older control plane names no kind, and a team can run on Freestyle only.
-		["a Freestyle-only team workspace", { displayName: "Northwind", offering: { kind: "b2c" } }, false],
-		["a Coder team workspace", { displayName: "Northwind", offering: { kind: "b2b" } }, false],
-		["one named after the account's email", { displayName: "asha@northwind.dev", offering: { kind: "both" } }, true],
-		["one named after the person", { displayName: "Asha Rao", offering: { kind: "b2c" } }, true],
-		["\"<name>'s organization\"", { displayName: "Pritom's organization", offering: { kind: "both" } }, true],
+		// An older control plane names no kind: a name or an offering never makes one personal.
+		["one named \"<name>'s organization\" by an older control plane", { displayName: "Pritom's organization", offering: { kind: "both" } }, false],
+		["one named after the account by an older control plane", { displayName: "asha@northwind.dev", offering: { kind: "b2c" } }, false],
+		["one still loading", undefined, false],
 	])("knows %s is personal or not", (_name, org, personal) => {
-		expect(isPersonalWorkspace(org, { email: "asha@northwind.dev", displayName: "Asha Rao" })).toBe(personal);
+		expect(isPersonalWorkspace(org as { kind?: string } | undefined)).toBe(personal);
 	});
 
-	it("names the workspace's people in a Freestyle-only team workspace", async () => {
-		mocks.org = { id: ORG, displayName: "Northwind", offering: { kind: "b2c" } };
-		renderDialog();
-		expect(await sentence()).toBe("Only people in Northwind and people added above can open this session.");
-		expect(document.querySelector("[data-share-workspace-row]")).toHaveTextContent("People in Northwind");
-	});
-
-	it("says only you and people added above in a personal workspace", async () => {
-		mocks.org = { id: ORG, displayName: "Asha's organization", offering: { kind: "b2c" } };
+	it("says only you and people added above, with no workspace row, when the control plane says the workspace is personal", async () => {
+		mocks.org = { id: ORG, displayName: "Asha's organization", kind: "personal" };
 		renderDialog();
 		expect(await sentence()).toBe("Only you and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toBeNull();
+	});
+
+	it("names the workspace and its people when the control plane says it is a team's, whatever its name", async () => {
+		mocks.org = { id: ORG, displayName: "Pritom's organization", kind: "team" };
+		renderDialog();
+		expect(await sentence()).toBe("Only people in Pritom's organization and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toHaveTextContent("People in Pritom's organization");
+	});
+
+	it("names the workspace and its people against an older control plane, even with a name like someone's", async () => {
+		mocks.org = { id: ORG, displayName: "Pritom's organization", offering: { kind: "b2c" } };
+		renderDialog();
+		expect(await sentence()).toBe("Only people in Pritom's organization and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toHaveTextContent("People in Pritom's organization");
+	});
+
+	it.each([
+		["still loading", undefined],
+		["unreadable or another organization's", { id: "another-org", displayName: "Elsewhere", kind: "personal" }],
+	])("never says \"only you\" while the workspace is %s", async (_state, org) => {
+		mocks.org = org as Record<string, unknown>;
+		renderDialog();
+		expect(await sentence()).toBe("Only people with access can open this session.");
+		// The workspace's people still have access, so they still show.
+		await waitFor(() => expect(document.querySelector("[data-share-workspace-row]")).not.toBeNull());
 	});
 
 	it("turns link access on with a Can watch link for 7 days, then copies the link it made", async () => {
@@ -163,6 +180,11 @@ describe("general access", () => {
 		await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
 		expect(copyButton()).toHaveTextContent("Copy new link");
 		fireEvent.click(copyButton());
+		// Another link that can write: it asks, as turning writing on does.
+		const confirm = await screen.findByRole("dialog", { name: "Let anyone with the link write?" });
+		expect(confirm).toHaveTextContent("your repository access and its secrets");
+		expect(mocks.client.createShareLink).not.toHaveBeenCalled();
+		fireEvent.click(await confirmAction(confirm, "Allow writing"));
 		// Rounded down: the copy never outlasts the link it stands in for.
 		await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", {
 			sessionId: "s1", role: "editor", accessScope: "anyone", interaction: "interact", modeCap: "standard", expiresInHours: 47,
@@ -223,20 +245,26 @@ describe("general access", () => {
 		mocks.client.listShareLinks.mockResolvedValue({
 			links: [shareLink({ id: LINK_A, sessionId: "s1", joinedCount: 2 }), shareLink({ id: LINK_B, sessionId: "s1", joinedCount: 1 })],
 		});
+		// The control plane's own count, which may differ from the list's.
+		mocks.client.revokeShareLink.mockImplementation(async (_org: string, _project: string, id: string) => ({ removedGrants: id === LINK_A ? 3 : 1 }));
 		renderDialog();
 		await waitFor(async () => expect((await card()).dataset.shareGeneralAccess).toBe("anyone"));
 		await chooseAudience("Only people with access");
 		const confirm = await screen.findByRole("dialog", { name: "Turn off link access?" });
 		expect(confirm).toHaveTextContent("2 links stop working.");
 		const turnOff = await confirmAction(confirm, "Turn off");
+		// Never ticked for the owner: until they tick it, the people who joined keep access.
+		expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+		expect(confirm).toHaveTextContent("People who already opened them keep their access.");
 		fireEvent.click(within(confirm).getByRole("checkbox"));
+		expect(confirm).not.toHaveTextContent("keep their access");
 		// Several links: the people joined by one of them or another.
 		expect(confirm).toHaveTextContent("Also remove the 3 people who joined via link");
 		fireEvent.click(turnOff);
 		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_B, { removeJoined: true }));
 		expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true });
 		await waitFor(() => expect(forget).toHaveBeenCalledWith("https://cp.example.test", [LINK_A, LINK_B]));
-		expect(await screen.findByText("Link access turned off, and the 3 people who joined by it lost access.")).toBeInTheDocument();
+		expect(await screen.findByText("Link access turned off, and the 4 people who joined by it lost access.")).toBeInTheDocument();
 	});
 
 	it("says people who opened a link keep access when the control plane can't remove them", async () => {
@@ -355,7 +383,7 @@ describe("link access, made safe", () => {
 		mocks.org = { id: ORG, displayName: "Northwind", kind: "team" };
 		mocks.client.listShareLinks.mockReset().mockResolvedValue({ links: [] });
 		mocks.client.createShareLink.mockReset().mockResolvedValue({ link: shareLink({ id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT }) });
-		mocks.client.revokeShareLink.mockReset().mockResolvedValue(undefined);
+		mocks.client.revokeShareLink.mockReset().mockResolvedValue({});
 		mocks.client.getShareAccess.mockReset().mockImplementation(async () => ({ entries: [] }));
 		forgetUrlsMadeHere();
 	});
@@ -425,11 +453,11 @@ describe("link access, made safe", () => {
 			expect(current.querySelector("svg")).not.toBeNull();
 			await userEvent.click(screen.getByRole("menuitem", { name: "Standard" }));
 			const confirm = await screen.findByRole("dialog", { name: "Make a new link?" });
-			// Narrower access: removing who joined with the wider one is ticked.
-			expect(within(confirm).getByRole("checkbox")).toBeChecked();
+			// Narrower access still leaves who joined alone unless the owner ticks it.
+			expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
 			expect(confirm).toHaveTextContent("Also remove the 2 people who joined via link");
 			fireEvent.click(await confirmAction(confirm, "Make new link"));
-			await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true }));
+			await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, undefined));
 			expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ role: "editor", modeCap: "standard" }));
 		});
 
@@ -450,11 +478,28 @@ describe("link access, made safe", () => {
 			fireEvent.click(copyButton());
 			const confirm = await screen.findByRole("dialog", { name: "Replace the Trusted link?" });
 			expect(confirm).toHaveTextContent("the current one stops working");
+			// The people who joined keep the access the old link gave them unless the owner removes them.
+			expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+			expect(confirm).toHaveTextContent("People who already opened it keep their access.");
 			fireEvent.click(await confirmAction(confirm, "Make new link"));
 			await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
 			expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1);
 			expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ role: "editor", modeCap: "standard" }));
-			expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true });
+			expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, undefined);
+		});
+
+		it("removes who joined by the Trusted link it replaces only when the owner ticks it", async () => {
+			mocks.client.listShareLinks.mockResolvedValue({ links: [trusted()] });
+			const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+			renderDialog();
+			await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "replace"));
+			fireEvent.click(copyButton());
+			const confirm = await screen.findByRole("dialog", { name: "Replace the Trusted link?" });
+			const make = await confirmAction(confirm, "Make new link");
+			fireEvent.click(within(confirm).getByRole("checkbox"));
+			fireEvent.click(make);
+			await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true }));
+			await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
 		});
 
 		it("is named with its cap in Link settings", async () => {
@@ -517,8 +562,9 @@ describe("link access, made safe", () => {
 		answer({ links: [shareLink({ sessionId: "s1", joinedCount: 1 })] });
 		const turnOff = await confirmAction(confirm, "Turn off");
 		expect(confirm).toHaveTextContent("Also remove the person who joined via link");
-		expect(confirm).not.toHaveTextContent("keep their access");
+		expect(confirm).toHaveTextContent("People who already opened it keep their access.");
 		fireEvent.click(within(confirm).getByRole("checkbox"));
+		expect(confirm).not.toHaveTextContent("keep their access");
 		fireEvent.click(turnOff);
 		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true }));
 	});
@@ -537,18 +583,152 @@ describe("link access, made safe", () => {
 		await waitFor(() => expect(mocks.client.getShareAccess.mock.calls.length).toBeGreaterThan(reads));
 	});
 
-	it("offers to remove who joined when narrowing a link's access, ticked, and leaves it unticked when widening", async () => {
+	it.each([
+		["leaves who joined alone by default", false, undefined],
+		["removes who joined once the owner ticks it", true, { removeJoined: true }],
+	])("narrowing a link's access offers to remove who joined, unticked, and %s", async (_name, tick, options) => {
 		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", role: "editor", interaction: "interact", modeCap: "standard", joinedCount: 2 })] });
 		renderDialog();
 		await userEvent.click(await within(await card()).findByRole("button", { name: /Change access: Can write/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		const confirm = await screen.findByRole("dialog", { name: "Make a new link?" });
 		const make = await confirmAction(confirm, "Make new link");
-		expect(within(confirm).getByRole("checkbox")).toBeChecked();
+		expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
 		expect(confirm).toHaveTextContent("Also remove the 2 people who joined via link");
+		if (tick) fireEvent.click(within(confirm).getByRole("checkbox"));
 		fireEvent.click(make);
-		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, { removeJoined: true }));
+		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, options));
 		expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ role: "viewer", modeCap: "read-only" }));
+	});
+
+	it.each([
+		["leaves who joined alone by default", false, undefined],
+		["removes who joined once the owner ticks it", true, { removeJoined: true }],
+	])("revoking a link in Link settings %s", async (_name, tick, options) => {
+		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", joinedCount: 2 })] });
+		renderDialog();
+		await userEvent.click(await screen.findByRole("button", { name: "Link settings" }));
+		fireEvent.click(await waitFor(() => {
+			const button = document.querySelector<HTMLButtonElement>(`[data-share-revoke="${LINK_A}"]`);
+			expect(button).not.toBeNull();
+			return button!;
+		}));
+		const confirm = await screen.findByRole("dialog", { name: "Revoke this link?" });
+		const revoke = await confirmAction(confirm, "Revoke");
+		expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+		expect(confirm).toHaveTextContent("Also remove the 2 people who joined by this link");
+		if (tick) fireEvent.click(within(confirm).getByRole("checkbox"));
+		fireEvent.click(revoke);
+		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, options));
+	});
+
+	it("turning link access off leaves who joined alone unless the owner ticks it", async () => {
+		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", joinedCount: 2 })] });
+		renderDialog();
+		await waitFor(async () => expect((await card()).dataset.shareGeneralAccess).toBe("anyone"));
+		await chooseAudience("Only people with access");
+		const confirm = await screen.findByRole("dialog", { name: "Turn off link access?" });
+		const turnOff = await confirmAction(confirm, "Turn off");
+		expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
+		fireEvent.click(turnOff);
+		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, undefined));
+		expect(await screen.findByText("Link access turned off. People who opened the link keep access.")).toBeInTheDocument();
+	});
+
+	it("asks before raising a Can write link from Read only agent permissions to Standard", async () => {
+		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", role: "editor", interaction: "interact", modeCap: "read-only" })] });
+		renderDialog();
+		await userEvent.click(await within(await card()).findByRole("button", { name: /Change access: Can write/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Standard" }));
+		const confirm = await screen.findByRole("dialog", { name: "Let anyone with the link write?" });
+		expect(confirm).toHaveTextContent("your repository access and its secrets");
+		fireEvent.click(await confirmAction(confirm, "Allow writing"));
+		await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ role: "editor", modeCap: "standard" })));
+	});
+
+	describe("Copy new link for a link that can write", () => {
+		const writer = () => shareLink({ sessionId: "s1", role: "editor", interaction: "interact", modeCap: "standard", expiresAt: new Date(Date.now() + 2 * DAY).toISOString() });
+
+		it("makes nothing when the owner doesn't allow it", async () => {
+			mocks.client.listShareLinks.mockResolvedValue({ links: [writer()] });
+			const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+			renderDialog();
+			await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
+			fireEvent.click(copyButton());
+			const confirm = await screen.findByRole("dialog", { name: "Let anyone with the link write?" });
+			expect(confirm).toHaveTextContent("the current one keeps working until it expires");
+			// Nothing stops, so there is nobody to remove.
+			expect(within(confirm).queryByRole("checkbox")).toBeNull();
+			fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+			await waitFor(() => expect(screen.queryByRole("dialog", { name: "Let anyone with the link write?" })).toBeNull());
+			expect(mocks.client.createShareLink).not.toHaveBeenCalled();
+			expect(mocks.client.revokeShareLink).not.toHaveBeenCalled();
+			expect(writeText).not.toHaveBeenCalled();
+		});
+
+		it("doesn't ask for a watch-only link", async () => {
+			mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", expiresAt: new Date(Date.now() + 2 * DAY).toISOString() })] });
+			vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+			renderDialog();
+			await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
+			fireEvent.click(copyButton());
+			await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1));
+			expect(screen.queryByRole("dialog", { name: "Let anyone with the link write?" })).toBeNull();
+		});
+	});
+
+	it("copies the link it made, not another new one, when the control plane's clock is behind this device's", async () => {
+		// The control plane is 3 hours behind, so a copy counted on this
+		// device's clock ends over an hour before the link it stands in for.
+		const skew = 3 * 3_600_000;
+		const broadest = shareLink({
+			sessionId: "s1", createdAt: new Date(Date.now() - DAY - skew).toISOString(),
+			expiresAt: new Date(Date.now() + 2 * DAY - 30 * 60_000).toISOString(),
+		});
+		const serverNow = new Date(Date.now() - skew);
+		const made = shareLink({
+			id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT, createdAt: serverNow.toISOString(),
+			expiresAt: new Date(serverNow.getTime() + 47 * 3_600_000).toISOString(),
+		});
+		let links = [broadest];
+		mocks.client.listShareLinks.mockImplementation(async () => ({ links }));
+		mocks.client.createShareLink.mockImplementation(async () => {
+			const { code: _code, shortUrl: _shortUrl, ...listed } = made;
+			links = [broadest, listed];
+			return { link: made };
+		});
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		renderDialog();
+		await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
+		fireEvent.click(copyButton());
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
+		expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ expiresInHours: 47 }));
+		// Once the links are read again (the button still says "Link copied").
+		await waitFor(() => expect(mocks.client.listShareLinks.mock.calls.length).toBeGreaterThan(1));
+		await waitFor(() => expect(copyButton()).not.toHaveAttribute("data-share-copy-busy"));
+		fireEvent.click(copyButton());
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+		expect(writeText).toHaveBeenLastCalledWith(SHORT);
+		expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1);
+	});
+
+	it("copies the link it made even when reading the links again fails", async () => {
+		const broadest = shareLink({ sessionId: "s1", expiresAt: new Date(Date.now() + 2 * DAY).toISOString() });
+		mocks.client.listShareLinks.mockResolvedValueOnce({ links: [broadest] }).mockRejectedValue(new CloudCpError("Unavailable", { status: 503 }));
+		mocks.client.createShareLink.mockResolvedValue({
+			link: shareLink({ id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 47 * 3_600_000).toISOString() }),
+		});
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		renderDialog();
+		await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
+		fireEvent.click(copyButton());
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
+		// Once the links are read again (the button still says "Link copied").
+		await waitFor(() => expect(mocks.client.listShareLinks.mock.calls.length).toBeGreaterThan(1));
+		await waitFor(() => expect(copyButton()).not.toHaveAttribute("data-share-copy-busy"));
+		fireEvent.click(copyButton());
+		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+		expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1);
 	});
 
 	describe("Copy link waits", () => {
@@ -693,13 +873,23 @@ describe("share links", () => {
 	it("copies a copy made here of the broadest link, so Copy new link doesn't make one on every click", () => {
 		const broadest = shareLink({ id: LINK_A, role: "editor", modeCap: "standard", expiresAt: "2026-11-08T12:00:00Z" });
 		const copy = shareLink({ id: NEW_LINK, role: "editor", modeCap: "standard", expiresAt: "2026-11-08T11:30:00Z" });
-		const older = shareLink({ id: LINK_B, role: "editor", modeCap: "standard", expiresAt: "2026-11-07T00:00:00Z" });
+		const older = shareLink({ id: LINK_B, role: "editor", modeCap: "standard", createdAt: "2026-10-30T00:00:00Z", expiresAt: "2026-11-07T00:00:00Z" });
 		const links = [broadest, copy, older];
 		expect(broadestLink(links)?.id).toBe(LINK_A);
 		expect(urlForBroadest(broadest, links, { [NEW_LINK]: SHORT })).toBe(SHORT);
-		// One ending much sooner, or with other access, isn't the same link to copy.
+		// One made before it and ending much sooner, or with other access, isn't the same link to copy.
 		expect(urlForBroadest(broadest, links, { [LINK_B]: SHORT })).toBeUndefined();
 		expect(urlForBroadest(broadest, [broadest, { ...copy, role: "viewer", modeCap: "read-only" }], { [NEW_LINK]: SHORT })).toBeUndefined();
+	});
+
+	it("knows a copy made here by the control plane's own times, whatever this device's clock says", () => {
+		const broadest = shareLink({ id: LINK_A, role: "editor", modeCap: "standard", createdAt: "2026-11-01T00:00:00Z", expiresAt: "2026-11-08T12:00:00Z" });
+		// Made after it, ending hours sooner: a copy counted on a clock ahead of the control plane's.
+		const copy = shareLink({ id: NEW_LINK, role: "editor", modeCap: "standard", createdAt: "2026-11-06T09:00:00Z", expiresAt: "2026-11-08T08:00:00Z" });
+		expect(urlForBroadest(broadest, [broadest, copy], { [NEW_LINK]: SHORT })).toBe(SHORT);
+		// Made before it: not a copy of it.
+		const earlier = { ...copy, createdAt: "2026-10-31T00:00:00Z" };
+		expect(urlForBroadest(broadest, [broadest, earlier], { [NEW_LINK]: SHORT })).toBeUndefined();
 	});
 
 	it("copies the link on the public site when the control plane names one for the same code", () => {
