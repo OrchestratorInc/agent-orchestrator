@@ -315,6 +315,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "The working directory can't be used",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "The working folder is already in use",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "The working folder isn't kept across restarts",
+	"cloud.startupError.sandboxUnresponsiveTitle": "The sandbox stopped responding",
 	"board.empty.body": "Describe a task and the orchestrator plans it, spawns worker sessions, and tracks them here as work moves forward.",
 	"board.empty.title": "No worker sessions yet",
 	"home.folderMissing": "Folder missing",

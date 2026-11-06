@@ -354,6 +354,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "No se puede usar el directorio de trabajo",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "La carpeta de trabajo ya está en uso",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "La carpeta de trabajo no se conserva entre reinicios",
+	"cloud.startupError.sandboxUnresponsiveTitle": "El sandbox dejó de responder",
 	"board.empty.body": "Describe una tarea y el orquestador la planifica, crea sesiones de trabajo y las sigue aquí a medida que avanza el trabajo.",
 	"board.empty.title": "Aún no hay sesiones de trabajo",
 	"home.folderMissing": "Carpeta no encontrada",

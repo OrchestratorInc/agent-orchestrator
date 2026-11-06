@@ -353,6 +353,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "Das Arbeitsverzeichnis kann nicht verwendet werden",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Der Arbeitsordner wird bereits verwendet",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Der Arbeitsordner bleibt bei Neustarts nicht erhalten",
+	"cloud.startupError.sandboxUnresponsiveTitle": "Die Sandbox reagiert nicht mehr",
 	"board.empty.body": "Beschreiben Sie eine Aufgabe — der Orchestrator plant sie, startet Worker-Sitzungen und verfolgt sie hier, während die Arbeit voranschreitet.",
 	"board.empty.title": "Noch keine Worker-Sitzungen",
 	"home.folderMissing": "Ordner fehlt",

@@ -354,6 +354,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "Não é possível usar o diretório de trabalho",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "A pasta de trabalho já está em uso",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "A pasta de trabalho não é mantida entre reinicializações",
+	"cloud.startupError.sandboxUnresponsiveTitle": "O sandbox parou de responder",
 	"board.empty.body": "Descreva uma tarefa e o orchestrator a planeja, inicia sessões de worker e as acompanha aqui conforme o trabalho avança.",
 	"board.empty.title": "Nenhuma sessão de worker ainda",
 	"home.folderMissing": "Pasta não encontrada",

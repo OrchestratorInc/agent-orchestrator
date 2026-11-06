@@ -353,6 +353,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "作業ディレクトリを使用できません",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "作業フォルダーはすでに使用されています",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "作業フォルダーは再起動後に保持されません",
+	"cloud.startupError.sandboxUnresponsiveTitle": "サンドボックスが応答しなくなりました",
 	"board.empty.body": "タスクを説明すると、オーケストレーターが計画を立て、ワーカーセッションを起動し、進捗に合わせてここで追跡します。",
 	"board.empty.title": "ワーカーセッションはまだありません",
 	"home.folderMissing": "フォルダがありません",

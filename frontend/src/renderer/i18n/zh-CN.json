@@ -353,6 +353,7 @@
 	"cloud.startupError.workingDirectoryUnusableTitle": "无法使用工作目录",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "工作文件夹已被占用",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "工作文件夹在重启后不会保留",
+	"cloud.startupError.sandboxUnresponsiveTitle": "沙盒已停止响应",
 	"board.empty.body": "描述一个任务后，编排器会进行规划、创建 worker 会话，并在工作推进时在此跟踪。",
 	"board.empty.title": "还没有 worker 会话",
 	"home.folderMissing": "文件夹缺失",
