@@ -70,7 +70,7 @@ it("reports an oversized recovered draft outside the React state updater", async
 	const references = Array.from({ length: 8 }, (_, index): ChatDraftExcerptReference => ({ id: `ref-${index}`, conversationId: "main", messageId: "answer", revision: 1, text: `quote ${index}`, role: "assistant" }));
 	drafts.set("destination-1", JSON.stringify({ ...emptySideChatDraft(), references }));
 	await act(async () => {
-		await expect(hook.result.current.create({ ...references[0], id: "ninth", text: "another quote" })).rejects.toThrow(/eight/);
+		await expect(hook.result.current.create({ ...references[0], id: "ninth", text: "another quote" })).rejects.toThrow("chat.draft.annotationLimit");
 	});
 	expect(hook.result.current.activeId).toBe("source");
 	expect(JSON.parse(drafts.get("destination-1")!).references).toEqual(references);

@@ -44,6 +44,7 @@ test("diagram annotations navigate to the selected repeated block and fall back 
 	expect(await targetVisible()).toBe(false);
 	await page.getByLabel("Message the agent").fill("Explain the flowchart.");
 	await page.getByRole("button", { name: "Send message", exact: true }).click();
+	await expect(page.getByTestId("sent-payload")).not.toHaveText("[]");
 	const sent = JSON.parse(await page.getByTestId("sent-payload").textContent() ?? "[]");
 	expect(sent[0].text).toBe("");
 	const positions = await target.evaluate(element => ({ start: Number((element as HTMLElement).dataset.excerptStart), end: Number((element as HTMLElement).dataset.excerptEnd), offsetUnit: "utf-16" }));
@@ -91,6 +92,7 @@ test("diagram source stays hidden behind the flowchart badge @T0", async ({ page
 	await page.keyboard.press("Escape");
 	await page.getByLabel("Message the agent").fill("Explain the first annotation.");
 	await page.getByRole("button", { name: "Send message", exact: true }).click();
+	await expect(page.getByTestId("sent-payload")).not.toHaveText("[]");
 	const sent = JSON.parse(await page.getByTestId("sent-payload").textContent() ?? "[]");
 	expect(sent[0].text).toBe("");
 	expect(sent[0].snapshot.rawText).toContain("flowchart LR");
@@ -99,28 +101,27 @@ test("diagram source stays hidden behind the flowchart badge @T0", async ({ page
 	await expect(page.getByRole("dialog").getByText("Flowchart attached", { exact: true })).toBeVisible();
 });
 
-test("reply controls stay clear of the following response on hover and focus @T0", async ({ page }) => {
+test("reply controls retain the existing floating layout on hover and focus @T0", async ({ page }) => {
 	await page.setViewportSize({ width: 1000, height: 850 });
 	await page.goto("/e2e/excerpt-snapshots/harness.html");
 	await page.locator('[data-chat-message-id="question"]').hover();
 	const edit = page.getByRole("button", { name: "Copy user message", exact: true });
 	await expect(edit).toBeVisible();
-	const response = page.locator('[data-chat-message-id="source"] [data-chat-message-body]');
-	const assertSeparated = async () => {
-		const controls = await edit.boundingBox();
-		const content = await response.boundingBox();
-		expect(controls).not.toBeNull();
-		expect(content).not.toBeNull();
-		expect(controls!.y + controls!.height).toBeLessThanOrEqual(content!.y);
+	const assertFloating = async () => {
+		expect(await edit.evaluate(element => {
+			const row = element.closest(".h-7");
+			if (!row) throw new Error("Reply action row missing");
+			return getComputedStyle(row).position;
+		})).toBe("absolute");
 	};
 	await page.screenshot({ path: test.info().outputPath("reply-controls.png") });
-	await assertSeparated();
+	await assertFloating();
 	await edit.focus();
 	await page.mouse.move(0, 0);
 	await expect(edit).toBeFocused();
-	await assertSeparated();
+	await assertFloating();
 	await page.setViewportSize({ width: 400, height: 850 });
-	await assertSeparated();
+	await assertFloating();
 });
 
 test("captured excerpts span formatting and code and survive source deletion @T0", async ({ page }) => {
