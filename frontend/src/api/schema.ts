@@ -6502,6 +6502,8 @@ export interface components {
             supported: components["schemas"]["AgentInfo"][];
         };
         ListArtifactVersionsResponse: {
+            /** @description This daemon serves a version's bytes on the preview route and restores any file type. Absent from an older daemon. */
+            mediaVersions?: boolean;
             path: string;
             versions: components["schemas"]["ArtifactVersionSummary"][];
         };
@@ -21362,6 +21364,8 @@ export interface operations {
                 source?: "workspace" | "artifact";
                 /** @description When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview. */
                 raw?: boolean;
+                /** @description With source=artifact, serve this saved version of the file instead of its current content. */
+                artifactVersion?: number;
             };
             header?: never;
             path: {

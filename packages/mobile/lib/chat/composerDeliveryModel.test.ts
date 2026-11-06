@@ -7,7 +7,6 @@ describe("mobile chat delivery", () => {
 		expect(composerDeliveryRoute("send", true)).toBe("queue");
 		expect(composerDeliveryPresentation({ active: true, canSteer: true, hasDraft: true, hasAttachments: false, hasQueued: false })).toEqual({
 			placeholder: "Send after this…",
-			showQueueNote: true,
 			showSteerAction: true,
 		});
 	});
@@ -22,7 +21,6 @@ describe("mobile chat delivery", () => {
 	it("keeps the idle composer free of queue controls", () => {
 		expect(composerDeliveryPresentation({ active: false, canSteer: true, hasDraft: true, hasAttachments: false, hasQueued: false })).toEqual({
 			placeholder: "Message this worker…",
-			showQueueNote: false,
 			showSteerAction: false,
 		});
 	});

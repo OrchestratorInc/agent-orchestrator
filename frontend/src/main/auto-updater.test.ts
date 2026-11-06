@@ -5514,3 +5514,18 @@ describe("release notes while a newer build replaces a staged one (#6607)", () =
     expect(notesWhileDownloading).toBeUndefined();
   });
 });
+
+
+it("keeps expected update outages out of handled captures and reports genuine faults", async () => {
+  const { module } = await importAutoUpdater();
+  const { setMainErrorSink, resetMainErrorCaptureForTests } = await import("./main-error-capture");
+  const sink = vi.fn(); setMainErrorSink(sink);
+  try {
+    for (const error of [new Error("ETIMEDOUT"), new Error("ENOTFOUND"), ...[429, 404, 503].map(statusCode => Object.assign(new Error("updater request failed"), { statusCode }))]) module.reportUpdateFailure(error, "check");
+    expect(sink).not.toHaveBeenCalled();
+    module.reportUpdateFailure(Object.assign(new Error("private signature details"), { code: "ERR_UPDATER_INVALID_SIGNATURE" }), "install", "stage");
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "update", reason: "stage", detail: "kind:invalid-signature" }));
+    module.reportUpdateFailure(new Error("unexpected staging failure"), "install");
+    expect(sink).toHaveBeenCalledTimes(2);
+  } finally { resetMainErrorCaptureForTests(); }
+});

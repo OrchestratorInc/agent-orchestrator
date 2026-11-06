@@ -176,6 +176,10 @@ if (typeof window !== "undefined") {
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
 		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
+		},
 		window: {
 			getZoomFactor: async () => 1,
 			onZoomFactor: () => () => undefined,
@@ -247,6 +251,7 @@ if (typeof window !== "undefined") {
 			openArtifacts: async ({ targetId }) => targetId === "terminal"
 				? { id: "terminal", name: "Terminal", kind: "terminal" }
 				: { id: "file-manager", name: "Finder", kind: "file_manager" },
+			openArtifactInBrowser: async () => undefined,
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {

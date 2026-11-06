@@ -114,6 +114,7 @@ vi.mock("../../lib/api-client", () => ({
 
 // Every agent's permission modes are known, as once the daemon has answered, unless a test says not.
 const permissionModesState = vi.hoisted(() => ({ known: true }));
+const conversationCommandArgs = vi.hoisted(() => [] as unknown[][]);
 vi.mock("../../hooks/useChatPermissionModes", () => ({
 	useChatPermissionModes: (_hostId: string | undefined, harness: string | undefined) =>
 		harness && permissionModesState.known ? new Map([[harness, ["default", "accept-edits", "bypass-permissions"]]]) : undefined,
@@ -130,7 +131,10 @@ vi.mock("../../hooks/useConversation", () => ({
 			? { ...snapshotFor(sessionId), ...conversationState.snapshot }
 			: undefined,
 	}),
-	useConversationCommands: () => conversationCommandState,
+	useConversationCommands: (...args: unknown[]) => {
+		conversationCommandArgs.push(args);
+		return conversationCommandState;
+	},
 	useProviderSwitchCommand: () => ({
 		mutateAsync: providerSwitchMock,
 		isPending: false,
@@ -285,12 +289,24 @@ beforeEach(() => {
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
 	conversationCommandState.echoBeforeSend.mockReset();
 	conversationCommandState.dropEcho.mockReset();
+	conversationCommandArgs.length = 0;
 	catalogObserverState.enabled = [];
 	useUiStore.setState({ inspectorSessions: {}, developerMode: false });
 });
 
 afterEach(() => {
 	vi.useRealTimers();
+});
+
+describe("SessionChatSurface recovery", () => {
+	it.each<[string, WorkspaceSession, boolean]>([
+		["a live session", session, false],
+		["a terminated session", { ...session, isTerminated: true }, true],
+		["a session read as terminated", { ...session, status: "terminated" }, true],
+	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
+		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated]);
+	});
 });
 
 describe("SessionChatSurface pending switch effort", () => {

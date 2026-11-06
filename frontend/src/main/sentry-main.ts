@@ -39,6 +39,7 @@ const SAFE_CODES = new Set([
 	"INTERNAL_ERROR", "ORCHESTRATOR_SPAWN_FAILED", "REPORT_CREATE_FAILED",
 	"REPORT_LIST_FAILED", "REVIEW_OPERATION_FAILED", "WORKSPACE_GIT_READ_FAILED",
 ]);
+const SAFE_OPERATIONS = new Set(["query", "mutation", "route", "react_render", "open_orchestrator", "xterm_init"]);
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
 const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
@@ -85,6 +86,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: "main_error";
 	const category = event.tags?.["ao.category"];
 	const code = event.tags?.["ao.code"];
+	const operation = event.tags?.["ao.operation"];
+	const safeOperation = typeof operation === "string" && SAFE_OPERATIONS.has(operation) ? operation : undefined;
 	const safeCategory = typeof category === "string" && SAFE_CATEGORIES.has(category) ? category : "unknown";
 	const safeCode = typeof code === "string" && SAFE_CODES.has(code) ? code : "unknown";
 	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
@@ -115,7 +118,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
 		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}) } : {}), ...(processReason ? { reason: processReason } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -188,9 +191,8 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
-		// Every consented error is kept. Volume is bounded by the renderer's
-		// per-error budget and by fixed fingerprints, not by random sampling,
-		// which hid low-volume regressions.
+		// Keep admitted consented errors. Renderer call-site budgets and main's
+		// per-category/reason/detail budgets limit handled capture volume.
 		sampleRate: 1,
 		tracesSampleRate: 0,
 		skipOpenTelemetrySetup: true,
@@ -217,6 +219,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					"ao.kind": safe.kind,
 					"ao.category": category && SAFE_CATEGORIES.has(category) ? category : "unknown",
 					"ao.code": code && SAFE_CODES.has(code) ? code : "unknown",
+					...(safe.tags?.operation && SAFE_OPERATIONS.has(safe.tags.operation) ? { "ao.operation": safe.tags.operation } : {}),
 				},
 			});
 		},

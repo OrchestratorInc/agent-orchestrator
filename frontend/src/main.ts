@@ -83,7 +83,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
-import type { DaemonFailureCode, DaemonStatus } from "./shared/daemon-status";
+import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
@@ -102,6 +102,7 @@ import {
 	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
+	SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
@@ -241,7 +242,7 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { captureMainError, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink, type MainErrorReason } from "./main/main-error-capture";
+import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
 
 // Every ipcMain.handle registered from here on reports unexpected throws.
 installIpcErrorCapture(ipcMain);
@@ -478,6 +479,8 @@ let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
 let terminalFontSizeFocused = false;
+// An artifact viewer that can zoom is under the pointer or holds focus.
+let artifactZoomEngaged = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -746,19 +749,6 @@ app.once("will-quit", () => {
 	if (sideStateTimer) clearInterval(sideStateTimer);
 	sideStateTimer = undefined;
 });
-
-// Daemon failures the user cannot fix by waiting. not_ready, not_configured
-// and daemon_unreachable are transitional and are not reported.
-const REPORTED_DAEMON_FAILURES = new Set<DaemonFailureCode>(["binary_missing", "spawn_failed", "exited", "port_unconfirmed", "identity_mismatch", "datadir_unwritable"]);
-
-function reportDaemonFailure(previous: DaemonStatus, next: DaemonStatus): void {
-	const code = next.code;
-	if (!code || !REPORTED_DAEMON_FAILURES.has(code)) return;
-	// One report per transition into a failure, not one per status refresh.
-	if (previous.code === code && previous.state === next.state) return;
-	const detail = next.signal ? `signal:${next.signal}` : typeof next.exitCode === "number" ? `code:${next.exitCode}` : undefined;
-	captureMainError({ category: "daemon", reason: code as MainErrorReason, ...(detail ? { detail } : {}) });
-}
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	reportDaemonFailure(daemonStatus, nextStatus);
@@ -1112,6 +1102,7 @@ async function createWindowInternal(): Promise<void> {
 		},
 		() => terminalFocused,
 		() => terminalFontSizeFocused,
+		() => artifactZoomEngaged,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -1238,10 +1229,12 @@ async function createWindowInternal(): Promise<void> {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
+		artifactZoomEngaged = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
 		terminalFontSizeFocused = false;
+		artifactZoomEngaged = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -1379,6 +1372,29 @@ function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string>
 	return fetchDesktopSessionPath(sessionId, "artifacts", "artifactDir", "This session has no artifacts folder yet.");
 }
 
+// A file's own OS handler may not be a browser (a PNG opens in Preview), so on
+// macOS and Windows the default https handler opens it; elsewhere, or when that
+// handler is unknown or fails to launch (a moved app, a stale handler), the
+// file's handler does.
+async function openFileInDefaultBrowser(filePath: string): Promise<void> {
+	if (process.platform === "darwin" || process.platform === "win32") {
+		const browser = await app.getApplicationInfoForProtocol("https://").catch(() => undefined);
+		if (browser?.path) {
+			try {
+				if (process.platform === "darwin") {
+					await launchCommand("open", ["-a", browser.path, filePath], path.dirname(filePath));
+				} else {
+					await launchCommand(browser.path, [pathToFileURL(filePath).toString()], path.dirname(filePath));
+				}
+				return;
+			} catch (error) {
+				console.warn("AO: unable to launch the default browser; opening with the file's handler", error);
+			}
+		}
+	}
+	await shell.openExternal(pathToFileURL(filePath).toString());
+}
+
 const editorHandoff = createEditorHandoff({
 	platform: process.platform,
 	env: process.env,
@@ -1398,6 +1414,7 @@ const editorHandoff = createEditorHandoff({
 		if (!(await stat(filePath).catch(() => undefined))) throw new Error(`${filePath} does not exist`);
 		shell.showItemInFolder(filePath);
 	},
+	openInBrowser: (filePath) => openFileInDefaultBrowser(filePath),
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
 	discoverTerminalApps: discoverMacTerminalApps,
@@ -2867,6 +2884,10 @@ ipcMain.handle("editorHandoff:openArtifacts", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.openArtifacts(input && typeof input === "object" ? input : { sessionId: "", targetId: "file-manager" });
 });
+ipcMain.handle("editorHandoff:openArtifactInBrowser", (event, input) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.openArtifactInBrowser(input && typeof input === "object" ? input : { sessionId: "", path: "" });
+});
 ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
@@ -2966,6 +2987,11 @@ ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSi
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
 	terminalFontSizeFocused = focused && handlesFontSize === true;
+});
+
+ipcMain.on(SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, (event, engaged: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof engaged !== "boolean") return;
+	artifactZoomEngaged = engaged;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {
@@ -3332,6 +3358,7 @@ registerChatImageIpc({
 });
 registerCloudArtifactIpc({
 	ipcMain,
+	openInBrowser: (target) => openFileInDefaultBrowser(target),
 	openInFileManager: async (target, isFile) => {
 		if (isFile) shell.showItemInFolder(target);
 		else {

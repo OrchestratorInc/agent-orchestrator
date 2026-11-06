@@ -322,15 +322,28 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<WrapText aria-hidden="true" className="size-3.5" />
 		</RenderAction>
 	);
-	// The page on its own, as a tab opens it. The render's sandbox CSP keeps it
-	// off the daemon wherever it is opened.
-	const standaloneUrl = () => `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
-	const browserPanelAction = openInBrowserPanel ? (
+	// The page on its own, as a tab opens it. A render opens from its render
+	// route, whose sandbox CSP keeps it off the daemon wherever it is opened.
+	// An HTML artifact opens from its preview origin, the same URL the
+	// Artifacts tab and `ao preview` open: the daemon serves the artifact-files
+	// route the chat frames only to the app's own frames, and refuses a
+	// browser tab there (ORIGIN_FORBIDDEN). With no preview URL listed for it,
+	// the artifact does not open outside the chat.
+	const artifactPreviewUrl = "artifact" in props && links?.previewUrl && /^https?:\/\//.test(links.previewUrl) ? links.previewUrl : undefined;
+	const standaloneUrl = (): string | undefined => "artifact" in props
+		? artifactPreviewUrl
+		: `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
+	const opensStandalone = !("artifact" in props) || artifactPreviewUrl !== undefined;
+	const openStandalone = (open: (url: string) => void) => {
+		const url = standaloneUrl();
+		if (url) open(url);
+	};
+	const browserPanelAction = openInBrowserPanel && opensStandalone ? (
 		<RenderAction
 			label={t("inspector.openInAOBrowser")}
 			onClick={() => {
 				setExpanded(false);
-				openInBrowserPanel(standaloneUrl());
+				openStandalone(openInBrowserPanel);
 			}}
 		>
 			<BrowserIcon aria-hidden="true" className="size-3.5" />
@@ -407,12 +420,14 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						{browserPanelAction}
-						<RenderAction
-							label={t("chat.render.openInBrowser")}
-							onClick={() => window.open(standaloneUrl(), "_blank", "noopener,noreferrer")}
-						>
-							<ExternalLink className="size-3.5" />
-						</RenderAction>
+						{opensStandalone ? (
+							<RenderAction
+								label={t("chat.render.openInBrowser")}
+								onClick={() => openStandalone((url) => window.open(url, "_blank", "noopener,noreferrer"))}
+							>
+								<ExternalLink className="size-3.5" />
+							</RenderAction>
+						) : null}
 					</div>
 					{!expanded ? null : showSource ? (
 						<RenderSource path={page.path} />
