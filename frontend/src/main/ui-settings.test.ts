@@ -59,10 +59,17 @@ describe("ui-settings", () => {
 		await writeUiSettings(dir, { locale: "ja", soundNotificationsEnabled: false });
 		await writeUiSettings(dir, { terminalShell: { kind: "git-bash" } });
 		expect(await readUiSettings(dir)).toEqual({
+			...DEFAULT_UI_SETTINGS,
 			locale: "ja",
 			soundNotificationsEnabled: false,
 			terminalShell: { kind: "git-bash" },
 		});
+	});
+
+	it("persists the Alt menu preference while preserving other settings", async () => {
+		await writeUiSettings(dir, { locale: "ru", altMenuEnabled: false });
+		await writeUiSettings(dir, { soundNotificationsEnabled: false });
+		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, locale: "ru", altMenuEnabled: false, soundNotificationsEnabled: false });
 	});
 
 	it("atomic write leaves no temp file behind", async () => {

@@ -4,6 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
 import { useUiStore } from "../../stores/ui-store";
+import * as platform from "../../lib/platform";
+import { aoBridge } from "../../lib/bridge";
+import { DEFAULT_UI_SETTINGS } from "../../../shared/ui-locale";
 
 const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
@@ -84,6 +87,21 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+
+describe("Linux Alt menu setting", () => {
+	it("persists the user's choice on Linux", async () => {
+		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);
+		const get = vi.spyOn(aoBridge.uiSettings, "get").mockResolvedValue({ ...DEFAULT_UI_SETTINGS });
+		const set = vi.spyOn(aoBridge.uiSettings, "set").mockResolvedValue({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: false });
+		settingsMock.mockReturnValue(settings({}));
+		renderSection();
+		const toggle = await screen.findByRole("switch", { name: "Show menu bar with Alt" });
+		expect(toggle).toBeChecked();
+		await userEvent.click(toggle);
+		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
+		get.mockRestore(); set.mockRestore(); vi.restoreAllMocks();
 	});
 });
 
