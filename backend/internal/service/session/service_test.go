@@ -66,6 +66,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	artifacts           map[domain.SessionID][]string
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
@@ -375,31 +376,38 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	return r, ok, nil
 }
 
-func (f *fakeStore) AddSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID, paths []string, gone func(path string) bool) ([]string, bool, error) {
-	rec, ok := f.sessions[id]
-	if !ok {
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, paths []string, _ time.Time) ([]string, bool, error) {
+	if _, ok := f.sessions[id]; !ok {
 		return nil, false, nil
 	}
-	next, err := domain.AddRegisteredArtifactPaths(rec.RegisteredArtifactPaths, paths, gone)
-	if err != nil {
-		return nil, true, err
+	if f.artifacts == nil {
+		f.artifacts = map[domain.SessionID][]string{}
 	}
-	rec.RegisteredArtifactPaths = next
-	f.sessions[id] = rec
-	return next, true, nil
+	for _, path := range paths {
+		if !slices.Contains(f.artifacts[id], path) {
+			f.artifacts[id] = append(f.artifacts[id], path)
+		}
+	}
+	return f.artifacts[id], true, nil
 }
 
-func (f *fakeStore) RemoveSessionRegisteredArtifactPath(_ context.Context, id domain.SessionID, path string) error {
-	rec := f.sessions[id]
-	rec.RegisteredArtifactPaths = slices.DeleteFunc(rec.RegisteredArtifactPaths, func(p string) bool { return p == path })
-	f.sessions[id] = rec
+func (f *fakeStore) ListSessionArtifactPathsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]string, error) {
+	out := make(map[domain.SessionID][]string, len(ids))
+	for _, id := range ids {
+		if paths, ok := f.artifacts[id]; ok {
+			out[id] = paths
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveSessionArtifact(_ context.Context, id domain.SessionID, path string) error {
+	f.artifacts[id] = slices.DeleteFunc(f.artifacts[id], func(p string) bool { return p == path })
 	return nil
 }
 
-func (f *fakeStore) ClearSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID) error {
-	rec := f.sessions[id]
-	rec.RegisteredArtifactPaths = nil
-	f.sessions[id] = rec
+func (f *fakeStore) ClearSessionArtifacts(_ context.Context, id domain.SessionID) error {
+	delete(f.artifacts, id)
 	return nil
 }
 
@@ -5892,7 +5900,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5950,7 +5958,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}

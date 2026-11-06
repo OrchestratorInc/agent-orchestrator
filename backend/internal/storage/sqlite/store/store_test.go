@@ -2523,43 +2523,7 @@ func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
 	}
 }
 
-func neverGone(string) bool { return false }
-
-func TestRegisteredArtifactPathsReclaimOnlyWhatTheyNeed(t *testing.T) {
-	st := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, st, "p1")
-	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	full := make([]string, domain.MaxRegisteredArtifactPaths)
-	for i := range full {
-		full[i] = fmt.Sprintf("old-%d.md", i)
-	}
-	if _, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, full, neverGone); err != nil {
-		t.Fatal(err)
-	}
-	gone := func(path string) bool { return path != "old-0.md" }
-	got, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"new.md", "old-1.md"}, gone)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != domain.MaxRegisteredArtifactPaths || got[len(got)-1] != "new.md" {
-		t.Fatalf("paths = %v", got)
-	}
-	// old-0 has a file, old-1 is in the request, and one slot was all it took.
-	for _, want := range []string{"old-0.md", "old-1.md", "old-3.md"} {
-		if !slices.Contains(got, want) {
-			t.Errorf("%s was dropped", want)
-		}
-	}
-	if slices.Contains(got, "old-2.md") {
-		t.Error("the oldest dead path was kept")
-	}
-}
-
-func TestRegisteredArtifactPaths(t *testing.T) {
+func TestSessionArtifacts(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, st, "p1")
@@ -2569,52 +2533,73 @@ func TestRegisteredArtifactPaths(t *testing.T) {
 	}
 	read := func() []string {
 		t.Helper()
-		rec, ok, err := st.GetSession(ctx, sess.ID)
-		if err != nil || !ok {
-			t.Fatalf("get session: ok=%v err=%v", ok, err)
+		paths, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{sess.ID})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return rec.RegisteredArtifactPaths
+		return paths[sess.ID]
 	}
 	if got := read(); len(got) != 0 {
 		t.Fatalf("new session paths = %v, want none", got)
 	}
-	got, found, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"a.html", "b.md", "a.html"}, neverGone)
-	if err != nil || !found || !slices.Equal(got, []string{"a.html", "b.md"}) {
+	first := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	got, found, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"z.html", "b.md", "z.html"}, first)
+	if err != nil || !found || !slices.Equal(got, []string{"b.md", "z.html"}) {
 		t.Fatalf("add = %v, %v, %v", got, found, err)
 	}
-	if got, _, err = st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"b.md"}, neverGone); err != nil || len(got) != 2 {
+	// Adding a path again keeps its row, and so its place: oldest first.
+	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, []string{"a.md", "b.md"}, first.Add(time.Minute))
+	if err != nil || !slices.Equal(got, []string{"b.md", "z.html", "a.md"}) {
 		t.Fatalf("add again = %v, %v", got, err)
 	}
-	if err := st.RemoveSessionRegisteredArtifactPath(ctx, sess.ID, "a.html"); err != nil {
+	if err := st.RemoveSessionArtifact(ctx, sess.ID, "z.html"); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(); !slices.Equal(got, []string{"b.md"}) {
+	if got := read(); !slices.Equal(got, []string{"b.md", "a.md"}) {
 		t.Fatalf("after remove = %v", got)
 	}
-
-	tooMany := make([]string, domain.MaxRegisteredArtifactPaths)
-	for i := range tooMany {
-		tooMany[i] = fmt.Sprintf("f%d.md", i)
-	}
-	if _, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, tooMany, neverGone); !errors.Is(err, domain.ErrRegisteredArtifactLimit) {
-		t.Fatalf("add past the limit err = %v", err)
-	}
-	if got := read(); !slices.Equal(got, []string{"b.md"}) {
-		t.Fatalf("a refused add changed the paths: %v", got)
-	}
-
-	if err := st.ClearSessionRegisteredArtifactPaths(ctx, sess.ID); err != nil {
+	if err := st.ClearSessionArtifacts(ctx, sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(); len(got) != 0 {
 		t.Fatalf("after clear = %v", got)
 	}
-	if _, found, err := st.AddSessionRegisteredArtifactPaths(ctx, "missing", []string{"a.md"}, neverGone); err != nil || found {
+	if _, found, err := st.AddSessionArtifacts(ctx, "missing", []string{"a.md"}, first); err != nil || found {
 		t.Fatalf("add for an unknown session: found=%v err=%v", found, err)
 	}
 }
 
-func TestUpdateSessionDoesNotOverwriteRegisteredArtifactPaths(t *testing.T) {
+func TestSessionArtifactsAreReadPerSessionAndGoWithTheSession(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	one := terminalSession(t, st, "p1", 0)
+	two, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, one.ID, []string{"a.md"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, []string{"b.md"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
+	if err != nil || len(got) != 2 || !slices.Equal(got[one.ID], []string{"a.md"}) || !slices.Equal(got[two.ID], []string{"b.md"}) {
+		t.Fatalf("paths = %v, %v", got, err)
+	}
+	if deleted, err := st.DeleteTerminatedSession(ctx, one.ID); err != nil || !deleted {
+		t.Fatalf("delete session = %v, %v", deleted, err)
+	}
+	got, err = st.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{one.ID})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("paths after deleting the session = %v, %v", got, err)
+	}
+}
+
+// Registration is one row per path, so nothing bounds how many files a session
+// can register in total.
+func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, st, "p1")
@@ -2622,15 +2607,13 @@ func TestUpdateSessionDoesNotOverwriteRegisteredArtifactPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddSessionRegisteredArtifactPaths(ctx, sess.ID, []string{"a.html"}, neverGone); err != nil {
-		t.Fatal(err)
+	paths := make([]string, 3*domain.MaxArtifactRegistrationPaths)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("f%d.md", i)
 	}
-	if err := st.UpdateSession(ctx, sess); err != nil {
-		t.Fatal(err)
-	}
-	rec, _, err := st.GetSession(ctx, sess.ID)
-	if err != nil || !slices.Equal(rec.RegisteredArtifactPaths, []string{"a.html"}) {
-		t.Fatalf("paths after a stale UpdateSession = %v, %v", rec.RegisteredArtifactPaths, err)
+	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, paths, time.Now())
+	if err != nil || len(got) != len(paths) {
+		t.Fatalf("registered %d of %d, %v", len(got), len(paths), err)
 	}
 }
 

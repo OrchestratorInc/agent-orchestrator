@@ -41,7 +41,7 @@ func TestRegisterArtifactsReportsWhatStaysUnlisted(t *testing.T) {
 	if !slices.Equal(got.Registered, []string{"brand.html"}) || got.OtherFiles != 3 || !slices.Equal(got.OtherRootFiles, []string{"draft.md"}) {
 		t.Fatalf("registration = %+v", got)
 	}
-	if paths := st.sessions["mer-1"].RegisteredArtifactPaths; !slices.Equal(paths, []string{"brand.html"}) {
+	if paths := st.artifacts["mer-1"]; !slices.Equal(paths, []string{"brand.html"}) {
 		t.Fatalf("stored paths = %v", paths)
 	}
 }
@@ -54,7 +54,7 @@ func TestRegisterArtifactsRegistersNothingUnlessEveryPathIsValid(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.Code != "ARTIFACT_FILE_NOT_FOUND" {
 		t.Fatalf("err = %v", err)
 	}
-	if paths := st.sessions["mer-1"].RegisteredArtifactPaths; len(paths) != 0 {
+	if paths := st.artifacts["mer-1"]; len(paths) != 0 {
 		t.Fatalf("stored paths = %v, want none", paths)
 	}
 }
@@ -69,55 +69,25 @@ func TestRegisterArtifactsRefusesPathsOutsideTheDirectory(t *testing.T) {
 	}
 }
 
-func TestRegisterArtifactsPastTheLimit(t *testing.T) {
-	files := []string{"brand.html"}
-	for i := range domain.MaxRegisteredArtifactPaths {
-		files = append(files, fmt.Sprintf("f%d.md", i))
+func TestRegisterArtifactsAcceptsAPathAfterManyRenames(t *testing.T) {
+	svc, st, _ := registrationFixture(t, "brand-v2.html")
+	renamed := make([]string, 2*domain.MaxArtifactRegistrationPaths)
+	for i := range renamed {
+		renamed[i] = fmt.Sprintf("renamed-%d.html", i)
 	}
-	svc, st, _ := registrationFixture(t, files...)
-	rec := st.sessions["mer-1"]
-	rec.RegisteredArtifactPaths = slices.Clone(files[1:])
-	st.sessions["mer-1"] = rec
-
-	_, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{"brand.html"})
-	var apiErr *apierr.Error
-	if !errors.As(err, &apiErr) || apiErr.Code != "ARTIFACT_REGISTRATION_LIMIT" {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestRegisterArtifactsFreesSlotsHeldByRenamedFiles(t *testing.T) {
-	svc, st, _ := registrationFixture(t, "keep.html", "brand-v2.html")
-	rec := st.sessions["mer-1"]
-	// keep.html is the oldest, so a careless drop would take it first.
-	rec.RegisteredArtifactPaths = []string{"keep.html"}
-	for i := 1; i < domain.MaxRegisteredArtifactPaths; i++ {
-		rec.RegisteredArtifactPaths = append(rec.RegisteredArtifactPaths, fmt.Sprintf("renamed-%d.html", i))
-	}
-	st.sessions["mer-1"] = rec
+	st.artifacts = map[domain.SessionID][]string{"mer-1": renamed}
 
 	if _, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{"brand-v2.html"}); err != nil {
-		t.Fatalf("a list full of dead paths refused a new path: %v", err)
+		t.Fatalf("rows left by renamed files refused a new path: %v", err)
 	}
-	paths := st.sessions["mer-1"].RegisteredArtifactPaths
-	if len(paths) != domain.MaxRegisteredArtifactPaths {
-		t.Fatalf("len = %d, want %d", len(paths), domain.MaxRegisteredArtifactPaths)
-	}
-	for _, want := range []string{"keep.html", "brand-v2.html", "renamed-2.html"} {
-		if !slices.Contains(paths, want) {
-			t.Errorf("%s was dropped", want)
-		}
-	}
-	if slices.Contains(paths, "renamed-1.html") {
-		t.Error("the oldest dead path was kept")
+	if paths := st.artifacts["mer-1"]; !slices.Contains(paths, "brand-v2.html") {
+		t.Fatalf("stored paths = %v", paths)
 	}
 }
 
 func TestGetMarksRegisteredArtifactFiles(t *testing.T) {
 	svc, st, _ := registrationFixture(t, "brand.html", "assets/a.png")
-	rec := st.sessions["mer-1"]
-	rec.RegisteredArtifactPaths = []string{"brand.html", "renamed-away.html"}
-	st.sessions["mer-1"] = rec
+	st.artifacts = map[domain.SessionID][]string{"mer-1": {"brand.html", "renamed-away.html"}}
 
 	sess, err := svc.Get(context.Background(), "mer-1")
 	if err != nil {

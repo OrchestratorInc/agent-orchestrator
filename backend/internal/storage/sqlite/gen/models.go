@@ -763,7 +763,6 @@ type Session struct {
 	BranchNaming                     bool
 	TemporaryBranch                  string
 	TerminatedAt                     sql.NullTime
-	RegisteredArtifactPaths          string
 }
 
 type SessionAgentAccount struct {
@@ -771,6 +770,12 @@ type SessionAgentAccount struct {
 	Provider  string
 	AccountID string
 	BoundAt   time.Time
+}
+
+type SessionArtifact struct {
+	SessionID    domain.SessionID
+	Path         string
+	RegisteredAt time.Time
 }
 
 type SessionArtifactVersion struct {
