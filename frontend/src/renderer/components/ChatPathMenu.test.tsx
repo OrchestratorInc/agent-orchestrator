@@ -169,7 +169,7 @@ describe("chat path menus", () => {
 		expect(openFile).toHaveBeenCalledExactlyOnceWith(...(kind === "inline" ? ["src/a file.ts", 12] : ["src/a file.ts"]));
 	});
 
-	it("preserves established symbols and automatically uses native icons for other editors", async () => {
+	it("preserves established editor symbols and uses native icons for Finder and other editors", async () => {
 		const iconDataUrl = "data:image/png;base64,dGVzdA==";
 		vi.spyOn(aoBridge.editorHandoff, "getState").mockResolvedValue({
 			targets: [
@@ -182,11 +182,16 @@ describe("chat path menus", () => {
 		});
 		chat("`src/a file.ts`");
 		fireEvent.contextMenu(screen.getByRole("button"));
-		for (const name of ["Reveal in Finder", "Open with Cursor", "Open with VS Code"]) {
+		for (const name of ["Open with Cursor", "Open with VS Code"]) {
 			const item = await screen.findByRole("menuitem", { name });
 			expect(item.querySelector("image")).toBeNull();
 			expect(item.querySelector("svg")).not.toBeNull();
 		}
+		const finder = await screen.findByRole("menuitem", { name: "Reveal in Finder" });
+		expect(finder.querySelector("image")).toHaveAttribute("href", iconDataUrl);
+		fireEvent.error(finder.querySelector("image")!);
+		expect(finder.querySelector("image")).toBeNull();
+		expect(finder.querySelector("svg")).not.toBeNull();
 		const editor = await screen.findByRole("menuitem", { name: "Open with Kiro" });
 		expect(editor.querySelector("image")).toHaveAttribute("href", iconDataUrl);
 		fireEvent.error(editor.querySelector("image")!);
