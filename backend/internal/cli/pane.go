@@ -157,13 +157,17 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Run a command in one of this session's terminal tabs and print what it shows",
 		Long: "Types the command into the terminal tab and presses Enter, then waits until\n" +
 			"the screen stops changing (or --timeout passes) and prints its last lines.\n" +
-			"A long-running command keeps running; read it later with `ao pane read`.",
+			"A long-running command keeps running; read it later with `ao pane read`.\n\n" +
+			"Everything after the tab is the command, dashes included, so put flags\n" +
+			"before the tab: ao pane run --timeout 60s <tab> npm test -- --watch=false",
 		Args: usageArgs(cobra.MinimumNArgs(2)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), sessionFlag, args[0], strings.Join(args[1:], " "), runFlags)
 		},
 	}
 	runFlags.register(run)
+	// Everything after the tab is the command: `ao pane run <tab> ls -la`.
+	run.Flags().SetInterspersed(false)
 	cmd.AddCommand(run)
 
 	var readLines int
@@ -194,6 +198,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	send.Flags().BoolVar(&noEnter, "no-enter", false, "type the text without pressing Enter (answers to prompts, TUI keys)")
+	send.Flags().SetInterspersed(false)
 	cmd.AddCommand(send)
 
 	cmd.AddCommand(&cobra.Command{
