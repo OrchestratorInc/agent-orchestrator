@@ -218,7 +218,8 @@ describe("cloudShare IPC", () => {
 	it("publishes a cloud session's file without uploading it", async () => {
 		const { invoke, cloudFile, requests, bodies, records } = setup();
 		await expect(invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256 })).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		expect(requests).toEqual([`POST ${CLOUD_SESSION_PATH}/artifacts/share`]);
+		// Its only write, and nothing goes to storage.
+		expect(requests.filter((request) => !request.startsWith("GET "))).toEqual([`POST ${CLOUD_SESSION_PATH}/artifacts/share`]);
 		// The control plane shares only the version the person was shown.
 		expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256 });
 		// The link is remembered apart from any local session's file.

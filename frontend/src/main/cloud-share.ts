@@ -407,8 +407,13 @@ export async function inspectCloudSessionArtifact(
  * committed version is no longer sha256, the one the person was shown.
  *
  * The load balancer gives up on the request after a minute, sooner than a
- * large file's copy ends. The control plane finishes it regardless, so a
- * timed out request is followed by waiting for the link to appear.
+ * large file's copy ends. The control plane finishes it regardless, so such a
+ * timeout is followed by waiting for this file's link to appear. A timeout has
+ * no error envelope: anything the control plane answered itself is a real
+ * refusal. Identical bytes can have their own link from another session or
+ * folder, so only the link being updated, or one that is new or changed since
+ * the request, is this file's. Without that list there is no telling them
+ * apart, and the timeout is shown as it came.
  */
 export async function shareCloudSessionArtifact(
 	api: CloudShareApi,
@@ -417,18 +422,25 @@ export async function shareCloudSessionArtifact(
 	signal?: AbortSignal,
 	pollMs = COPY_POLL_MS,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
+	const sessionPath = sessionApiPath(ref);
+	const before = ref.shareId ? [] : await listShareLinks(api, baseUrl).then(({ shares }) => shares, () => null);
 	try {
-		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
+		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionPath}/artifacts/share`,
 			{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
 	} catch (error) {
-		if (!(error instanceof CloudShareError) || (error.status !== 502 && error.status !== 504)) throw error;
+		if (!before || !(error instanceof CloudShareError) || (error.code !== "http_502" && error.code !== "http_504")) throw error;
 	}
 	const name = ref.path.split("/").pop();
+	const isThisFile = (link: CloudShareLink): boolean => {
+		if (link.sha256 !== ref.sha256 || link.revokedAt) return false;
+		if (ref.shareId) return link.id === ref.shareId;
+		const earlier = before.find((candidate) => candidate.id === link.id);
+		return link.name === name && (!earlier || earlier.revokedAt !== undefined || earlier.updatedAt !== link.updatedAt);
+	};
 	for (let attempt = 0; attempt < COPY_POLL_ATTEMPTS; attempt += 1) {
 		if (attempt > 0) await wait(pollMs, signal);
-		const { shares } = await listShareLinks(api, baseUrl);
-		const share = shares.find((link) => link.name === name && link.sha256 === ref.sha256 && !link.revokedAt);
-		if (share) return { share, replaced: Boolean(ref.shareId) };
+		const share = (await listShareLinks(api, baseUrl)).shares.find(isThisFile);
+		if (share) return { share, replaced: Boolean(ref.shareId) || before.some((link) => link.id === share.id && !link.revokedAt) };
 	}
 	throw new CloudShareError("share_copy_pending", "This file is taking a while to publish. Look for it in your shared links later.");
 }

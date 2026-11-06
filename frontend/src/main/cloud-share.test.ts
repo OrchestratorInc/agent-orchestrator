@@ -321,30 +321,65 @@ describe("cloud control-plane proxy", () => {
 
 describe("shareCloudSessionArtifact", () => {
 	const ref = { orgId: "11111111-1111-4111-8111-111111111111", sessionId: "22222222-2222-4222-8222-222222222222", path: "clips/demo.mp4", sha256: "a".repeat(64) };
-	const link = { id: "s-1", slug: "abc", name: "demo.mp4", sha256: ref.sha256 };
+	const link = { id: "s-1", slug: "abc", name: "demo.mp4", sha256: ref.sha256, updatedAt: "2026-11-05T10:00:00Z" };
+	const otherDocument = { ...link, id: "s-other", slug: "other" };
+	const shareRequests = (requests: string[]) => requests.filter((request) => request.endsWith("/artifacts/share"));
 
-	function timingOut(lists: Array<Array<Record<string, unknown>>>, status = 504) {
+	function failingShare(lists: Array<Array<Record<string, unknown>>>, status = 504, body = "") {
 		const requests: string[] = [];
 		const api: CloudShareApi = {
 			getToken: async () => "token-1",
 			fetch: vi.fn(async (url: string) => {
 				requests.push(new URL(url).pathname);
-				if (url.endsWith("/artifacts/share")) return new Response("", { status });
+				if (url.endsWith("/artifacts/share")) return new Response(body, { status });
 				return new Response(JSON.stringify({ shares: lists.shift() ?? [], limit: 3, used: 1 }));
 			}),
 		};
 		return { api, requests };
 	}
 
-	it("waits for the link when the load balancer gives up on a long copy", async () => {
-		const { api, requests } = timingOut([[], [{ ...link, name: "other.mp4" }], [link]]);
+	it.each([502, 504])("waits for the link when the load balancer answers %i on a long copy", async (status) => {
+		const { api, requests } = failingShare([[], [], [{ ...link, name: "other.mp4" }], [link]], status);
 		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).resolves.toEqual({ share: link, replaced: false });
-		expect(requests.filter((request) => request.endsWith("/artifacts/share"))).toHaveLength(1);
+		expect(shareRequests(requests)).toHaveLength(1);
+	});
+
+	it("shows a refusal from the control plane at once, without waiting", async () => {
+		const envelope = JSON.stringify({ code: "artifact_store_unavailable", message: "The file could not be shared." });
+		const { api, requests } = failingShare([[]], 502, envelope);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).rejects.toMatchObject({ code: "artifact_store_unavailable", status: 502, message: "The file could not be shared." });
+		expect(requests).toHaveLength(2);
 	});
 
 	it("does not take another refusal for a long copy", async () => {
-		const { api, requests } = timingOut([], 500);
+		const { api, requests } = failingShare([[]], 500);
 		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).rejects.toMatchObject({ status: 500 });
-		expect(requests).toHaveLength(1);
+		expect(requests).toHaveLength(2);
+	});
+
+	it("does not take another document's link with the same name and bytes for this file's", async () => {
+		const fresh = { ...link, id: "s-new", slug: "new" };
+		const { api } = failingShare([[otherDocument], [otherDocument], [otherDocument, fresh]]);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).resolves.toEqual({ share: fresh, replaced: false });
+	});
+
+	it("takes this document's link when it changed since the request", async () => {
+		const republished = { ...link, updatedAt: "2026-11-05T10:05:00Z" };
+		const { api } = failingShare([[{ ...link, sha256: "b".repeat(64) }], [republished]]);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).resolves.toEqual({ share: republished, replaced: true });
+	});
+
+	it("waits for the link being updated to hold these bytes, whatever others hold", async () => {
+		const updating = { ...link, id: "s-9", slug: "nine" };
+		const { api, requests } = failingShare([[otherDocument, { ...updating, sha256: "b".repeat(64) }], [otherDocument, updating]]);
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", { ...ref, shareId: "s-9" }, undefined, 1)).resolves.toEqual({ share: updating, replaced: true });
+		// An update needs no list of what was there before.
+		expect(requests[0].endsWith("/artifacts/share")).toBe(true);
+	});
+
+	it("shows the timeout when it cannot tell which link is new", async () => {
+		const { api } = failingShare([]);
+		vi.mocked(api.fetch).mockImplementationOnce(async () => new Response("", { status: 503 }));
+		await expect(shareCloudSessionArtifact(api, "https://cp.test", ref, undefined, 1)).rejects.toMatchObject({ code: "http_504" });
 	});
 });
