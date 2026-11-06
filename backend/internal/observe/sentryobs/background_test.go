@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
@@ -21,12 +23,12 @@ func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	CaptureBackground(context.Background(), fmt.Errorf("spawn %s: %w", secret, context.DeadlineExceeded), "session_manager", "chat_spawn", map[string]string{
-		"agent": "claude-code", "reason": "provision", "session": secret, "project": secret,
+		"agent": "claude-code", "reason": "record_failure", "session": secret, "project": secret,
 	})
 	event := <-transport.events
 	if event.Message != "Async chat spawn failed (context_deadline)" ||
 		event.Tags["component"] != "session_manager" || event.Tags["operation"] != "chat_spawn" ||
-		event.Tags["agent"] != "claude-code" || event.Tags["reason"] != "provision" ||
+		event.Tags["agent"] != "claude-code" || event.Tags["reason"] != "record_failure" ||
 		event.Tags["error_type"] != "context_deadline" || event.Tags["session"] != "" ||
 		len(event.Fingerprint) != 1 || !safeFingerprint.MatchString(event.Fingerprint[0]) {
 		t.Fatalf("background capture = %+v", event)
@@ -191,5 +193,30 @@ func TestErrorBudgetOverflowIsPerOperation(t *testing.T) {
 	}
 	if !allowErrorFingerprintFor("dddddddddddddddd", "chat_spawn", when) {
 		t.Fatal("a noisy operation starved a different operation's new failure")
+	}
+}
+
+func TestCaptureErrorAsyncOwnsTagsAndPreservesHTTPMetadata(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	SetPolicyCheck(func(context.Context) bool { return true })
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	tags := map[string]string{"operation": "http_request", "category": "http_fault", "status": "409", "error_code": "CHAT_RESUME_FAILED"}
+	CaptureErrorAsync(context.Background(), errors.New("private"), tags, "123456789abcdef0", telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{})
+	tags["operation"] = "mutated"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-transport.events:
+		if event.Tags["operation"] != "http_request" || event.Tags["category"] != "http_fault" || event.Tags["status"] != "409" {
+			t.Fatalf("lost admitted HTTP tags: %v", event.Tags)
+		}
+	default:
+		t.Fatal("HTTP capture missing")
 	}
 }

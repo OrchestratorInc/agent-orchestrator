@@ -80,6 +80,15 @@ describe("Electron main Sentry configuration", () => {
 		expect(random).not.toHaveBeenCalled();
 	});
 
+	it.each(["query", "mutation", "route", "react_render", "open_orchestrator", "xterm_init", "/private/session"])("forwards only registered renderer operations through final scrubbing: %s", async (operation) => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", tags: { operation } });
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const event = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
+		expect(event?.tags?.operation).toBe(operation.startsWith("/") ? undefined : operation);
+		expect(JSON.stringify(event)).not.toContain("/private/session");
+	});
+
 	it("reports handled main failures with fixed titles and no error text", async () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;

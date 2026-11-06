@@ -3,6 +3,7 @@ package sentryobs
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"time"
 
@@ -108,7 +109,13 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		}
 	}
 	fingerprint := telemetrymeta.Fingerprint("background", component, operation, errorType, code, tags["agent"], tags["reason"])
-	if !enterCapture(ctx) {
+	captureAsync(ctx, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, operation)
+}
+
+// captureAsync shares bounded admission across HTTP and background reports.
+// Admission pins consent; only owned metadata crosses the goroutine boundary.
+func captureAsync(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
+	if ctx.Err() != nil || !enterCapture(ctx) {
 		return
 	}
 	select {
@@ -122,12 +129,11 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		leaveCapture()
 		return
 	}
-	// Admission pins the existing consent gate before scheduling. Opt-out closes
-	// intake and Drain waits for this send, so it cannot replay after opt-in.
+	tags = maps.Clone(tags)
 	go func() {
 		defer leaveCapture()
 		defer func() { <-backgroundSends }()
-		capture(sentry.LevelError, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, false)
+		capture(sentry.LevelError, tags, fingerprint, route, site, false)
 	}()
 }
 
@@ -141,13 +147,7 @@ var backgroundReasons = map[string]struct{}{
 	"queued_delivery":    {},
 	"wake":               {},
 	"drain":              {},
-	"provision":          {},
-	"workspace":          {},
-	"controller":         {},
-	"prompt":             {},
-	"attachments":        {},
 	"record_failure":     {},
-	"retry":              {},
 	"relaunch":           {},
 	"restore_workspace":  {},
 	"restore_attachment": {},
@@ -155,15 +155,12 @@ var backgroundReasons = map[string]struct{}{
 	"reap":               {},
 	"chat_host":          {},
 	"runtime":            {},
-	"graphql":            {},
 	"db_write":           {},
 	"notify":             {},
 	"verify":             {},
 	"persist":            {},
-	"timeout":            {},
 	"stop":               {},
 	"send":               {},
-	"settle":             {},
 }
 
 func safeBackgroundTag(key, value string) (bool, bool) {
