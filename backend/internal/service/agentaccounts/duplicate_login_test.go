@@ -197,3 +197,103 @@ func TestAddRefusesTheLoginOfASignedOutSavedAccount(t *testing.T) {
 		})
 	}
 }
+
+func startAdd(t *testing.T, svc *Service, claude *fakeClaude, root, email, org string) (LoginStatus, *AccountView) {
+	t.Helper()
+	start, err := svc.StartLogin(context.Background(), domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[home] = email
+	claude.orgOf[home] = org
+	status, view, err := svc.VerifyLogin(context.Background(), start.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, view
+}
+
+func TestSameEmailInAnotherOrganizationIsAnotherLogin(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name                string
+		deviceOrg, savedOrg string
+		want                bool
+	}{
+		{name: "same organization", deviceOrg: "org-team", savedOrg: "org-team", want: true},
+		{name: "another organization", deviceOrg: "org-personal", savedOrg: "org-team", want: false},
+		{name: "the CLI reports no organization", deviceOrg: "", savedOrg: "org-team", want: true},
+		{name: "the account reports no organization", deviceOrg: "org-personal", savedOrg: "", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, claude, _, root := newDuplicateFixture(t, "")
+			claude.orgOf = map[string]string{}
+			status, view := startAdd(t, svc, claude, root, "a@example.com", tc.savedOrg)
+			if status != LoginComplete || view == nil {
+				t.Fatalf("add = %q %+v", status, view)
+			}
+			claude.signedInAs[""] = "a@example.com"
+			claude.orgOf[""] = tc.deviceOrg
+			views, err := svc.List(ctx, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			device := viewByID(t, views, domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude))
+			if got := device.SameLoginAs == view.Account.ID; got != tc.want || (!tc.want && device.SameLoginAs != "") {
+				t.Fatalf("device SameLoginAs = %q, want duplicate=%v", device.SameLoginAs, tc.want)
+			}
+		})
+	}
+}
+
+func TestAddAcceptsTheSameEmailInAnotherOrganization(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		holder func(t *testing.T, svc *Service, claude *fakeClaude, root string) string
+	}{
+		{name: "held by the CLI", holder: func(_ *testing.T, _ *Service, claude *fakeClaude, _ string) string {
+			claude.signedInAs[""] = "a@example.com"
+			claude.orgOf[""] = "org-team"
+			return domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+		}},
+		{name: "held by a signed-in saved account", holder: func(t *testing.T, svc *Service, claude *fakeClaude, root string) string {
+			_, view := startAdd(t, svc, claude, root, "a@example.com", "org-team")
+			return view.Account.ID
+		}},
+		{name: "held by a saved account signed out after a reading", holder: func(t *testing.T, svc *Service, claude *fakeClaude, root string) string {
+			_, view := startAdd(t, svc, claude, root, "a@example.com", "org-team")
+			delete(claude.signedInAs, view.Account.Home)
+			delete(claude.orgOf, view.Account.Home)
+			if _, err := svc.List(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+			return view.Account.ID
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, claude, _, root := newDuplicateFixture(t, "")
+			claude.orgOf = map[string]string{}
+			holder := tc.holder(t, svc, claude, root)
+
+			if status, view := startAdd(t, svc, claude, root, "A@example.com", "org-personal"); status != LoginComplete || view == nil || view.Account.ID == holder {
+				t.Fatalf("add in another organization = %q %+v", status, view)
+			}
+			if status, view := startAdd(t, svc, claude, root, "a@example.com", "org-team"); status != LoginDuplicate || view == nil || view.Account.ID != holder {
+				t.Fatalf("add in the same organization = %q %+v, want duplicate of %s", status, view, holder)
+			}
+		})
+	}
+}
+
+func TestAddRefusesASignedOutAccountsEmailWhenItsOrganizationIsUnknown(t *testing.T) {
+	svc, claude, store, root := newDuplicateFixture(t, "")
+	claude.orgOf = map[string]string{}
+	home := filepath.Join(root, "claude", "acct-a")
+	store.accounts = []domain.AgentAccount{{ID: "acct-a", Provider: domain.AgentAccountProviderClaude, Home: home, Email: "a@example.com"}}
+
+	if status, view := startAdd(t, svc, claude, root, "a@example.com", "org-personal"); status != LoginDuplicate || view == nil || view.Account.ID != "acct-a" {
+		t.Fatalf("add = %q %+v, want duplicate of acct-a", status, view)
+	}
+}

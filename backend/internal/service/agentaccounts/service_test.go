@@ -58,6 +58,7 @@ type fakeClaude struct {
 	failing    map[string]bool   // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
 	limitsErr  error
+	orgOf      map[string]string
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -73,7 +74,7 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if f.apiKey[home] {
 		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
 	}
-	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
+	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home]}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
 	if f.limitsErr != nil {
