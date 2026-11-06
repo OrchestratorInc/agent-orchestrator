@@ -1,12 +1,13 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactVisual } from "../../lib/artifactVisual";
+import { headerTitleWidth } from "../../lib/pagerTitle";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, stableArtifactOrder, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
@@ -75,8 +76,15 @@ function ArtifactViewerContent() {
 	const { artifacts, loading } = useSessionArtifacts(hostMatches ? sessionId : "");
 	// A listed file's modified time, so a document's regenerated image is not served from cache.
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
-	// The page on screen: the file the route opened, until a swipe moves on.
+	// The page on screen: the file the route opened, until a swipe moves on. A
+	// link to another file while this is open replaces the route's path; the
+	// viewer then goes to that file.
 	const [currentPath, setCurrentPath] = useState(path);
+	const [openedPath, setOpenedPath] = useState(path);
+	if (openedPath !== path) {
+		setOpenedPath(path);
+		setCurrentPath(path);
+	}
 	// The pages keep the order they had on open: the list is newest first, so a
 	// file the agent rewrites would otherwise jump to the front and remount.
 	const pageOrder = useRef<string[]>(undefined);
@@ -164,14 +172,16 @@ function ArtifactViewerContent() {
 		}
 	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
 
+	// The toolbar beside the title: ⋯, and version history where the file has one.
+	const headerActions = artifact && canShowArtifactHistory(artifact) ? 2 : 1;
 	useLayoutEffect(() => {
 		const title = artifact?.name ?? path.split("/").pop() ?? "Artifact";
 		navigation.setOptions({
 			title,
 			// In a gallery of several, the title also says where this page sits.
-			headerTitle: pageCount > 1 && pageIndex >= 0 ? () => <PagerTitle title={title} position={`${pageIndex + 1} of ${pageCount}`} /> : undefined,
+			headerTitle: pageCount > 1 && pageIndex >= 0 ? () => <PagerTitle title={title} position={`${pageIndex + 1} of ${pageCount}`} actions={headerActions} /> : undefined,
 		});
-	}, [artifact?.name, navigation, pageCount, pageIndex, path]);
+	}, [artifact?.name, headerActions, navigation, pageCount, pageIndex, path]);
 	// Memoized: each new element re-registers the header's items.
 	const headerItems = useMemo(() => artifact ? (
 		<Stack.Toolbar placement="right">
@@ -390,11 +400,13 @@ function ArtifactFilmstrip({ config, sessionId, artifacts, index, versionOf, onS
 }
 
 /** The header of a gallery page: the file's name over where it sits in the list. */
-function PagerTitle({ title, position }: { title: string; position: string }) {
+function PagerTitle({ title, position, actions }: { title: string; position: string; actions: number }) {
 	const styles = useThemedStyles(makeStyles);
+	const { width } = useWindowDimensions();
 	return (
-		<View accessible accessibilityRole="header" accessibilityLabel={`${title}, ${position}`} style={styles.pagerTitle}>
-			<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.pagerTitleText}>{title}</Text>
+		<View accessible accessibilityRole="header" accessibilityLabel={`${title}, ${position}`} style={[styles.pagerTitle, { maxWidth: headerTitleWidth(width, actions) }]}>
+			{/* A long file name keeps its start and its extension. */}
+			<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} ellipsizeMode="middle" style={styles.pagerTitleText}>{title}</Text>
 			<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.pagerPosition}>{position}</Text>
 		</View>
 	);
@@ -576,7 +588,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	stripContent: { paddingHorizontal: space.md, paddingVertical: STRIP_PAD },
 	tile: { width: STRIP_TILE, height: STRIP_TILE, borderRadius: radius.sm, borderCurve: "continuous", borderWidth: 2, borderColor: "transparent", overflow: "hidden", alignItems: "center", justifyContent: "center" },
 	tileSelected: { borderColor: t.accent },
-	pagerTitle: { maxWidth: 240, alignItems: "center", justifyContent: "center" },
+	pagerTitle: { alignItems: "center", justifyContent: "center" },
 	pagerTitleText: { fontFamily: font.semibold, maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	pagerPosition: { fontFamily: font.regular, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
