@@ -41,7 +41,7 @@ func newArtifactCommand(ctx *commandContext) *cobra.Command {
 			"stay in the directory, so links between them keep working.\n\n" +
 			"A path is absolute, or relative to the artifact directory. Run this once per\n" +
 			"path, not after every edit. A renamed or copied file is a new path.",
-		Example: `  ao artifact add "$AO_SESSION_ARTIFACTS_DIR/report.html"
+		Example: `  ao artifact add report.html
   ao artifact add brand.html icons/app.icon`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
