@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "선택한 텍스트가 24 KiB를 초과합니다. 더 짧은 부분을 선택하세요.",
+	"chat.draft.excerptSourceLimit": "캡처한 원문이 24 KiB를 초과합니다. 더 짧은 부분을 선택하세요.",
+	"chat.draft.excerptMessageLimit": "메시지와 발췌문이 크기 제한을 초과합니다. 메시지를 줄이거나 발췌문을 삭제하세요.",
+	"chat.draft.excerptBodySelection": "발췌문을 첨부하려면 메시지 본문의 텍스트를 선택하세요.",
+	"chat.draft.excerptPendingDelivery": "전송 중인 메시지가 완료된 후 발췌문을 추가하세요.",
+	"chat.draft.excerptSaveFailed": "발췌문을 저장하지 못했습니다. 선택 영역은 그대로 유지됩니다.",
 	"awake.offTooltip": "Stay Awake가 꺼져 있습니다. 클릭하여 켜세요.",
 	"awake.activeTooltip": "Stay Awake가 켜져 있습니다. 클릭하여 끄세요.",
 	"awake.pausedBattery": "배터리가 {{percent}}% 미만이라 일시 중지됨.\n충전 후 다시 시작합니다.",

@@ -3046,7 +3046,7 @@ export function Timeline({
 		const composer = readChatSessionDraft(draftScope).composer;
 		// A pending delivery is cleared by revision on acceptance. Changing the
 		// draft now would keep the sent text and excerpts for a second send.
-		if (composer.delivery) throw new Error("Wait for the pending message before adding an excerpt.");
+		if (composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
 		const current = composer.excerpts ?? [];
 		const duplicate = current.some(
 			(item) =>
@@ -3067,7 +3067,7 @@ export function Timeline({
 		if (sizeError) throw new Error(sizeError);
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
-		if (!result.ok) throw new Error("Could not save the captured excerpt. Your selection is unchanged.");
+		if (!result.ok) throw new Error("chat.draft.excerptSaveFailed");
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction, snapshot]);

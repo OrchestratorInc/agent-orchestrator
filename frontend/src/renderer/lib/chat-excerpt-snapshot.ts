@@ -59,13 +59,13 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 		const end = range.endContainer === entry.node ? range.endOffset : entry.node.length;
 		return end > start ? [{ ...entry, from: start, to: end }] : [];
 	});
-	if (!selected.length) throw new Error("Select text in the message body to attach an excerpt.");
+	if (!selected.length) throw new Error("chat.draft.excerptBodySelection");
 	const first = selected[0];
 	const last = selected[selected.length - 1];
 	const start = first.start + first.from;
 	const end = last.start + last.to;
 	let text = rendered.text.slice(start, end);
-	if (!text.trim()) throw new Error("Select text in the message body to attach an excerpt.");
+	if (!text.trim()) throw new Error("chat.draft.excerptBodySelection");
 	const chartEntries = selected.filter(entry => entry.node.parentElement?.closest("[data-excerpt-flowchart]"));
 	// Keep the original projection for source coverage; diagram labels and source
 	// belong only to the raw excerpt, never to the readable quote.

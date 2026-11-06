@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "Der ausgewählte Text überschreitet 24 KiB. Wähle einen kürzeren Auszug.",
+	"chat.draft.excerptSourceLimit": "Der erfasste Rohtext überschreitet 24 KiB. Wähle einen kürzeren Auszug.",
+	"chat.draft.excerptMessageLimit": "Nachricht und Auszüge überschreiten die maximale Nachrichtengröße. Kürze die Nachricht oder entferne einen Auszug.",
+	"chat.draft.excerptBodySelection": "Wähle Text im Nachrichteninhalt aus, um einen Auszug anzuhängen.",
+	"chat.draft.excerptPendingDelivery": "Warte, bis die ausstehende Nachricht gesendet wurde, bevor du einen Auszug hinzufügst.",
+	"chat.draft.excerptSaveFailed": "Der erfasste Auszug konnte nicht gespeichert werden. Deine Auswahl bleibt unverändert.",
 	"awake.offTooltip": "Stay Awake ist aus. Zum Einschalten klicken.",
 	"awake.activeTooltip": "Stay Awake ist an. Zum Ausschalten klicken.",
 	"awake.pausedBattery": "Pausiert: Akku unter {{percent}} %.\nWird nach dem Laden fortgesetzt.",

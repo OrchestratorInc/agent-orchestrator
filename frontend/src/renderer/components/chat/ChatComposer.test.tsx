@@ -3058,6 +3058,28 @@ describe("unavailable states", () => {
 	});
 });
 
+it("keeps oversized excerpt sends in the draft and translates the error", async () => {
+	const sessionId = "composer-excerpt-size-localized";
+	const refs = [{ id: "large", conversationId: "c", messageId: "m", revision: 1, text: "文".repeat(8200), role: "assistant" as const }];
+	writeChatExcerptReferences(sessionId, refs);
+	const onSend = vi.fn();
+	const view = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+	try {
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "explain this");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Selected text exceeds 24 KiB");
+		await act(async () => { await appI18n.changeLanguage("fr"); });
+		expect(screen.getByRole("alert")).toHaveTextContent("Le texte sélectionné dépasse 24 Kio");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(readChatSessionDraft(sessionId).composer).toMatchObject({ text: "explain this", excerpts: refs });
+		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
+	} finally {
+		view.unmount();
+		await appI18n.changeLanguage("en");
+	}
+});
+
 it("shows restored composer recovery notices and actions in the selected language", async () => {
 	const sessionId = "composer-localized-recovery";
 	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: "bonjour", attachments: [], requestText: "bonjour", clientMessageId: "fr-recovery" });

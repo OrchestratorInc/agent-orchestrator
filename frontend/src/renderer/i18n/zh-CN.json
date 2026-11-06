@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "所选文本超过 24 KiB。请选择更短的片段。",
+	"chat.draft.excerptSourceLimit": "捕获的原始内容超过 24 KiB。请选择更短的片段。",
+	"chat.draft.excerptMessageLimit": "消息和摘录超过大小限制。请缩短消息或移除摘录。",
+	"chat.draft.excerptBodySelection": "请在消息正文中选择文本以附加摘录。",
+	"chat.draft.excerptPendingDelivery": "请等待待发送消息完成后再添加摘录。",
+	"chat.draft.excerptSaveFailed": "无法保存捕获的摘录。您的选择保持不变。",
 	"awake.offTooltip": "Stay Awake 已关闭。点击开启。",
 	"awake.activeTooltip": "Stay Awake 已开启。点击关闭。",
 	"awake.pausedBattery": "电量低于 {{percent}}%，已暂停。\n充电后自动恢复。",

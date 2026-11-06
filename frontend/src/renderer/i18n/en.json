@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "Selected text exceeds 24 KiB. Select a smaller excerpt.",
+	"chat.draft.excerptSourceLimit": "Captured raw source exceeds 24 KiB. Select a smaller excerpt.",
+	"chat.draft.excerptMessageLimit": "Message and captured excerpts exceed the message size limit. Shorten the message or remove an excerpt.",
+	"chat.draft.excerptBodySelection": "Select text in the message body to attach an excerpt.",
+	"chat.draft.excerptPendingDelivery": "Wait for the pending message before adding an excerpt.",
+	"chat.draft.excerptSaveFailed": "Could not save the captured excerpt. Your selection is unchanged.",
 	"awake.offTooltip": "Stay Awake is off. Click to turn on.",
 	"awake.activeTooltip": "Stay Awake is on. Click to turn off.",
 	"awake.pausedBattery": "Paused: battery below {{percent}}%.\nResumes after charging.",

@@ -1061,9 +1061,9 @@ export function HumanMessage({
 				</div>
 			)}
 			{editing ? null : (
-				// Reserve the action row even while hidden so hover and keyboard focus
-				// cannot place reply controls over the following assistant response.
-				<div className="mt-1 flex h-7 items-center gap-1">
+				// Hover-only actions float under the bubble instead of reserving a blank row;
+				// a branch navigator is always visible, so it keeps its place in the flow.
+				<div className={cn("flex h-7 items-center gap-1", branchPoint && onActivateBranch ? "mt-1" : "absolute right-0 top-full z-10")}>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (

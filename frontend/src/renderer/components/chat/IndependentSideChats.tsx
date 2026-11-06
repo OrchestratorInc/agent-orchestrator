@@ -1,5 +1,6 @@
 import { excerptSizeError, fitExcerptContext } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
@@ -375,6 +376,7 @@ export function useIndependentSideChats(
 	canCreate = true,
 ) {
 	const { t } = useTranslation();
+	const translateDraft = useChatDraftTranslation();
 	const [sides, setSides] = useState<Side[]>([]);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
@@ -1776,7 +1778,7 @@ export function useIndependentSideChats(
 				)}
 				{error ? (
 					<div className="shrink-0 border-t border-border bg-surface px-4 py-3 text-xs" role="alert">
-						<p className="break-words text-destructive">{error}</p>
+						<p className="break-words text-destructive">{translateDraft(error)}</p>
 					</div>
 				) : null}
 			</aside>
@@ -1788,7 +1790,7 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{error ? <p role="alert">{error}</p> : null}
+					{error ? <p role="alert">{translateDraft(error)}</p> : null}
 				</div>
 			</div>
 		);

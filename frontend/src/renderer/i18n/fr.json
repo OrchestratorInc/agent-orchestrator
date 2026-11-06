@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "Le texte sélectionné dépasse 24 Kio. Sélectionnez un extrait plus court.",
+	"chat.draft.excerptSourceLimit": "La source brute capturée dépasse 24 Kio. Sélectionnez un extrait plus court.",
+	"chat.draft.excerptMessageLimit": "Le message et les extraits dépassent la taille maximale. Raccourcissez le message ou retirez un extrait.",
+	"chat.draft.excerptBodySelection": "Sélectionnez du texte dans le corps du message pour joindre un extrait.",
+	"chat.draft.excerptPendingDelivery": "Attendez la fin de l’envoi du message avant d’ajouter un extrait.",
+	"chat.draft.excerptSaveFailed": "Impossible d’enregistrer l’extrait capturé. Votre sélection est inchangée.",
 	"awake.offTooltip": "Stay Awake est désactivé. Cliquez pour l’activer.",
 	"awake.activeTooltip": "Stay Awake est activé. Cliquez pour le désactiver.",
 	"awake.pausedBattery": "En pause : batterie sous {{percent}} %.\nReprend après recharge.",

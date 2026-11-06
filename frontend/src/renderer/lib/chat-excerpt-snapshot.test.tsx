@@ -240,7 +240,7 @@ describe("captured chat excerpts", () => {
 		expect(() => fitExcerptContext(required, question, requiredBytes - 1, [file])).toThrow();
 	});
 	it("enforces UTF-8 limits, drops only optional context, and upgrades legacy quotes", () => {
-		expect(excerptSizeError([{ text: "é".repeat(13000) }])).toMatch(/24 KiB/);
+		expect(excerptSizeError([{ text: "é".repeat(13000) }])).toBe("chat.draft.excerptTextLimit");
 		const ref = upgradeExcerpt({ id: "r", conversationId: "c", messageId: "m", revision: 1, role: "user", text: "quote" });
 		expect(ref.snapshot?.captureMode).toBe("legacy");
 		const rich = { ...ref, snapshot: { ...ref.snapshot!, sourceTurnId: "t", turn: { id: "t", messages: [{ role: "user" as const, text: "x".repeat(2000) }] } } };

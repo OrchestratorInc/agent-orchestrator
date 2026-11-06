@@ -72,9 +72,9 @@ export function isFlowchartOnlySnapshot(snapshot: ChatExcerptSnapshot | undefine
 }
 
 export function excerptSizeError(refs: readonly { text: string; snapshot?: ChatExcerptSnapshot }[]): string | undefined {
-	if (refs.length > 8) return "At most eight annotations may be attached.";
-	if (refs.reduce((n, ref) => n + utf8Bytes(ref.text), 0) > EXCERPT_TEXT_BYTES) return "Selected text exceeds 24 KiB. Select a smaller excerpt.";
-	if (refs.reduce((n, ref) => n + utf8Bytes(ref.snapshot?.rawText ?? ""), 0) > EXCERPT_TEXT_BYTES) return "Captured raw source exceeds 24 KiB. Select a smaller excerpt.";
+	if (refs.length > 8) return "chat.draft.annotationLimit";
+	if (refs.reduce((n, ref) => n + utf8Bytes(ref.text), 0) > EXCERPT_TEXT_BYTES) return "chat.draft.excerptTextLimit";
+	if (refs.reduce((n, ref) => n + utf8Bytes(ref.snapshot?.rawText ?? ""), 0) > EXCERPT_TEXT_BYTES) return "chat.draft.excerptSourceLimit";
 	return undefined;
 }
 
@@ -115,6 +115,6 @@ export function fitExcerptContext<T extends { text: string; order?: number; conv
 		const ref = result[i];
 		if (ref.snapshot?.turn) result[i] = { ...ref, snapshot: { ...ref.snapshot, turn: undefined, contextOmitted: true } };
 	}
-	if (size() > limit) throw new Error("Message and captured excerpts exceed the message size limit. Shorten the message or remove an excerpt.");
+	if (size() > limit) throw new Error("chat.draft.excerptMessageLimit");
 	return result;
 }

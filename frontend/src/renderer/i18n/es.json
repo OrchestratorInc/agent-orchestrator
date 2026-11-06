@@ -1,4 +1,10 @@
 {
+	"chat.draft.excerptTextLimit": "El texto seleccionado supera los 24 KiB. Selecciona un fragmento más corto.",
+	"chat.draft.excerptSourceLimit": "El texto fuente capturado supera los 24 KiB. Selecciona un fragmento más corto.",
+	"chat.draft.excerptMessageLimit": "El mensaje y los fragmentos superan el tamaño máximo. Acorta el mensaje o elimina un fragmento.",
+	"chat.draft.excerptBodySelection": "Selecciona texto en el cuerpo del mensaje para adjuntar un fragmento.",
+	"chat.draft.excerptPendingDelivery": "Espera a que se envíe el mensaje pendiente antes de añadir un fragmento.",
+	"chat.draft.excerptSaveFailed": "No se pudo guardar el fragmento capturado. Tu selección no ha cambiado.",
 	"awake.offTooltip": "Stay Awake está desactivado. Haz clic para activarlo.",
 	"awake.activeTooltip": "Stay Awake está activado. Haz clic para desactivarlo.",
 	"awake.pausedBattery": "En pausa: batería por debajo del {{percent}} %.\nSe reanuda al cargar.",
