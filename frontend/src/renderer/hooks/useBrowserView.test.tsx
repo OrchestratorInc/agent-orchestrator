@@ -331,6 +331,33 @@ describe("useBrowserView", () => {
 		expect(calls.some(([viewId, visible]) => viewId === "42:sess-1" && !visible)).toBe(false);
 	});
 
+	it("moves the native page on every frame of the inspector slide", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const gap = document.createElement("div");
+		gap.setAttribute("data-slot", "inspector-gap");
+		document.body.appendChild(gap);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		const slide = (type: string) => {
+			const event = new Event(type, { bubbles: true });
+			Object.defineProperty(event, "propertyName", { value: "width" });
+			gap.dispatchEvent(event);
+		};
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+
+		act(() => slide("transitionrun"));
+		await waitFor(() => expect(bridge.setBounds.mock.calls.length).toBeGreaterThanOrEqual(3));
+		act(() => slide("transitionend"));
+		const settled = bridge.setBounds.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(bridge.setBounds.mock.calls.length).toBe(settled);
+		expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true }));
+	});
+
 	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
 		createSlot();

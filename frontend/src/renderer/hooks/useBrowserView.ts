@@ -778,6 +778,49 @@ export function useBrowserView({
 		};
 	}, [hasNativeBrowser, scheduleSettleMeasure]);
 
+	// The inspector opens and closes as a CSS slide: the rail's gap animates its
+	// width and the panel its transform. The native page is not a DOM node, so it
+	// follows only through setBounds. Resize observers miss the transform, and on
+	// open they reached the page only ~110 ms into a 300 ms slide, so the page
+	// jumped in behind the panel. Track every frame of the slide instead.
+	useEffect(() => {
+		if (!hasNativeBrowser) return;
+		const running = new Set<string>();
+		let frame: number | null = null;
+		let deadline = 0;
+		const isInspectorSlide = (event: TransitionEvent) => {
+			const slot = event.target instanceof Element ? event.target.getAttribute("data-slot") : null;
+			return (slot === "inspector-gap" || slot === "inspector-container") &&
+				(event.propertyName === "width" || event.propertyName === "transform");
+		};
+		const step = () => {
+			frame = null;
+			measureAndSend();
+			if (running.size > 0 && performance.now() < deadline) frame = window.requestAnimationFrame(step);
+		};
+		const onRun = (event: TransitionEvent) => {
+			if (!isInspectorSlide(event)) return;
+			running.add(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
+			// Backstop for a transition whose end event never arrives (hidden window).
+			deadline = performance.now() + 1_000;
+			if (frame === null) frame = window.requestAnimationFrame(step);
+		};
+		const onEnd = (event: TransitionEvent) => {
+			if (!isInspectorSlide(event)) return;
+			running.delete(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
+			if (running.size === 0) measureAndSend();
+		};
+		document.addEventListener("transitionrun", onRun);
+		document.addEventListener("transitionend", onEnd);
+		document.addEventListener("transitioncancel", onEnd);
+		return () => {
+			document.removeEventListener("transitionrun", onRun);
+			document.removeEventListener("transitionend", onEnd);
+			document.removeEventListener("transitioncancel", onEnd);
+			if (frame !== null) window.cancelAnimationFrame(frame);
+		};
+	}, [hasNativeBrowser, measureAndSend]);
+
 	useEffect(() => {
 		const handle = () => scheduleMeasure();
 		// Fullscreen animates on macOS, so settle-measure: hiding lands on the
