@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { machineIdentity, type ServerConfig } from "../config";
+import type { ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -98,6 +98,7 @@ export function ChatComposer({
 	onExpandedChange,
 	sessionId,
 	config,
+	machine,
 	changes,
 	snapshot,
 	skills,
@@ -143,6 +144,8 @@ export function ChatComposer({
 	onExpandedChange?(expanded: boolean): void;
 	sessionId: string;
 	config: ServerConfig | null;
+	/** The store's `machine`: keys the draft and attachments, which must survive the connection dropping. */
+	machine: string;
 	/** What this session changed, from git. Present only when it changed something. */
 	changes?: { files: number; additions: number; deletions: number; onOpen(): void };
 	snapshot: ConversationSnapshot;
@@ -216,7 +219,7 @@ export function ChatComposer({
 	const [cursor, setCursor] = useState(0);
 	// Not component state: an Android pick can resolve after this composer has
 	// unmounted (see composerAttachments.ts).
-	const attachmentKey = config ? `${machineIdentity(config)}.${sessionId}` : sessionId;
+	const attachmentKey = machine ? `${machine}.${sessionId}` : sessionId;
 	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
 	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
@@ -276,7 +279,7 @@ export function ChatComposer({
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer && quotes.length === 0), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
-	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
+	const draftKey = machine ? `ao.chat.draft.${machine}.${sessionId}` : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
