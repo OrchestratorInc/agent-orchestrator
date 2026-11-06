@@ -99,6 +99,8 @@ vi.mock("./worker-board-list", async () => {
 });
 // The real one draws nothing on iOS; this stands in for Android's FAB on both.
 vi.mock("./AddFab", () => ({ AddFab: "AddFab", addFabClearance: 72 }));
+vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
+vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
 vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
 vi.mock("./largeTitle", () => ({
 	useLargeTitle: (_title: string, onScroll?: unknown) => ({ header: null, edge: null, onScroll, topInset: 0 }),
