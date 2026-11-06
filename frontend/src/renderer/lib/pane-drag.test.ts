@@ -64,6 +64,19 @@ describe("pane tab drag completion", () => {
 		expect(commit).not.toHaveBeenCalled();
 	});
 
+	it("sizes the ghost to the tab frame, not the wrapper that was pressed", () => {
+		const frame = document.createElement("span");
+		frame.setAttribute("data-terminal-tab-frame", "");
+		source.appendChild(frame);
+		vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(4, 2, 96, 34));
+		holdTab();
+
+		const ghost = document.body.querySelector<HTMLElement>(".pane-drag-ghost");
+		expect(ghost?.style.width).toBe("96px");
+		expect(ghost?.style.height).toBe("34px");
+		expect(ghost?.firstElementChild?.hasAttribute("data-terminal-tab-frame")).toBe(true);
+	});
+
 	it("drops at the release coordinates even without another pointer move", () => {
 		holdTab();
 		window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, clientX: 300, clientY: 200 }));

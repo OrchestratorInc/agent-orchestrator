@@ -167,7 +167,12 @@ export function beginPaneTabDrag(
 function detach(drag: ActiveDrag): void {
 	drag.detached = true;
 	drag.onDetach?.();
-	const box = drag.source.getBoundingClientRect();
+	// The ghost is a copy of the tab itself at its exact size, measured from
+	// the tab's frame rather than the wrapper the press landed on.
+	const frame = (drag.source.matches("[data-terminal-tab-frame]")
+		? drag.source
+		: drag.source.querySelector<HTMLElement>("[data-terminal-tab-frame]")) ?? drag.source;
+	const box = frame.getBoundingClientRect();
 	drag.grabX = Math.min(Math.max(drag.x - box.left, 0), box.width);
 	drag.grabY = Math.min(Math.max(drag.y - box.top, 0), box.height);
 	// Keep the pointer stream even over iframes and native-feeling surfaces.
@@ -181,9 +186,6 @@ function detach(drag: ActiveDrag): void {
 	ghost.setAttribute("aria-hidden", "true");
 	ghost.style.width = `${box.width}px`;
 	ghost.style.height = `${box.height}px`;
-	const frame = (drag.source.matches("[data-terminal-tab-frame]")
-		? drag.source
-		: drag.source.querySelector("[data-terminal-tab-frame]")) ?? drag.source;
 	const clone = frame.cloneNode(true) as HTMLElement;
 	clone.removeAttribute("id");
 	clone.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));

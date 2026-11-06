@@ -6632,33 +6632,27 @@ body.is-pane-dragging webview {
 	display: flex;
 	overflow: hidden;
 	pointer-events: none;
-	border-radius: var(--radius-md);
+	/* Exactly the tab's box: square like the tab, no ring or scale that would
+	   read larger. Only a soft shadow lifts it off the page. */
 	background: var(--color-bg-elevated);
-	box-shadow:
-		0 0 0 1px color-mix(in oklch, var(--foreground) 10%, transparent),
-		var(--shadow-popover);
+	box-shadow: var(--shadow-popover);
 	opacity: 0;
-	scale: 1;
 	will-change: transform;
-	transition:
-		opacity var(--duration-fast) ease-out,
-		scale var(--duration-normal) ease-out;
+	transition: opacity var(--duration-fast) ease-out;
 }
 
 .pane-drag-ghost > [data-terminal-tab-frame] {
 	flex: 1;
+	min-width: 0;
 	max-width: none;
-	border-right: 0;
 }
 
 .pane-drag-ghost[data-lifted] {
 	opacity: 0.96;
-	scale: 1.03;
 }
 
 .pane-drag-ghost[data-leaving] {
 	opacity: 0;
-	scale: 0.98;
 	transition-timing-function: ease-in;
 }
 
@@ -6781,8 +6775,5 @@ body.is-pane-dragging webview {
 	.pane-split-dim,
 	.pane-split-divider::after {
 		transition: none;
-	}
-	.pane-drag-ghost[data-lifted] {
-		scale: 1;
 	}
 }
