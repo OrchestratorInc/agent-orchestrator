@@ -80,7 +80,7 @@ export type FilesSource =
 	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
 	 * `artifactRoot` is the URL relative links resolve against.
 	 */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave };
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
 
 /** Saves an edit of an artifact file somewhere other than the local daemon, as a cloud session's control plane. */
 export type ArtifactSave = (input: { path: string; content: string; expectedFileFingerprint: string }) => Promise<{ fileFingerprint: string; size: number }>;
