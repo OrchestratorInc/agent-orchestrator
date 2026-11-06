@@ -22,6 +22,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 // fakeArtifactVersions holds versions in memory; RecordSave appends the file's
@@ -127,7 +130,7 @@ func artifactVersionServer(t *testing.T) (*httptest.Server, *fakeArtifactVersion
 	svc := newFakeSessionService()
 	s := svc.sessions["ao-1"]
 	s.Metadata.ArtifactDir = dir
-	s.ArtifactFiles = []domain.SessionArtifactFile{{Path: "plan.md", Name: "plan.md"}, {Path: "chart.png", Name: "chart.png"}}
+	s.ArtifactFiles = []domain.SessionArtifactFile{{Path: "plan.md", Name: "plan.md"}, {Path: "chart.png", Name: "chart.png"}, {Path: "style.css", Name: "style.css"}}
 	svc.sessions["ao-1"] = s
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -425,7 +428,7 @@ func TestPreviewFileServesAKeptVersionOfAnArtifact(t *testing.T) {
 	srv, older, newer := mediaVersionServer(t)
 	base := srv.URL + "/api/v1/sessions/ao-1/preview/files/chart.png?source=artifact&raw=true"
 
-	resp, err := http.Get(base + "&version=3")
+	resp, err := http.Get(base + "&artifactVersion=3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +444,7 @@ func TestPreviewFileServesAKeptVersionOfAnArtifact(t *testing.T) {
 		t.Errorf("a version must stay sandboxed: %v", resp.Header)
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, base+"&version=4", nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"&artifactVersion=4", nil)
 	req.Header.Set("Range", "bytes=8-12")
 	ranged, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -453,7 +456,7 @@ func TestPreviewFileServesAKeptVersionOfAnArtifact(t *testing.T) {
 		t.Fatalf("range: status=%d body=%q, want 206 for a seek in a video", ranged.StatusCode, part)
 	}
 
-	cached, _ := http.NewRequest(http.MethodGet, base+"&version=3", nil)
+	cached, _ := http.NewRequest(http.MethodGet, base+"&artifactVersion=3", nil)
 	cached.Header.Set("If-None-Match", resp.Header.Get("ETag"))
 	unchanged, err := http.DefaultClient.Do(cached)
 	if err != nil {
@@ -469,15 +472,139 @@ func TestPreviewFileRefusesAVersionItCannotName(t *testing.T) {
 	srv, _, _ := mediaVersionServer(t)
 	base := srv.URL + "/api/v1/sessions/ao-1/preview/files/"
 	for name, target := range map[string]string{
-		"unknown version": base + "chart.png?source=artifact&version=99",
-		"another file's":  base + "chart.png?source=artifact&version=1",
-		"not a number":    base + "chart.png?source=artifact&version=first",
-		"zero":            base + "chart.png?source=artifact&version=0",
-		"unlisted file":   base + "secret.png?source=artifact&version=3",
+		"unknown version": base + "chart.png?source=artifact&artifactVersion=99",
+		"another file's":  base + "chart.png?source=artifact&artifactVersion=1",
+		"not a number":    base + "chart.png?source=artifact&artifactVersion=first",
+		"zero":            base + "chart.png?source=artifact&artifactVersion=0",
+		"unlisted file":   base + "secret.png?source=artifact&artifactVersion=3",
 	} {
 		status, body := artifactVersionCall(t, http.MethodGet, target, nil)
 		if status != http.StatusNotFound || artifactErrorCode(t, body) != "ARTIFACT_VERSION_NOT_FOUND" {
 			t.Errorf("%s: status=%d body=%s", name, status, body)
+		}
+	}
+}
+
+func TestArtifactVersionListSaysItServesMediaVersions(t *testing.T) {
+	srv, _, _ := mediaVersionServer(t)
+	status, body := artifactVersionCall(t, http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/artifact-versions?path=chart.png", nil)
+	var list struct {
+		MediaVersions bool `json:"mediaVersions"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil || status != http.StatusOK || !list.MediaVersions {
+		t.Fatalf("status=%d body=%s err=%v, want mediaVersions", status, body, err)
+	}
+}
+
+// A page's own cache-busting query must not be taken for a kept version.
+func TestPreviewFileLeavesAPagesVersionQueryAlone(t *testing.T) {
+	srv, _, dir := artifactVersionServer(t)
+	if err := os.WriteFile(filepath.Join(dir, "style.css"), []byte("body{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, body := artifactVersionCall(t, http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/preview/files/style.css?source=artifact&version=2", nil)
+	if status != http.StatusOK || string(body) != "body{}" {
+		t.Fatalf("status=%d body=%s, want the live file", status, body)
+	}
+}
+
+func TestArtifactOriginServesAKeptVersion(t *testing.T) {
+	srv, older, newer := mediaVersionServer(t)
+	origin, err := previewutil.ArtifactFileURL("http://127.0.0.1", "ao-1", "chart.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, status, _ := doPreviewOriginRequest(t, srv, origin, "/chart.png?artifactVersion=3")
+	if status != http.StatusOK || !bytes.Equal(body, older) {
+		t.Fatalf("version 3: status=%d body=%q", status, body)
+	}
+	body, status, _ = doPreviewOriginRequest(t, srv, origin, "/chart.png?version=3")
+	if status != http.StatusOK || !bytes.Equal(body, newer) {
+		t.Fatalf("a page's version query: status=%d body=%q, want the live file", status, body)
+	}
+	if _, status, _ = doPreviewOriginRequest(t, srv, origin, "/chart.png?artifactVersion=99"); status != http.StatusNotFound {
+		t.Fatalf("unknown version: status=%d, want 404, never the live file", status)
+	}
+}
+
+// Restore is not limited to the types the viewer offers it for: every binary
+// comes back byte for byte, through the real capture and blob store.
+func TestArtifactVersionRestoreIsByteExactForAnyBinaryType(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store := sqlitetest.MustOpenAt(t, filepath.Join(dataDir, "db"))
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "ao", Path: dataDir, RegisteredAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "ao", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := sessionartifacts.Dir(dataDir, rec.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	capturer := artifactversions.New(store, dataDir, nil)
+	mtime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	write := func(name string, content []byte) {
+		t.Helper()
+		target := filepath.Join(dir, name)
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mtime = mtime.Add(time.Second)
+		if err := os.Chtimes(target, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture := func() {
+		t.Helper()
+		for range 2 {
+			if err := capturer.CaptureSession(ctx, rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	names := []string{"bundle.zip", "report.docx", "sheet.xlsx", "data.sqlite", "tool.bin"}
+	older := func(name string) []byte { return append([]byte("\x00\xff\xfeolder "+name), 0x80, 0x00) }
+	for _, name := range names {
+		write(name, older(name))
+	}
+	capture()
+	for _, name := range names {
+		write(name, append(older(name), []byte("newer")...))
+	}
+	capture()
+	files, err := sessionartifacts.List(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.ID = rec.ID
+	s.Metadata.ArtifactDir = dir
+	s.ArtifactFiles = files
+	svc.sessions[rec.ID] = s
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc, ArtifactVersions: capturer}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+
+	for _, name := range names {
+		status, body := artifactVersionCall(t, http.MethodPost, srv.URL+"/api/v1/sessions/"+string(rec.ID)+"/artifact-versions/restore", map[string]any{"path": name, "version": 1})
+		if status != http.StatusOK {
+			t.Fatalf("%s: restore status=%d body=%s", name, status, body)
+		}
+		if data, _ := os.ReadFile(filepath.Join(dir, name)); !bytes.Equal(data, older(name)) {
+			t.Fatalf("%s: restored %q, want %q", name, data, older(name))
+		}
+		kept, err := store.ListSessionArtifactVersions(ctx, rec.ID, name)
+		if err != nil || len(kept) != 3 || kept[0].RestoredFrom != 1 {
+			t.Fatalf("%s: versions = %+v err=%v, want a restore of version 1 on top", name, kept, err)
 		}
 	}
 }

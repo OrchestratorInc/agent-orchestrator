@@ -8,11 +8,11 @@ const directUrl = "http://127.0.0.1:3002/api/v1/sessions/s1/artifact-files/chart
 
 describe("artifactContentUrl", () => {
 	it("reads a saved version through the daemon's preview route", () => {
-		expect(artifactContentUrl("s1", "dir/chart a.png", previewUrl, 3)).toBe("http://127.0.0.1:3002/api/v1/sessions/s1/preview/files/dir/chart%20a.png?source=artifact&raw=true&version=3");
+		expect(artifactContentUrl("s1", "dir/chart a.png", previewUrl, 3)).toBe("http://127.0.0.1:3002/api/v1/sessions/s1/preview/files/dir/chart%20a.png?source=artifact&raw=true&artifactVersion=3");
 	});
 
 	it("adds a saved version to a direct link", () => {
-		expect(artifactContentUrl("s1", "chart.png", directUrl, 3)).toBe(`${directUrl}&version=3`);
+		expect(artifactContentUrl("s1", "chart.png", directUrl, 3)).toBe(`${directUrl}&artifactVersion=3`);
 	});
 
 	it("leaves the live file's URL without a version", () => {

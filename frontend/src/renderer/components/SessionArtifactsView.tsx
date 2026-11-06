@@ -7,7 +7,7 @@ import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
-import { useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
+import { useHostServesMediaVersions, useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
@@ -472,14 +472,20 @@ export function SessionArtifactsView({
 	};
 	// A file the agent rewrites while it is open shows the new content.
 	useArtifactFileChanges(session, Boolean(selected) && !hostId);
-	// Versions are read back as text or, for a local file, by the media viewers,
-	// so a cloud media file and any other binary file, such as an archive, get
-	// no History. This shares the viewer's cached read of the file, which for a
+	// Versions are read back as text or, from a daemon that can, by the media
+	// viewers, so a cloud media file and any other binary file, such as an
+	// archive, get no History. This shares the viewer's cached read of the file, which for a
 	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
 		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
 		// A cloud page is framed, not read, until its source is shown.
 		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && (selected?.kind !== "html" || htmlSourcePath === selected?.path))),
+	});
+	const hostServesMediaVersions = useHostServesMediaVersions({
+		enabled: Boolean(hostId && !cloud && selected && fileMediaKind(selected.path)),
+		hostId,
+		path: selected?.path ?? "",
+		sessionId: session.id,
 	});
 	const refetchAccess = cloudAccess.refetch;
 	const repin = pinned.repin;
@@ -521,7 +527,7 @@ export function SessionArtifactsView({
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
 					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
-						{(fileMediaKind(selected.path) ? session.cloud : selectedFile.data?.binary) ? null : (
+						{(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
 							<ArtifactHistoryMenu cloud={cloudVersions} fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 						)}
 					</ArtifactActionsMenu>

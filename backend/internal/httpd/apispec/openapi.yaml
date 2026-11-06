@@ -10234,7 +10234,7 @@ paths:
       - description: With source=artifact, serve this saved version of the file instead
           of its current content.
         in: query
-        name: version
+        name: artifactVersion
         schema:
           description: With source=artifact, serve this saved version of the file
             instead of its current content.
@@ -18386,6 +18386,10 @@ components:
       type: object
     ListArtifactVersionsResponse:
       properties:
+        mediaVersions:
+          description: This daemon serves a version's bytes on the preview route and
+            restores any file type. Absent from an older daemon.
+          type: boolean
         path:
           type: string
         versions:

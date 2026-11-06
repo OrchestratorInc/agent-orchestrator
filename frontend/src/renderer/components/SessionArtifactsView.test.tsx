@@ -49,6 +49,11 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	}),
 }));
 vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: artifactFileChangesMock }));
+const { hostServesMediaVersionsMock } = vi.hoisted(() => ({ hostServesMediaVersionsMock: vi.fn(() => false) }));
+vi.mock("../hooks/useArtifactVersions", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useArtifactVersions")>()),
+	useHostServesMediaVersions: hostServesMediaVersionsMock,
+}));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
@@ -547,6 +552,16 @@ describe("SessionArtifactsView", () => {
 		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 
+	it("offers a remote media file's history only when its host serves media versions", async () => {
+		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
+		hostServesMediaVersionsMock.mockReturnValue(true);
+		renderView(<SessionArtifactsView hostId="remote-1" request={{ key: 1, path: "chart.png" }} session={session([image])} />);
+		await userEvent.click(screen.getByRole("button", { name: "chart.png" }));
+		expect(await screen.findByRole("menuitem", { name: "Version history" })).toBeInTheDocument();
+		expect(hostServesMediaVersionsMock).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, hostId: "remote-1", path: "chart.png" }));
+		hostServesMediaVersionsMock.mockReturnValue(false);
+	});
+
 	it("offers version history for text and local media files but not for another binary file", async () => {
 		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
 		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
@@ -700,8 +715,8 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: path }));
 		const menu = screen.getByRole("menu");
-		// A cloud media file keeps no reachable versions; only a local one does.
-		const hasHistory = !(cloud && path.endsWith(".png"));
+		// A media file's versions are reachable locally, or on a host that says it serves them.
+		const hasHistory = !(path.endsWith(".png") && (cloud || hostId));
 		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(hasHistory ? ["Version history", ...actions] : actions);
 		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + (hasHistory ? 1 : 0));
 		const children = Array.from(menu.children);

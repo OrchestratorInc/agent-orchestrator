@@ -153,7 +153,7 @@ describe("ArtifactVersionPreview", () => {
 		const { onRestore } = renderPreview({ path: "chart.png", rawUrl: "http://daemon.test/chart.png?raw=true" });
 		expect(versionMock).toHaveBeenCalledWith(expect.objectContaining({ version: null }));
 		expect(screen.queryByText("the older text")).toBeNull();
-		expect(screen.getByRole("img", { name: "chart.png" }).getAttribute("src")).toContain("version=2");
+		expect(screen.getByRole("img", { name: "chart.png" }).getAttribute("src")).toContain("artifactVersion=2");
 		await userEvent.click(screen.getByRole("button", { name: "Restore this version" }));
 		expect(onRestore).toHaveBeenCalledTimes(1);
 	});

@@ -31,6 +31,11 @@ const (
 	artifactVersionSyncPath    = "/api/v1/sessions/{sessionId}/artifact-versions/sync"
 )
 
+// artifactVersionQuery names the kept version a preview request reads. A
+// session's own pages load their assets through these routes, so it must not
+// be a name such as "version" that a page uses to bust a cache.
+const artifactVersionQuery = "artifactVersion"
+
 // maxArtifactVersionPreviewBytes caps the content a version read returns. A
 // longer version is cut short and marked truncated; a restore still writes it
 // whole.
@@ -126,7 +131,7 @@ func (c *SessionsController) writeArtifactVersionList(w http.ResponseWriter, r *
 		envelope.WriteError(w, r, err)
 		return
 	}
-	out := ListArtifactVersionsResponse{Path: clean, Versions: make([]ArtifactVersionSummary, len(rows))}
+	out := ListArtifactVersionsResponse{Path: clean, MediaVersions: true, Versions: make([]ArtifactVersionSummary, len(rows))}
 	for i, v := range rows {
 		out.Versions[i] = artifactVersionSummary(v)
 	}
