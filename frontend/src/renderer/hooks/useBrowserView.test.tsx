@@ -380,6 +380,54 @@ describe("useBrowserView", () => {
 		expect(bridge.setBounds).not.toHaveBeenCalled();
 	});
 
+	it("shows a cached session's latest page when switching back", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const live = (viewId: string, url: string) => ({ viewId, url, title: "", canGoBack: false, canGoForward: false, isLoading: false });
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit(live("42:sess-1", "http://localhost:3000/")));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+
+		// An agent navigates sess-1's page while the user is on sess-2.
+		act(() => bridge.emit(live("42:sess-1", "http://localhost:3000/next")));
+		bridge.ensure.mockImplementationOnce(() => new Promise<BrowserNavState>(() => undefined));
+		rerender({ sessionId: "sess-1" });
+
+		expect(result.current.navState.url).toBe("http://localhost:3000/next");
+	});
+
+	it("hides the departing view even when ensure answers with a new view first", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const live = (viewId: string) => ({ viewId, url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false });
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit(live("42:sess-1")));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		act(() => bridge.emit(live("42:sess-2")));
+
+		// sess-1's view was recreated while the user was away.
+		bridge.ensure.mockImplementationOnce(async () => live("43:sess-1"));
+		bridge.setBounds.mockClear();
+		rerender({ sessionId: "sess-1" });
+
+		await waitFor(() => expect(result.current.viewId).toBe("43:sess-1"));
+		await waitFor(() =>
+			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-2", visible: false })),
+		);
+	});
+
 	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
 		createSlot();

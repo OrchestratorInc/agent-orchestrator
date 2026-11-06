@@ -193,6 +193,15 @@ export function resetNativeViewCacheForTest(): void {
 	nativeViewBySession.clear();
 }
 
+// Main reports every view's navigation and tabs, including sessions that are
+// not on screen. Keep their cached state current so switching back never shows
+// an address bar or tab list from before an agent navigated that page.
+function refreshCachedNativeView(viewId: string, update: Partial<Omit<CachedNativeView, "viewId">>): void {
+	for (const [sessionId, cached] of nativeViewBySession) {
+		if (cached.viewId === viewId) nativeViewBySession.set(sessionId, { ...cached, ...update });
+	}
+}
+
 export function resetClosedTabsForTest(): void {
 	closedTabsBySession.clear();
 }
@@ -629,9 +638,10 @@ export function useBrowserView({
 		activeRef.current = active;
 		let frame: number | null = window.requestAnimationFrame(() => {
 			frame = null;
-			if (viewIdRef.current !== cached.viewId) return;
-			measureAndSend();
-			if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+			// `ensure` may already have answered with a new view for this session;
+			// it shows that one. Either way the departing view must go.
+			if (viewIdRef.current === cached.viewId) measureAndSend();
+			if (previous && previous !== viewIdRef.current) sendHiddenBounds(previous);
 		});
 		return () => {
 			if (frame === null) return;
@@ -647,7 +657,10 @@ export function useBrowserView({
 
 	useEffect(() => {
 		return window.ao?.browser.onNavState((state) => {
-			if (state.viewId !== viewIdRef.current) return;
+			if (state.viewId !== viewIdRef.current) {
+				refreshCachedNativeView(state.viewId, { navState: state });
+				return;
+			}
 			setNavState(state);
 		});
 	}, []);
@@ -669,7 +682,10 @@ export function useBrowserView({
 
 	useEffect(() => {
 		return window.ao?.browser.onTabsState((state) => {
-			if (state.viewId !== viewIdRef.current) return;
+			if (state.viewId !== viewIdRef.current) {
+				refreshCachedNativeView(state.viewId, { tabsState: state });
+				return;
+			}
 			setTabsState(state);
 			const change = state.change;
 			if (change?.kind === "popup") {
