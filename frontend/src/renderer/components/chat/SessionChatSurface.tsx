@@ -52,7 +52,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -221,7 +221,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId);
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it

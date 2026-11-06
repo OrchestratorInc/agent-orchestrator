@@ -56,6 +56,8 @@
 	"chat.removeAllAnnotations": "Удалить все аннотации",
 	"chat.removeAnnotation": "Удалить аннотацию {{count}}",
 	"chat.startup.queuePlaceholder": "Добавьте следующее сообщение в очередь, пока {{agent}} готовится",
+	"chat.archived.body": "История сохранена. Восстановите сессию, чтобы продолжить.",
+	"chat.archived.placeholder": "Восстановите сессию, чтобы продолжить",
 	"chat.projectSetup.succeeded": "Подготовка выполнена",
 	"chat.projectSetup.succeededIn": "Подготовка выполнена за {{duration}}",
 	"chat.projectSetup.timedOut": "Превышено время ожидания шага подготовки {{step}}",

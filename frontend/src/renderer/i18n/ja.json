@@ -54,6 +54,8 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",
+	"chat.archived.body": "履歴は保持されています。続行するにはセッションを復元してください。",
+	"chat.archived.placeholder": "続行するにはセッションを復元してください",
 	"chat.projectSetup.succeeded": "セットアップに成功しました",
 	"chat.projectSetup.succeededIn": "セットアップが {{duration}} で成功しました",
 	"chat.projectSetup.timedOut": "セットアップのステップ {{step}} がタイムアウトしました",

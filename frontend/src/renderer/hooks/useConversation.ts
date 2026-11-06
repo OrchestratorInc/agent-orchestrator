@@ -30,6 +30,7 @@ import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentErrorMessage } from "./useCanResumeAgent";
+import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -661,8 +662,9 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string) {
+export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false) {
 	const queryClient = useQueryClient();
+	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
 	const stateKey = (targetSessionId: string) => sessionUiKey(targetSessionId, hostId);
 	const trackedDispatches = useQuery({
@@ -923,6 +925,17 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const resume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: async () => {
+			// The daemon refuses to resume a terminated session. Only a restore, which
+			// also brings its worktree back, can start it again.
+			if (terminated) {
+				const restored = await restoreSession(sessionId as string, hostId);
+				if (restored.status !== "success") throw new Error(restored.message);
+				// Stay pending until the chat reads the live agent: its cached snapshot
+				// still says stopped, which would flash as a crash. The composer stays
+				// locked meanwhile, so nothing here can strand a send.
+				await invalidateSession(sessionId as string).catch(() => {});
+				return undefined;
+			}
 			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/resume-agent",
 				{
