@@ -110,7 +110,7 @@ export function formatNumberedAnnotations(refs: readonly { text: string; order?:
 /** Budget newly prepared, numbered deliveries; recovered payloads bypass this. */
 export function fitExcerptContext<T extends { text: string; order?: number; conversationId?: string; snapshot?: ChatExcerptSnapshot }>(refs: readonly T[], question: string, limit = 65536, files: readonly ChatFileReference[] = []): T[] {
 	const result = [...refs];
-	const size = () => question.length + formatNumberedAnnotations(result, files).length;
+	const size = () => utf8Bytes(question + formatNumberedAnnotations(result, files));
 	for (let i = result.length - 1; size() > limit && i >= 0; i--) {
 		const ref = result[i];
 		if (ref.snapshot?.turn) result[i] = { ...ref, snapshot: { ...ref.snapshot, turn: undefined, contextOmitted: true } };

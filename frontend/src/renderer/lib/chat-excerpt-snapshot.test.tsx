@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { captureExcerptSnapshot, captureExcerptTurn, excerptRenderedText, renderedExcerptRange, upgradeExcerpt } from "./chat-excerpt-snapshot";
 import { codeSourceOffsets } from "./rehype-excerpt-source";
-import { excerptSizeError, fitExcerptContext, formatSnapshotExcerpt, formatNumberedAnnotations, isExcerptSnapshot } from "../../shared/chat-excerpt";
+import { excerptSizeError, fitExcerptContext, formatSnapshotExcerpt, formatNumberedAnnotations, isExcerptSnapshot, utf8Bytes } from "../../shared/chat-excerpt";
 import { captureFileReference } from "../../shared/chat-file-reference";
 import { renderMermaidDiagram } from "./mermaid-diagram";
 import type { ConversationSnapshot } from "../types/conversation";
@@ -221,6 +221,23 @@ describe("captured chat excerpts", () => {
 		expect(captureExcerptTurn(ref, snapshot).snapshot?.turn).toBeUndefined();
 		snapshot.items = [];
 		expect(captureExcerptTurn(ref, snapshot).text).toBe("second");
+	});
+	it.each(["ASCII", "中文日本語", "🙂é文"])("budgets the complete formatted delivery in bytes (%s)", (text) => {
+		const file = { ...captureFileReference({ path: "文.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text }] }, "s"), order: 2 };
+		const ref = { text, conversationId: "c", order: 1, snapshot: { version: 1, rawText: text, captureMode: "exact" as const, sourceTurnId: "t", turn: { id: "t", messages: [{ role: "assistant" as const, text: text.repeat(1000) }] } } };
+		const refs = [ref, { ...ref, order: 3 }];
+		const question = `Explain ${text}`;
+		const bytes = utf8Bytes(question + formatNumberedAnnotations(refs, [file]));
+		expect(fitExcerptContext(refs, question, bytes, [file])).toEqual(refs);
+		const fitted = fitExcerptContext(refs, question, bytes - 1, [file]);
+		expect(utf8Bytes(question + formatNumberedAnnotations(fitted, [file]))).toBeLessThanOrEqual(bytes - 1);
+		expect(fitted.every(item => item.snapshot.turn === undefined)).toBe(true);
+		expect(fitted.map(item => item.text)).toEqual([text, text]);
+		expect(ref.snapshot.turn.messages[0].text).toBe(text.repeat(1000));
+		const required = fitted.map(item => ({ ...item, snapshot: { ...item.snapshot, turn: undefined } }));
+		const requiredBytes = utf8Bytes(question + formatNumberedAnnotations(required, [file]));
+		expect(() => fitExcerptContext(required, question, requiredBytes, [file])).not.toThrow();
+		expect(() => fitExcerptContext(required, question, requiredBytes - 1, [file])).toThrow();
 	});
 	it("enforces UTF-8 limits, drops only optional context, and upgrades legacy quotes", () => {
 		expect(excerptSizeError([{ text: "é".repeat(13000) }])).toMatch(/24 KiB/);
