@@ -198,13 +198,18 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 	}
 	fmt.Fprintf(w, "Split panes: %s\n", state)
 	fmt.Fprintf(w, "On screen: %s\n", layout.Selected)
+	// Keys line up in one column; a terminal's key is long.
+	width := 0
+	for _, tab := range layout.Tabs {
+		width = max(width, len(tab.Key))
+	}
 	fmt.Fprintln(w, "Tabs:")
 	for _, tab := range layout.Tabs {
 		title := tab.Title
 		if tab.Agent != nil && *tab.Agent != "" {
 			title += " (" + *tab.Agent + ")"
 		}
-		fmt.Fprintf(w, "  %-28s %-9s %s\n", tab.Key, tab.Kind, title)
+		fmt.Fprintf(w, "  %-*s  %-8s  %s\n", width, tab.Key, tab.Kind, title)
 	}
 	if len(layout.Groups) == 0 {
 		fmt.Fprintln(w, "Splits: none")
@@ -222,7 +227,7 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 			if pane.Key == group.Focus {
 				focus = "  focused"
 			}
-			fmt.Fprintf(w, "    %-28s %s%s\n", pane.Key, paneRegion(pane), focus)
+			fmt.Fprintf(w, "    %-*s  %s%s\n", width, pane.Key, paneRegion(pane), focus)
 		}
 	}
 	return nil

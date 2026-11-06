@@ -1976,7 +1976,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const side: SplitSide = request.side ?? "right";
 			if (tab === "terminal") {
 				if (isOrchestrator) throw new PaneCommandError("UNSUPPORTED", "The orchestrator's view does not open split terminals.");
-				if (!splitNewTerminalRef.current(side, anchor)) throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
+				const opened = splitNewTerminalRef.current(side, anchor);
+				if (!opened) throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
+				// A new shell is a placeholder until the daemon lists it. Answer with
+				// its real key, which is the one later commands must use.
+				let seen = false;
+				for (let waited = 0; waited < 5_000; waited += 100) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					const listed = latestPaneLayout(sessionId)?.tabs.some((candidate) => candidate.key === opened) ?? false;
+					if (listed) seen = true;
+					else if (seen || waited >= 1_000) break;
+				}
 			} else if (tab.startsWith("file:")) {
 				const path = await resolvePaneFile(tab.slice("file:".length));
 				openCenterFile(path);
