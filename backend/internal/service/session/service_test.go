@@ -375,19 +375,14 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	return r, ok, nil
 }
 
-func (f *fakeStore) AddSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID, paths []string) ([]string, bool, error) {
+func (f *fakeStore) AddSessionRegisteredArtifactPaths(_ context.Context, id domain.SessionID, paths []string, gone func(path string) bool) ([]string, bool, error) {
 	rec, ok := f.sessions[id]
 	if !ok {
 		return nil, false, nil
 	}
-	next := slices.Clone(rec.RegisteredArtifactPaths)
-	for _, path := range paths {
-		if !slices.Contains(next, path) {
-			next = append(next, path)
-		}
-	}
-	if len(next) > domain.MaxRegisteredArtifactPaths {
-		return nil, true, domain.ErrRegisteredArtifactLimit
+	next, err := domain.AddRegisteredArtifactPaths(rec.RegisteredArtifactPaths, paths, gone)
+	if err != nil {
+		return nil, true, err
 	}
 	rec.RegisteredArtifactPaths = next
 	f.sessions[id] = rec
