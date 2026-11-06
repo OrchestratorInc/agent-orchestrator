@@ -255,6 +255,54 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getAllByTestId("worker-update")).toHaveLength(2);
 	});
 
+	it("keeps reports a worker's steer carried under that steer after the turn settles", async () => {
+		const prompt: ConversationMessage = {
+			kind: "message", id: "run-human", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: "How are the workers doing?",
+		};
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", turnId: "run", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+			summary: "Steer", createdAt: at(1), detail: { event: "steer", senderSessionId: "proj-7", senderDisplayName: "Menus", text: "Rebased." },
+		};
+		const carried = report("t-report", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?");
+		// Work before the steer, so the steer arrives mid-turn rather than with the prompt.
+		const items: ConversationItem[] = [prompt, { ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Both moved.")];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace
+						snapshot={{
+							...chatFixtureEmpty, latestSequence: 22, items,
+							// The batched report turn is not among the snapshot's turns, as the daemon sends it.
+							turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
+							batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+						}}
+						sessionRole="orchestrator"
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: /^1 Agent Report/ }));
+		expect(screen.getByText("iOS pages")).toBeInTheDocument();
+	});
+
+	it("draws one logo per sender on the reports line", () => {
+		const envelope = ["Reports since your previous turn:", "",
+			...[1, 2, 3, 4].flatMap((n) => [`[done] [Menus](ao://sessions/proj/proj-285)`, `Step ${n}.`, ""]),
+		].join("\n");
+		const human: ConversationMessage = {
+			kind: "message", id: "t1-human", turnId: "t1", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: `Status?\n\n<ao-worker-reports>\n${envelope}\n</ao-worker-reports>`,
+		};
+		renderOrchestrator([human, reply("t1", 2, "Noted.")]);
+		const line = screen.getByRole("button", { name: /^4 Agent Reports/ });
+		expect(line.querySelectorAll("[data-report-logo]")).toHaveLength(1);
+		expect(line).not.toHaveTextContent("...");
+	});
+
 	it("still shows the work of a turn that answered with tools only", async () => {
 		renderOrchestrator([
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser"),

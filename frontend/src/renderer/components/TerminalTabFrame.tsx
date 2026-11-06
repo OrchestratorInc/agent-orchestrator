@@ -64,14 +64,17 @@ export function TerminalTabFrame({
 			) : (
 				<Pressable
 					ref={buttonRef}
-					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!"
+					className={cn(
+						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!",
+						// Without an icon the action takes the tab's right edge; keep the label clear of it.
+						!icon && action && "pr-7",
+					)}
 					{...buttonProps}
 				>
 					{/* The open-menu rule reaches the icon through child combinators. The
 					    group-has-[[data-state=open]] form (`:has([attr]) *`) made Chromium
 					    restyle the whole document on every DOM change in the app. */}
-					{/* Without an icon the slot stays only as the place the hover action takes. */}
-					{icon || action ? (
+					{icon ? (
 						<span
 							className={cn(
 								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
@@ -88,7 +91,8 @@ export function TerminalTabFrame({
 			{action ? (
 				<span
 					className={cn(
-						"absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
+						"absolute top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
+						icon ? "left-2" : "right-2",
 						// Clickable only while revealed: a tap or a click on a faded slot
 						// selects the tab (the icon lets it through) instead of closing it.
 						actionPinned

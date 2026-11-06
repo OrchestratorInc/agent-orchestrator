@@ -5049,6 +5049,8 @@ const TurnGroup = memo(function TurnGroup({
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
 	);
+	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
+	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
@@ -5058,16 +5060,21 @@ const TurnGroup = memo(function TurnGroup({
 		// A direct send or steer is one row; a batch of reports is one line that opens to them.
 		if (updates.length > 0 && updates[0]?.state === undefined) {
 			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
-			return carried.length > 0 ? [rows, reportsLine(`${run.key}:reports`, carried)] : rows;
+			if (carried.length === 0) return rows;
+			drewReportsUnder = true;
+			return [rows, reportsLine(`${run.key}:reports`, carried)];
 		}
 		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
 		const reports = [...piggybackedUpdates(item), ...carried];
 		if (reports.length === 0) return renderRun(run);
+		drewReportsUnder = true;
 		return [renderRun(run), reportsLine(`${run.key}:reports`, reports)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
+	// The reports line under the prompt takes the prompt's action row itself.
+	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -5107,9 +5114,6 @@ const TurnGroup = memo(function TurnGroup({
 	const promptBubble = group.items.some(
 		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
 	);
-	// The reports line under the prompt takes that row itself.
-	const reportsUnderPrompt = Boolean(workerUpdates) && humanRuns.some((run) => run.kind === "single"
-		&& (piggybackedUpdates(run.items[0]).length > 0 || Boolean(batched?.under.has(run.items[0].id))));
 	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	// The empty row is exactly as tall as "Worked for", which takes its place as the
 	// turn settles, so the handover moves nothing. Only one of the two is ever in the
@@ -5145,7 +5149,8 @@ const TurnGroup = memo(function TurnGroup({
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
-	if (outcome) body.push(...noticeRuns.map(renderRun));
+	// Settled steers still carry the reports they delivered.
+	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
 	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
