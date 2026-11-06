@@ -9468,6 +9468,113 @@ paths:
       summary: Configure whether PR completion terminates the session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/panes:
+    get:
+      operationId: getSessionPanes
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneLayoutResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read the split-pane layout the desktop window shows for a session
+      tags:
+      - sessions
+    post:
+      operationId: commandSessionPanes
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPaneCommandRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneLayoutResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Gateway Timeout
+      summary: Ask the desktop window to split, unsplit or focus a session's tabs
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pin:
     delete:
       operationId: unpinSession
@@ -16049,6 +16156,162 @@ components:
       properties:
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersPaneBox:
+      properties:
+        height:
+          description: Height, 0 to 1.
+          format: double
+          type: number
+        key:
+          description: Key of the tab shown in this pane.
+          type: string
+        width:
+          description: Width, 0 to 1.
+          format: double
+          type: number
+        x:
+          description: Left edge, 0 to 1.
+          format: double
+          type: number
+        "y":
+          description: Top edge, 0 to 1.
+          format: double
+          type: number
+      required:
+      - key
+      - x
+      - "y"
+      - width
+      - height
+      type: object
+    ControllersPaneCommandRequest:
+      properties:
+        action:
+          description: split shows tab beside another; remove takes a tab out of its
+            group; ungroup dissolves a group; focus brings a tab on screen.
+          enum:
+          - split
+          - remove
+          - ungroup
+          - focus
+          type: string
+        beside:
+          description: 'For split: key of the tab to split beside. Defaults to the
+            tab on screen.'
+          type:
+          - "null"
+          - string
+        group:
+          description: 'For ungroup: group id. Defaults to the group on screen.'
+          type:
+          - "null"
+          - string
+        side:
+          description: 'For split: which side of beside the tab goes. Defaults to
+            right.'
+          enum:
+          - left
+          - right
+          - top
+          - bottom
+          type:
+          - "null"
+          - string
+        tab:
+          description: Tab key. For split, also terminal (open a new shell terminal)
+            or file:<workspace-relative path> (open the file).
+          type:
+          - "null"
+          - string
+      required:
+      - action
+      type: object
+    ControllersPaneGroup:
+      properties:
+        focus:
+          description: Key of the group's focused pane.
+          type: string
+        id:
+          description: Group id, for ungroup.
+          type: string
+        panes:
+          description: Every pane of the split with its position.
+          items:
+            $ref: '#/components/schemas/ControllersPaneBox'
+          type: array
+      required:
+      - id
+      - focus
+      - panes
+      type: object
+    ControllersPaneLayout:
+      properties:
+        enabled:
+          description: Whether split panes are on in the window (a Developer Mode
+            preview). Commands are refused while off.
+          type: boolean
+        groups:
+          description: Every split group of the session.
+          items:
+            $ref: '#/components/schemas/ControllersPaneGroup'
+          type: array
+        selected:
+          description: Key of the tab on screen (the focused pane when a split is
+            shown).
+          type: string
+        shown:
+          description: Id of the group on screen, when a split is shown.
+          type:
+          - "null"
+          - string
+        tabs:
+          description: Every tab of the session.
+          items:
+            $ref: '#/components/schemas/ControllersPaneTab'
+          type: array
+      required:
+      - enabled
+      - selected
+      - tabs
+      - groups
+      type: object
+    ControllersPaneLayoutResponse:
+      properties:
+        layout:
+          $ref: '#/components/schemas/ControllersPaneLayout'
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - layout
+      type: object
+    ControllersPaneTab:
+      properties:
+        agent:
+          description: Agent running in a terminal tab, when the window tracks it.
+          type:
+          - "null"
+          - string
+        key:
+          description: 'Stable tab key used by pane commands: session, a shell terminal''s
+            handle id, reviewer:<id>, reviewer-chat:<id> or file:<path>.'
+          type: string
+        kind:
+          description: What the tab shows.
+          enum:
+          - session
+          - terminal
+          - reviewer
+          - file
+          type: string
+        title:
+          description: The tab's label.
+          type: string
+      required:
+      - key
+      - kind
+      - title
       type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
