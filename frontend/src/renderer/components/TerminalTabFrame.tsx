@@ -42,7 +42,7 @@ export function TerminalTabFrame({
 		<span
 			className={cn(
 				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center border-r border-border",
-				wide ? "max-w-[192px]" : "max-w-shell-tab-max",
+				wide ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"

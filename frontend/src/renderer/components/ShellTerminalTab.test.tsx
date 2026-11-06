@@ -233,14 +233,14 @@ describe("ShellTerminalTab agent name", () => {
 		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
 		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
-		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-[192px]");
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-agent-shell-tab-max");
 	});
 
 	it("returns to the plain tab when Developer Mode is switched off", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
 		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
 		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
-		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-[192px]");
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-agent-shell-tab-max");
 		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-shell-tab-max");
 		act(() => useUiStore.setState({ developerMode: false }));
 		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();

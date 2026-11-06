@@ -103,8 +103,8 @@ type AgentTracker interface {
 	UntrackShellTerminal(handleID string)
 }
 
-// SetAgentTracker starts agent detection for every open shell. Call once at
-// boot, before serving requests.
+// SetAgentTracker registers every open shell for agent detection. Watches start
+// only while a client subscribes. Call once at boot, before serving requests.
 func (s *Service) SetAgentTracker(ctx context.Context, tracker AgentTracker) {
 	s.agents = tracker
 	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)

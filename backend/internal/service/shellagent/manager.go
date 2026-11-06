@@ -65,8 +65,8 @@ type Manager struct {
 	nextSub int
 }
 
-// NewManager builds a manager whose watches live until ctx ends. agents may be
-// nil; then only the generic prompt patterns detect waiting.
+// NewManager builds a manager whose watches live while clients subscribe and
+// ctx is active. agents may be nil; then generic prompts detect waiting.
 func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -105,8 +105,8 @@ func (m *Manager) UntrackShellTerminal(handleID string) {
 	defer m.mu.Unlock()
 	if cancel := m.tracked[handleID]; cancel != nil {
 		cancel()
-		delete(m.tracked, handleID)
 	}
+	delete(m.tracked, handleID)
 	m.setLocked(handleID, nil)
 }
 

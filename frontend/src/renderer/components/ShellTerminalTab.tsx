@@ -220,7 +220,7 @@ export function ShellTerminalTab({
 			{isEditing ? (
 				<input
 					aria-label={t("terminal.rename", { title })}
-					className={cn("min-w-flex-min rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent", agent ? "max-w-[192px]" : "max-w-shell-tab-max")}
+					className={cn("min-w-flex-min rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent", agent ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max")}
 					onBlur={commit}
 					onChange={(event) => setDraft(event.target.value)}
 					onKeyDown={(event) => {
@@ -243,7 +243,7 @@ export function ShellTerminalTab({
 					className={cn(
 						"min-w-flex-min cursor-pointer select-none truncate font-mono text-control font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
 						isActive ? "text-foreground" : "text-passive group-hover:text-foreground",
-						agent ? "max-w-[192px]" : "max-w-shell-tab-max",
+						agent ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
 					)}
 					{...tabRenameHandlers}
 					{...renameKeyProps}

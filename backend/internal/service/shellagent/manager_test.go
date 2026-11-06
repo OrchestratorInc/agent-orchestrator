@@ -73,6 +73,25 @@ func TestManagerWatchesOnlyWhileSubscribed(t *testing.T) {
 	unsubscribe()
 }
 
+func TestManagerUntracksWithoutSubscriber(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground), started: make(chan struct{}, 1), stopped: make(chan struct{}, 1)}
+	m := NewManager(ctx, rt, nil, nil)
+	m.TrackShellTerminal("shell-1")
+	m.UntrackShellTerminal("shell-1")
+	if len(m.tracked) != 0 {
+		t.Fatalf("closed shell remained tracked: %+v", m.tracked)
+	}
+	unsubscribe := m.SubscribeShellAgents(func(json.RawMessage) {})
+	defer unsubscribe()
+	select {
+	case <-rt.started:
+		t.Fatal("started watching a shell closed before subscription")
+	default:
+	}
+}
+
 func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	return f.screen, nil
 }
