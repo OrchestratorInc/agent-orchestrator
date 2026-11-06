@@ -4433,6 +4433,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/terminal-shells": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the shells installed on this machine for new terminals */
+        get: operations["listTerminalShells"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminal-shells/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check that a custom shell path is an executable */
+        get: operations["checkTerminalShell"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -6607,7 +6641,7 @@ export interface components {
             rows?: number;
             /** @description Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell. */
             sessionId?: string;
-            /** @description Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux. */
+            /** @description Shell to launch: auto (the user's default shell), an executable path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl). */
             shell?: string;
             /** @description Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid. */
             startOnAttach?: boolean;
@@ -7856,6 +7890,27 @@ export interface components {
             isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
             optedOut: boolean;
+        };
+        TerminalShellCheckResponse: {
+            executable: boolean;
+            /** @description Why the path cannot launch. */
+            message?: string;
+            /** @description Resolved executable path when executable. */
+            path?: string;
+        };
+        TerminalShellResponse: {
+            /** @description Value to send as a terminal's shell: auto, a Windows selector, or the executable path. */
+            id: string;
+            /** @description Display name, such as zsh or PowerShell. */
+            name: string;
+            /** @description Executable path. Empty when the default shell cannot be resolved. */
+            path?: string;
+        };
+        TerminalShellsResponse: {
+            /** @description The shell auto resolves to. */
+            default: components["schemas"]["TerminalShellResponse"];
+            /** @description Installed shells, one per real binary. */
+            shells: components["schemas"]["TerminalShellResponse"][];
         };
         TrackerIntakeConfig: {
             assignee?: string;
@@ -24596,6 +24651,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listTerminalShells: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalShellsResponse"];
+                };
+            };
+        };
+    };
+    checkTerminalShell: {
+        parameters: {
+            query?: {
+                /** @description Custom shell: an absolute path, a ~/ path, or a command on PATH. */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalShellCheckResponse"];
                 };
             };
         };
