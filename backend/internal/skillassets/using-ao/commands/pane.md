@@ -1,10 +1,16 @@
 # ao pane
 
-Show or change how this session's tabs are split in the AO desktop window.
+Show or change how this session's tabs are split in the AO desktop window,
+and run commands in this session's terminal tabs where the user can watch.
 The window can show tabs side by side or stacked: your own chat or terminal,
 shell terminals, reviewers and open files. Use it when the user asks for a
 split ("open a terminal next to the chat", "put the test output below") or when
 showing two things at once helps them follow your work.
+
+When the user asks you to run something "in a terminal", "on the right", or
+anywhere they can see it, run it in a terminal tab with `ao pane run` or
+`ao pane split terminal --run`. Do not run it in your own shell instead: they
+see only the terminal tab.
 
 Split panes are a Developer Mode preview. The window refuses changes while
 Split panes is off (Settings → General), and only changes the session that is
@@ -14,6 +20,11 @@ on screen. If a command says so, tell the user rather than retrying.
 ao pane                                    # tabs, their keys, and the splits
 ao pane split terminal                     # new shell terminal right of the tab on screen
 ao pane split terminal --side bottom       # ... or below it
+ao pane split terminal --run "ls -la"      # new terminal on the right, run a command in it, print its output
+ao pane run <terminal-key> "npm test"      # run a command in an existing terminal tab, print its output
+ao pane read <terminal-key>                # print what a terminal tab shows now
+ao pane send <terminal-key> y --no-enter   # type without Enter (prompt answers, TUI keys)
+ao pane interrupt <terminal-key>           # Ctrl-C
 ao pane split file:src/app.ts --beside session
 ao pane split <tab-key> --beside <tab-key> --side left
 ao pane focus <tab-key>                    # bring a tab (and its split) on screen
@@ -34,6 +45,19 @@ ao pane ungroup                            # turn the split on screen back into 
 `file:<path>` for a file that is not open yet, workspace-relative or absolute
 inside this session's workspace.
 
+## Running commands in a terminal tab
+
+- `run` and `split --run` type the command and press Enter, wait until the
+  screen stops changing (`--timeout`, 15 s by default), then print the last
+  `--lines` (60) lines. A long-running command (a dev server, a watcher) keeps
+  running after `run` returns. Check on it with `ao pane read`, and stop it with
+  `ao pane interrupt`.
+- The terminal is a normal shell in this session's workspace. Commands run as
+  the user and they see every keystroke, so run only what the user asked for or
+  what the task needs.
+- Only this session's own terminal tabs can be driven. The agent tab, reviewers,
+  other sessions' terminals and AO's login terminals are refused.
+
 ## Rules
 
 - Run `ao pane` first and use the keys it prints; do not guess handle ids.
@@ -44,6 +68,8 @@ inside this session's workspace.
 - Every command prints the layout after the change. Add `--json` for the same
   data as JSON (`selected`, `shown`, `tabs`, `groups` with each pane's `x`,
   `y`, `width` and `height` as fractions).
-- Errors are final answers from the window: `SPLIT_PANES_OFF`,
-  `SESSION_NOT_ON_SCREEN`, `TAB_NOT_FOUND`, `NO_DESKTOP_WINDOW`. Report them to
-  the user instead of looping.
+- Errors are final answers: `SPLIT_PANES_OFF`, `SESSION_NOT_ON_SCREEN`,
+  `TAB_NOT_FOUND`, `NO_DESKTOP_WINDOW`, `PANE_TERMINAL_NOT_FOUND`,
+  `PANE_TERMINAL_EXITED`. Report them to the user instead of looping.
+- `run`, `read`, `send` and `interrupt` work without the window. They need only
+  the terminal tab's key.

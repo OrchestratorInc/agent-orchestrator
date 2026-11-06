@@ -71,7 +71,9 @@ type APIDeps struct {
 	Browser           controllers.BrowserService
 	BrowserChrome     controllers.BrowserChromeService
 	// Panes relays split-pane requests from agents to the desktop window.
-	Panes                    controllers.PaneService
+	Panes controllers.PaneService
+	// PaneTerminals lets an agent type into and read its session's shell terminals.
+	PaneTerminals            controllers.PaneTerminalService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -220,7 +222,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
-		panes:         &controllers.PanesController{Svc: deps.Panes},
+		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},

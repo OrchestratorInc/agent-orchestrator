@@ -9575,6 +9575,138 @@ paths:
       summary: Ask the desktop window to split, unsplit or focus a session's tabs
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/panes/input:
+    post:
+      operationId: typeIntoSessionPane
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPaneInputRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Type into, or interrupt, one of the session's own terminal tabs
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/panes/output:
+    get:
+      operationId: readSessionPaneOutput
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Key of one of this session's terminal tabs, from ao pane.
+        in: query
+        name: tab
+        schema:
+          description: Key of one of this session's terminal tabs, from ao pane.
+          type: string
+      - description: How many of the last lines to return. Defaults to 200.
+        in: query
+        name: lines
+        schema:
+          description: How many of the last lines to return. Defaults to 200.
+          maximum: 2000
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneOutputResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read what one of the session's own terminal tabs shows
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/pin:
     delete:
       operationId: unpinSession
@@ -16245,6 +16377,28 @@ components:
       - focus
       - panes
       type: object
+    ControllersPaneInputRequest:
+      properties:
+        enter:
+          description: Press Enter after the text. Defaults to true.
+          type:
+          - "null"
+          - boolean
+        interrupt:
+          description: Send Ctrl-C instead of text.
+          type: boolean
+        tab:
+          description: Key of one of this session's terminal tabs, from ao pane.
+          type: string
+        text:
+          description: Text to type. Sent as a command (followed by Enter) unless
+            enter is false.
+          type:
+          - "null"
+          - string
+      required:
+      - tab
+      type: object
     ControllersPaneLayout:
       properties:
         enabled:
@@ -16285,6 +16439,19 @@ components:
       required:
       - sessionId
       - layout
+      type: object
+    ControllersPaneOutputResponse:
+      properties:
+        output:
+          type: string
+        sessionId:
+          type: string
+        tab:
+          type: string
+      required:
+      - sessionId
+      - tab
+      - output
       type: object
     ControllersPaneTab:
       properties:

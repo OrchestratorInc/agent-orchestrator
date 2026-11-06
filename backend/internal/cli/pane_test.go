@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type paneCapture struct {
@@ -108,6 +109,84 @@ func TestPaneNeedsASession(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "")
 	setConfigEnv(t)
 	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane"); err == nil || !strings.Contains(err.Error(), "needs a session") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// paneTerminalServer fakes a terminal whose screen shows the typed command's
+// output once it has been typed.
+func paneTerminalServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var calls []string
+	screen := "$ "
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+string(body))
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/sessions/aa-47/panes/input":
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			if text, ok := req["text"].(string); ok {
+				screen = "$ " + text + "\nREADME.md\n$ "
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/v1/sessions/aa-47/panes/output":
+			_ = json.NewEncoder(w).Encode(map[string]string{"sessionId": "aa-47", "tab": r.URL.Query().Get("tab"), "output": screen})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+func TestPaneRunTypesTheCommandAndPrintsTheSettledScreen(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, calls := paneTerminalServer(t)
+	writeRunFileFor(t, cfg, srv)
+	previous := paneSettleInterval
+	paneSettleInterval = 20 * time.Millisecond
+	t.Cleanup(func() { paneSettleInterval = previous })
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "run", "sh-1", "ls", "-la")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "$ ls -la\nREADME.md") {
+		t.Fatalf("output = %q", out)
+	}
+	if first := (*calls)[0]; !strings.Contains(first, "/panes/input") || !strings.Contains(first, `"text":"ls -la"`) || !strings.Contains(first, `"enter":true`) {
+		t.Fatalf("first call = %s", first)
+	}
+}
+
+func TestPaneReadAndInterrupt(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, calls := paneTerminalServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "read", "sh-1", "--lines", "20")
+	if err != nil || strings.TrimSpace(out) != "$" {
+		t.Fatalf("read: out = %q, err = %v", out, err)
+	}
+	if !strings.Contains((*calls)[0], "lines=20") || !strings.Contains((*calls)[0], "tab=sh-1") {
+		t.Fatalf("read call = %s", (*calls)[0])
+	}
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "interrupt", "sh-1"); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	if last := (*calls)[len(*calls)-1]; !strings.Contains(last, `"interrupt":true`) {
+		t.Fatalf("interrupt call = %s", last)
+	}
+}
+
+func TestPaneSplitRunRefusesANonTerminalTab(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	setConfigEnv(t)
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "pane", "split", "file:README.md", "--run", "ls"); err == nil || !strings.Contains(err.Error(), "needs a terminal") {
 		t.Fatalf("err = %v", err)
 	}
 }
