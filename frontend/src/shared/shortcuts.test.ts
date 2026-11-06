@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	APP_SHORTCUTS,
+	isSplitPaneShortcut,
 	matchesAppShortcut,
 	
 	matchesKeyboardShortcutsHelpShortcut,
@@ -138,7 +139,7 @@ describe("default shortcuts", () => {
 		["toggle-sidebar", chord({ key: "b", meta: true })],
 		["toggle-inspector", chord({ key: "b", code: "KeyB", meta: true, alt: true })],
 		["toggle-terminal", chord({ key: "`", code: "Backquote", ctrl: true })],
-		["toggle-diff", chord({ key: "G", meta: true, shift: true })],
+		["toggle-diff", chord({ key: "D", meta: true, shift: true })],
 		["toggle-inspector", chord({ key: "B", meta: true, shift: true })],
 		["jump-to-session", chord({ key: "1", meta: true })],
 		["jump-to-session", chord({ key: "9", meta: true })],
@@ -158,9 +159,7 @@ describe("default shortcuts", () => {
 		["open-in-editor", chord({ key: "o", meta: true })],
 		["copy-session-path", chord({ key: "C", meta: true, shift: true })],
 		["model-picker", chord({ key: "M", meta: true, shift: true })],
-		["split-shell-terminal", chord({ key: "d", meta: true })],
-		["split-shell-terminal-down", chord({ key: "D", meta: true, shift: true })],
-		["dictate", chord({ key: "d", ctrl: true, meta: true })],
+		["dictate", chord({ key: "d", meta: true })],
 		["open-orchestrator", chord({ key: "O", meta: true, shift: true })],
 	] as const)("macOS binds %s to its chord", (id, pressed) => {
 		expect(matchesAppShortcut(id, pressed, true)).toBe(true);
@@ -229,6 +228,12 @@ describe("default shortcuts", () => {
 describe("shortcut catalog", () => {
 	it("provides runtime defaults for every shortcut on each platform", () => {
 		for (const shortcut of APP_SHORTCUTS) {
+			// The split-pane preview leaves macOS ⌘D and ⌘⇧D to dictate and diff.
+			if (isSplitPaneShortcut(shortcut.id)) {
+				expect(defaultShortcutBindings(shortcut.id, true)).toEqual([]);
+				expect(defaultShortcutBindings(shortcut.id, false).length).toBeGreaterThan(0);
+				continue;
+			}
 			expect(defaultShortcutBindings(shortcut.id, true).length).toBeGreaterThan(0);
 			expect(defaultShortcutBindings(shortcut.id, false).length).toBeGreaterThan(0);
 		}

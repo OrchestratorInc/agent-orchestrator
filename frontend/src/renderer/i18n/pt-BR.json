@@ -2700,6 +2700,8 @@
 	"settings.diagnosticsToggleHint": "Mostra o uso de memória e CPU nos cartões de sessão e no quadro, além da página de Diagnóstico.",
 	"settings.sideChats": "Chats laterais",
 	"settings.sideChatsHint": "Abra conversas laterais separadas no inspetor e use /btw para fazer uma pergunta.",
+	"settings.splitPanes": "Painéis divididos",
+	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual.",
 	"settings.newSidebarDesign": "Novo design da barra lateral",
 	"settings.newSidebarDesignHint": "Ícones de status, prévias ao passar o mouse e avatares de repositório na barra lateral esquerda, com as cores do quadro combinando. Desative para voltar à barra lateral anterior.",
 	"settings.simplifiedTopbar": "Barra superior simplificada",

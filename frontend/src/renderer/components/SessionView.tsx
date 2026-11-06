@@ -22,6 +22,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
+import { readStoredSplitGroups, useSplitPanesEnabled, writeStoredSplitGroups } from "../lib/split-panes";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
@@ -974,11 +975,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 
 	const openShellTerminal = useOpenShellTerminal(hostId);
+	// Split panes are a Developer mode preview; off, no split is shown and
+	// turning it off mid-split puts every tab back in the strip.
+	const splitPanes = useSplitPanesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
 	// pane, so terminals, chats and editors survive each move.
-	const [groupsBySession, setGroupsBySession] = useState<Record<string, TabGroup[]>>({});
+	// Layouts are remembered across reloads; members that did not come back
+	// (a file tab, a closed shell) drop out when the tabs are reconciled.
+	const [groupsBySession, setGroupsBySession] = useState<Record<string, TabGroup[]>>(readStoredSplitGroups);
+	useEffect(() => writeStoredSplitGroups(groupsBySession), [groupsBySession]);
 	const storedGroups = groupsBySession[uiSessionId] ?? EMPTY_TAB_GROUPS;
 	// A Cloud session shows one file view at a time, so its files are never split.
 	const splittableKeys = useMemo(
@@ -991,6 +998,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const seenPendingShellsRef = useRef(new Set<string>());
 	for (const key of splittableKeys) if (key.startsWith(PENDING_SHELL_KEY_PREFIX)) seenPendingShellsRef.current.add(key);
 	const groups = useMemo(() => {
+		if (!splitPanes) return EMPTY_TAB_GROUPS;
 		if (!shellListKnown) return storedGroups;
 		// A shell opened into a split is a placeholder until the daemon answers:
 		// keep its pane until the list shows it, then follow it to the shell it
@@ -1005,7 +1013,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			}
 		}
 		return reconcileGroups(storedGroups, available, adoptedShellHandle);
-	}, [shellListKnown, splittableKeys, storedGroups]);
+	}, [shellListKnown, splitPanes, splittableKeys, storedGroups]);
 	const updateGroups = useCallback(
 		(update: (current: TabGroup[]) => TabGroup[]) => {
 			setGroupsBySession((current) => {
@@ -1019,9 +1027,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[uiSessionId],
 	);
 	// A closed member leaves its group; a group of one becomes a plain tab.
+	// While split panes are off the stored layouts are kept for when they return.
 	useEffect(() => {
-		if (groups !== storedGroups) updateGroups(() => groups);
-	}, [groups, storedGroups, updateGroups]);
+		if (splitPanes && groups !== storedGroups) updateGroups(() => groups);
+	}, [groups, splitPanes, storedGroups, updateGroups]);
 	const groupedKeysSignature = groups.flatMap((group) => leafKeys(group.root)).join("\n");
 	const groupedKeySet = useMemo<ReadonlySet<string>>(
 		() => new Set(groupedKeysSignature ? groupedKeysSignature.split("\n") : []),
@@ -1698,7 +1707,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	splitDropStateRef.current = { groups, shownGroup, selectedTabKey, splittableKeys, selectTab, updateGroups };
 	useEffect(
 		() =>
-			registerPaneDropTarget({
+			!splitPanes ? undefined : registerPaneDropTarget({
 				// Other tabs come to the tab on screen; it never leaves itself. A
 				// member of the group on screen can still move within or out of it.
 				canDrag: (key) => {
@@ -1711,7 +1720,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					return state ? resolveSplitDrop(state, splitScreenRef.current, centerColumnRef.current, key, x, y) : null;
 				},
 			}),
-		[],
+		[splitPanes],
 	);
 	const shownGroupId = shownGroup?.id;
 	const resizeSplit = useCallback(
@@ -1736,9 +1745,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const box = shownLayout?.leaves.get(key);
 		return box ? { position: "absolute", ...box } : FULL_PANE_STYLE;
 	};
-	const visitedReviewerChatId = useRef<string | null>(null);
-	if (reviewerChatId) visitedReviewerChatId.current = reviewerChatId;
-	const retainedReviewerChatId = reviewerChatId ?? (reviewerChat?.reviewId === visitedReviewerChatId.current ? visitedReviewerChatId.current : null);
+	// The reviewer chat stays mounted while it is a member of a split, so it
+	// survives moving between panes and leaving its group's tab. Otherwise it
+	// is only mounted while selected, as before split panes.
+	const groupedReviewerChatId = reviewerChat && groupedKeySet.has(`reviewer-chat:${reviewerChat.reviewId}`) ? reviewerChat.reviewId : null;
+	const retainedReviewerChatId = reviewerChatId ?? groupedReviewerChatId;
 	const reviewerPaneKey = retainedReviewerChatId ? `reviewer-chat:${retainedReviewerChatId}` : undefined;
 	const reviewerInPane = Boolean(reviewerPaneKey && shownLayout?.leaves.has(reviewerPaneKey));
 	const reviewerVisible = reviewerInPane || Boolean(retainedReviewerChatId && mainReviewerChatId === retainedReviewerChatId);
@@ -1876,7 +1887,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// below it, splitting the tab on screen if it is not split yet.
 	const splitNewTerminalRef = useRef<(side: "right" | "bottom") => void>(() => undefined);
 	splitNewTerminalRef.current = (side) => {
-		if (!session || isOrchestrator) return;
+		if (!session || isOrchestrator || !splitPanes) return;
 		const anchor = splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY;
 		const shell = openShellTerminal.open({ projectId: session.workspaceId, sessionId, cloud: session.cloud });
 		if (!shell) return;
@@ -1898,8 +1909,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setActiveShellTerminal(key);
 		setTerminalTarget({ generation: shell.createdAt, kind: "shell", handleId: key, sessionId, title: shell.title });
 	};
-	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), Boolean(session) && !isOrchestrator);
-	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), Boolean(session) && !isOrchestrator);
+	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), splitPanes && Boolean(session) && !isOrchestrator);
+	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), splitPanes && Boolean(session) && !isOrchestrator);
 
 	const mainWorkspaceTabs = useMemo(
 		() => (groupWorkspaceTabs.length ? [...centerFileTabs, ...groupWorkspaceTabs] : centerFileTabs),

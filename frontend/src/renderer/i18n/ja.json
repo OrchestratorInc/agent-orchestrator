@@ -2656,6 +2656,8 @@
 	"settings.diagnosticsToggleHint": "セッションカードとボードにメモリと CPU の使用量を表示し、診断ページを表示します。",
 	"settings.sideChats": "サイドチャット",
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
+	"settings.splitPanes": "分割ペイン",
+	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。",
 	"settings.newSidebarDesign": "新しいサイドバーデザイン",
 	"settings.newSidebarDesignHint": "左サイドバーのステータスアイコン、ホバープレビュー、リポジトリのアバターと、それに合わせたボードの色。オフにすると以前のサイドバーに戻ります。",
 	"settings.simplifiedTopbar": "シンプルなトップバー",

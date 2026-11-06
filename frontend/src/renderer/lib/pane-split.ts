@@ -224,3 +224,66 @@ export function halfOf(rect: ClientRect, side: SplitSide): ClientRect {
 export function containsPoint(rect: ClientRect, x: number, y: number): boolean {
 	return x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height;
 }
+
+/** Split layouts are remembered for this many sessions, the most recently changed. */
+export const MAX_STORED_SPLIT_SESSIONS = 50;
+
+function parseNode(value: unknown, dropKey: (key: string) => boolean): SplitNode | null {
+	if (!value || typeof value !== "object") return null;
+	const node = value as Record<string, unknown>;
+	if (node.type === "leaf") {
+		return typeof node.key === "string" && node.key && !dropKey(node.key) ? { type: "leaf", key: node.key } : null;
+	}
+	if (node.type !== "split" || (node.dir !== "row" && node.dir !== "column")) return null;
+	const a = parseNode(node.a, dropKey);
+	const b = parseNode(node.b, dropKey);
+	if (!a) return b;
+	if (!b) return a;
+	const ratio = typeof node.ratio === "number" && Number.isFinite(node.ratio) ? Math.min(0.95, Math.max(0.05, node.ratio)) : 0.5;
+	return { type: "split", dir: node.dir, ratio, a, b };
+}
+
+/**
+ * Reads remembered split layouts, keeping only well-formed groups of two or
+ * more distinct tabs. `dropKey` leaves out tabs that cannot outlive a reload.
+ */
+export function parseStoredGroups(raw: string | null | undefined, dropKey: (key: string) => boolean = () => false): Record<string, TabGroup[]> {
+	if (!raw) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return {};
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+	const result: Record<string, TabGroup[]> = {};
+	for (const [sessionKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+		if (!Array.isArray(value)) continue;
+		const seen = new Set<string>();
+		const groups: TabGroup[] = [];
+		for (const candidate of value) {
+			if (!candidate || typeof candidate !== "object") continue;
+			const group = candidate as Record<string, unknown>;
+			if (typeof group.id !== "string" || !group.id) continue;
+			let root = parseNode(group.root, dropKey);
+			// A tab belongs to one group at most.
+			for (const key of root ? leafKeys(root) : []) {
+				if (seen.has(key) && root) root = removeLeaf(root, key);
+			}
+			if (!root || root.type !== "split") continue;
+			const keys = leafKeys(root);
+			if (new Set(keys).size !== keys.length) continue;
+			for (const key of keys) seen.add(key);
+			const focus = typeof group.focus === "string" && keys.includes(group.focus) ? group.focus : undefined;
+			groups.push(focus ? { id: group.id, root, focus } : { id: group.id, root });
+		}
+		if (groups.length) result[sessionKey] = groups;
+	}
+	return result;
+}
+
+/** The layouts to remember: the most recently changed sessions come last. */
+export function trimStoredGroups(groupsBySession: Record<string, TabGroup[]>): Record<string, TabGroup[]> {
+	const entries = Object.entries(groupsBySession).filter(([, groups]) => groups.length > 0);
+	return Object.fromEntries(entries.slice(-MAX_STORED_SPLIT_SESSIONS));
+}

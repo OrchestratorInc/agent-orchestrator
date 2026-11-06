@@ -7,9 +7,12 @@ import {
 	insertBeside,
 	layoutBoxes,
 	layoutCss,
+	MAX_STORED_SPLIT_SESSIONS,
+	parseStoredGroups,
 	leafKeys,
 	reconcileGroups,
 	removeLeaf,
+	trimStoredGroups,
 	setRatioAt,
 	type SplitNode,
 	type TabGroup,
@@ -106,5 +109,42 @@ describe("drop zones", () => {
 
 	it("previews the half the tab would take", () => {
 		expect(halfOf(rect, "bottom")).toEqual({ left: 100, top: 350, width: 800, height: 300 });
+	});
+});
+
+describe("stored split layouts", () => {
+	const leaf = (key: string) => ({ type: "leaf", key });
+	const pair = (a: string, b: string, ratio = 0.5) => ({ type: "split", dir: "row", ratio, a: leaf(a), b: leaf(b) });
+
+	it("reads back a saved layout", () => {
+		const saved = { "sess-1": [{ id: "g1", root: pair("session", "sh-1", 0.4), focus: "sh-1" }] };
+		expect(parseStoredGroups(JSON.stringify(saved))).toEqual(saved);
+	});
+
+	it("ignores storage that is missing or not a layout", () => {
+		expect(parseStoredGroups(null)).toEqual({});
+		expect(parseStoredGroups("{not json")).toEqual({});
+		expect(parseStoredGroups("[]")).toEqual({});
+		expect(parseStoredGroups(JSON.stringify({ "sess-1": [{ id: "g1", root: { type: "split", dir: "diagonal" } }] }))).toEqual({});
+	});
+
+	it("drops tabs that cannot outlive a reload and dissolves what is left alone", () => {
+		const saved = { "sess-1": [{ id: "g1", root: pair("session", "pending-shell:1"), focus: "pending-shell:1" }] };
+		expect(parseStoredGroups(JSON.stringify(saved), (key) => key.startsWith("pending-shell:"))).toEqual({});
+	});
+
+	it("keeps each tab in one group and clamps ratios", () => {
+		const saved = { "sess-1": [{ id: "g1", root: pair("a", "b", 7) }, { id: "g2", root: pair("b", "c") }] };
+		expect(parseStoredGroups(JSON.stringify(saved))).toEqual({ "sess-1": [{ id: "g1", root: { ...pair("a", "b"), ratio: 0.95 } }] });
+	});
+
+	it("remembers only the most recently changed sessions", () => {
+		const many = Object.fromEntries(
+			Array.from({ length: MAX_STORED_SPLIT_SESSIONS + 5 }, (_, index) => [`sess-${index}`, [{ id: `g${index}`, root: pair("a", "b") as never }]]),
+		);
+		const trimmed = trimStoredGroups(many);
+		expect(Object.keys(trimmed)).toHaveLength(MAX_STORED_SPLIT_SESSIONS);
+		expect(trimmed["sess-0"]).toBeUndefined();
+		expect(trimmed[`sess-${MAX_STORED_SPLIT_SESSIONS + 4}`]).toBeDefined();
 	});
 });

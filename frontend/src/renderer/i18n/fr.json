@@ -2700,6 +2700,8 @@
 	"settings.diagnosticsToggleHint": "Afficher l’utilisation de la mémoire et du processeur sur les cartes de session et le tableau, ainsi que la page Diagnostic.",
 	"settings.sideChats": "Conversations annexes",
 	"settings.sideChatsHint": "Ouvrir des conversations annexes distinctes dans l’inspecteur et utiliser /btw pour y poser une question.",
+	"settings.splitPanes": "Volets partagés",
+	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel.",
 	"settings.newSidebarDesign": "Nouveau design de la barre latérale",
 	"settings.newSidebarDesignHint": "Icônes d'état, aperçus au survol et avatars de dépôt dans la barre latérale gauche, avec les couleurs du tableau assorties. Désactivez pour revenir à l'ancienne barre latérale.",
 	"settings.simplifiedTopbar": "Barre supérieure simplifiée",
