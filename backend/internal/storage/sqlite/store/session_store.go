@@ -515,21 +515,13 @@ func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.Sessi
 }
 
 // AddSessionRegisteredArtifactPaths adds paths the session has not registered
-// yet and returns all of its registered paths. It returns
-// domain.ErrRegisteredArtifactLimit, changing nothing, when the result would
-// pass domain.MaxRegisteredArtifactPaths, and false for an unknown session.
-func (s *Store) AddSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, paths []string) ([]string, bool, error) {
+// yet and returns all of its registered paths, as
+// domain.AddRegisteredArtifactPaths does with gone reporting a path's file is
+// missing. It returns domain.ErrRegisteredArtifactLimit, changing nothing, when
+// the list stays too long, and false for an unknown session.
+func (s *Store) AddSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, paths []string, gone func(path string) bool) ([]string, bool, error) {
 	return s.editRegisteredArtifactPaths(ctx, id, func(current []string) ([]string, error) {
-		next := slices.Clone(current)
-		for _, path := range paths {
-			if !slices.Contains(next, path) {
-				next = append(next, path)
-			}
-		}
-		if len(next) > domain.MaxRegisteredArtifactPaths && len(next) > len(current) {
-			return nil, domain.ErrRegisteredArtifactLimit
-		}
-		return next, nil
+		return domain.AddRegisteredArtifactPaths(current, paths, gone)
 	})
 }
 

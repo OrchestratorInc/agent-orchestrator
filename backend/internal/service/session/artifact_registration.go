@@ -40,7 +40,11 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 		}
 		paths = append(paths, path)
 	}
-	registered, found, err := s.store.AddSessionRegisteredArtifactPaths(ctx, id, paths)
+	gone := func(path string) bool {
+		_, err := sessionartifacts.Registrable(dir, path)
+		return errors.Is(err, sessionartifacts.ErrNotFound)
+	}
+	registered, found, err := s.store.AddSessionRegisteredArtifactPaths(ctx, id, paths, gone)
 	if errors.Is(err, domain.ErrRegisteredArtifactLimit) {
 		return ArtifactRegistration{}, apierr.Conflict("ARTIFACT_REGISTRATION_LIMIT",
 			fmt.Sprintf("A session can register at most %d artifacts.", domain.MaxRegisteredArtifactPaths), nil)
