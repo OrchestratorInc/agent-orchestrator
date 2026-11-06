@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: mocks.remotes } }));
-vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, hasTrustedApiBaseUrl: () => true }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: mocks.localGet }, hasTrustedApiBaseUrl: () => true, reportingFetch: (input: Request) => fetch(input) }));
 vi.mock("openapi-fetch", () => ({ default: ({ baseUrl }: { baseUrl: string }) => ({ GET: (path: string) => mocks.remoteGet(baseUrl, path) }) }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "authenticated", session: { user: { id: "fixture-account" } } }) }));
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.cloudBaseUrl } }) }));

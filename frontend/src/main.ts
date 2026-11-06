@@ -83,7 +83,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
-import type { DaemonStatus } from "./shared/daemon-status";
+import type { DaemonFailureCode, DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
@@ -241,6 +241,10 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
+import { captureMainError, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink, type MainErrorReason } from "./main/main-error-capture";
+
+// Every ipcMain.handle registered from here on reports unexpected throws.
+installIpcErrorCapture(ipcMain);
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -695,6 +699,11 @@ function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void
 	const fallback = setTimeout(show, WINDOW_SHOW_FALLBACK_MS);
 	contents.once("did-finish-load", show);
 	contents.once("did-fail-load", show);
+	// -3 (ERR_ABORTED) is a navigation replaced by another, not a failure.
+	contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
+		if (isMainFrame && errorCode !== -3) captureMainError({ category: "window", reason: "did_fail_load", detail: `code:${errorCode}` });
+	});
+	contents.on("unresponsive", () => captureMainError({ category: "window", reason: "unresponsive" }));
 }
 
 function focusMainWindow(): void {
@@ -738,7 +747,21 @@ app.once("will-quit", () => {
 	sideStateTimer = undefined;
 });
 
+// Daemon failures the user cannot fix by waiting. not_ready, not_configured
+// and daemon_unreachable are transitional and are not reported.
+const REPORTED_DAEMON_FAILURES = new Set<DaemonFailureCode>(["binary_missing", "spawn_failed", "exited", "port_unconfirmed", "identity_mismatch", "datadir_unwritable"]);
+
+function reportDaemonFailure(previous: DaemonStatus, next: DaemonStatus): void {
+	const code = next.code;
+	if (!code || !REPORTED_DAEMON_FAILURES.has(code)) return;
+	// One report per transition into a failure, not one per status refresh.
+	if (previous.code === code && previous.state === next.state) return;
+	const detail = next.signal ? `signal:${next.signal}` : typeof next.exitCode === "number" ? `code:${next.exitCode}` : undefined;
+	captureMainError({ category: "daemon", reason: code as MainErrorReason, ...(detail ? { detail } : {}) });
+}
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	reportDaemonFailure(daemonStatus, nextStatus);
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	if (nextStatus.state !== "ready") {
@@ -2053,10 +2076,14 @@ async function repairDevAcpRuntime(): Promise<void> {
 		});
 		child.once("error", (err) => {
 			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			captureMainError({ category: "acp_runtime", reason: "rebuild", error: err });
 			resolve();
 		});
 		child.once("exit", (code) => {
-			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			if (code !== 0) {
+				console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+				captureMainError({ category: "acp_runtime", reason: "rebuild", ...(typeof code === "number" ? { detail: `code:${code}` } : {}) });
+			}
 			resolve();
 		});
 	});
@@ -3124,7 +3151,7 @@ registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
 	requireAccount: async () => {
-		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
+		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to AO Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
@@ -3887,6 +3914,9 @@ app.whenReady().then(async () => {
 	telemetryPolicyController = policyController;
 	try { await policyController.initialize(); }
 	catch (error) { console.error("telemetry policy bootstrap failed; reporting remains disabled:", error); }
+	// Handled main failures (including any held from before this point) go
+	// through the same consent check as renderer captures.
+	setMainErrorSink((capture) => { policyController.captureMain(capture); });
 	setInterval(() => { if (telemetryPolicyRetryable(policyController.snapshot())) void policyController.retryPendingCleanup(); }, 1_000).unref();
 	// Capture install provenance BEFORE relocation. moveToApplicationsFolder()
 	// relaunches from /Applications WITHOUT forwarding our --installed-via arg, and
