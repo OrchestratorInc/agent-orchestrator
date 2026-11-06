@@ -63,6 +63,7 @@ describe("archived session retention", () => {
 	it("saves the chosen number of days", async () => {
 		settingsMock.mockReturnValue(settings({ sessionRetentionDays: 0 }));
 		renderSection();
+		expect(screen.queryByRole("button", { name: "Automatic browser opening" })).not.toBeInTheDocument();
 
 		const menu = screen.getByRole("button", { name: "Delete archived sessions" });
 		expect(menu).toHaveTextContent("Never");

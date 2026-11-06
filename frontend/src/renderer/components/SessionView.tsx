@@ -70,6 +70,7 @@ import { FileTabMenuItems, SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
+import { useAutomaticBrowserStore } from "../stores/automatic-browser-store";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
@@ -473,6 +474,8 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 }
 
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
+	const automaticBrowser = useAutomaticBrowserStore((state) => state.mode);
+	const automaticBrowserLoaded = useAutomaticBrowserStore((state) => state.loaded);
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
@@ -2263,7 +2266,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
 
 	useEffect(() => {
-		if (!hasInspector) return;
+		if (!hasInspector || !automaticBrowserLoaded) return;
 		const previewKey = previewRevealKey(previewUrl, previewRevision);
 		const baseline = previewBaselineRef.current;
 		if (!baseline || baseline.sessionId !== uiSessionId) {
@@ -2272,12 +2275,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 		if (baseline.key === previewKey) return;
 		previewBaselineRef.current = { sessionId: uiSessionId, key: previewKey };
-		if (!previewKey || terminated) return;
+		if (!previewKey || terminated || automaticBrowser !== "internal") return;
 		// Only the routed session mounts SessionView. A new explicit preview
 		// reveals its panel; entering a session with an existing target does not.
 		revealBrowserPanel();
 	}, [
 		hasInspector,
+		automaticBrowser,
+		automaticBrowserLoaded,
 		previewRevision,
 		previewUrl,
 		uiSessionId,

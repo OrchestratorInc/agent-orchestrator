@@ -22,6 +22,7 @@ import { startSessionManagementTelemetry } from "./lib/session-management-teleme
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
+import { useAutomaticBrowserStore } from "./stores/automatic-browser-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
@@ -124,6 +125,7 @@ async function renderApp(): Promise<void> {
 	// The sound-notifications toggle only needs to be right by the time
 	// Settings renders, so it loads in the background rather than blocking mount.
 	void useSoundNotificationsStore.getState().load();
+	void useAutomaticBrowserStore.getState().load();
 	// Do not wrap the desktop root in StrictMode. React 19 enables per-component
 	// performance tracking for that tree in development, which made common route
 	// switches and drag updates spend hundreds of milliseconds recording timings.

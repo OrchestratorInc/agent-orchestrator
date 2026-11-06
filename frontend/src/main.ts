@@ -203,6 +203,7 @@ import {
 import type { BrowserProfileMenuInput } from "./shared/browser-profiles";
 import { createWindowComposition, type WindowComposition } from "./main/window-composition";
 import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
+import { enforceAutomaticBrowserPolicy } from "./main/automatic-browser-policy";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import {
@@ -494,6 +495,7 @@ let pendingBounce: { id: number; critical: boolean } | null = null;
 // Live mirror of the persisted `soundNotificationsEnabled` UI setting, kept in sync by the
 // uiSettings:set handler so a toggle flip takes effect without an app restart.
 let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
+let automaticBrowser: UiSettings["automaticBrowser"] = "internal";
 
 // Plays the bundled notification sound through the renderer (main has no
 // audio output). `shell.beep()` is only the fallback for when no shell is
@@ -1777,7 +1779,7 @@ function establishBrowserRuntimeLink(): void {
 	if (browserRuntimeLink) dropBrowserRuntimeLink();
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
-		execute: (command, signal) => {
+		execute: async (command, signal) => {
 			// A render check or measure uses its own hidden offscreen window,
 			// never the main window or the session's Browser panel, so it does
 			// not need (or disturb) the view host.
@@ -1787,6 +1789,7 @@ function establishBrowserRuntimeLink(): void {
 			if (command.action === "__render-measure") {
 				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
+			await enforceAutomaticBrowserPolicy(automaticBrowser, command.action, command.args, (url) => shell.openExternal(url));
 			const host = browserViewHost;
 			if (!host) {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
@@ -1862,7 +1865,7 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 			return;
 		case "preview": {
 			const url = (control.payload as { url?: unknown } | undefined)?.url;
-			if (typeof url === "string") await host.openLivePreview(sessionId, url);
+			if (automaticBrowser === "internal" && typeof url === "string") await host.openLivePreview(sessionId, url);
 			return;
 		}
 		default:
@@ -3417,6 +3420,7 @@ ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 	trayController?.setLocale(result.locale);
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
+	automaticBrowser = result.automaticBrowser;
 	shellEnvPromise = null;
 	cachedShellEnv = null;
 	return result;
@@ -4010,6 +4014,7 @@ app.whenReady().then(async () => {
 		? await readUiSettings(path.dirname(keybindingRunFile))
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
+	automaticBrowser = initialUiSettings.automaticBrowser;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	if (isTrayEnabled(process.platform)) {
