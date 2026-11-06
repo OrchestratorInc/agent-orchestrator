@@ -29,6 +29,7 @@ type paneInputAPIRequest struct {
 	Text      *string `json:"text,omitempty"`
 	Enter     *bool   `json:"enter,omitempty"`
 	Interrupt bool    `json:"interrupt,omitempty"`
+	Close     bool    `json:"close,omitempty"`
 }
 
 type paneOutputDTO struct {
@@ -91,6 +92,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
   ao pane run <terminal-key> "ls -la"
   ao pane read <terminal-key>
   ao pane interrupt <terminal-key>
+  ao pane close <terminal-key>
   ao pane focus session
   ao pane remove <tab-key>
   ao pane ungroup`,
@@ -200,6 +202,19 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 	send.Flags().BoolVar(&noEnter, "no-enter", false, "type the text without pressing Enter (answers to prompts, TUI keys)")
 	send.Flags().SetInterspersed(false)
 	cmd.AddCommand(send)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "close <terminal-tab>",
+		Short: "Close one of this session's terminal tabs, running or exited",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Close: true}); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Closed %s\n", args[0])
+			return err
+		},
+	})
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "interrupt <terminal-tab>",

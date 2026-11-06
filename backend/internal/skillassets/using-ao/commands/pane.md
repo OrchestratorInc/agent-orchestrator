@@ -25,6 +25,7 @@ ao pane run <terminal-key> "npm test"      # run a command in an existing termin
 ao pane read <terminal-key>                # print what a terminal tab shows now
 ao pane send --no-enter <terminal-key> y   # type without Enter (prompt answers, TUI keys)
 ao pane interrupt <terminal-key>           # Ctrl-C
+ao pane close <terminal-key>               # close a terminal tab, running or exited
 ao pane split file:src/app.ts --beside session
 ao pane split <tab-key> --beside <tab-key> --side left
 ao pane focus <tab-key>                    # bring a tab (and its split) on screen
@@ -55,6 +56,9 @@ inside this session's workspace.
   `--lines` (60) lines. A long-running command (a dev server, a watcher) keeps
   running after `run` returns. Check on it with `ao pane read`, and stop it with
   `ao pane interrupt`.
+- When the user asks you to close or kill a terminal, use `ao pane close`. It
+  closes the tab and collapses its split. A terminal whose shell exits (`exit`,
+  Ctrl-D) closes on its own.
 - The terminal is a normal shell in this session's workspace. Commands run as
   the user and they see every keystroke, so run only what the user asked for or
   what the task needs.

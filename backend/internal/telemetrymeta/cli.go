@@ -148,6 +148,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao pr merge":               {},
 	"ao pr resolve-comments":    {},
 	"ao pane":                   {},
+	"ao pane close":             {},
 	"ao pane focus":             {},
 	"ao pane interrupt":         {},
 	"ao pane ls":                {},

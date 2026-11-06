@@ -81,3 +81,18 @@ func TestSessionTerminalControlRefusesAnExitedShell(t *testing.T) {
 		t.Fatalf("err = %v, want PANE_TERMINAL_EXITED", err)
 	}
 }
+
+func TestCloseSessionTerminalClosesOnlyTheSessionsOwnShell(t *testing.T) {
+	svc, rt := agentControlFixture()
+	rt.childExited = true // an exited shell can still be closed
+	ctx := context.Background()
+	if err := svc.CloseSessionTerminal(ctx, "s-1", "sh-other"); apiErrCode(err) != "PANE_TERMINAL_NOT_FOUND" {
+		t.Fatalf("closing another session's shell: err = %v", err)
+	}
+	if err := svc.CloseSessionTerminal(ctx, "s-1", "sh-own"); err != nil {
+		t.Fatalf("close own shell: %v", err)
+	}
+	if len(rt.destroyed) != 1 || rt.destroyed[0] != "sh-own" {
+		t.Fatalf("destroyed = %v, want [sh-own]", rt.destroyed)
+	}
+}

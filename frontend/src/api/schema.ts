@@ -5617,6 +5617,8 @@ export interface components {
             panes: components["schemas"]["ControllersPaneBox"][];
         };
         ControllersPaneInputRequest: {
+            /** @description Close the terminal tab (its shell may already have exited). */
+            close?: boolean;
             /** @description Press Enter after the text. Defaults to true. */
             enter?: null | boolean;
             /** @description Send Ctrl-C instead of text. */

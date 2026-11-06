@@ -16379,6 +16379,9 @@ components:
       type: object
     ControllersPaneInputRequest:
       properties:
+        close:
+          description: Close the terminal tab (its shell may already have exited).
+          type: boolean
         enter:
           description: Press Enter after the text. Defaults to true.
           type:
