@@ -9,14 +9,21 @@ import {
 	type MachineSearchAnswer,
 } from "../lib/session-search-machines";
 import { useConnectedHosts } from "./useHostConnection";
-import type { SessionSearchFilters } from "./useSessionSearch";
+import type { SessionSearchFilters, SessionSearchResult } from "./useSessionSearch";
+
+/** The most rows a daemon returns for one request (domain.SessionSearchMaxLimit). */
+export const SESSION_SEARCH_REQUEST_MAX = 100;
 
 /**
  * What each remote machine is asked: the same words and filters as this
  * machine. Never a project: a project id names a project on one machine.
  */
 export type RemoteMachineSearchRequest = Pick<SessionSearchFilters, "query" | "harness" | "from" | "to" | "sort"> & {
-	/** Results wanted from each machine: everything up to the end of the page. */
+	/**
+	 * Results wanted from each machine: everything up to the end of the page.
+	 * More than one request returns (SESSION_SEARCH_REQUEST_MAX) is read in
+	 * requests at increasing offsets.
+	 */
 	limit: number;
 };
 
@@ -100,22 +107,40 @@ async function searchRemoteMachine(
 	const cancel = () => controller.abort();
 	signal.addEventListener("abort", cancel, { once: true });
 	try {
-		const { data, response } = await clientForHost(hostId).GET("/api/v1/search/sessions", {
-			signal: controller.signal,
-			params: {
-				query: {
-					q: query,
-					...(request.harness ? { harness: request.harness } : {}),
-					...(request.from ? { from: request.from } : {}),
-					...(request.to ? { to: request.to } : {}),
-					...(request.sort ? { sort: request.sort } : {}),
-					limit: request.limit,
+		// A daemon returns at most SESSION_SEARCH_REQUEST_MAX rows per request, so
+		// a page past them is read in requests at increasing offsets; a short one
+		// means the machine has no more. A session that moved between requests
+		// while new work was indexed is kept once.
+		const results: SessionSearchResult[] = [];
+		const seen = new Set<string>();
+		let total = 0;
+		for (let offset = 0; offset < request.limit; offset += SESSION_SEARCH_REQUEST_MAX) {
+			const limit = Math.min(SESSION_SEARCH_REQUEST_MAX, request.limit - offset);
+			const { data, response } = await clientForHost(hostId).GET("/api/v1/search/sessions", {
+				signal: controller.signal,
+				params: {
+					query: {
+						q: query,
+						...(request.harness ? { harness: request.harness } : {}),
+						...(request.from ? { from: request.from } : {}),
+						...(request.to ? { to: request.to } : {}),
+						...(request.sort ? { sort: request.sort } : {}),
+						limit,
+						...(offset ? { offset } : {}),
+					},
 				},
-			},
-		});
-		if (!response.ok || !data) return failed(classifyMachineSearchFailure(response.status));
-		const results = data.results ?? [];
-		return { hostId, label, outcome: "searched", results, total: data.total ?? results.length };
+			});
+			if (!response.ok || !data) return failed(classifyMachineSearchFailure(response.status));
+			const page = data.results ?? [];
+			for (const result of page) {
+				if (seen.has(result.sessionId)) continue;
+				seen.add(result.sessionId);
+				results.push(result);
+			}
+			total = data.total ?? results.length;
+			if (page.length < limit) break;
+		}
+		return { hostId, label, outcome: "searched", results, total };
 	} catch (error) {
 		// Replaced by a newer query: let the query layer drop this one.
 		if (signal.aborted) throw error;

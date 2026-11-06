@@ -67,6 +67,38 @@ describe("useRemoteMachineSearch", () => {
 		]);
 	});
 
+	// A daemon returns at most 100 rows per request. The Search page asks each
+	// machine for everything up to the end of the page, so past 100 a machine is
+	// read in requests at increasing offsets, and a short one ends it.
+	it("reads a machine past the 100-row request limit in pages", async () => {
+		connected.hosts = ["h_air"];
+		const all = Array.from({ length: 130 }, (_, index) => `air-${index}`);
+		const get = vi.fn(async (_path: string, options: { params: { query: { limit: number; offset?: number } } }) => {
+			const { limit, offset = 0 } = options.params.query;
+			const page = all.slice(offset, offset + Math.min(limit, 100)).map((sessionId) => ok(sessionId).data.results[0]);
+			return { data: { ...ok("unused").data, results: page, total: all.length }, response: { ok: true, status: 200 } };
+		});
+		getMocks.set("h_air", get);
+		const { result, rerender } = renderHook(
+			({ limit }) => useRemoteMachineSearch({ query: "flaky", harness: "", from: "", to: "", limit }, true),
+			{ wrapper, initialProps: { limit: 125 } },
+		);
+		await waitFor(() => expect(result.current.settled).toBe(true));
+		expect(get.mock.calls.map(([, options]) => options.params.query)).toEqual([
+			{ q: "flaky", limit: 100 },
+			{ q: "flaky", limit: 25, offset: 100 },
+		]);
+		expect(result.current.answers[0]).toMatchObject({ outcome: "searched", total: 130 });
+		expect(result.current.answers[0]!.results.map((row) => row.sessionId)).toEqual(all.slice(0, 125));
+
+		// Asked for more than it has: the short request ends the reading.
+		get.mockClear();
+		rerender({ limit: 250 });
+		await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(result.current.answers[0]!.results).toHaveLength(130));
+		expect(get.mock.calls.map(([, options]) => options.params.query.offset ?? 0)).toEqual([0, 100]);
+	});
+
 	it("reports a machine that cannot answer, and why, without failing the others", async () => {
 		connected.hosts = ["h_air", "h_box"];
 		// An AO without session search, and a machine whose tunnel is gone.
