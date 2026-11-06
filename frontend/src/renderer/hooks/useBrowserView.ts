@@ -182,6 +182,17 @@ export function resetConsumedPreviewTriggersForTest(): void {
 // good, even though nothing about it actually changed.
 const closedTabsBySession = new Map<string, ClosedBrowserTab[]>();
 
+// The last native view, page and tabs each session showed. A native view
+// outlives a session switch, so switching back can show it in the same frame
+// instead of waiting for `ensure` to answer: the panel is transparent over a
+// live page, so that wait painted the bare window (black) for 100-150 ms.
+type CachedNativeView = { viewId: string; navState: BrowserNavState; tabsState: BrowserTabsState };
+const nativeViewBySession = new Map<string, CachedNativeView>();
+
+export function resetNativeViewCacheForTest(): void {
+	nativeViewBySession.clear();
+}
+
 export function resetClosedTabsForTest(): void {
 	closedTabsBySession.clear();
 }
@@ -482,10 +493,15 @@ export function useBrowserView({
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
+		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
+		// The view this run owns, so its cleanup never hides or clears the next
+		// session's view, which the switch below may already have shown.
+		let ownViewId = cached?.viewId ?? "";
+		if (cached) viewIdRef.current = cached.viewId;
 		setStateSessionId(sessionId);
-		setViewId("");
-		setNavState(EMPTY_NAV_STATE);
-		setTabsState(EMPTY_TABS_STATE);
+		setViewId(cached?.viewId ?? "");
+		setNavState(cached?.navState ?? EMPTY_NAV_STATE);
+		setTabsState(cached?.tabsState ?? EMPTY_TABS_STATE);
 		// Tab ids (`t1`, `t2`, ...) restart per session, so a stale order from the
 		// previous session could otherwise silently reapply to the new one.
 		setTabOrder([]);
@@ -508,6 +524,7 @@ export function useBrowserView({
 		if (terminated) {
 			consumedPreviewTriggers.delete(sessionId);
 			closedTabsBySession.delete(sessionId);
+			nativeViewBySession.delete(sessionId);
 			return;
 		}
 		if (!hasNativeBrowser) {
@@ -543,6 +560,7 @@ export function useBrowserView({
 				return;
 			}
 			viewIdRef.current = state.viewId;
+			ownViewId = state.viewId;
 			setViewId(state.viewId);
 			setNavState(state);
 			void window.ao?.browser
@@ -567,7 +585,7 @@ export function useBrowserView({
 		});
 		return () => {
 			disposed = true;
-			const id = viewIdRef.current;
+			const id = ownViewId;
 			if (id) {
 				if (annotationModeRef.current) {
 					void window.ao?.browser.setAnnotationMode({
@@ -582,7 +600,7 @@ export function useBrowserView({
 					sendHiddenBounds(id);
 				}
 			}
-			viewIdRef.current = "";
+			if (viewIdRef.current === id) viewIdRef.current = "";
 		};
 	}, [
 		sessionEnded,
@@ -592,6 +610,26 @@ export function useBrowserView({
 		sendHiddenBounds,
 		sessionId,
 	]);
+
+	// Swap native views before the destination session first paints: show its
+	// cached view, then hide the departing one, so no frame shows neither.
+	const shownSessionRef = useRef(sessionId);
+	useLayoutEffect(() => {
+		if (shownSessionRef.current === sessionId) return;
+		shownSessionRef.current = sessionId;
+		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
+		if (!cached) return;
+		const previous = viewIdRef.current;
+		viewIdRef.current = cached.viewId;
+		activeRef.current = active;
+		measureAndSend();
+		if (previous && previous !== cached.viewId) sendHiddenBounds(previous);
+	}, [active, hasNativeBrowser, measureAndSend, sendHiddenBounds, sessionId, terminated]);
+
+	useEffect(() => {
+		if (!hasNativeBrowser || stateSessionId !== sessionId || !viewId || terminated) return;
+		nativeViewBySession.set(sessionId, { viewId, navState, tabsState });
+	}, [hasNativeBrowser, navState, sessionId, stateSessionId, tabsState, terminated, viewId]);
 
 	useEffect(() => {
 		return window.ao?.browser.onNavState((state) => {
@@ -1170,10 +1208,13 @@ export function useBrowserView({
 	// intervening render so consumers can never interpret the departed session's
 	// state as belonging to the destination session.
 	const stateBelongsToSession = stateSessionId === sessionId;
+	// That render may still show the destination's own cached page, which is
+	// already on screen, so the panel stays transparent over it.
+	const switchingTo = !stateBelongsToSession && hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 
 	return {
-		viewId: stateBelongsToSession ? viewId : "",
-		navState: stateBelongsToSession ? navState : EMPTY_NAV_STATE,
+		viewId: stateBelongsToSession ? viewId : (switchingTo?.viewId ?? ""),
+		navState: stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE),
 		slotRef,
 		navigate,
 		goBack: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()),
@@ -1184,8 +1225,8 @@ export function useBrowserView({
 		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
 		findInPage,
 		stopFindInPage,
-		tabs: stateBelongsToSession ? tabs : [],
-		activeTabId: stateBelongsToSession ? tabsState.activeTabId : "",
+		tabs: stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? []),
+		activeTabId: stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? ""),
 		tabNotice: stateBelongsToSession ? tabNotice : "",
 		selectTab,
 		closeTab,
