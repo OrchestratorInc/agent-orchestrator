@@ -1551,6 +1551,8 @@
 	"settings.automaticBrowser.blocked": "Не открывать автоматически",
 	"settings.automaticBrowser.description": "Управляет запросами браузера от агента и автоматическими предпросмотрами. Во внешнем режиме и при запрете управление браузером агентом недоступно; ссылки, которые вы открываете сами, работают.",
 	"settings.automaticBrowser.saveFailed": "Не удалось сохранить настройку.",
+	"settings.altMenu": "Показывать меню по Alt",
+	"settings.altMenuSaveFailed": "Не удалось сохранить настройку.",
 	"settings.navigationGestures": "Жесты навигации",
 	"settings.navigationGesturesHint": "Проводите двумя пальцами по горизонтали, чтобы переходить назад или вперёд.",
 	"settings.renderMath": "Отображать формулы",

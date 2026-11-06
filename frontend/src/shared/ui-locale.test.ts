@@ -37,6 +37,7 @@ describe("shared UI locale schema", () => {
 		expect(DEFAULT_UI_SETTINGS).toEqual({
 			locale: "en",
 			automaticBrowser: "internal",
+			altMenuEnabled: true,
 			soundNotificationsEnabled: true,
 			terminalShell: { kind: "auto" },
 		});

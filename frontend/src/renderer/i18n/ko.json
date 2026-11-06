@@ -1486,6 +1486,8 @@
 	"settings.automaticBrowser.blocked": "Do not open automatically",
 	"settings.automaticBrowser.description": "Controls agent browser requests and automatic previews. In external or blocked mode, agent browser automation is unavailable; links you open yourself still work.",
 	"settings.automaticBrowser.saveFailed": "Could not save this setting.",
+	"settings.altMenu": "Show menu bar with Alt",
+	"settings.altMenuSaveFailed": "Could not save this setting.",
 	"settings.navigationGestures": "탐색 제스처",
 	"settings.navigationGesturesHint": "두 손가락으로 좌우로 스와이프하여 뒤로 또는 앞으로 이동합니다.",
 	"settings.renderMath": "수식 표시",

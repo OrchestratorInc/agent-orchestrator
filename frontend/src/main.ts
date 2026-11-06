@@ -807,6 +807,14 @@ function buildLinuxAppMenu(): Menu {
 	);
 }
 
+let altMenuEnabled = true;
+
+function applyAltMenuPreference(): void {
+	if (!mainWindow || process.platform !== "linux") return;
+	mainWindow.setAutoHideMenuBar(altMenuEnabled);
+	mainWindow.setMenuBarVisibility(false);
+}
+
 async function disposeBrowserViewHost(): Promise<void> {
 	const host = browserViewHost;
 	browserViewHost = null;
@@ -901,15 +909,13 @@ async function createWindowInternal(): Promise<void> {
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden" as const,
-					// Hide the native menu bar. A role-based menu is still installed (for
-					// accelerators) below; the visible menu is painted by WindowTitlebar.
+					// Hide the native menu; the renderer paints the titlebar.
 					autoHideMenuBar: true,
 				}
 			: process.platform === "linux"
 				? {
-						// Auto-hide the native menu bar strip. Accelerators stay active
-						// via the application menu; pressing Alt reveals the menu bar.
-						autoHideMenuBar: true,
+						// Hide the menu after installing it; Alt-to-reveal is configurable.
+						autoHideMenuBar: altMenuEnabled,
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
@@ -947,12 +953,12 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
-	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
+	// menu bar is hidden below. The role-based menu is still
 	// installed so its accelerators keep working and act on the focused pane;
 	// setMenuBarVisibility(false) keeps the strip itself out of view. macOS gets
 	// an explicit menu so DevTools avoids Electron's unsafe built-in role; Linux
 	// installs the role-based menu so accelerators and guarded DevTools work,
-	// while autoHideMenuBar and setMenuBarVisibility(false) hide the menu strip.
+	// while the visibility and auto-hide settings control the menu strip.
 	if (process.platform === "win32") {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
@@ -968,6 +974,7 @@ async function createWindowInternal(): Promise<void> {
 		Menu.setApplicationMenu(buildLinuxAppMenu());
 		mainWindow.setMenuBarVisibility(false);
 	}
+	applyAltMenuPreference();
 
 	// Harden navigation: never let renderer/terminal content open in-app windows or
 	// navigate the privileged window away from the app origin. External links go to
@@ -3421,6 +3428,8 @@ ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
 	automaticBrowser = result.automaticBrowser;
+	altMenuEnabled = result.altMenuEnabled;
+	applyAltMenuPreference();
 	shellEnvPromise = null;
 	cachedShellEnv = null;
 	return result;
@@ -4015,6 +4024,7 @@ app.whenReady().then(async () => {
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	automaticBrowser = initialUiSettings.automaticBrowser;
+	altMenuEnabled = initialUiSettings.altMenuEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
 	if (isTrayEnabled(process.platform)) {

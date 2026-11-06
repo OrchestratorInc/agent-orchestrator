@@ -1513,6 +1513,8 @@
 	"settings.automaticBrowser.blocked": "Do not open automatically",
 	"settings.automaticBrowser.description": "Controls agent browser requests and automatic previews. In external or blocked mode, agent browser automation is unavailable; links you open yourself still work.",
 	"settings.automaticBrowser.saveFailed": "Could not save this setting.",
+	"settings.altMenu": "Show menu bar with Alt",
+	"settings.altMenuSaveFailed": "Could not save this setting.",
 	"settings.navigationGestures": "Gestos de navegación",
 	"settings.navigationGesturesHint": "Desliza horizontalmente con dos dedos para ir hacia atrás o hacia delante.",
 	"settings.renderMath": "Mostrar fórmulas",
