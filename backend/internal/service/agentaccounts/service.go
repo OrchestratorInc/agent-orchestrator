@@ -125,9 +125,9 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
 	// LoggedIn is any login the CLI launches with as this account, an API key
 	// included; a folder signed in as another login is not.
 	LoggedIn    bool
