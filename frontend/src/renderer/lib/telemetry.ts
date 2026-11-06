@@ -480,6 +480,7 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 			posthog.reset();
 		}
 		identifiedId = null;
+		identifyCalledFor = null;
 		return;
 	}
 	if (posthogReady) {
