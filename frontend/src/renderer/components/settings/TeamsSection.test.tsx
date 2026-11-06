@@ -208,7 +208,7 @@ describe("TeamsSection", () => {
 		mocks.ready = false;
 		mocks.org = undefined;
 		renderSection();
-		expect(screen.getByText("Sign in to Orchestrator.inc to use teams.")).toBeInTheDocument();
+		expect(screen.getByText("Sign in to AO Cloud to use teams.")).toBeInTheDocument();
 		expect(document.querySelector("[aria-busy]")).toBeNull();
 	});
 
@@ -224,7 +224,7 @@ describe("TeamsSection", () => {
 	it("is quiet against a control plane from before teams", async () => {
 		mocks.teamsError = new CloudCpError("404 page not found", { status: 404 });
 		renderSection();
-		expect(await screen.findByText("Teams aren't available on this Orchestrator.inc Cloud yet. Share links still work.")).toBeInTheDocument();
+		expect(await screen.findByText("Teams aren't available on this AO Cloud yet. Share links still work.")).toBeInTheDocument();
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(mocks.calls.filter((call) => call[0] === "listTeams")).toHaveLength(1);
 	});
