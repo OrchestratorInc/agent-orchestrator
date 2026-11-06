@@ -183,6 +183,9 @@ function detach(drag: ActiveDrag): void {
 	}
 	const ghost = document.createElement("div");
 	ghost.className = "pane-drag-ghost";
+	// Tabs in the floating top bar are styled by that bar; carry it over so
+	// the ghost looks like the tab it lifted.
+	if (drag.source.closest(".center-panel-shell--floating-topbar")) ghost.classList.add("center-panel-shell--floating-topbar");
 	ghost.setAttribute("aria-hidden", "true");
 	ghost.style.width = `${box.width}px`;
 	ghost.style.height = `${box.height}px`;

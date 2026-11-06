@@ -1,6 +1,7 @@
 import { render, fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { SplitDivider } from "./SplitView";
+import { SplitDivider, SplitGroupTab } from "./SplitView";
+import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
 
@@ -39,4 +40,16 @@ it("clears resize state and cancels the pending frame when a divider unmounts mi
 	expect(document.body.style.cursor).toBe("");
 	expect(screen.style.getPropertyValue("--split-r")).toBe("0.5");
 	expect(onResize).not.toHaveBeenCalled();
+});
+
+it.each([true, false])("marks the group tab's frame as the selected tab only while it is on screen (active: %s)", (active) => {
+	const member = (key: string, label: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn() });
+	const { container } = render(
+		<TooltipProvider>
+			<SplitGroupTab active={active} focusedKey="session" members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]} onUngroup={vi.fn()} />
+		</TooltipProvider>,
+	);
+	const frame = container.querySelector("[data-terminal-tab-frame]");
+	// The floating top bar draws the selected pill from data-active.
+	expect(frame?.hasAttribute("data-active")).toBe(active);
 });

@@ -6647,6 +6647,16 @@ body.is-pane-dragging webview {
 	max-width: none;
 }
 
+/* On the floating top bar a tab is a pill: round the ghost to match and
+   drop the trailing separator. */
+.pane-drag-ghost.center-panel-shell--floating-topbar {
+	border-radius: var(--radius-topbar-control);
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+	background: none;
+}
+
 .pane-drag-ghost[data-lifted] {
 	opacity: 0.96;
 }

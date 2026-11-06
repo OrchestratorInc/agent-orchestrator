@@ -212,6 +212,8 @@ export function SplitGroupTab({
 				"group relative inline-flex h-full shrink-0 self-stretch items-stretch border-r border-border",
 				active ? "bg-overlay text-foreground" : "text-passive hover:bg-raised",
 			)}
+			// The floating top bar draws the selected tab's pill from data-active.
+			data-active={active || undefined}
 			data-split-group-tab
 			data-terminal-tab-frame
 			role="group"
