@@ -1,7 +1,7 @@
 {
 	"name": "@aoagents/ao-win32-x64",
 	"version": "0.10.0",
-	"description": "Agent Orchestrator CLI binary for Windows x64.",
+	"description": "Orchestrator CLI binary for Windows x64.",
 	"license": "MIT",
 	"os": [
 		"win32"

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
+	realPermissionDiscovery: false,
 	delete: vi.fn(),
 	get: vi.fn(),
 	post: vi.fn(),
@@ -32,6 +33,16 @@ const h = vi.hoisted(() => ({
 	cloudBaseUrl: "https://cloud-a.example.test",
 	cloudUserId: "user-1",
 }));
+
+vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useChatPermissionModes")>();
+	return {
+		...actual,
+		useChatPermissionModesQuery: (host: string | undefined, harness: string | undefined) => h.realPermissionDiscovery
+			? actual.useChatPermissionModesQuery(host, harness)
+			: { data: harness ? new Map([[harness, harness === "kimi" ? ["default"] : ["default", "accept-edits", "auto", "bypass-permissions"]]]) : undefined, isPending: false },
+	};
+});
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
@@ -84,6 +95,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("../lib/host-clients", () => ({
+	clientForSessionHost: (host?: string) => ({ GET: host ? h.remoteGet : h.get }),
 	clientForHost: () => ({ GET: h.remoteGet, POST: h.remotePost, DELETE: h.remoteDelete }),
 	connectedHosts: () => h.connectedHostIds,
 	subscribeConnectedHosts: () => () => undefined,
@@ -177,6 +189,7 @@ async function waitForTaskReady() {
 }
 
 beforeEach(() => {
+	h.realPermissionDiscovery = false;
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.agentCatalog = { agents: AGENT_OPTIONS.map((id) => agentReadiness(id, agentLabel(id))) };
 	// An older control plane, unless a test says otherwise.
@@ -2620,11 +2633,38 @@ describe("TaskComposer", () => {
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
 
-		it("explains an expired login that Claude Code renews on its own", async () => {
+		it("stays quiet about an expired login that Claude Code renews on its own", async () => {
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })] };
 			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Claude Code's saved login has expired.");
+			await waitFor(() => expect(h.get).toHaveBeenCalledWith(expect.stringContaining("/models"), expect.anything()));
+			// The catalog has rendered once its models are listed; only then is
+			// the absence of the notice meaningful.
+			await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+			expect(await screen.findByText("Sonnet 5.5")).toBeInTheDocument();
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
+		});
+
+		// A remote host may run an older daemon that still refuses the spawn for a
+		// stale catalog, so it keeps the notice and its Log in shortcut.
+		it("keeps the expired-login notice for a remote host", async () => {
+			const claude = agentReadiness("claude-code", "Claude Code", { authentication: "configured" });
+			h.agentCatalog = { agents: [claude] };
+			h.remoteGet.mockImplementation(async (path: string) => {
+				if (path.includes("/models")) return { data: claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }) };
+				if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: [] } };
+				return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "claude-code" } } } } };
+			});
+			h.remotePost.mockImplementation(async (path: string) => path === "/api/v1/agents/readiness/ensure"
+				? { data: { agents: [claude] } }
+				: { data: {} });
+			render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+			const notice = await screen.findByTestId("model-catalog-notice");
+			// The host's login only expired, so say that rather than "not logged in
+			// on this computer".
+			expect(notice).toHaveTextContent("Claude Code's saved login has expired.");
+			expect(notice).not.toHaveTextContent("isn't logged in on this computer");
 			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 		});
 
@@ -3588,5 +3628,103 @@ describe("useTaskLaunch on the new chat page", () => {
 		});
 		// Answered, the send releases it as any send does.
 		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+	});
+});
+
+describe("Chat launch permission capability boundary", () => {
+	it.each(["proj-1", "__standalone__"])("preserves Unreal's omitted harness policy for direct and replay launches in %s", async (projectId) => {
+		h.realPermissionDiscovery = true;
+		h.agentCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["unreal-agent"], agent: "unreal-agent" } };
+			if (path === "/api/v1/agents/chat/permission-modes") return { data: { agents: [{ agent: "unreal-agent", modes: ["bypass-permissions"] }] } };
+			if (path.includes("/models")) return { data: { models: [], allowCustom: true, selectionMode: "text" } };
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "unreal-agent" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		await waitFor(() => expect(task.approvalModes).toEqual(["bypass-permissions"]));
+		const replay = task.launchSnapshot();
+		expect(replay.approvalMode).toBeUndefined();
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+		await act(async () => { await task.launch("use harness default"); });
+		await act(async () => { await task.launch("replay harness default", { replay }); });
+		const launches = h.post.mock.calls.filter(([route]) => route === path);
+		expect(launches).toHaveLength(2);
+		for (const [, options] of launches) expect(options.body).not.toHaveProperty("approvalMode");
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "bypass-permissions" }));
+		expect(task.launchSnapshot().approvalMode).toBe("bypass-permissions");
+		await act(async () => { await task.launch("explicit policy"); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "bypass-permissions" }) }));
+	});
+	it.each(["proj-1", "__standalone__"])("uses Kimi native permissions and preserves the chosen policy when switching back in %s", async (projectId) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex", "kimi"], agent: "codex" } };
+			if (path.includes("/models")) return { data: { models: [], allowCustom: true, selectionMode: "text" } };
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "codex", agentConfig: { permissions: "auto" } } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		act(() => task.switchAgent("codex"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "accept-edits" }));
+		expect(task.turnSettings.approvalMode).toBe("accept-edits");
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+		await act(async () => { await task.launch("supported permissions"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "accept-edits" }) }));
+		act(() => task.switchAgent("kimi"));
+		await waitFor(() => expect(task.agent.value).toBe("kimi"));
+		expect(task.approvalModes).toEqual(["default"]);
+		expect(task.turnSettings.approvalMode).toBe("default");
+		expect(task.launchSnapshot().approvalMode).toBe("default");
+		await act(async () => { await task.launch("hello"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "default" }) }));
+		act(() => task.switchAgent("codex"));
+		await waitFor(() => expect(task.agent.value).toBe("codex"));
+		expect(task.approvalModes).toContain("auto");
+		expect(task.turnSettings.approvalMode).toBe("accept-edits");
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
+		await act(async () => { await task.launch("back on auto"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
+	});
+});
+
+describe("Chat launch permission discovery recovery", () => {
+	it.each(["omitted agent", "failed request"])("keeps the terminal retry reachable after %s", async (discovery) => {
+		h.realPermissionDiscovery = true;
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		let answerPermissions!: (value: unknown) => void;
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+			if (path === "/api/v1/agents/chat/permission-modes") return new Promise((resolve) => { answerPermissions = resolve; });
+			if (path.includes("/models")) return { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } };
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+		const delegate = vi.fn(async (options: { body: { mode?: string } }) => options.body.mode === "tui"
+			? { data: { workerId: "terminal-recovery" } }
+			: { error: { code: "CHAT_DRIVER_INCOMPATIBLE", message: "Codex Chat needs a newer agent version." } });
+		h.post.mockImplementation(async (path: string, options) => path === "/api/v1/orchestrators/delegate" ? delegate(options) : { data: {} });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		await waitFor(() => expect(answerPermissions).toEqual(expect.any(Function)));
+		fireEvent.change(task(), { target: { value: "Recover this launch" } });
+		expect(startTask()).toBeDisabled();
+		expect(delegate).not.toHaveBeenCalled();
+		await act(async () => { answerPermissions(discovery === "omitted agent"
+			? { data: { agents: [] } }
+			: { error: { message: "Permission discovery temporarily unavailable" } }); });
+		await waitFor(() => expect(startTask()).toBeEnabled());
+		fireEvent.click(startTask());
+		await screen.findByText("Codex Chat needs a newer agent version.");
+		fireEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("terminal-recovery"));
+		expect(delegate).toHaveBeenCalledTimes(2);
+		expect(delegate.mock.calls[0][0].body.mode).toBeUndefined();
+		expect(delegate.mock.calls[1][0].body.mode).toBe("tui");
 	});
 });

@@ -63,8 +63,10 @@ export interface CloudCpOffering {
 	defaultProvider: string;
 	billingMode: CloudCpBillingMode;
 	kind: CloudCpOfferingKind;
-	/** Plan feature flags; empty when none. */
+	/** The org's product features and the deployment's own (attachments); empty when none. */
 	features: string[];
+	/** The largest file one attachment may be, sent with the attachments feature. */
+	maxAttachmentBytes?: number;
 	/**
 	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
 	 * it may connect its own Coder deployment, and its Coder sessions are not
@@ -652,6 +654,8 @@ export interface CloudCpSession {
 	requestedOutput?: "artifact";
 	/** The guest the session was started for, when someone the project was shared with asked its orchestrator for it. */
 	requestedBy?: CloudCpPersonRef;
+	/** The person who started the session; only they share its files as public links. Absent when none is on record. */
+	createdByUserId?: string;
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
@@ -1285,8 +1289,10 @@ export interface CloudCpRestoreSessionResponse {
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/messages (requires an Idempotency-Key header). */
 export interface CloudCpSendMessageRequest {
-	/** 1-65536 bytes. */
+	/** 1-65536 bytes; may be empty when the message carries attachments. */
 	text: string;
+	/** Files uploaded to the session (POST .../attachments) that the message carries. */
+	attachmentIds?: string[];
 	model?: string;
 	reasoningEffort?: string;
 	/** Per-turn permission mode, capped by the session and share grant. */
@@ -1786,6 +1792,11 @@ export interface CloudCpShareLink {
 	/** Only in the creation response: the raw token is never stored. */
 	token?: string;
 	url?: string;
+	/**
+	 * Only in the creation response, and only when the control plane has short
+	 * links turned on: the link's 22-character code (letters and digits).
+	 */
+	code?: string;
 }
 
 /** A project or session someone shared with the caller. */
@@ -1804,4 +1815,133 @@ export interface CloudCpSharedProject {
 	sessionId?: string;
 	sessionName?: string;
 	sharedByName?: string;
+	/** The team this reaches the caller through, when not shared with them directly. */
+	viaTeamId?: string;
+	viaTeamName?: string;
+	/** How the caller got it: from a link, shared directly, or through a team. */
+	source?: "link" | "direct" | "team";
+}
+
+/** A named group of people in a workspace that sessions and projects are shared with. */
+export interface CloudCpTeam {
+	id: string;
+	orgId: string;
+	/** The workspace's name, for teams the caller is in elsewhere. */
+	orgName?: string;
+	name: string;
+	/** Everyone in the team, invited emails included. */
+	memberCount: number;
+	/** The caller's role in the team; absent when they aren't in it. */
+	yourRole?: "owner" | "member";
+	/** Owners and workspace admins can change the team. */
+	canManage: boolean;
+	sharedSessions: number;
+	sharedProjects: number;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CloudCpTeamMember {
+	id: string;
+	teamId: string;
+	/** Set once the workspace knows who this is. */
+	userId?: string;
+	/** Absent for people outside the caller's workspace. */
+	email?: string;
+	/** Absent until the person is known to the workspace. */
+	name?: string;
+	role: "owner" | "member";
+	/** Added by email and hasn't opened AO since. */
+	invited: boolean;
+	you: boolean;
+	/** Already in the team's workspace, so shares can't change what they can do. */
+	workspaceMember: boolean;
+	addedAt: string;
+}
+
+export interface CloudCpShareSubject {
+	kind: "user" | "email" | "team";
+	userId?: string;
+	email?: string;
+	name?: string;
+	teamId?: string;
+	teamName?: string;
+	memberCount?: number;
+	workspaceMember?: boolean;
+}
+
+/** One grant as the share dialog lists it. */
+export interface CloudCpShareEntry {
+	grantId: string;
+	subject: CloudCpShareSubject;
+	scope: "session" | "project";
+	sessionId?: string;
+	sessionName?: string;
+	projectId: string;
+	projectName: string;
+	role: CloudCpShareRole;
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands: string[];
+	source: "link" | "direct" | "team";
+	sharedByName?: string;
+	createdAt: string;
+}
+
+export interface CloudCpTeamDetail {
+	team: CloudCpTeam;
+	members: CloudCpTeamMember[];
+	shares: CloudCpShareEntry[];
+}
+
+/** What removing someone, leaving, or deleting a team takes away. */
+export interface CloudCpTeamImpact {
+	people: number;
+	sessions: number;
+	projects: number;
+	/** What a removed person still reaches another way. */
+	keeps: string[];
+}
+
+export interface CloudCpShareAccess {
+	/** The session's creator; absent for a whole project. */
+	owner?: CloudCpShareSubject;
+	entries: CloudCpShareEntry[];
+}
+
+export interface CloudCpEffectiveAccess {
+	role?: "member" | "editor" | "viewer";
+	modeCap?: "read-only" | "standard" | "trusted";
+	source?: "workspace" | "team" | "direct" | "link" | "project";
+	teamId?: string;
+	teamName?: string;
+}
+
+export interface CloudCpTeamMemberAccess {
+	member: CloudCpTeamMember;
+	access: CloudCpEffectiveAccess;
+}
+
+export interface CloudCpShareCandidate {
+	kind: "team" | "user";
+	teamId?: string;
+	name: string;
+	email?: string;
+	memberCount?: number;
+	/** The first few people in a team, to tell similar teams apart. */
+	memberNames?: string[];
+	/** A person already in the workspace, who has full access without a share. */
+	workspaceMember?: boolean;
+}
+
+export interface CloudCpTeamMemberInput {
+	email: string;
+	role?: "owner" | "member";
+}
+
+export interface CloudCpCreateShareGrantsRequest {
+	sessionId?: string;
+	subjects: Array<{ teamId: string } | { email: string }>;
+	role: CloudCpShareRole;
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands?: string[];
 }

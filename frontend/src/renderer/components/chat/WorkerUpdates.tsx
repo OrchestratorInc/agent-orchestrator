@@ -21,6 +21,8 @@ import { AgentAvatar } from "../AgentAvatar";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 
 export interface WorkerUpdate {
 	key: string;
@@ -337,11 +339,10 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 				) : (
 					<span className="max-w-[40%] shrink-0 font-medium text-foreground">{name}</span>
 				)}
-				<button
-					type="button"
+				<Pressable
 					aria-expanded={open}
 					onClick={() => setOpen((current) => !current)}
-					className="flex h-full min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					className="flex h-full min-w-0 flex-1 items-center gap-2 rounded"
 				>
 					{state ? (
 						<span className={cn("shrink-0", attention && "font-medium text-status-needs-you")}>{state.label}</span>
@@ -352,7 +353,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 						aria-hidden="true"
 						className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")}
 					/>
-				</button>
+				</Pressable>
 			</div>
 			{artifacts.map((path) => (
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
@@ -471,15 +472,14 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 				<div>{children}</div>
 			</div>
 			{folds || open ? (
-				<button
-					type="button"
+				<Pressable
 					aria-expanded={open}
 					onClick={() => setOpen((current) => !current)}
-					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}
 					<ChevronDown aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-				</button>
+				</Pressable>
 			) : null}
 		</>
 	);
@@ -518,8 +518,7 @@ export function OrchestratorReply({
 	rollbackDisabled?: boolean;
 }) {
 	const { t } = useTranslation();
-	const control = "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground";
-	return (
+		return (
 		<div
 			className="group/message -mt-1.5 ml-6 min-w-0"
 			data-testid="orchestrator-reply"
@@ -539,30 +538,32 @@ export function OrchestratorReply({
 				<div className="-my-1 flex shrink-0 items-center">
 					{/* Revealed on hover or keyboard focus, so a list of quiet replies does not carry a toolbar each. */}
 					<div className="flex items-center opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none">
-						<CopyButton text={message.text} label="Copy message as markdown" compact className={cn(control, "px-0 py-0")} />
+						<CopyButton text={message.text} label="Copy message as markdown" compact size="icon-xs" />
 						{onRollback ? (
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="icon-xs"
 								onClick={onRollback}
 								disabled={rollbackDisabled}
 								aria-label={t("chat.rollBackToHere")}
 								title={t("chat.rollBackToHere")}
-								className={cn(control, "disabled:pointer-events-none disabled:opacity-40")}
 							>
 								<Undo2 aria-hidden="true" className="size-3" />
-							</button>
+							</Button>
 						) : null}
 					</div>
 					{work ? (
-						<button
+						<Button
 							type="button"
+							variant="quiet"
+							size="icon-xs"
 							aria-expanded={workOpen}
 							aria-label={t("chat.showReplyWork")}
 							onClick={() => onWorkOpenChange(!workOpen)}
-							className={control}
 						>
 							<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", workOpen && "rotate-90")} />
-						</button>
+						</Button>
 					) : null}
 				</div>
 			</div>
@@ -602,8 +603,7 @@ export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] })
 	const [open, setOpen] = useState(false);
 	return (
 		<div className="min-w-0 text-xs">
-			<button
-				type="button"
+			<Pressable
 				aria-expanded={open}
 				onClick={() => setOpen((current) => !current)}
 				className="inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
@@ -611,7 +611,7 @@ export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] })
 				<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 				<Split aria-hidden="true" className="size-3.5" />
 				{sessionIds.length === 1 ? "Spawned 1 agent" : `Spawned ${sessionIds.length} agents`}
-			</button>
+			</Pressable>
 			{open ? (
 				<div className="mt-1 flex flex-col">
 					{sessionIds.map((id) => (

@@ -1073,6 +1073,21 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
+	if mode == domain.SessionModeChat && m.chat != nil && cfg.AgentConfig.Permissions == "" &&
+		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
+		// Auto is AO's generic default, not a provider capability. An agent
+		// with no alternate modes keeps its native approval behavior. Never
+		// select bypass implicitly for agents without an approval channel.
+		if catalog, ok := m.chat.(interface {
+			PermissionModes(context.Context, domain.AgentHarness) ([]ports.PermissionMode, error)
+		}); ok {
+			modes, err := catalog.PermissionModes(ctx, cfg.Harness)
+			if err == nil && len(modes) == 1 && modes[0] == ports.PermissionModeDefault && agentConfig.Permissions != ports.PermissionModeDefault {
+				cfg.AgentConfig.Permissions = ports.PermissionModeDefault
+				agentConfig.Permissions = ports.PermissionModeDefault
+			}
+		}
+	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -1701,7 +1716,16 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	if catalog.Stale && validateClaudeModel {
+	// A catalog left stale only because the stored login's access token expired
+	// (its refresh token still in date) must not block the launch: Claude Code
+	// renews the token when it starts. The stale list still validates what it
+	// knows. Models it lacks are left to the CLI only when there is no
+	// account-scoped list (the built-in fallback); against the account's own
+	// last-known list an unlisted ID is more likely a typo than a new release.
+	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
+		cfg.Harness == domain.HarnessClaudeCode
+	unlistedToCLI := renewableLogin && catalog.LastSuccessAt == nil
+	if catalog.Stale && validateClaudeModel && !renewableLogin {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
@@ -1711,7 +1735,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil {
+	if validateClaudeModel && selected == nil && !unlistedToCLI {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if selected != nil && selected.RequiresVersion != "" {
@@ -1736,7 +1760,15 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if resolved.Effort == "" {
 		return resolved, nil
 	}
-	if catalog.Stale || selected == nil {
+	if unlistedToCLI && selected == nil {
+		// The CLI owns per-model capabilities, but a level no Claude model
+		// accepts can still be refused here rather than after the session starts.
+		if !containsString(claudeEffortLevels, resolved.Effort) {
+			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
+		}
+		return resolved, nil
+	}
+	if (catalog.Stale && !renewableLogin) || selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
@@ -1747,6 +1779,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 
 var (
 	claudeFamilyAliases = []string{"fable", "opus", "sonnet", "haiku"}
+	claudeEffortLevels  = []string{"low", "medium", "high", "xhigh", "max"}
 	claudeVersionNumber = regexp.MustCompile(`\d+`)
 	claudeVersionNoise  = regexp.MustCompile(`\(.*?\)|\[.*?\]`)
 )
@@ -4297,6 +4330,7 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 		}
 		if err := m.reconcileReap(ctx, rec); err != nil {
 			m.logger.Error("reconcile: reap pass failed, skipping", "sessionID", rec.ID, "error", err)
+			captureBackgroundFault(ctx, err, "reconcile", "reap")
 		}
 	}
 	if err := m.deliverAllTransitionMessages(ctx); err != nil {
@@ -4374,6 +4408,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 				}
 				if err != nil {
 					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "retrying", retry, "error", err)
+					if !retry {
+						captureBackgroundFault(ctx, err, "reconcile", "reconcile_live")
+					}
 				}
 				if retry {
 					retryMu.Lock()
@@ -4430,6 +4467,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	rows, err := m.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
 		m.logger.Error("restore-all: list worktrees failed", "sessionID", rec.ID, "error", err)
+		captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 		return
 	}
 	if len(rows) == 0 {
@@ -4449,6 +4487,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		missing, statErr := workspacePathMissing(path)
 		if statErr != nil {
 			m.logger.Error("restore-all: inspect workspace failed", "sessionID", rec.ID, "error", statErr)
+			captureBackgroundFault(ctx, statErr, "boot_restore", "restore_workspace")
 			return
 		}
 		recreated = recreated || missing
@@ -4459,6 +4498,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		m.logger.Error("restore-all: load project failed", "sessionID", rec.ID, "error", err)
+		captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 		return
 	}
 	var ws ports.WorkspaceInfo
@@ -4469,11 +4509,13 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		projectRows, rowErr = m.workspaceProjectRestoreRowsFromMarkers(ctx, project, rec, rows)
 		if rowErr != nil {
 			m.logger.Error("restore-all: workspace rows failed", "sessionID", rec.ID, "error", rowErr)
+			captureBackgroundFault(ctx, rowErr, "boot_restore", "restore_workspace")
 			return
 		}
 		root, restoreErr := m.restoreWorkspaceProjectRows(ctx, projectRows)
 		if restoreErr != nil {
 			m.logger.Error("restore-all: workspace project restore failed", "sessionID", rec.ID, "error", restoreErr)
+			captureBackgroundFault(ctx, restoreErr, "boot_restore", "restore_workspace")
 			return
 		}
 		ws = workspaceInfoFromRepoInfo(root)
@@ -4491,6 +4533,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		})
 		if restoreErr != nil {
 			m.logger.Error("restore-all: workspace restore failed", "sessionID", rec.ID, "error", restoreErr)
+			captureBackgroundFault(ctx, restoreErr, "boot_restore", "restore_workspace")
 			return
 		}
 	}
@@ -4500,6 +4543,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	}
 	if err := m.restoreAttachments(ctx, rec.ID, ws); err != nil {
 		m.logger.Error("restore-all: restore attachments failed", "sessionID", rec.ID, "error", err)
+		captureBackgroundFault(ctx, err, "boot_restore", "restore_attachment")
 		return
 	}
 
@@ -4521,6 +4565,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 						"sessionID", rec.ID, "ref", preserveRef, "error", applyErr)
 				} else {
 					m.logger.Error("restore-all: apply preserved failed", "sessionID", rec.ID, "error", applyErr)
+					captureBackgroundFault(ctx, applyErr, "boot_restore", "restore_workspace")
 				}
 				// Continue: always relaunch even on conflict (never delete the ref here).
 			}
@@ -4529,6 +4574,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	if recreated {
 		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
+			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
 		}
 	}
@@ -4546,6 +4592,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			m.logger.Warn("restore-all: session vanished before relaunch, skipping", "sessionID", rec.ID)
 		default:
 			m.logger.Error("restore-all: relaunch failed", "sessionID", rec.ID, "error", err)
+			captureBackgroundFault(ctx, err, "boot_restore", "relaunch")
 		}
 		return
 	}
@@ -4912,6 +4959,7 @@ func (m *Manager) applyWorkspaceProjectPreserved(ctx context.Context, rows []por
 		sessionRows, err := m.store.ListSessionWorktrees(ctx, row.SessionID)
 		if err != nil {
 			m.logger.Error("restore-all: list worktrees failed", "sessionID", row.SessionID, "error", err)
+			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			continue
 		}
 		for _, sessionRow := range sessionRows {
@@ -4929,6 +4977,7 @@ func (m *Manager) applyWorkspaceProjectPreserved(ctx context.Context, rows []por
 					"sessionID", row.SessionID, "repo", row.RepoName, "ref", preserveRef, "error", applyErr)
 			} else {
 				m.logger.Error("restore-all: apply preserved failed", "sessionID", row.SessionID, "repo", row.RepoName, "error", applyErr)
+				captureBackgroundFault(ctx, applyErr, "boot_restore", "restore_workspace")
 			}
 		}
 	}

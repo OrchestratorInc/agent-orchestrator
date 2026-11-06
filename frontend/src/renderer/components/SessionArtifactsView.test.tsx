@@ -5,11 +5,31 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
+
+// Share is offered only where the control plane serves share links.
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+	return {
+		...actual,
+		useSettings: (...args: Parameters<typeof actual.useSettings>) => {
+			const result = actual.useSettings(...args);
+			return { ...result, settings: { ...result.settings, cloudControlPlaneUrl: "https://cp.test" } as NonNullable<typeof result.settings> };
+		},
+	};
+});
+
+const { artifactFileChangesMock, capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
+	artifactFileChangesMock: vi.fn(),
+	capturedSave: { current: undefined as ((input: { content: string; expectedFileFingerprint: string; path: string }) => Promise<unknown>) | undefined },
+	saveCloudArtifactMock: vi.fn(),
 	cloudAccessMock: vi.fn(),
 	createArtifactAccessMock: vi.fn(),
 	listArtifactsMock: vi.fn(),
@@ -28,11 +48,13 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}`, editable: true, fileFingerprint: "fingerprint" }),
 	}),
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: artifactFileChangesMock }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
 			sendSessionMessage: sendSessionMessageMock,
 			deleteSessionArtifact: deleteCloudArtifactMock,
+			saveSessionArtifact: saveCloudArtifactMock,
 			listSessionArtifacts: listArtifactsMock,
 			createSessionArtifactAccess: createArtifactAccessMock,
 		},
@@ -42,9 +64,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
-		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">
+	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
+		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
+			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
+			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
 			{sendMessage ? <button type="button" onClick={() => void sendMessage("looks good")}>send feedback</button> : null}
 		</div>
 	),
@@ -318,6 +342,29 @@ describe("SessionArtifactsView", () => {
 		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false, refetch: vi.fn() });
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
+		artifactFileChangesMock.mockReset();
+	});
+
+	it("follows an open local file's changes on disk only while it is open", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+	});
+
+	it("follows an open cloud file through its session, and a remote host's files not at all", async () => {
+		const { rerender } = renderView(<SessionArtifactsView hostId="host-1" session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		rerender(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "cloud-1", cloud: { orgId: "org-1" } }), true);
 	});
 
 	it("lists every artifact newest first", () => {
@@ -420,6 +467,17 @@ describe("SessionArtifactsView", () => {
 		expect(document.querySelector("iframe")).not.toBeNull();
 	});
 
+	it("opens an HTML artifact in the session Browser from its header", async () => {
+		const openInBrowser = vi.fn();
+		renderView(<AppBrowserLinkContext.Provider value={openInBrowser}><SessionArtifactsView session={session()} /></AppBrowserLinkContext.Provider>);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.queryByRole("button", { name: "Open in AO Browser" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("http://artifact.localhost/report.html");
+	});
+
 	it("never frames an HTML artifact from the daemon's own origin", () => {
 		const html: SessionArtifact = { kind: "html", name: "report.html", path: "report.html", inlineUrl: "http://127.0.0.1:3002/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" };
 		renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={session([html])} />);
@@ -501,7 +559,7 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^chart\.png/ }));
-		await userEvent.click(screen.getByRole("button", { name: /chart\.png/ }));
+		await userEvent.click(screen.getByRole("button", { name: /^chart\.png/ }));
 		expect(screen.queryByRole("menuitem", { name: "Version history" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Copy contents" })).not.toBeInTheDocument();
 	});
@@ -566,6 +624,48 @@ describe("SessionArtifactsView", () => {
 		expect(openArtifacts).toHaveBeenNthCalledWith(1, { sessionId: "sess-1", targetId: "file-manager", path: "reports/plan.md" });
 		expect(openArtifacts).toHaveBeenNthCalledWith(2, { sessionId: "sess-1", targetId: "terminal", path: "reports/plan.md" });
 		openArtifacts.mockRestore();
+	});
+
+	it.each([
+		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
+		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: false },
+		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "me-1" }, shown: true },
+		{ location: "another member's cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "someone-else" }, shown: false },
+		{ location: "creatorless cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: false },
+		{ location: "shared project's", hostId: undefined, cloud: { orgId: "org-1", shared: true }, shown: false },
+	])("puts Share beside Edit for a $location artifact: $shown", async ({ hostId, cloud, shown }) => {
+		const currentSession = { ...session(), ...(cloud ? { cloud } : {}) } as WorkspaceSession;
+		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path: "notes.md" }} session={currentSession} />);
+
+		await screen.findByRole("button", { name: "notes.md" });
+		const share = screen.queryByRole("button", { name: "Share: notes.md" });
+		if (!shown) {
+			expect(share).not.toBeInTheDocument();
+			return;
+		}
+		expect(share).toHaveTextContent("Share");
+		// After the file's menu and the viewer's own buttons (Edit), before full screen.
+		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(after(screen.getByRole("button", { name: "notes.md" }), share!)).toBe(true);
+		expect(after(share!, screen.getByRole("button", { name: "Maximize" }))).toBe(true);
+		await userEvent.click(share!);
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+	});
+
+	it("hides Share while the open file is being edited", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+		expect(await screen.findByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "start editing" }));
+		expect(screen.queryByRole("button", { name: "Share: notes.md" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "stop editing" }));
+		expect(screen.getByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+	});
+
+	it("disables Share for a video and says why", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+
+		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
@@ -641,6 +741,65 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
 
 		expect(await within(dialog).findByText("artifact file not found")).toBeInTheDocument();
+	});
+
+	it("offers only viewing on another member's cloud session", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1", createdByUserId: "someone-else" } } as WorkspaceSession} />);
+
+		// The list's cards: no edit, delete or copy to this machine.
+		expect(screen.getAllByRole("button", { name: /^More actions:/ }).length).toBeGreaterThan(0);
+		expect(screen.queryByRole("button", { name: /^Edit file:/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Delete artifact:/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Open in / })).toBeNull();
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const viewer = await screen.findByTestId("artifact-view");
+		expect(viewer).toHaveAttribute("data-read-only", "true");
+		expect(viewer).toHaveAttribute("data-saves", "false");
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history"]);
+		expect(screen.getByText("View only. Only the person who started this session can change, download or copy its files.")).toBeInTheDocument();
+	});
+
+	it("offers every action on the person's own cloud session", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1", createdByUserId: "me-1" } } as WorkspaceSession} />);
+
+		expect(screen.getAllByRole("button", { name: /^Edit file:/ }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /^Delete artifact:/ }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /^Open in / })).toHaveLength(1);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const viewer = await screen.findByTestId("artifact-view");
+		expect(viewer).toHaveAttribute("data-read-only", "false");
+		expect(viewer).toHaveAttribute("data-saves", "true");
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.queryByText(/^View only\./)).toBeNull();
+	});
+
+	// A session with no creator on record offers these, and the server refuses them.
+	it("reads a refused delete of a cloud file as view only", async () => {
+		deleteCloudArtifactMock.mockReset().mockRejectedValue(new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" }));
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete artifact: notes.md" }));
+		const dialog = screen.getByRole("dialog");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+
+		expect(await within(dialog).findByText("View only. Only the person who started this session can change, download or copy its files.")).toBeInTheDocument();
+	});
+
+	it("reads a refused save of a cloud file as view only", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		saveCloudArtifactMock.mockReset().mockRejectedValue(new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" }));
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		await screen.findByTestId("artifact-view");
+
+		await expect(capturedSave.current?.({ content: "x", expectedFileFingerprint: "f", path: "notes.md" })).rejects.toThrow(/^View only\./);
 	});
 
 	it("offers copy, download and delete for a cloud session", async () => {
