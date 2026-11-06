@@ -222,3 +222,30 @@ export const fontScaleCap = {
 	/** Body copy, buttons, settings labels, empty states. */
 	body: 1.6,
 } as const;
+
+/**
+ * Colours drawn over a live camera preview. The preview is dark whatever the
+ * theme, so these stay fixed: the backdrop behind it before the first frame
+ * arrives, and the reticle that shows where to hold a code.
+ */
+export const onCamera = {
+	backdrop: "#0c0d10",
+	reticle: "rgba(255,255,255,0.92)",
+} as const;
+
+/**
+ * iOS grouped lists' icon column: each row's glyph centred in this width, so
+ * the titles beside them line up whatever the symbol's own width.
+ */
+export const rowIconWidth = 28;
+
+/**
+ * Opacity for a control's interactive states, one value each so every control
+ * dims by the same amount. `pressed` is for iOS controls that fade on touch; an
+ * Android control shows a ripple instead (see `pressFeedback.ts`). `disabled`
+ * sits at Material 3's 38% for disabled content, rounded.
+ */
+export const stateOpacity = {
+	pressed: 0.7,
+	disabled: 0.4,
+} as const;

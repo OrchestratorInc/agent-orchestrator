@@ -1,6 +1,7 @@
-import { StyleSheet } from "react-native";
+import { useMemo } from "react";
+import { StyleSheet, useWindowDimensions } from "react-native";
 import type { Theme } from "../theme";
-import { space, type } from "../tokens";
+import { fontScaleCap, space, type } from "../tokens";
 import { composerGlassSupported } from "./composer-glass";
 
 // The composer dock and pill shared by the session chat (ChatComposer) and the
@@ -51,3 +52,30 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
 	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 });
+
+/** The largest text size the composer's field grows with. */
+export const COMPOSER_FONT_SCALE_CAP = fontScaleCap.body;
+
+/**
+ * The field's and its row's heights at the reader's text size. They are
+ * points, which the text size does not reach, so at the largest sizes one line
+ * and its padding outgrew them and the placeholder was cut top and bottom.
+ * They grow with the text up to its cap. `fontScale` is the system's own, for
+ * what has to be rebuilt when it changes.
+ */
+export function useComposerFieldSize() {
+	const { fontScale } = useWindowDimensions();
+	const scale = Math.min(Math.max(fontScale || 1, 1), COMPOSER_FONT_SCALE_CAP);
+	return useMemo(() => ({
+		fontScale,
+		field: { minHeight: Math.round(COMPOSER_FIELD_HEIGHT * scale), maxHeight: Math.round(COMPOSER_FIELD_MAX_HEIGHT * scale) },
+		row: { maxHeight: Math.round(COMPOSER_MAX_HEIGHT * scale) },
+	}), [fontScale, scale]);
+}
+
+/**
+ * The composer's filled controls, drawn this tall inside their touch targets:
+ * the plus's circle, the model's capsule and the round button, so the row's
+ * shapes line up.
+ */
+export const COMPOSER_DISC = 34;

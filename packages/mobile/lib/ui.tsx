@@ -14,7 +14,10 @@ import {
 	type TextStyle,
 	type ViewStyle,
 } from "react-native";
+import { AppSymbol } from "./AppSymbol";
+import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
+import { Spinner } from "./Spinner";
 import { BREATHE_MS, shouldBreathe, shouldSpin, SPIN_MS } from "./motion";
 import { useEnterTransition, usePressScale } from "./motionHooks";
 import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
@@ -437,16 +440,18 @@ export function Button({
 }: {
 	title: string;
 	onPress: () => void;
-	/** `success` is desktop's green merge action. */
-	variant?: "primary" | "ghost" | "danger" | "success";
+	/** `success` is desktop's green merge action; `secondary` is a tonal button. */
+	variant?: "primary" | "secondary" | "ghost" | "danger" | "success";
 	loading?: boolean;
 	disabled?: boolean;
-	icon?: keyof typeof Feather.glyphMap;
+	/** A Feather name, or a system symbol drawn as SF Symbols / Material Symbols. */
+	icon?: ChromeIcon;
 	style?: StyleProp<ViewStyle>;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
 	const isPrimary = variant === "primary";
+	const isSecondary = variant === "secondary";
 	const isDanger = variant === "danger";
 	const isSuccess = variant === "success";
 	// `onAccent`, not a literal: near-black reads best on the dark theme's light
@@ -475,6 +480,7 @@ export function Button({
 					s.btn,
 					isPrimary && s.btnPrimary,
 					!isPrimary && s.btnGhost,
+					isSecondary && { backgroundColor: t.accentTint },
 					isDanger && s.btnDanger,
 					isSuccess && s.btnSuccess,
 					(disabled || loading) && { opacity: 0.5 },
@@ -485,7 +491,7 @@ export function Button({
 					<ActivityIndicator color={fg} size="small" />
 				) : (
 					<View style={s.btnInner}>
-						{icon ? <Feather name={icon} size={15} color={fg} style={{ marginRight: space.xs }} /> : null}
+						{icon ? <ChromeGlyph icon={icon} size={15} color={fg} style={{ marginRight: space.xs }} /> : null}
 						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.btnText, { color: fg }]}>
 							{title}
 						</Text>
@@ -496,23 +502,42 @@ export function Button({
 	);
 }
 
+/**
+ * A chrome glyph from an icon prop. A Feather name draws with Feather, as it
+ * always has; a system symbol draws as SF Symbols / Material Symbols.
+ */
+function ChromeGlyph({ icon, size, color, style }: { icon: ChromeIcon; size: number; color: string; style?: StyleProp<TextStyle> }) {
+	if (typeof icon === "string" && icon in Feather.glyphMap) {
+		return <Feather name={icon as keyof typeof Feather.glyphMap} size={size} color={color} style={style} />;
+	}
+	const glyph = resolveChromeIcon(icon);
+	if (glyph.symbol) return <View style={style}><AppSymbol name={glyph.symbol} size={size} color={color} /></View>;
+	return <Feather name={glyph.lucide} size={size} color={color} style={style} />;
+}
+
 // A numbered instruction row. Used by both onboarding screens: the welcome
 // screen passes a `hint` for the full "how it works" list, the scanner omits it
 // so the steps stay one line each above the viewfinder.
 export function NumberedStep({
 	n,
+	total,
 	title,
 	hint,
 	compact = false,
 }: {
 	n: number;
+	/** How many steps the list has, so a screen reader says "Step 1 of 3". */
+	total?: number;
 	title: string;
 	hint?: string;
 	compact?: boolean;
 }) {
 	const s = useThemedStyles(makeStyles);
+	// One element for a screen reader when the list size is known, so the number
+	// is read with its step rather than as a stray digit before it.
+	const a11y = total ? { accessible: true, accessibilityLabel: [`Step ${n} of ${total}`, title, hint].filter(Boolean).join(", ") } : {};
 	return (
-		<View style={[s.step, compact && s.stepCompact]}>
+		<View {...a11y} style={[s.step, compact && s.stepCompact]}>
 			<View style={[s.stepBadge, compact && s.stepBadgeCompact]}>
 				<Text style={[s.stepNum, compact && s.stepNumCompact]}>{n}</Text>
 			</View>
@@ -823,13 +848,23 @@ export function EmptyState({
 	message,
 	action,
 	pulse = false,
+	busy = false,
+	visual,
+	iconColor,
 }: {
-	icon?: keyof typeof Feather.glyphMap;
+	/** A Feather name, or a system symbol drawn as SF Symbols / Material Symbols. */
+	icon?: ChromeIcon;
 	title: string;
 	message?: string;
 	action?: ReactNode;
 	/** Breathe the icon, for a state that is waiting on something. */
 	pulse?: boolean;
+	/** The system's activity indicator in place of the icon, for a state still loading. */
+	busy?: boolean;
+	/** Drawn in place of the icon: a mascot, a machine's avatar. */
+	visual?: ReactNode;
+	/** The glyph's colour, when the state means something, like a failure. */
+	iconColor?: string;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
@@ -841,7 +876,11 @@ export function EmptyState({
 		<Animated.View style={[s.empty, enter]}>
 			<View style={s.emptyIcon}>
 				<Animated.View style={breathing ? { opacity: breathing } : undefined}>
-					<Feather name={icon} size={24} color={t.textTertiary} />
+					{busy ? (
+						<Spinner color={iconColor ?? t.textTertiary} />
+					) : (
+						visual ?? <ChromeGlyph icon={icon} size={24} color={iconColor ?? t.textTertiary} />
+					)}
 				</Animated.View>
 			</View>
 			<Text maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>

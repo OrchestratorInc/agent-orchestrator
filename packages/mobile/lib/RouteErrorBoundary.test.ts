@@ -21,7 +21,10 @@ const screenRoutes = [
 	"artifacts/[sessionId].tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
-	"settings/environments.tsx",
+	"connect.tsx",
+	"files/[sessionId]/folder.tsx",
+	"settings/machine/[id]/index.tsx",
+	"settings/machine/[id]/edit.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",
 	"notifications.tsx",
@@ -51,6 +54,7 @@ const sheetRoutes = [
 	"sheets/project.tsx",
 	"sheets/review-actions.tsx",
 	"sheets/store-update.tsx",
+	"files/[sessionId]/review.tsx",
 ];
 
 // The tab navigator alone: it renders no screen of its own, and a fallback there
