@@ -3,9 +3,9 @@ Pod::Spec.new do |s|
   s.version        = '1.0.0'
   s.summary        = 'Return-to-send from a hardware keyboard for the AO chat composer'
   s.description    = s.summary
-  s.license        = 'MIT'
-  s.author         = 'AO'
-  s.homepage       = 'https://github.com/Untrivial-ai/agent-orchestrator'
+  s.license        = 'UNLICENSED'
+  s.authors        = 'AO'
+  s.homepage       = 'https://github.com/OrchestratorInc/agent-orchestrator'
   s.platforms      = { :ios => '16.4' }
   s.source         = { git: '' }
 
