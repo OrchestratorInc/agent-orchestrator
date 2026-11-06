@@ -33,11 +33,12 @@ describe("reviewer conversation parity", () => {
 	// The reviewer screen had React Native's avoider with no Android behaviour,
 	// so the keyboard covered the composer there.
 	it("shares the session chat's keyboard avoidance", () => {
-		expect(source).toContain("const chatKeyboard = useChatKeyboard();");
+		expect(source).toContain("const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });");
 		expect(source).toContain('from "react-native-keyboard-controller"');
-		expect(source).toContain("style={[styles.screen, chatKeyboard.rootStyle]}");
+		expect(source).toContain("style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]}");
 		expect(source).toContain("restingInset={chatKeyboard.restingInset}");
 		expect(source).not.toContain("keyboardVerticalOffset={88}");
-		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard();");
+		// The session's chat lays out under a clear bar; the reviewer's below its bar.
+		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });");
 	});
 });

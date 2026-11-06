@@ -45,25 +45,25 @@ func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
 	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	fingerprint := "9999999999999999"
 	for i := 0; i < 5; i++ {
-		if !allowErrorFingerprint(fingerprint, when) {
+		if !allowErrorFingerprintFor(fingerprint, "", when) {
 			t.Fatalf("event %d was dropped", i)
 		}
 	}
-	if allowErrorFingerprint(fingerprint, when) {
+	if allowErrorFingerprintFor(fingerprint, "", when) {
 		t.Fatal("sixth event in a minute was accepted")
 	}
-	if !allowErrorFingerprint(fingerprint, when.Add(time.Minute)) {
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(time.Minute)) {
 		t.Fatal("new minute did not admit a new event")
 	}
 	for minute := 2; minute < 42; minute++ {
 		for i := 0; i < 5; i++ {
-			allowErrorFingerprint(fingerprint, when.Add(time.Duration(minute)*time.Minute))
+			allowErrorFingerprintFor(fingerprint, "", when.Add(time.Duration(minute)*time.Minute))
 		}
 	}
-	if allowErrorFingerprint(fingerprint, when.Add(42*time.Minute)) {
+	if allowErrorFingerprintFor(fingerprint, "", when.Add(42*time.Minute)) {
 		t.Fatal("daily budget exceeded")
 	}
-	if !allowErrorFingerprint(fingerprint, when.Add(24*time.Hour)) {
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(24*time.Hour)) {
 		t.Fatal("new day did not reset the budget")
 	}
 }
@@ -84,11 +84,11 @@ func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
 		errorBudget.Unlock()
 	})
 	for i := range maxErrorsPerFingerprintMinute {
-		if !allowErrorFingerprint(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), when) {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "", when) {
 			t.Fatalf("overflow event %d was dropped", i)
 		}
 	}
-	if allowErrorFingerprint("ffffffffffffffff", when) {
+	if allowErrorFingerprintFor("ffffffffffffffff", "", when) {
 		t.Fatal("overflow bucket admitted a sixth event in the minute")
 	}
 	errorBudget.Lock()

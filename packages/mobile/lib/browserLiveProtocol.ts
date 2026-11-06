@@ -62,6 +62,16 @@ export function containBrowserFrame(
 	};
 }
 
+/**
+ * Where a point in the viewport lands on the desktop page, as fractions of the
+ * fitted frame. Null when it falls in the letterbox around the frame.
+ */
+export function normalizedFramePoint(rect: BrowserFrameRect, point: { x: number; y: number }): { x: number; y: number } | null {
+	if (rect.width <= 0 || rect.height <= 0) return null;
+	if (point.x < rect.left || point.x > rect.left + rect.width || point.y < rect.top || point.y > rect.top + rect.height) return null;
+	return { x: (point.x - rect.left) / rect.width, y: (point.y - rect.top) / rect.height };
+}
+
 /** React Native Image accepts data URIs, while URL.createObjectURL is web-only. */
 export function browserJPEGDataURI(buffer: ArrayBuffer): string {
 	const bytes = new Uint8Array(buffer);

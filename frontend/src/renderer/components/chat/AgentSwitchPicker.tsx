@@ -48,6 +48,7 @@ import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
 export interface PendingAgentSwitch {
 	harness: string;
@@ -83,6 +84,11 @@ export function compactsEarly(harness: string | undefined, model = ""): boolean 
 /** What the chat surface passes down to turn the model control into this one. */
 export interface AgentSwitchProps {
 	projectId: string;
+	/**
+	 * A Cloud task's organization: the agents' models are Cloud's for the
+	 * account (the ones its sessions run), not this computer's.
+	 */
+	cloudOrgId?: string;
 	hostId?: string;
 	pending?: PendingAgentSwitch;
 	/** The permission modes the pending agent runs in, strictest first, once known. */
@@ -222,6 +228,12 @@ export function AgentModelPicker({
 }) {
 	const { t } = useTranslation();
 	const { pending, onPendingChange, projectId, hostId } = agentSwitch;
+	const cloudCatalogOptions = useCloudAgentCatalogOptions(agentSwitch.cloudOrgId);
+	// Each agent's model list: Cloud's for a Cloud task, else this computer's.
+	// Both resolve to the pickers' catalog shape (Cloud's through its select),
+	// which is all the queries below read.
+	const catalogOptions = (harness: string) =>
+		(cloudCatalogOptions(harness) ?? agentModelsQueryOptions(harness, projectId, hostId)) as ReturnType<typeof agentModelsQueryOptions>;
 	// The agents to offer before a session exists, in place of the chat switch targets.
 	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
@@ -265,7 +277,7 @@ export function AgentModelPicker({
 	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
-	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
+	const savedCatalog = useQuery({ ...catalogOptions(currentHarness), enabled: Boolean(loadingModels) }).data;
 	// Until the agent reports its own models, its list fills the menu; picks wait for the agent.
 	const starting = loadingModels && savedCatalog && !current.models.some((model) => model.id)
 		? otherAgentSource(
@@ -284,10 +296,10 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	// Warmed on hover or focus, so the first keystrokes already search every agent.
 	const warmCatalogs = () => {
-		for (const agent of others) void queryClient.prefetchQuery(agentModelsQueryOptions(agent.id, projectId, hostId));
+		for (const agent of others) void queryClient.prefetchQuery(catalogOptions(agent.id));
 	};
 	const catalogs = useQueries({
-		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
+		queries: others.map((agent) => ({ ...catalogOptions(agent.id), enabled: open })),
 	});
 	// A pending agent offers the models its own session will, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
@@ -304,7 +316,7 @@ export function AgentModelPicker({
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
 	// A catalog that could not be read says why, instead of an empty model list.
-	const shownCatalog = useQuery({ ...agentModelsQueryOptions(shownHarness, projectId, hostId), enabled: open && settable }).data;
+	const shownCatalog = useQuery({ ...catalogOptions(shownHarness), enabled: open && settable }).data;
 	const modelsProblem = !settable || source.models.some((model) => model.id)
 		? undefined
 		: catalogProblem(shownCatalog);

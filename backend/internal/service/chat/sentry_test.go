@@ -39,6 +39,7 @@ func TestCaptureChatFaultExcludesExpectedProviderStates(t *testing.T) {
 		capture bool
 	}{
 		{"nil", nil, false},
+		{"agent signed out", ports.ErrAgentAuthRequired, false},
 		{"signed out", ports.NewChatProviderFailure("Sign in required", "", ports.ErrChatAuthRequired), false},
 		{"canceled", context.Canceled, false},
 		{"Codex usage limit", ports.NewChatProviderFailure("Usage limit exceeded", "Try again later", errors.New("usageLimitExceeded")), false},
