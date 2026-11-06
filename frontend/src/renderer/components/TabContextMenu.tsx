@@ -1,10 +1,19 @@
-import { Pencil, X } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { Columns2, Pencil, Rows2, X } from "lucide-react";
+import { createContext, useContext, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import { isMacPlatform } from "../lib/platform";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
 import { useShortcutKeys } from "./ui/tooltip";
+
+/** Split this tab beside the one on screen; an absent action shows disabled. */
+export type TabSplitActions = { right?: () => void; down?: () => void };
+
+/**
+ * Provided only while split panes are on (a Developer Mode preview); tab menus
+ * then offer Split right and Split down for their tab key.
+ */
+export const TabSplitMenuContext = createContext<((tabKey: string) => TabSplitActions) | undefined>(undefined);
 
 /** A key hint for an app shortcut, honouring custom keybindings. */
 export function TabMenuShortcut({ id }: { id: AppShortcutId }) {
@@ -36,6 +45,7 @@ function isMenuKey(event: KeyboardEvent) {
  */
 export function TabContextMenu({
 	children,
+	tabKey,
 	items,
 	destructive,
 	onClose,
@@ -43,6 +53,8 @@ export function TabContextMenu({
 	disabled = false,
 }: {
 	children: ReactNode;
+	/** The tab's key in the strip, for split actions. */
+	tabKey?: string;
 	items?: ReactNode;
 	destructive?: ReactNode;
 	/** The tab's own close action; absent, Close tab shows disabled. */
@@ -52,6 +64,7 @@ export function TabContextMenu({
 	disabled?: boolean;
 }) {
 	const { t } = useTranslation();
+	const split = useContext(TabSplitMenuContext);
 	if (disabled) return children;
 	return (
 		<ContextMenu>
@@ -75,6 +88,7 @@ export function TabContextMenu({
 			<ContextMenuContent className="min-w-56">
 				{items}
 				{items ? <ContextMenuSeparator /> : null}
+				{split && tabKey ? <TabSplitItems actions={split(tabKey)} /> : null}
 				<ContextMenuItem disabled={!onClose} onSelect={onClose}>
 					<X aria-hidden="true" />
 					{t("tabMenu.close")}
@@ -88,5 +102,22 @@ export function TabContextMenu({
 				) : null}
 			</ContextMenuContent>
 		</ContextMenu>
+	);
+}
+
+function TabSplitItems({ actions }: { actions: TabSplitActions }) {
+	const { t } = useTranslation();
+	return (
+		<>
+			<ContextMenuItem disabled={!actions.right} onSelect={actions.right}>
+				<Columns2 aria-hidden="true" />
+				{t("tabMenu.splitRight")}
+			</ContextMenuItem>
+			<ContextMenuItem disabled={!actions.down} onSelect={actions.down}>
+				<Rows2 aria-hidden="true" />
+				{t("tabMenu.splitDown")}
+			</ContextMenuItem>
+			<ContextMenuSeparator />
+		</>
 	);
 }

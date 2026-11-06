@@ -2159,6 +2159,8 @@
 	"terminal.fontSizeAria": "ターミナルのフォントサイズ: {{size}} ピクセル",
 	"terminal.new": "新しいターミナル",
 	"tabMenu.close": "タブを閉じる",
+	"tabMenu.splitDown": "下に分割",
+	"tabMenu.splitRight": "右に分割",
 	"tabMenu.copyRelativePath": "相対パスをコピー",
 	"terminal.noSession": "セッションなし",
 	"terminal.openFullscreenAria": "ターミナルをフルスクリーンで開く",

@@ -624,6 +624,7 @@ export function CenterPane({
 																? onSelectReviewerTerminal?.(tab.terminal)
 																: onSelectReviewerChat?.(tab.terminal)
 														}
+														tabKey={tab.key}
 														tabMenu
 														title={tab.terminal.harness}
 													/>
@@ -642,7 +643,7 @@ export function CenterPane({
 														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
-													<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose}>
+													<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
 														{tab.tab.content}
 													</TabContextMenu>
 												)}
@@ -732,6 +733,8 @@ type SessionPaneTabProps = {
 	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
+	/** The tab's strip key, for split actions in its menu. */
+	tabKey?: string;
 };
 
 // The session, reviewer and no-session tabs of the strip. The full label only
@@ -748,6 +751,7 @@ export function SessionPaneTab({
 	tabAction,
 	tabActionPinned = false,
 	tabMenu = false,
+	tabKey = SESSION_TAB_KEY,
 }: SessionPaneTabProps) {
 	const { t } = useTranslation();
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
@@ -843,6 +847,7 @@ export function SessionPaneTab({
 					session={session}
 				/>
 			) : undefined}
+			tabKey={tabKey}
 		>
 			{tabFrame}
 		</TabContextMenu>

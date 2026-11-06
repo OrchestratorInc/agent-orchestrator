@@ -2486,11 +2486,12 @@ function ChatHeader({
 													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
 													label={t("terminal.reviewer")}
 													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
+													tabKey={tab.key}
 													tabMenu
 													title={tab.terminal.harness}
 												/>
 											) : (
-												<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose}>
+												<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
 													{tab.tab.content}
 												</TabContextMenu>
 											)}

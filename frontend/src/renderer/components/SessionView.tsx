@@ -23,6 +23,7 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
+import { TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
@@ -1688,6 +1689,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
+	// Tab menus split their tab beside the one on screen, as dropping it on
+	// that pane's edge does. Only while split panes are on.
+	const splitTabMenu = useMemo(() => {
+		if (!splitPanes) return undefined;
+		return (key: string): TabSplitActions => {
+			const anchor = selectedTabKey;
+			if (key === anchor || !splittableKeys.has(anchor) || !splittableKeys.has(key)) return {};
+			const split = (side: "right" | "bottom") => () => {
+				updateGroups((current) => splitBeside(current, anchor, key, side));
+				selectTab(key);
+			};
+			return { right: split("right"), down: split("bottom") };
+		};
+	}, [selectTab, selectedTabKey, splitPanes, splittableKeys, updateGroups]);
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
 	// Clicking into a pane focuses its member, as clicking its name does. This
 	// listens natively: terminals are portaled from the shared cache, so React
@@ -2478,6 +2493,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							    reviewer targets remain terminal surfaces in either mode. */}
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
+							<TabSplitMenuContext.Provider value={splitTabMenu}>
 							<div
 								className={cn("min-h-0 min-w-0 overflow-hidden", (mainActiveFilePath || mainReviewerChatId || sessionPaneHidden) && "invisible pointer-events-none")}
 								data-split-pane={SESSION_TAB_KEY}
@@ -2617,6 +2633,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							)}
 							</div>
+							</TabSplitMenuContext.Provider>
 							</SplitHiddenTabKeysContext.Provider>
 							</SplitCloseFocusedContext.Provider>
 							{shownGroup

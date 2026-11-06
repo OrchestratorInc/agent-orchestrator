@@ -2653,6 +2653,8 @@
 	"terminal.fontSizeAria": "Размер шрифта терминала: {{size}} пикс.",
 	"terminal.new": "Новый терминал",
 	"tabMenu.close": "Закрыть вкладку",
+	"tabMenu.splitDown": "Разделить вниз",
+	"tabMenu.splitRight": "Разделить вправо",
 	"tabMenu.copyRelativePath": "Копировать относительный путь",
 	"terminal.noSession": "Нет сессии",
 	"terminal.openFullscreenAria": "Открыть терминал на весь экран",

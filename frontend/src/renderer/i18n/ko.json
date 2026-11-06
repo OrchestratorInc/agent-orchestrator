@@ -2159,6 +2159,8 @@
 	"terminal.fontSizeAria": "터미널 글꼴 크기: {{size}}픽셀",
 	"terminal.new": "새 터미널",
 	"tabMenu.close": "탭 닫기",
+	"tabMenu.splitDown": "아래로 분할",
+	"tabMenu.splitRight": "오른쪽으로 분할",
 	"tabMenu.copyRelativePath": "상대 경로 복사",
 	"terminal.noSession": "세션 없음",
 	"terminal.openFullscreenAria": "터미널 전체 화면으로 열기",

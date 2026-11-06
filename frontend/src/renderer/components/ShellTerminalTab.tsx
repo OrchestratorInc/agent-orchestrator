@@ -167,6 +167,7 @@ export function ShellTerminalTab({
 				disabled={isEditing || shell.optimistic}
 				items={<TabRenameItem ariaLabel={t("terminal.rename", { title })} onRename={canEdit ? beginEdit : undefined} />}
 				onClose={onClose}
+				tabKey={shell.handleId}
 			>
 				<TerminalTabFrame
 					wide={Boolean(agent)}

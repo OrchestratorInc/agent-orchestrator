@@ -2194,6 +2194,8 @@
 	"terminal.fontSizeAria": "Tamaño de fuente del terminal: {{size}} píxeles",
 	"terminal.new": "Nuevo terminal",
 	"tabMenu.close": "Cerrar pestaña",
+	"tabMenu.splitDown": "Dividir hacia abajo",
+	"tabMenu.splitRight": "Dividir a la derecha",
 	"tabMenu.copyRelativePath": "Copiar ruta relativa",
 	"terminal.noSession": "Sin sesión",
 	"terminal.openFullscreenAria": "Abrir terminal a pantalla completa",

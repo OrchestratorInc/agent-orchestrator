@@ -2218,6 +2218,8 @@
 	"terminal.fontSizeAria": "终端字体大小：{{size}} 像素",
 	"terminal.new": "新建终端",
 	"tabMenu.close": "关闭标签页",
+	"tabMenu.splitDown": "向下拆分",
+	"tabMenu.splitRight": "向右拆分",
 	"tabMenu.copyRelativePath": "复制相对路径",
 	"terminal.noSession": "无会话",
 	"terminal.openFullscreenAria": "以全屏模式打开终端",

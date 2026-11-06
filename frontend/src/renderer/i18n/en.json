@@ -2565,6 +2565,8 @@
 	"terminal.fontSizeAria": "Terminal font size: {{size}} pixels",
 	"terminal.new": "New terminal",
 	"tabMenu.close": "Close tab",
+	"tabMenu.splitDown": "Split down",
+	"tabMenu.splitRight": "Split right",
 	"tabMenu.copyRelativePath": "Copy relative path",
 	"terminal.noSession": "No session",
 	"terminal.openFullscreenAria": "Open terminal fullscreen",

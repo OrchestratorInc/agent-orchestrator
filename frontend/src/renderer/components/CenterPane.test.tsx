@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
+import { TabSplitMenuContext } from "./TabContextMenu";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -858,6 +859,32 @@ describe("CenterPane tab context menu", () => {
 		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
 
 		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("offers split actions only while split panes provide them", async () => {
+		const right = vi.fn();
+		const { unmount } = renderCenterPane({ session: worker, shellTerminals: shells });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(screen.queryByRole("menuitem", { name: "Split right" })).not.toBeInTheDocument();
+		unmount();
+
+		const split = vi.fn((key: string) => (key === "h-1" ? { right } : {}));
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<TabSplitMenuContext.Provider value={split}>
+						<CenterPane daemonReady session={worker} shellTerminals={shells} theme="dark" />
+					</TabSplitMenuContext.Provider>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		expect(await screen.findByRole("menuitem", { name: "Split down" })).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(screen.getByRole("menuitem", { name: "Split right" }));
+
+		expect(split).toHaveBeenCalledWith("h-1");
+		expect(right).toHaveBeenCalledOnce();
 	});
 
 	it("never closes the session's own tab", async () => {

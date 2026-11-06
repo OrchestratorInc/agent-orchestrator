@@ -2159,6 +2159,8 @@
 	"terminal.fontSizeAria": "Terminal-Schriftgröße: {{size}} Pixel",
 	"terminal.new": "Neues Terminal",
 	"tabMenu.close": "Tab schließen",
+	"tabMenu.splitDown": "Unten teilen",
+	"tabMenu.splitRight": "Rechts teilen",
 	"tabMenu.copyRelativePath": "Relativen Pfad kopieren",
 	"terminal.noSession": "Keine Sitzung",
 	"terminal.openFullscreenAria": "Terminal im Vollbild öffnen",
