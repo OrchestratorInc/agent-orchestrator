@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { requestDockModel } from "./requestDockModel";
+import { requestCardMaxHeight, requestDockModel } from "./requestDockModel";
 import type { ConversationActivity, ConversationSnapshot, InputProperty } from "./types";
 
 const activity = (over: Partial<ConversationActivity> = {}): ConversationActivity =>
@@ -186,5 +186,20 @@ describe("requestDockModel", () => {
 
 	it("passes the matching in-flight flag through as busy", () => {
 		expect(requestDockModel(snapshot([activity({ decisions: [{ id: "a", label: "A" }] })]), { approval: true, input: false })?.busy).toBe(true);
+	});
+});
+
+describe("requestCardMaxHeight", () => {
+	it("leaves the chat half of the screen", () => {
+		expect(requestCardMaxHeight(844, 0)).toBe(422);
+	});
+
+	it("measures the half from the space above the keyboard", () => {
+		expect(requestCardMaxHeight(844, 336)).toBe(254);
+	});
+
+	it("never drops below room for the header, a little question and one answer", () => {
+		expect(requestCardMaxHeight(390, 200)).toBe(180);
+		expect(requestCardMaxHeight(0, 500)).toBe(180);
 	});
 });
