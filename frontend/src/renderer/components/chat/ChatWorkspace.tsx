@@ -5041,11 +5041,10 @@ const TurnGroup = memo(function TurnGroup({
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
 	// report batch, or reports folded into the user's message) draws as rows, and
 	// AO's task-naming prompt as the name it produced.
-	const reportsLine = (key: string, updates: readonly WorkerUpdate[], withMessage: boolean) => (
+	const reportsLine = (key: string, updates: readonly WorkerUpdate[]) => (
 		<ReportsLine
 			key={key}
 			updates={updates}
-			withMessage={withMessage}
 			open={Boolean(activityDisclosureOverrides[key])}
 			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
 		/>
@@ -5059,14 +5058,14 @@ const TurnGroup = memo(function TurnGroup({
 		// A direct send or steer is one row; a batch of reports is one line that opens to them.
 		if (updates.length > 0 && updates[0]?.state === undefined) {
 			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
-			return carried.length > 0 ? [rows, reportsLine(`${run.key}:reports`, carried, true)] : rows;
+			return carried.length > 0 ? [rows, reportsLine(`${run.key}:reports`, carried)] : rows;
 		}
-		if (updates.length > 0) return reportsLine(run.key, updates, false);
+		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
 		const reports = [...piggybackedUpdates(item), ...carried];
 		if (reports.length === 0) return renderRun(run);
-		return [renderRun(run), reportsLine(`${run.key}:reports`, reports, true)];
+		return [renderRun(run), reportsLine(`${run.key}:reports`, reports)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	// The live row sits at the end of the turn, under what the agent has written so

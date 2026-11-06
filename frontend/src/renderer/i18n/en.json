@@ -3004,8 +3004,6 @@
 	"chat.startup.failed": "Session setup failed",
 	"chat.reports.count_one": "{{count}} Agent Report",
 	"chat.reports.count_other": "{{count}} Agent Reports",
-	"chat.reports.sentWith_one": "{{count}} Agent Report sent with this message",
-	"chat.reports.sentWith_other": "{{count}} Agent Reports sent with this message",
 	"chat.reports.needsYou": "{{count}} needs you",
 	"chat.action.session.spawned": "Spawned an agent",
 	"chat.action.session.terminated": "Terminated an agent",

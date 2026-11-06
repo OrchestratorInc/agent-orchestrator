@@ -2994,8 +2994,6 @@
 	"chat.startup.failed": "Einrichtung der Sitzung fehlgeschlagen",
 	"chat.reports.count_one": "{{count}} Agent-Bericht",
 	"chat.reports.count_other": "{{count}} Agent-Berichte",
-	"chat.reports.sentWith_one": "{{count}} Agent-Bericht mit dieser Nachricht gesendet",
-	"chat.reports.sentWith_other": "{{count}} Agent-Berichte mit dieser Nachricht gesendet",
 	"chat.reports.needsYou": "{{count}} braucht dich",
 	"chat.action.session.spawned": "Agent gestartet",
 	"chat.action.session.terminated": "Agent beendet",

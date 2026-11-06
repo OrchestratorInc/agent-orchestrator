@@ -2994,8 +2994,6 @@
 	"chat.startup.failed": "セッションのセットアップに失敗しました",
 	"chat.reports.count_one": "エージェントレポート {{count}} 件",
 	"chat.reports.count_other": "エージェントレポート {{count}} 件",
-	"chat.reports.sentWith_one": "このメッセージと一緒に送信されたエージェントレポート {{count}} 件",
-	"chat.reports.sentWith_other": "このメッセージと一緒に送信されたエージェントレポート {{count}} 件",
 	"chat.reports.needsYou": "{{count}} 件が対応待ち",
 	"chat.action.session.spawned": "エージェントを起動しました",
 	"chat.action.session.terminated": "エージェントを終了しました",

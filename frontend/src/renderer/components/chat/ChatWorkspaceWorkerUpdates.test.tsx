@@ -245,8 +245,9 @@ describe("orchestrator worker updates", () => {
 		};
 		renderOrchestrator([human, reply("t1", 2, "Both moved.")]);
 
-		const line = screen.getByRole("button", { name: /2 Agent Reports sent with this message/ });
+		const line = screen.getByRole("button", { name: /^2 Agent Reports/ });
 		expect(line).toHaveTextContent("1 needs you");
+		expect(line).not.toHaveTextContent("sent with this message");
 		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
 		// The line sits under the message it travelled with, not above it.
 		expect(screen.getByText("How is it going?").compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
