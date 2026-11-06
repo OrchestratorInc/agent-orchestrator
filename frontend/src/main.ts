@@ -3327,6 +3327,7 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
 });
 registerAgentLoginIpc({
 	ipcMain,

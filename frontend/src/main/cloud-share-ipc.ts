@@ -12,7 +12,10 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
+	type CloudShareHistoryInspection,
+	type CloudShareHistoryVersion,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudSharePublishResult,
 	type CloudSessionShareFile,
@@ -20,12 +23,21 @@ import {
 import {
 	CloudShareError,
 	type CloudShareApi,
+	deleteShareHistory,
+	hashShareFile,
 	inspectCloudSessionArtifact,
+	inspectCloudSessionHistory,
+	listLocalVersions,
 	listShareLinks,
+	olderVersions,
 	resolveShareFile,
+	resolveShareVersion,
+	SecretScanner,
 	shareLinksAvailable,
 	scanShareFile,
 	shareCloudSessionArtifact,
+	shareCloudSessionHistory,
+	shareLocalHistory,
 	type ShareSnapshot,
 	snapshotShareFile,
 	unpublishShareLink,
@@ -41,6 +53,10 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	snapshotDir: () => string;
 	/** Which link each local file was last published to. */
 	records: ShareLinkRecordStore;
+	/** The daemon's port while it is ready. */
+	daemonPort: () => number | undefined;
+	/** Calls the daemon. Not Electron's net.fetch, whose browser metadata the daemon rejects. */
+	daemonFetch?: typeof fetch;
 }
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
@@ -49,22 +65,31 @@ function isVideo(name: string): boolean {
 	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
+function historyArgument(value: unknown): CloudShareHistoryVersion[] | undefined {
+	if (value === undefined) return undefined;
+	const valid = Array.isArray(value) && value.every((entry: Partial<CloudShareHistoryVersion> | null) =>
+		typeof entry?.version === "number" && typeof entry.sha256 === "string" && typeof entry.size === "number" && typeof entry.createdAt === "string");
+	if (!valid) throw new CloudShareError("invalid_request", "Not a file to share.");
+	return value as CloudShareHistoryVersion[];
+}
+
 function shareFileArgument(value: unknown): CloudShareFile {
 	if (typeof value !== "object" || value === null) throw new CloudShareError("invalid_request", "Not a file to share.");
 	const { source, baseUrl, sessionId, path: filePath, projectId, orgId, shareId, fingerprint } = value as Record<string, unknown>;
+	const history = historyArgument((value as Record<string, unknown>).history);
 	if (typeof baseUrl !== "string" || typeof sessionId !== "string" || typeof filePath !== "string" ||
 		(shareId !== undefined && typeof shareId !== "string") || (fingerprint !== undefined && typeof fingerprint !== "string")) {
 		throw new CloudShareError("invalid_request", "Not a file to share.");
 	}
 	if (source === "cloud") {
 		if (typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a file to share.");
-		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", shareId, fingerprint } satisfies CloudSessionShareFile;
+		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", shareId, fingerprint, history } satisfies CloudSessionShareFile;
 	}
 	// A local file's project names the document: an empty one would make a
 	// second document, and link, for a file already published.
 	if (source !== undefined && source !== "local") throw new CloudShareError("invalid_request", "Not a file to share.");
 	if (typeof projectId !== "string" || projectId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
-	return { baseUrl, sessionId, path: filePath, projectId, shareId, fingerprint };
+	return { baseUrl, sessionId, path: filePath, projectId, shareId, fingerprint, history };
 }
 
 function isCloudFile(file: CloudShareFile): file is CloudSessionShareFile {
@@ -148,7 +173,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
 			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint);
-			return { status: "published", share: result.share, replaced: result.replaced };
+			if (!file.history) return { status: "published", share: result.share, replaced: result.replaced };
+			const shown = await withHistory(result.share, () => shareCloudHistory(file, result.share.id, file.history ?? []));
+			return { status: "published", replaced: result.replaced, ...shown };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
 				return { status: "changed", inspection: await inspectCloudFile(file) };
@@ -156,6 +183,39 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			throw error;
 		}
 	};
+
+	const shareCloudHistory = (file: CloudSessionShareFile, shareId: string, versions: CloudShareHistoryVersion[]) =>
+		shareCloudSessionHistory(deps, file.baseUrl, { ...file, shareId, versions });
+
+	// A link is live whatever becomes of its history: a failure here shows on
+	// the published link instead of reading as a failed publish.
+	const withHistory = async (share: CloudShareLink, showHistory: () => Promise<CloudShareLink>): Promise<{ share: CloudShareLink; historyError?: string }> => {
+		try {
+			return { share: await showHistory() };
+		} catch (error) {
+			if (error instanceof CloudShareError) return { share, historyError: error.message };
+			throw error;
+		}
+	};
+
+	const shareLocal = (
+		file: CloudShareFile,
+		name: string,
+		shareId: string,
+		versions: CloudShareHistoryVersion[],
+		signal: AbortSignal,
+		onProgress: (doneBytes: number) => void,
+	) => shareLocalHistory(deps, {
+		baseUrl: file.baseUrl,
+		shareId,
+		sessionId: file.sessionId,
+		name,
+		versions,
+		dataDir: deps.daemonDataDir(),
+		snapshotDir: deps.snapshotDir(),
+		onProgress,
+		signal,
+	});
 
 	deps.ipcMain.handle("cloudShare:inspect", async (event, value: unknown): Promise<CloudShareInspection> => {
 		requireMainFrame(event);
@@ -175,6 +235,60 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
 		};
+	});
+
+	// Every older version a link would show is checked here, before the person
+	// chooses: a credential a later version removed is still in the history.
+	deps.ipcMain.handle("cloudShare:inspectHistory", async (event, value: unknown): Promise<CloudShareHistoryInspection> => {
+		requireMainFrame(event);
+		const file = shareFileArgument(value);
+		if (isCloudFile(file)) {
+			const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
+			return inspectCloudSessionHistory(deps, file.baseUrl, { ...file, name: found.name, sha256: found.sha256 });
+		}
+		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
+		const kept = await listLocalVersions(deps.daemonFetch ?? fetch, deps.daemonPort(), file.sessionId, resolved.relativePath);
+		const versions = olderVersions(kept, await hashShareFile(resolved));
+		const findings = new Set(new SecretScanner(resolved.name).list());
+		for (const sha256 of new Set(versions.map((version) => version.sha256))) {
+			const version = await resolveShareVersion(deps.daemonDataDir(), file.sessionId, sha256, resolved.name);
+			for (const kind of (await scanShareFile(version)).secretFindings) findings.add(kind);
+		}
+		return { versions, secretFindings: [...findings].sort() };
+	});
+
+	// Shows older versions on a link that is already live, leaving what it
+	// serves as its latest alone. Only a person's choice in the popover gets here.
+	deps.ipcMain.handle("cloudShare:shareHistory", async (event, value: unknown): Promise<CloudSharePublishResult> => {
+		requireMainFrame(event);
+		const file = shareFileArgument(value);
+		const { shareId, history } = file;
+		if (!shareId || !history) throw new CloudShareError("invalid_request", "Not a file to share.");
+		const sender = event.sender;
+		if (inFlight.has(sender.id)) return { status: "error", message: "Another file is being shared." };
+		const controller = new AbortController();
+		inFlight.set(sender.id, controller);
+		try {
+			if (isCloudFile(file)) return { status: "published", replaced: true, share: await shareCloudHistory(file, shareId, history) };
+			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
+			const totalBytes = history.reduce((sum, version) => sum + version.size, 0);
+			const share = await shareLocal(file, resolved.name, shareId, history, controller.signal, (sentBytes) => {
+				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
+			});
+			return { status: "published", replaced: true, share };
+		} catch (error) {
+			if (controller.signal.aborted) return { status: "cancelled" };
+			return refusal(error);
+		} finally {
+			inFlight.delete(sender.id);
+		}
+	});
+
+	deps.ipcMain.handle("cloudShare:unshareHistory", async (event, value: unknown): Promise<CloudShareLink> => {
+		requireMainFrame(event);
+		const shareId = (value as { shareId?: unknown } | null)?.shareId;
+		if (typeof shareId !== "string") throw new CloudShareError("invalid_request", "Not a share link.");
+		return deleteShareHistory(deps, baseUrlArgument(value), shareId);
 	});
 
 	deps.ipcMain.handle("cloudShare:available", async (_event, value: unknown): Promise<boolean | null> =>
@@ -218,13 +332,17 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 			if (isVideo(resolved.name)) return { status: "unsupported", message: "Sharing videos is coming soon." };
 			if (!(await deps.getToken())) return { status: "signed_out" };
+			const history = file.history;
+			const historyBytes = history?.reduce((sum, version) => sum + version.size, 0) ?? 0;
 			const progress = (sentBytes: number, totalBytes: number) => {
 				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
 			};
-			// Preparing the snapshot is the first half of the progress, uploading it the second.
+			// Preparing the snapshot is the first part of the progress, uploading
+			// it the second, and sending any older versions the last.
+			const total = resolved.size * 2 + historyBytes;
 			snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
 				signal: controller.signal,
-				onProgress: (copied) => progress(copied, resolved.size * 2),
+				onProgress: (copied) => progress(copied, total),
 			});
 			const taken = snapshot;
 			// Publish only what the person was shown: the file as inspected,
@@ -253,9 +371,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				project: file.projectId,
 				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
 				shareId: file.shareId,
-			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
+			}, (sentBytes) => progress(taken.size + sentBytes, total), controller.signal);
 			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id, taken.fingerprint);
-			return { status: "published", share: result.share, replaced: result.replaced };
+			if (!history) return { status: "published", share: result.share, replaced: result.replaced };
+			// The link is live from here on: cancelling stops only its history.
+			const shown = await withHistory(result.share, () => shareLocal(file, resolved.name, result.share.id, history, controller.signal,
+				(doneBytes) => progress(taken.size * 2 + doneBytes, total)));
+			return { status: "published", replaced: result.replaced, ...shown };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };
 			return refusal(error);

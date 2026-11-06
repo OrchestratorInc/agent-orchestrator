@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Globe, Share } from "lucide-react";
-import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import type { CloudShareFile, CloudShareHistoryInspection, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
@@ -9,6 +9,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type Phase =
@@ -19,7 +20,15 @@ type Phase =
 	| { kind: "limit"; limit: number }
 	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean; unpublished?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
-	| { kind: "published"; share: CloudShareLink; outdated?: OutdatedShare; unpublishing?: "confirm" | "busy"; error?: string }
+	| {
+		kind: "published";
+		share: CloudShareLink;
+		outdated?: OutdatedShare;
+		unpublishing?: "confirm" | "busy";
+		/** Older versions the person is being asked to share on this live link. */
+		confirmingHistory?: CloudShareHistoryInspection;
+		error?: string;
+	}
 	| { kind: "error"; message: string };
 
 /**
@@ -31,6 +40,17 @@ interface OutdatedShare {
 	links: CloudShareLinks;
 	changed?: boolean;
 }
+
+/**
+ * The person's choice to share a file's older versions, and what they were
+ * shown about them. It starts off: a link shows only what is published unless
+ * they turn this on.
+ */
+type HistoryChoice =
+	| { kind: "off" }
+	| { kind: "checking" }
+	| { kind: "on"; inspection: CloudShareHistoryInspection }
+	| { kind: "failed"; message: string };
 
 /** Videos are not shared yet: there is no partial-file serving for them. */
 const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
@@ -50,6 +70,9 @@ interface PendingShare {
 }
 
 const pendingShares = new Map<string, PendingShare>();
+
+/** Sharing a live link's history touches no slots: no list to consult. */
+const NO_LINKS: CloudShareLinks = { shares: [], limit: 0, used: 0, unlimited: true };
 
 function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
 	return JSON.stringify([baseUrl, file.sessionId, file.path]);
@@ -166,6 +189,11 @@ function SharePanel({
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
 	const [copied, setCopied] = useState(false);
+	const [history, setHistory] = useState<HistoryChoice>({ kind: "off" });
+	// Older control planes have no history to offer.
+	const [historySupported, setHistorySupported] = useState(false);
+	const [historyBusy, setHistoryBusy] = useState(false);
+	const checkHistoryRef = useRef<() => Promise<unknown>>(() => Promise.resolve());
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
 
@@ -175,7 +203,13 @@ function SharePanel({
 	const settle = (result: CloudSharePublishResult, links: CloudShareLinks, share?: CloudShareLink) => {
 		switch (result.status) {
 			case "published":
-				return setPhase({ kind: "published", share: result.share });
+				// A link left without its history shows that on the switch.
+				if (!result.share.includeHistory) setHistory({ kind: "off" });
+				return setPhase({
+					kind: "published",
+					share: result.share,
+					error: result.historyError ? t("artifacts.share.historyFailed", { message: result.historyError }) : undefined,
+				});
 			case "cancelled":
 				return load();
 			case "limit":
@@ -215,12 +249,17 @@ function SharePanel({
 			.then(([inspection, links]) => {
 				if (cancelled) return;
 				if (inspection.unsupported) return setPhase({ kind: "unsupported" });
+				setHistorySupported(Boolean(links.versionHistory));
 				// The link this file was published to from here, while it is active.
 				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
 				// The file changed since it was published here: the link still
 				// serves what it held then.
 				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-				if (current) return setPhase({ kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined });
+				if (current) {
+					// Republishing a link that shows its history brings that up to date.
+					if (outdated && current.includeHistory) void checkHistoryRef.current();
+					return setPhase({ kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined });
+				}
 				// It was published from here, but its link is unpublished now,
 				// usually from somewhere else. Publishing gives it a new link.
 				const unpublished = Boolean(inspection.shareId);
@@ -240,6 +279,21 @@ function SharePanel({
 
 	useEffect(() => load(), [load]);
 
+	// Lists the older versions and checks each for credentials, for the person
+	// to see before they go public. The answer is the choice being on.
+	const inspectHistory = useCallback(async (): Promise<CloudShareHistoryInspection | undefined> => {
+		setHistory({ kind: "checking" });
+		try {
+			const inspection = await aoBridge.cloudShare.inspectHistory({ ...file, baseUrl });
+			setHistory({ kind: "on", inspection });
+			return inspection;
+		} catch (error) {
+			setHistory({ kind: "failed", message: errorMessage(error) });
+			return undefined;
+		}
+	}, [baseUrl, file.projectId, file.sessionId, file.path, file.source, file.orgId]); // eslint-disable-line react-hooks/exhaustive-deps
+	checkHistoryRef.current = inspectHistory;
+
 	useEffect(() => {
 		if (phase.kind !== "uploading") return;
 		return aoBridge.cloudShare.onProgress((progress) => {
@@ -256,17 +310,9 @@ function SharePanel({
 		return () => clearTimeout(timer);
 	}, [copied]);
 
-	// With share, updates that active link in place: same URL, same slot.
-	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink) => {
+	const track = async (result: Promise<CloudSharePublishResult>, links: CloudShareLinks, share?: CloudShareLink) => {
 		setPhase({ kind: "uploading", sent: 0, total: 0 });
-		// The fingerprint ties the publish to what this popover showed.
-		const pending: PendingShare = {
-			result: aoBridge.cloudShare.publish({ ...shareFile, fingerprint: inspection.fingerprint, shareId: share?.id }),
-			links,
-			share,
-			sent: 0,
-			total: 0,
-		};
+		const pending: PendingShare = { result, links, share, sent: 0, total: 0 };
 		pendingShares.set(key, pending);
 		try {
 			settle(await pending.result, links, share);
@@ -275,6 +321,36 @@ function SharePanel({
 		} finally {
 			if (pendingShares.get(key) === pending) pendingShares.delete(key);
 		}
+	};
+
+	// With share, updates that active link in place: same URL, same slot.
+	const publish = (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink) => {
+		const versions = history.kind === "on" ? history.inspection.versions : undefined;
+		// The fingerprint ties the publish to what this popover showed.
+		return track(aoBridge.cloudShare.publish({ ...shareFile, fingerprint: inspection.fingerprint, shareId: share?.id, history: versions }), links, share);
+	};
+
+	// The switch on a live link. Turning it on asks first, as publishing does;
+	// turning it off takes the older versions down at once.
+	const toggleLinkHistory = async (on: boolean, share: CloudShareLink, outdated?: OutdatedShare) => {
+		if (!on) {
+			setHistoryBusy(true);
+			try {
+				const updated = await aoBridge.cloudShare.unshareHistory(baseUrl, share.id);
+				setHistory({ kind: "off" });
+				setPhase({ kind: "published", share: updated, outdated });
+			} catch (error) {
+				setPhase({ kind: "published", share, outdated, error: t("artifacts.share.historyFailed", { message: errorMessage(error) }) });
+			} finally {
+				setHistoryBusy(false);
+			}
+			return;
+		}
+		// A file that changed since publishing has versions newer than the link's
+		// latest: they go public only with Republish, which this choice joins.
+		if (outdated) return void inspectHistory();
+		const inspection = await inspectHistory();
+		if (inspection) setPhase({ kind: "published", share, confirmingHistory: inspection });
 	};
 
 	const unpublish = async (share: CloudShareLink, outdated?: OutdatedShare) => {
@@ -305,6 +381,34 @@ function SharePanel({
 		</div>
 	);
 	const meta = (text: string) => <span className="text-caption text-muted-foreground tabular-nums">{text}</span>;
+	const earlier = (inspection: CloudShareHistoryInspection) => inspection.versions.length === 0
+		? t("artifacts.share.historyNoneYet")
+		: t("artifacts.share.historyOn", { count: inspection.versions.length });
+	// The choice to share older versions, a row of its own under the status.
+	const historyRow = (on: boolean, caption: string, onChange: (on: boolean) => void, disabled = false) => (
+		<div className="mt-2.5 flex items-start justify-between gap-3">
+			<div className="min-w-0">
+				<p className="text-caption text-foreground">{t("artifacts.share.history")}</p>
+				<p className="text-caption text-muted-foreground">{caption}</p>
+			</div>
+			<Switch aria-label={t("artifacts.share.history")} checked={on} className="mt-0.5" disabled={disabled} onCheckedChange={onChange} />
+		</div>
+	);
+	const historyCaption = (linkShows: boolean): string => {
+		switch (history.kind) {
+			case "checking":
+				return t("artifacts.share.historyChecking");
+			case "on":
+				return earlier(history.inspection);
+			case "failed":
+				return t("artifacts.share.historyCheckFailed", { message: history.message });
+			case "off":
+				return t(linkShows ? "artifacts.share.historyShown" : "artifacts.share.historyOff");
+		}
+	};
+	const historySecrets = history.kind === "on" && history.inspection.secretFindings.length > 0
+		? status(t("artifacts.share.historySecrets", { kinds: history.inspection.secretFindings.join(", ") }), "alert")
+		: null;
 
 	switch (phase.kind) {
 		case "loading":
@@ -341,9 +445,14 @@ function SharePanel({
 					{title}
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") }), "alert") : null}
+					{historySupported ? historyRow(history.kind === "on" || history.kind === "checking", historyCaption(false), (on) => {
+						if (on) void inspectHistory();
+						else setHistory({ kind: "off" });
+					}) : null}
+					{historySupported ? historySecrets : null}
 					{footer(
 						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
-						<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>,
+						<Button disabled={history.kind === "checking"} onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>,
 					)}
 				</>
 			);
@@ -372,6 +481,34 @@ function SharePanel({
 		case "published": {
 			const { share, outdated } = phase;
 			const link = share.viewerUrl ?? share.contentUrl;
+			if (phase.confirmingHistory) {
+				const { versions, secretFindings } = phase.confirmingHistory;
+				const cancelHistory = () => {
+					setHistory({ kind: "off" });
+					setPhase({ kind: "published", share });
+				};
+				return (
+					<>
+						{heading(t("artifacts.share.historyConfirmTitle"))}
+						{status(earlier(phase.confirmingHistory))}
+						{secretFindings.length > 0 ? status(t("artifacts.share.historySecrets", { kinds: secretFindings.join(", ") }), "alert") : null}
+						{footer(
+							null,
+							<>
+								<Button onClick={cancelHistory} size="sm" type="button" variant="ghost">{t("artifacts.share.cancel")}</Button>
+								<Button
+									onClick={() => void track(aoBridge.cloudShare.shareHistory({ ...shareFile, shareId: share.id, history: versions }), NO_LINKS, share)}
+									size="sm"
+									type="button"
+									variant="primary"
+								>
+									{t("artifacts.share.historyConfirm")}
+								</Button>
+							</>,
+						)}
+					</>
+				);
+			}
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
 				return (
@@ -410,6 +547,15 @@ function SharePanel({
 					</div>
 					{outdated ? status(t(outdated.changed ? "artifacts.share.changed" : "artifacts.share.outdated"), "status") : null}
 					{outdated && outdated.inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: outdated.inspection.secretFindings.join(", ") }), "alert") : null}
+					{historySupported
+						? historyRow(
+							history.kind === "on" || history.kind === "checking" || Boolean(share.includeHistory),
+							historyCaption(Boolean(share.includeHistory)),
+							(on) => void toggleLinkHistory(on, share, outdated),
+							historyBusy,
+						)
+						: null}
+					{historySupported ? historySecrets : null}
 					{phase.error ? status(phase.error, "alert") : null}
 					{footer(
 						<Button
@@ -427,7 +573,7 @@ function SharePanel({
 								{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
 							</Button>
 							{outdated ? (
-								<Button onClick={() => void publish(outdated.inspection, outdated.links, share)} size="sm" type="button" variant="primary">
+								<Button disabled={history.kind === "checking"} onClick={() => void publish(outdated.inspection, outdated.links, share)} size="sm" type="button" variant="primary">
 									{t("artifacts.share.republish")}
 								</Button>
 							) : null}

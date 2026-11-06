@@ -57,7 +57,9 @@ import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
+	type CloudShareHistoryInspection,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
@@ -420,9 +422,12 @@ const api = {
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
+		inspectHistory: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspectHistory", file) as Promise<CloudShareHistoryInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
+		shareHistory: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:shareHistory", file) as Promise<CloudSharePublishResult>,
+		unshareHistory: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unshareHistory", { baseUrl, shareId }) as Promise<CloudShareLink>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {

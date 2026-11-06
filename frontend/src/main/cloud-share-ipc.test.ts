@@ -47,6 +47,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 		snapshotDir: () => path.join(dataDir, "snapshots"),
 		getToken: async () => (options.token === undefined ? "token-1" : options.token),
 		records,
+		daemonPort: () => undefined,
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
 			const { pathname } = new URL(url);
 			requests.push(`${init.method ?? "GET"} ${pathname}`);

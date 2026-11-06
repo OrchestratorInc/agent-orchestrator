@@ -83,8 +83,28 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file and any older versions it showed are deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Sets which older versions of a file its active link shows, so anyone with the link can read them. versions lists every older version, not the one the link serves as its latest. Stored versions the list leaves out are deleted at once. When a listed version is not stored yet the route names it in missing and the link's history stays as it was: upload each one (ArtifactShareUploadInput.historyVersion), then call this route again. When nothing is missing the link shows its history and includeHistory is true, also for an empty list, which shows only versions added later. At most 50 versions. */
+        put: operations["putArtifactShareHistory"];
+        post?: never;
+        /** @description Stops a link showing older versions and deletes their stored copies at once. The link keeps its URL and goes on serving its latest version. */
+        delete: operations["deleteArtifactShareHistory"];
         options?: never;
         head?: never;
         patch?: never;
@@ -168,7 +188,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, the URL its file is served at, and the older versions it shows, if any. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["getPublicArtifactShare"];
         put?: never;
         post?: never;
@@ -901,6 +921,26 @@ export interface paths {
         /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video.
          *     Only a person publishes: the route accepts only a signed-in account session, the bearer token of every user route. Worker, sandbox and host credentials get 401, so a cloud session's agent cannot publish its own files. Only the person who created the session shares its files, under their own link limit: another member of the organization, who may read them, gets 403 artifact_share_not_owner, as does anyone for a session with no creator on record; a guest of a shared project gets 404. */
         post: operations["shareSessionArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Shows the listed older versions of this session's file on the file's active link, as putArtifactShareHistory does for a local file. The control plane copies each version to the link, so the link keeps them after the session's history changes. deleteArtifactShareHistory stops showing them. Who may call it is as for shareSessionArtifact. 409 artifact_share_source_changed when a listed version is no longer kept with that sha256 (inspect it again). */
+        post: operations["shareSessionArtifactHistory"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4019,6 +4059,31 @@ export interface components {
              * @description When the link was revoked. A revoked link serves nothing and uses no slot.
              */
             revokedAt?: string;
+            /** @description Anyone with the link can also read the file's older versions. */
+            includeHistory?: boolean;
+        };
+        ArtifactShareHistoryVersion: {
+            /**
+             * Format: int64
+             * @description The version's number in the file's own history.
+             */
+            version: number;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the file held this version.
+             */
+            createdAt: string;
+        };
+        ArtifactShareHistoryInput: {
+            versions: components["schemas"]["ArtifactShareHistoryVersion"][];
+        };
+        ArtifactShareHistory: {
+            share: components["schemas"]["ArtifactShare"];
+            /** @description Version numbers still to upload. Empty once the link shows its history. */
+            missing: number[];
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -4033,6 +4098,8 @@ export interface components {
             unlimited?: boolean;
             /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+            /** @description True when links can show a file's older versions. */
+            versionHistory?: boolean;
         };
         ArtifactShareUploadInput: {
             /** @description The file name, without a directory. */
@@ -4048,6 +4115,16 @@ export interface components {
              * @description Set to update this active link instead of publishing a document.
              */
             shareId?: string;
+            /**
+             * Format: int64
+             * @description Set with shareId to upload this older version of the link's file. Finalizing stores it and leaves the file the link serves alone; it is shown once putArtifactShareHistory lists it.
+             */
+            historyVersion?: number;
+            /**
+             * Format: date-time
+             * @description With historyVersion, when the file held that version.
+             */
+            createdAt?: string;
         };
         ArtifactShareUpload: {
             /** @description Names the upload in the calls that follow; opaque. */
@@ -4109,6 +4186,21 @@ export interface components {
              */
             shareId?: string;
         };
+        SessionArtifactShareHistoryInput: {
+            /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
+            path: string;
+            /**
+             * Format: uuid
+             * @description The file's active link.
+             */
+            shareId: string;
+            /** @description The older versions the person was shown. */
+            versions: {
+                /** Format: int64 */
+                version: number;
+                sha256: string;
+            }[];
+        };
         PublicArtifactShare: {
             linkId: string;
             name: string;
@@ -4123,6 +4215,17 @@ export interface components {
             };
             /** @description Where the link's file is served; the viewer frames it. */
             contentUrl: string;
+            /** @description The older versions anyone with the link can read, newest first. Absent when the link shows only its latest version. */
+            versions?: {
+                /** Format: int64 */
+                version: number;
+                /** Format: int64 */
+                size: number;
+                /** Format: date-time */
+                createdAt: string;
+                /** @description Where this version is served; the viewer frames it. */
+                contentUrl: string;
+            }[];
         };
         WorkerArtifactFile: {
             path: string;
@@ -5107,6 +5210,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putArtifactShareHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareHistoryInput"];
+            };
+        };
+        responses: {
+            /** @description The link, and any versions still to upload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareHistory"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifactShareHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link, with includeHistory false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareHistory"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -6624,6 +6777,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    shareSessionArtifactHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionArtifactShareHistoryInput"];
+            };
+        };
+        responses: {
+            /** @description The link, now showing the listed versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareHistory"];
                 };
             };
             default: components["responses"]["Error"];

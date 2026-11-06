@@ -135,14 +135,65 @@ paths:
       operationId: deleteArtifactShare
       tags: [Artifacts]
       description: >-
-        Revokes a link: it stops serving at once, its stored file is deleted
-        at once, and it frees its slot for another
-        document. Publishing the same document again uploads it again and
+        Revokes a link: it stops serving at once, its stored file and any
+        older versions it showed are deleted at once, and it frees its slot
+        for another document. Publishing the same document again uploads it again and
         restores the link, under a new URL, when a slot is free; the revoked
         URL never serves again. A link already revoked returns 404.
       responses:
         "204":
           description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}/history:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: putArtifactShareHistory
+      tags: [Artifacts]
+      description: >-
+        Sets which older versions of a file its active link shows, so anyone
+        with the link can read them. versions lists every older version, not
+        the one the link serves as its latest. Stored versions the list leaves
+        out are deleted at once. When a listed version is not stored yet the
+        route names it in missing and the link's history stays as it was:
+        upload each one (ArtifactShareUploadInput.historyVersion), then call
+        this route again. When nothing is missing the link shows its history
+        and includeHistory is true, also for an empty list, which shows only
+        versions added later. At most 50 versions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareHistoryInput"
+      responses:
+        "200":
+          description: The link, and any versions still to upload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareHistory"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShareHistory
+      tags: [Artifacts]
+      description: >-
+        Stops a link showing older versions and deletes their stored copies at
+        once. The link keeps its URL and goes on serving its latest version.
+      responses:
+        "200":
+          description: The link, with includeHistory false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareHistory"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/uploads:
@@ -264,8 +315,8 @@ paths:
       security: []
       description: >-
         Returns what the public viewer page shows for a share link: its
-        file's name, type and size, its owner's display name, and the URL
-        its file is served at. Needs no sign-in and never returns the
+        file's name, type and size, its owner's display name, the URL its
+        file is served at, and the older versions it shows, if any. Needs no sign-in and never returns the
         owner's email. Readable from a browser only by the configured viewer
         origin, and rate-limited per client (429 rate_limited). An unknown or
         revoked link returns 404. Available only when the development-only
@@ -1441,6 +1492,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ArtifactSharePublishResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/share/history:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: shareSessionArtifactHistory
+      tags: [Artifacts]
+      description: >-
+        Shows the listed older versions of this session's file on the file's
+        active link, as putArtifactShareHistory does for a local file. The
+        control plane copies each version to the link, so the link keeps them
+        after the session's history changes. deleteArtifactShareHistory stops
+        showing them. Who may call it is as for shareSessionArtifact. 409
+        artifact_share_source_changed when a listed version is no longer kept
+        with that sha256 (inspect it again).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionArtifactShareHistoryInput"
+      responses:
+        "200":
+          description: The link, now showing the listed versions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareHistory"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests:
@@ -7244,6 +7325,53 @@ components:
           type: string
           format: date-time
           description: When the link was revoked. A revoked link serves nothing and uses no slot.
+        includeHistory:
+          type: boolean
+          description: Anyone with the link can also read the file's older versions.
+    ArtifactShareHistoryVersion:
+      type: object
+      additionalProperties: false
+      required: [version, sha256, size, createdAt]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The version's number in the file's own history.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+          description: When the file held this version.
+    ArtifactShareHistoryInput:
+      type: object
+      additionalProperties: false
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/ArtifactShareHistoryVersion"
+    ArtifactShareHistory:
+      type: object
+      additionalProperties: false
+      required: [share, missing]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+        missing:
+          type: array
+          description: Version numbers still to upload. Empty once the link shows its history.
+          items:
+            type: integer
+            format: int64
     ArtifactSharePublishResult:
       type: object
       additionalProperties: false
@@ -7276,6 +7404,9 @@ components:
           type: integer
           minimum: 0
           description: How many active links the user holds; revoked links do not count.
+        versionHistory:
+          type: boolean
+          description: True when links can show a file's older versions.
     ArtifactShareUploadInput:
       type: object
       additionalProperties: false
@@ -7303,6 +7434,18 @@ components:
           type: string
           format: uuid
           description: Set to update this active link instead of publishing a document.
+        historyVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Set with shareId to upload this older version of the link's file.
+            Finalizing stores it and leaves the file the link serves alone; it
+            is shown once putArtifactShareHistory lists it.
+        createdAt:
+          type: string
+          format: date-time
+          description: With historyVersion, when the file held that version.
     ArtifactShareUpload:
       type: object
       additionalProperties: false
@@ -7424,6 +7567,35 @@ components:
           type: string
           format: uuid
           description: An active link of the caller's, for a file of the same name, to point at this file.
+    SessionArtifactShareHistoryInput:
+      type: object
+      additionalProperties: false
+      required: [path, shareId, versions]
+      properties:
+        path:
+          type: string
+          minLength: 1
+          description: The file's path in the session's artifact directory, as SessionArtifact.path.
+        shareId:
+          type: string
+          format: uuid
+          description: The file's active link.
+        versions:
+          type: array
+          maxItems: 50
+          description: The older versions the person was shown.
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, sha256]
+            properties:
+              version:
+                type: integer
+                format: int64
+                minimum: 1
+              sha256:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
     PublicArtifactShare:
       type: object
       additionalProperties: false
@@ -7453,6 +7625,30 @@ components:
         contentUrl:
           type: string
           description: Where the link's file is served; the viewer frames it.
+        versions:
+          type: array
+          description: >-
+            The older versions anyone with the link can read, newest first.
+            Absent when the link shows only its latest version.
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, size, createdAt, contentUrl]
+            properties:
+              version:
+                type: integer
+                format: int64
+                minimum: 1
+              size:
+                type: integer
+                format: int64
+                minimum: 0
+              createdAt:
+                type: string
+                format: date-time
+              contentUrl:
+                type: string
+                description: Where this version is served; the viewer frames it.
     WorkerArtifactFile:
       type: object
       additionalProperties: false
