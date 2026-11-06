@@ -5,8 +5,10 @@ import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type 
 import { GithubAvatar } from "@aoagents/product-ui";
 import { useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
+import { fileMediaKind } from "../lib/file-media";
 import { getGitHubStatus } from "../lib/github-daemon";
 import { cn } from "../lib/utils";
+import { FileMediaPreview } from "./FileMediaPreview";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { Button } from "./ui/button";
 import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "./ui/dropdown-menu";
@@ -175,17 +177,20 @@ export function ArtifactHistoryMenu({
 
 /**
  * A saved version shown read-only in place of the live file, with the actions
- * that leave it: restore it, or go back to the current file. Markdown renders;
- * anything else, HTML included for now, shows as source. A long version shows
- * only its start, and a restore still writes all of it.
+ * that leave it: restore it, or go back to the current file. Markdown renders,
+ * an image, PDF, video or audio file plays as the live file does, and anything
+ * else, HTML included for now, shows as source. A long version shows only its
+ * start, and a restore still writes all of it.
  */
 export function ArtifactVersionPreview({
 	artifactOrigin,
 	cloud,
 	hostId,
+	onAccessRefused,
 	onBack,
 	onRestore,
 	path,
+	rawUrl,
 	restoreError,
 	restoring,
 	sessionId,
@@ -194,36 +199,48 @@ export function ArtifactVersionPreview({
 	artifactOrigin?: string;
 	cloud?: CloudArtifactVersions;
 	hostId?: string;
+	/** Takes a fresh access link for a cloud file whose link was refused. */
+	onAccessRefused?: () => void;
 	onBack: () => void;
 	/** Absent when this person only views the file. */
 	onRestore?: () => void;
 	path: string;
+	/** The live file's link, which media versions load through. */
+	rawUrl?: string;
 	restoreError?: string;
 	restoring: boolean;
 	sessionId: string;
 	version: number;
 }) {
 	const { t } = useTranslation();
-	const query = useArtifactVersion({ cloud, hostId, path, sessionId, version });
+	const media = fileMediaKind(path);
+	// A media version is loaded by its viewer, so only its row is read here.
+	const query = useArtifactVersion({ cloud, hostId, path, sessionId, version: media ? null : version });
+	const versions = useArtifactVersions({ cloud, enabled: Boolean(media), hostId, path, sessionId });
+	const createdAt = media ? versions.data?.find((item) => item.version === version)?.createdAt : query.data?.createdAt;
 	const markdown = /\.(md|markdown)$/i.test(path);
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">
 			<div className="flex min-h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-sm">
 				<span className="min-w-0 flex-1 truncate text-muted-foreground">
-					{query.data ? t("artifacts.history.viewing", { time: formatVersionTime(query.data.createdAt) }) : ""}
+					{createdAt ? t("artifacts.history.viewing", { time: formatVersionTime(createdAt) }) : ""}
 				</span>
 				{restoreError ? <span className="truncate text-caption text-destructive">{restoreError}</span> : null}
 				<Button onClick={onBack} size="sm" type="button" variant="ghost">
 					{t("artifacts.history.backToCurrent")}
 				</Button>
 				{onRestore ? (
-					<Button disabled={!query.data || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
+					<Button disabled={!createdAt || restoring} onClick={onRestore} size="sm" type="button" variant="primary">
 						{restoring ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
 						{t(restoring ? "artifacts.history.restoring" : "artifacts.history.restore")}
 					</Button>
 				) : null}
 			</div>
-			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
+			{media ? (
+				<div className="flex min-h-0 flex-1 flex-col">
+					<FileMediaPreview hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ cloud: Boolean(cloud), kind: "artifact", onAccessRefused, rawUrl, savedVersion: version }} version={version} />
+				</div>
+			) : <div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
 				{query.isPending ? (
 					<PanelMessage>
 						<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
@@ -242,7 +259,7 @@ export function ArtifactVersionPreview({
 						)}
 					</>
 				)}
-			</div>
+			</div>}
 		</div>
 	);
 }

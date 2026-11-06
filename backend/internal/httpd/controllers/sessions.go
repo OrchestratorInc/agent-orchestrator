@@ -590,6 +590,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.URL.Query().Get("source") == "artifact" {
+		if version := r.URL.Query().Get("version"); version != "" {
+			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
+			return
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}

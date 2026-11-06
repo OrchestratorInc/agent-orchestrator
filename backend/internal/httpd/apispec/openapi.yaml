@@ -10231,6 +10231,16 @@ paths:
           description: When true, serve Markdown files as raw source instead of rendering
             them to HTML for Browser preview.
           type: boolean
+      - description: With source=artifact, serve this saved version of the file instead
+          of its current content.
+        in: query
+        name: version
+        schema:
+          description: With source=artifact, serve this saved version of the file
+            instead of its current content.
+          format: int64
+          minimum: 1
+          type: integer
       responses:
         "200":
           content:

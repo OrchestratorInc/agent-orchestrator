@@ -262,6 +262,8 @@ type SessionIDParam struct {
 type PreviewFileQuery struct {
 	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
 	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+	// Version reads a kept version instead of the live artifact file.
+	Version int64 `query:"version,omitempty" description:"With source=artifact, serve this saved version of the file instead of its current content." minimum:"1"`
 }
 
 // PRNumberParam is the associated pull-request number in Files routes.

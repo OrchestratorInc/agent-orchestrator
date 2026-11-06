@@ -21066,6 +21066,8 @@ export interface operations {
                 source?: "workspace" | "artifact";
                 /** @description When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview. */
                 raw?: boolean;
+                /** @description With source=artifact, serve this saved version of the file instead of its current content. */
+                version?: number;
             };
             header?: never;
             path: {

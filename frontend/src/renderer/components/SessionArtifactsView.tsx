@@ -245,6 +245,7 @@ function ArtifactViewerBody({
 }) {
 	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
+	const media = fileMediaKind(artifact.path);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const showingPage = Boolean(page) && !htmlSource && !previewing;
 	// An error from one version's restore does not belong to the next one looked at.
@@ -260,7 +261,8 @@ function ArtifactViewerBody({
 	return (
 		<div className="flex h-full min-h-0">
 			<div className="relative min-h-0 min-w-0 flex-1">
-				<div className={cn("h-full", (previewing || showingPage) && "hidden")}>
+				{/* A hidden video or audio file would go on playing under the version shown. */}
+				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactFileView
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
@@ -279,18 +281,20 @@ function ArtifactViewerBody({
 						toolbarHost={previewing || showingPage ? null : toolbarHost}
 						onEditingChange={onEditingChange}
 					/>
-				</div>
+				</div>}
 				{showingPage ? <iframe className="absolute inset-0 h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} /> : null}
 				{previewing ? (
 					<ArtifactVersionPreview
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
+						onAccessRefused={onAccessRefused}
 						onBack={() => onPreviewVersion(null)}
 						onRestore={readOnly ? undefined : () => {
 							if (previewVersion !== null) restore.mutate({ version: previewVersion }, { onSuccess: () => onPreviewVersion(null) });
 						}}
 						path={artifact.path}
+						rawUrl={artifact.rawUrl}
 						restoreError={restore.isError ? restore.error.message : undefined}
 						restoring={restore.isPending}
 						sessionId={sessionId}
@@ -469,8 +473,8 @@ export function SessionArtifactsView({
 	};
 	// A file the agent rewrites while it is open shows the new content.
 	useArtifactFileChanges(session, Boolean(selected) && !hostId);
-	// Versions are read back as text, so a binary file such as an image gets no
-	// History. This shares the viewer's cached read of the file, which for a
+	// Versions are read back as text or by the media viewers, so any other
+	// binary file, such as an archive, gets no History. This shares the viewer's cached read of the file, which for a
 	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
 		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
@@ -517,7 +521,7 @@ export function SessionArtifactsView({
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
 					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
-						{selectedFile.data?.binary || (session.cloud && fileMediaKind(selected.path)) ? null : (
+						{selectedFile.data?.binary && !fileMediaKind(selected.path) ? null : (
 							<ArtifactHistoryMenu cloud={cloudVersions} fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 						)}
 					</ArtifactActionsMenu>

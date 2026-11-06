@@ -45,7 +45,7 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	deleteSessionArtifactFile: deleteArtifactMock,
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
 		queryKey: ["artifact-file", sessionId, path],
-		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}`, editable: true, fileFingerprint: "fingerprint" }),
+		queryFn: async () => (/\.(png|zip)$/.test(path) ? { binary: true, content: "" } : { content: `contents of ${path}`, editable: true, fileFingerprint: "fingerprint" }),
 	}),
 }));
 vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: artifactFileChangesMock }));
@@ -547,9 +547,10 @@ describe("SessionArtifactsView", () => {
 		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 
-	it("offers version history for a text file but not for a binary one", async () => {
+	it("offers version history for text and media files but not for another binary file", async () => {
 		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
-		renderView(<SessionArtifactsView session={session([...artifacts, image])} />);
+		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
+		renderView(<SessionArtifactsView session={session([...artifacts, image, archive])} />);
 
 		await userEvent.click(screen.getByRole("button", { name: /^plan\.md/ }));
 		expect(screen.queryByRole("button", { name: "Version history" })).not.toBeInTheDocument();
@@ -560,8 +561,14 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^chart\.png/ }));
 		await userEvent.click(screen.getByRole("button", { name: /^chart\.png/ }));
-		expect(screen.queryByRole("menuitem", { name: "Version history" })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: "Version history" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Copy contents" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		await userEvent.click(screen.getByRole("button", { name: /^bundle\.zip/ }));
+		await userEvent.click(screen.getByRole("button", { name: /^bundle\.zip/ }));
+		expect(screen.queryByRole("menuitem", { name: "Version history" })).not.toBeInTheDocument();
 	});
 
 	it("shows the open artifact full screen, keeping the same viewer, until Escape", async () => {
@@ -693,9 +700,8 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: path }));
 		const menu = screen.getByRole("menu");
-		const hasHistory = path.endsWith(".md");
-		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(hasHistory ? ["Version history", ...actions] : actions);
-		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + (hasHistory ? 1 : 0));
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", ...actions]);
+		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + 1);
 		const children = Array.from(menu.children);
 		expect(children[0]).not.toHaveAttribute("role", "separator");
 		expect(children.at(-1)).not.toHaveAttribute("role", "separator");
