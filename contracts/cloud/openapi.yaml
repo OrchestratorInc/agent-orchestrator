@@ -161,11 +161,16 @@ paths:
         with the link can read them. versions lists every older version, not
         the one the link serves as its latest. Stored versions the list leaves
         out are deleted at once. When a listed version is not stored yet the
-        route names it in missing and the link's history stays as it was:
+        route names it in missing and what the link shows stays as it was:
         upload each one (ArtifactShareUploadInput.historyVersion), then call
-        this route again. When nothing is missing the link shows its history
-        and includeHistory is true, also for an empty list, which shows only
-        versions added later. At most 50 versions.
+        this route again with the revision the first call returned. When
+        nothing is missing the link shows exactly the listed versions and
+        includeHistory is true, also for an empty list, which shows only
+        versions added later. A call without revision starts over, and so
+        does turning history off or revoking the link: the revision then in
+        use is refused with 409 artifact_share_history_changed, here and when
+        finalizing an upload, so nothing withdrawn can go public again. At
+        most 50 versions.
       requestBody:
         required: true
         content:
@@ -187,6 +192,7 @@ paths:
       description: >-
         Stops a link showing older versions and deletes their stored copies at
         once. The link keeps its URL and goes on serving its latest version.
+        Sharing history still in progress is refused from here on.
       responses:
         "200":
           description: The link, with includeHistory false.
@@ -1506,7 +1512,9 @@ paths:
         active link, as putArtifactShareHistory does for a local file. The
         control plane copies each version to the link, so the link keeps them
         after the session's history changes. deleteArtifactShareHistory stops
-        showing them. Who may call it is as for shareSessionArtifact. 409
+        showing them, and if it does so during this call this call answers 409
+        artifact_share_history_changed. Who may call it is as for
+        shareSessionArtifact. 404 when shareId is not this file's link; 409
         artifact_share_source_changed when a listed version is no longer kept
         with that sha256 (inspect it again).
       requestBody:
@@ -7354,6 +7362,13 @@ components:
       additionalProperties: false
       required: [versions]
       properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The revision the call that started this update returned. Absent
+            starts a new update.
         versions:
           type: array
           maxItems: 50
@@ -7362,7 +7377,7 @@ components:
     ArtifactShareHistory:
       type: object
       additionalProperties: false
-      required: [share, missing]
+      required: [share, missing, revision]
       properties:
         share:
           $ref: "#/components/schemas/ArtifactShare"
@@ -7372,6 +7387,10 @@ components:
           items:
             type: integer
             format: int64
+        revision:
+          type: integer
+          format: int64
+          description: Names this update. Pass it to uploads of its versions and to the call that finishes it.
     ArtifactSharePublishResult:
       type: object
       additionalProperties: false
@@ -7441,7 +7460,13 @@ components:
           description: >-
             Set with shareId to upload this older version of the link's file.
             Finalizing stores it and leaves the file the link serves alone; it
-            is shown once putArtifactShareHistory lists it.
+            is shown once putArtifactShareHistory lists it. An upload never
+            listed is deleted after a day.
+        historyRevision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: With historyVersion, the revision putArtifactShareHistory returned.
         createdAt:
           type: string
           format: date-time

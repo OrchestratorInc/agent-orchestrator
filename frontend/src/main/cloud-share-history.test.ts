@@ -52,7 +52,7 @@ function keptVersions(texts = [CURRENT, ...[...OLDER].reverse()]) {
 	}));
 }
 
-function setup(options: { kept?: ReturnType<typeof keptVersions>; failFinalizeAfter?: number; daemonPort?: number | null; failSync?: boolean; cloudContent?: Record<number, string> } = {}) {
+function setup(options: { kept?: ReturnType<typeof keptVersions>; failFinalizeAfter?: number; daemonPort?: number | null; failSync?: boolean; cloudContent?: Record<number, string>; turnedOffMidway?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const historyBodies: unknown[] = [];
@@ -83,11 +83,12 @@ function setup(options: { kept?: ReturnType<typeof keptVersions>; failFinalizeAf
 			const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 			if (pathname === HISTORY_PATH && method === "PUT") {
 				historyBodies.push(body);
+				if (body?.revision && options.turnedOffMidway) return json({ code: "artifact_share_history_changed", message: "History was turned off." }, 409);
 				const listed = (body?.versions as Array<{ version: number }>).map((entry) => entry.version);
 				const missing = listed.filter((version) => !stored.has(version)).sort((a, b) => a - b);
-				return json({ share: shareLink(missing.length === 0), missing });
+				return json({ share: shareLink(missing.length === 0), missing, revision: 7 });
 			}
-			if (pathname === HISTORY_PATH && method === "DELETE") return json({ share: shareLink(false), missing: [] });
+			if (pathname === HISTORY_PATH && method === "DELETE") return json({ share: shareLink(false), missing: [], revision: 8 });
 			if (pathname.endsWith("/uploads")) {
 				uploads.push(body ?? {});
 				pendingVersion = body?.historyVersion as number | undefined;
@@ -113,7 +114,7 @@ function setup(options: { kept?: ReturnType<typeof keptVersions>; failFinalizeAf
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/share`) return json({ share: shareLink(false), replaced: false }, 201);
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/share/history`) {
 				historyBodies.push(body);
-				return json({ share: shareLink(true), missing: [] });
+				return json({ share: shareLink(true), missing: [], revision: 7 });
 			}
 			return new Response("", { status: 404 });
 		}),
@@ -201,12 +202,14 @@ describe("cloudShare history IPC", () => {
 		expect(result).not.toHaveProperty("historyError");
 
 		expect(uploads.map((upload) => upload.historyVersion)).toEqual([undefined, 2, 1]);
-		expect(uploads[1]).toMatchObject({ shareId: SHARE_ID, name: "report.html", sha256: sha(OLDER[1]!), createdAt: "2026-10-02T00:00:00Z" });
+		expect(uploads[1]).toMatchObject({ shareId: SHARE_ID, name: "report.html", sha256: sha(OLDER[1]!), historyRevision: 7, createdAt: "2026-10-02T00:00:00Z" });
 		const puts = requests.map((request, index) => (request === `PUT ${HISTORY_PATH}` ? index : -1)).filter((index) => index >= 0);
 		const finalizes = requests.map((request, index) => (request.endsWith("/finalize") ? index : -1)).filter((index) => index >= 0);
 		expect(puts).toHaveLength(2);
 		expect(finalizes.every((index) => index < puts[1]!)).toBe(true);
-		expect(historyBodies[1]).toEqual(historyBodies[0]);
+		// The second call finishes the update the first started, and no other.
+		expect(historyBodies[0]).not.toHaveProperty("revision");
+		expect(historyBodies[1]).toEqual({ ...(historyBodies[0] as object), revision: 7 });
 		await expect(fs.readdir(path.join(dataDir, "snapshots"))).resolves.toEqual([]);
 	});
 
@@ -224,6 +227,14 @@ describe("cloudShare history IPC", () => {
 		expect(result).not.toMatchObject({ share: { includeHistory: true } });
 		expect(requests.filter((request) => request === `PUT ${HISTORY_PATH}`)).toHaveLength(1);
 		await expect(fs.readdir(path.join(dataDir, "snapshots"))).resolves.toEqual([]);
+	});
+
+	it("says so when history was turned off while its versions were uploading", async () => {
+		const { inspectHistory, publish, file } = setup({ turnedOffMidway: true });
+		const { versions } = await inspectHistory();
+		const result = await publish(file, versions);
+		expect(result).toMatchObject({ status: "published", historyError: "History was turned off." });
+		expect(result).not.toMatchObject({ share: { includeHistory: true } });
 	});
 
 	it("does not send a version whose blob is not what was shown", async () => {

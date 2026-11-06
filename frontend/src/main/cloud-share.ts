@@ -409,11 +409,16 @@ export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, sh
 interface ShareHistoryResult {
 	share: CloudShareLink;
 	missing: number[];
+	revision: number;
 }
 
-/** Sets the older versions a link shows: see putArtifactShareHistory. */
-export function putShareHistory(api: CloudShareApi, baseUrl: string, shareId: string, versions: CloudShareHistoryVersion[], signal?: AbortSignal): Promise<ShareHistoryResult> {
-	return callApi<ShareHistoryResult>(api, baseUrl, "PUT", `/me/artifact-shares/${shareId}/history`, { versions }, signal);
+/**
+ * Sets the older versions a link shows: see putArtifactShareHistory. Without
+ * revision it starts an update; with the one that returned, it finishes it,
+ * and the control plane refuses it if the person turned history off since.
+ */
+export function putShareHistory(api: CloudShareApi, baseUrl: string, shareId: string, versions: CloudShareHistoryVersion[], signal?: AbortSignal, revision?: number): Promise<ShareHistoryResult> {
+	return callApi<ShareHistoryResult>(api, baseUrl, "PUT", `/me/artifact-shares/${shareId}/history`, { versions, ...(revision ? { revision } : {}) }, signal);
 }
 
 /** Stops a link showing older versions and deletes its copies of them. */
@@ -463,6 +468,7 @@ export async function shareLocalHistory(api: CloudShareApi, input: LocalHistoryI
 				feature: "",
 				shareId,
 				historyVersion: version.version,
+				historyRevision: first.revision,
 				createdAt: version.createdAt,
 			}, (sent) => input.onProgress(before + sent), signal);
 			done += version.size;
@@ -470,7 +476,7 @@ export async function shareLocalHistory(api: CloudShareApi, input: LocalHistoryI
 			await fs.rm(snapshot.path, { force: true });
 		}
 	}
-	const last = await putShareHistory(api, baseUrl, shareId, versions, signal);
+	const last = await putShareHistory(api, baseUrl, shareId, versions, signal, first.revision);
 	if (last.missing.length > 0) throw new CloudShareError("upload_failed", "Some versions of this file did not reach the link.");
 	return last.share;
 }
@@ -601,6 +607,8 @@ export interface ShareUploadInput {
 	shareId?: string;
 	/** With shareId, this is that older version of the link's file, which the link goes on not serving as its latest. */
 	historyVersion?: number;
+	/** The update historyVersion belongs to: see putShareHistory. */
+	historyRevision?: number;
 	/** When the file held historyVersion. */
 	createdAt?: string;
 }
@@ -654,7 +662,7 @@ export async function uploadShare(
 			size: snapshot.size,
 			sha256: snapshot.sha256,
 			shareId: input.shareId,
-			...(input.historyVersion ? { historyVersion: input.historyVersion, createdAt: input.createdAt } : {}),
+			...(input.historyVersion ? { historyVersion: input.historyVersion, historyRevision: input.historyRevision, createdAt: input.createdAt } : {}),
 		}
 		: { name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature }, signal);
 	const handle = await fs.open(snapshot.path, "r");

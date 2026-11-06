@@ -100,10 +100,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Sets which older versions of a file its active link shows, so anyone with the link can read them. versions lists every older version, not the one the link serves as its latest. Stored versions the list leaves out are deleted at once. When a listed version is not stored yet the route names it in missing and the link's history stays as it was: upload each one (ArtifactShareUploadInput.historyVersion), then call this route again. When nothing is missing the link shows its history and includeHistory is true, also for an empty list, which shows only versions added later. At most 50 versions. */
+        /** @description Sets which older versions of a file its active link shows, so anyone with the link can read them. versions lists every older version, not the one the link serves as its latest. Stored versions the list leaves out are deleted at once. When a listed version is not stored yet the route names it in missing and what the link shows stays as it was: upload each one (ArtifactShareUploadInput.historyVersion), then call this route again with the revision the first call returned. When nothing is missing the link shows exactly the listed versions and includeHistory is true, also for an empty list, which shows only versions added later. A call without revision starts over, and so does turning history off or revoking the link: the revision then in use is refused with 409 artifact_share_history_changed, here and when finalizing an upload, so nothing withdrawn can go public again. At most 50 versions. */
         put: operations["putArtifactShareHistory"];
         post?: never;
-        /** @description Stops a link showing older versions and deletes their stored copies at once. The link keeps its URL and goes on serving its latest version. */
+        /** @description Stops a link showing older versions and deletes their stored copies at once. The link keeps its URL and goes on serving its latest version. Sharing history still in progress is refused from here on. */
         delete: operations["deleteArtifactShareHistory"];
         options?: never;
         head?: never;
@@ -939,7 +939,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Shows the listed older versions of this session's file on the file's active link, as putArtifactShareHistory does for a local file. The control plane copies each version to the link, so the link keeps them after the session's history changes. deleteArtifactShareHistory stops showing them. Who may call it is as for shareSessionArtifact. 409 artifact_share_source_changed when a listed version is no longer kept with that sha256 (inspect it again). */
+        /** @description Shows the listed older versions of this session's file on the file's active link, as putArtifactShareHistory does for a local file. The control plane copies each version to the link, so the link keeps them after the session's history changes. deleteArtifactShareHistory stops showing them, and if it does so during this call this call answers 409 artifact_share_history_changed. Who may call it is as for shareSessionArtifact. 404 when shareId is not this file's link; 409 artifact_share_source_changed when a listed version is no longer kept with that sha256 (inspect it again). */
         post: operations["shareSessionArtifactHistory"];
         delete?: never;
         options?: never;
@@ -4078,12 +4078,22 @@ export interface components {
             createdAt: string;
         };
         ArtifactShareHistoryInput: {
+            /**
+             * Format: int64
+             * @description The revision the call that started this update returned. Absent starts a new update.
+             */
+            revision?: number;
             versions: components["schemas"]["ArtifactShareHistoryVersion"][];
         };
         ArtifactShareHistory: {
             share: components["schemas"]["ArtifactShare"];
             /** @description Version numbers still to upload. Empty once the link shows its history. */
             missing: number[];
+            /**
+             * Format: int64
+             * @description Names this update. Pass it to uploads of its versions and to the call that finishes it.
+             */
+            revision: number;
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -4117,9 +4127,14 @@ export interface components {
             shareId?: string;
             /**
              * Format: int64
-             * @description Set with shareId to upload this older version of the link's file. Finalizing stores it and leaves the file the link serves alone; it is shown once putArtifactShareHistory lists it.
+             * @description Set with shareId to upload this older version of the link's file. Finalizing stores it and leaves the file the link serves alone; it is shown once putArtifactShareHistory lists it. An upload never listed is deleted after a day.
              */
             historyVersion?: number;
+            /**
+             * Format: int64
+             * @description With historyVersion, the revision putArtifactShareHistory returned.
+             */
+            historyRevision?: number;
             /**
              * Format: date-time
              * @description With historyVersion, when the file held that version.
