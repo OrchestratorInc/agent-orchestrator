@@ -246,6 +246,39 @@ it("turns hardware Return off while the agent is stopped", async () => {
 	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
 });
 
+it("stays open across a hardware-Return send while the read-only field is away", async () => {
+	let delivered!: (id: string) => void;
+	const opened: boolean[] = [];
+	const p = { ...props(), onSend: vi.fn(() => new Promise<string>((resolve) => { delivered = resolve; })), onExpandedChange: (expanded: boolean) => { opened.push(expanded); } };
+	const focus = vi.fn();
+	await act(async () => { renderer = create(<ChatComposer {...p} />, { createNodeMock: (element) => element.type === "TextInput" ? { focus } : null }); });
+	const field = () => renderer.root.findByType(TextInput);
+	act(() => field().props.onFocus());
+	act(() => field().props.onChangeText("Run the tests"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+	// Going read-only for the send takes the field's focus.
+	act(() => field().props.onBlur());
+	// The send lands: the draft clears before the field has its focus back.
+	await act(async () => delivered("send-id"));
+	expect(focus).toHaveBeenCalledOnce();
+	act(() => field().props.onFocus());
+	expect(opened.at(-1)).toBe(true);
+	expect(opened.slice(opened.indexOf(true))).not.toContain(false);
+	// Once the field has its focus back, leaving it empty closes the composer as usual.
+	act(() => field().props.onBlur());
+	expect(opened.at(-1)).toBe(false);
+});
+
+it("gives Return back to the field while the composer cannot send", async () => {
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} pending />); });
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+	await act(async () => renderer.update(<ChatComposer {...p} disabled />));
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
+	await act(async () => renderer.update(<ChatComposer {...p} />));
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(true);
+});
+
 it("steers on Cmd+Return only when the draft can steer, and sends otherwise", async () => {
 	const p = props();
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });

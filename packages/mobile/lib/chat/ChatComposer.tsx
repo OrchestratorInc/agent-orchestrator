@@ -39,6 +39,7 @@ import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { HardwareReturn } from "./HardwareReturn";
+import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
 import { contextMeterModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
@@ -228,14 +229,8 @@ export function ChatComposer({
 	// `bottom` resolves against the pill's content box, which leaves out its
 	// padding, and sat the slider that far down over the pill's top edge.
 	const [pillHeight, setPillHeight] = useState(0);
-	// Set when Return on a hardware keyboard sent: the field goes read-only while
-	// the send is in flight, and typing should carry on in it once it is back.
-	const refocusAfterSubmit = useRef(false);
-	useEffect(() => {
-		if (submitting || !refocusAfterSubmit.current) return;
-		refocusAfterSubmit.current = false;
-		inputRef.current?.focus();
-	}, [submitting]);
+	// Return on a hardware keyboard: typing carries on in the field after the send.
+	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
@@ -267,7 +262,9 @@ export function ChatComposer({
 	// round button, and it stays open while anything waits to be sent. While the
 	// mic is open it is the slim pill again with only the waveform and the stop
 	// button, so the trace gets the whole width.
-	const expanded = !dictating && (focused || hasDraft || attachments.length > 0);
+	// `keyboardSend.holding` keeps it open through a hardware-Return send, while the
+	// draft has cleared and the field has yet to get its focus back.
+	const expanded = !dictating && (focused || keyboardSend.holding || hasDraft || attachments.length > 0);
 	// 0 collapsed, 1 open. Everything that changes as the pill opens reads it, so
 	// the row, the field's insets and the settings move as one.
 	const reduceMotion = useReducedMotion();
@@ -358,8 +355,11 @@ export function ChatComposer({
 	}, [completedRetry, draftKey, onAcknowledgeSend, clearAttachments]);
 
 
+	// Whether a send can start now. Hardware Return is taken only then; otherwise it
+	// stays the field's and inserts a newline, rather than being caught and dropped.
+	const canSubmit = !submitting && !pending && !disabled && !(draftKey && !draftLoaded);
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send", from: "button" | "keyboard" = "button") => {
-		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
+		if (!canSubmit) return;
 		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
 		// This send owns these attachments and no others: it can finish after the
@@ -371,7 +371,7 @@ export function ChatComposer({
 		// answer arrived — which read as the keyboard being taken away mid-sentence.
 		// Return on a hardware keyboard keeps the field: the next message is typed
 		// straight after, as at a desk.
-		if (from === "keyboard") refocusAfterSubmit.current = true;
+		if (from === "keyboard") keyboardSend.begin();
 		else Keyboard.dismiss();
 		setLocalError(undefined);
 		dismissAttachmentNotice();
@@ -408,7 +408,7 @@ export function ChatComposer({
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
 	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
 		setLocalError(undefined);
@@ -674,7 +674,7 @@ export function ChatComposer({
 					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 					{/* Return on a hardware keyboard (iPad); the wrapper holds the field's
 					    place in the row, so it hides with the field while dictating. */}
-					<HardwareReturn style={[styles.inputSlot, dictating && styles.hiddenField]} enabled={!stopped && !submitting} onReturn={(modifiers) => { void submit(hardwareReturnIntent(modifiers), "keyboard"); }}>
+					<HardwareReturn style={[styles.inputSlot, dictating && styles.hiddenField]} enabled={!sendBlocked} onReturn={(modifiers) => { void submit(hardwareReturnIntent(modifiers), "keyboard"); }}>
 						<TextInput
 							ref={inputRef}
 							onLayout={pasteLayout}
@@ -683,7 +683,7 @@ export function ChatComposer({
 							value={text}
 							onChangeText={(value) => { latestText.current = value; setText(value); }}
 							onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
-							onFocus={() => setFocused(true)}
+							onFocus={() => { setFocused(true); keyboardSend.focused(); }}
 							onBlur={() => setFocused(false)}
 							placeholder={placeholder}
 							placeholderTextColor={t.textFaint}

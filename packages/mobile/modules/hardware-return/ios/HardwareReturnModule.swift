@@ -27,9 +27,9 @@ public final class HardwareReturnModule: Module {
 /// and inserts a newline, as it does in the desktop composer.
 final class HardwareReturnView: ExpoView {
   let onReturnKey = EventDispatcher()
-  var enabled = true {
-    didSet { syncKeyboardClick() }
-  }
+  /// Whether Return is taken. When it is not, Return stays the field's and
+  /// inserts a newline. The keyboard click stays off either way (see below).
+  var enabled = true
 
   private lazy var returnCommands: [UIKeyCommand] = {
     let modifiers: [UIKeyModifierFlags] = [[], .alternate, .control, .command]
@@ -74,14 +74,16 @@ final class HardwareReturnView: ExpoView {
   /// context-menu interaction has a press recognizer that opens the edit menu as
   /// soon as the key goes down — before any key command runs — and the open menu
   /// then takes the keyboard, so whatever is typed next goes nowhere. In this
-  /// field Ctrl+Return steers, so that recognizer stays off while this view
-  /// handles Return. Tapping and long-pressing the field use other recognizers
+  /// field Ctrl+Return sends or steers, so that recognizer stays off for as long
+  /// as the field is on screen here — whether or not Return is being taken at
+  /// the moment, since the field can still have focus and keystrokes while the
+  /// composer cannot send. Tapping and long-pressing the field use other recognizers
   /// and still open the menu.
   ///
   /// It is found by name, using public API only. If a later iPadOS renames it,
   /// nothing is turned off and Ctrl+Return opens the menu after sending again.
   private func syncKeyboardClick() {
-    let wanted: [UIGestureRecognizer] = enabled && window != nil
+    let wanted: [UIGestureRecognizer] = window != nil
       ? HardwareReturnView.textViews(in: self).flatMap { field in
         (field.gestureRecognizers ?? []).filter { recognizer in
           // Only ones this view turned off itself, or that are on now.

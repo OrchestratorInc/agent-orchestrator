@@ -18,6 +18,7 @@ import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass } from "./composer-glass";
 import { HardwareReturn } from "./HardwareReturn";
+import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
@@ -52,13 +53,8 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [submitting, setSubmitting] = useState(false);
 	const inputRef = useRef<TextInput>(null);
-	// See ChatComposer: a hardware-keyboard send returns to the field once it is editable again.
-	const refocusAfterSubmit = useRef(false);
-	useEffect(() => {
-		if (submitting || !refocusAfterSubmit.current) return;
-		refocusAfterSubmit.current = false;
-		inputRef.current?.focus();
-	}, [submitting]);
+	// See ChatComposer: a hardware-keyboard send gives the field its focus back.
+	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [error, setError] = useState("");
 	const keyboard = useReanimatedKeyboardAnimation();
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
@@ -114,7 +110,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 
 	const submit = async (from: "button" | "keyboard" = "button") => {
 		if (submitting || stopped || (!text.trim() && !attachments.length)) return;
-		if (from === "keyboard") refocusAfterSubmit.current = true;
+		if (from === "keyboard") keyboardSend.begin();
 		// Only what this send submitted; see ChatComposer.
 		const sentKey = attachmentKey;
 		const sent = new Set(attachments.map((item) => item.id));
@@ -147,10 +143,8 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 				{listening ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={dictation} /> : null}
 				{/* Return on a hardware keyboard sends; Cmd/Ctrl have no steer to pick here.
 				    The wrapper holds the field's place in the row, so it hides with it.
-				    On whenever the field is editable, busy or not: turning it off hands
-				    Ctrl+Return back to iPadOS, whose edit menu then swallows the follow-up
-				    being typed. While the reviewer works there is no Send, only Stop, so
-				    Return is taken and does nothing. */}
+				    While the reviewer works there is no Send, only Stop, so Return is still
+				    taken but does nothing, rather than turning into a newline for that turn. */}
 				<HardwareReturn style={[styles.inputSlot, listening && hiddenField]} enabled={!stopped && !submitting} onReturn={() => { if (!busy) void submit("keyboard"); }}>
 					<TextInput
 						ref={inputRef}
@@ -158,6 +152,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 						accessibilityLabel="Reply to reviewer"
 						value={text}
 						onChangeText={setText}
+						onFocus={keyboardSend.focused}
 						placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"}
 						placeholderTextColor={t.textFaint}
 						{...textSelectionColors(t)}
