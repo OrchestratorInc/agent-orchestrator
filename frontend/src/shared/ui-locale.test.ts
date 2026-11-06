@@ -36,6 +36,7 @@ describe("shared UI locale schema", () => {
 	it("defaults soundNotificationsEnabled to true and accepts a persisted boolean", () => {
 		expect(DEFAULT_UI_SETTINGS).toEqual({
 			locale: "en",
+			automaticBrowser: "internal",
 			soundNotificationsEnabled: true,
 			terminalShell: { kind: "auto" },
 		});
