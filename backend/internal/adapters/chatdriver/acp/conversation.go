@@ -805,9 +805,10 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 }
 
 // reportServedModel tells the client which model actually answered when the
-// binding can see it and it differs from the selection, such as an alias that
-// the installed CLI resolves to an older concrete model. Each distinct
-// (selection, served) pair is reported once rather than on every turn.
+// binding reports a substitution, such as an alias that the installed CLI resolves
+// to an older concrete model. The binding decides what counts: an alias reaching
+// the model it normally names is not one. Each distinct (selection, served) pair
+// is reported once rather than on every turn.
 // selected is the model the turn started with, not the current selection.
 func (c *conversation) reportServedModel(turnID, selected string) {
 	if c.servedModel == nil {

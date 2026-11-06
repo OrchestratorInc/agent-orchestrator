@@ -149,9 +149,10 @@ type Config struct {
 	// is the session's selected model when the turn ran, or "" when unknown.
 	PromptResponseFailure func(response acpsdk.PromptResponse, model string) error
 	// ServedModel optionally reports the model that actually answered the turn
-	// that just completed, when it differs from selectedModel in a way worth
-	// showing (for example an alias resolving to a concrete model). It returns
-	// "" when there is nothing to report. Optional.
+	// that just completed, when it is a substitution for selectedModel rather
+	// than selectedModel's normal resolution (for example an alias answering with
+	// an older model than it should). It returns "" when there is nothing to
+	// report. Optional.
 	ServedModel func(ctx context.Context, cfg LaunchConfig, sessionID, selectedModel string) (served, reason string)
 	// ValidateModel optionally rejects a model the binding knows the running
 	// agent cannot use (for example one its CLI version predates) before AO asks
