@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
@@ -8,7 +9,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -682,7 +683,7 @@ export function CommandPalette() {
 					const { error: triggerError } = await apiClient.POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 						params: { path: { sessionId: action.sessionId } },
 					});
-					if (triggerError) throw new Error(apiErrorMessage(triggerError, "Unable to start review"));
+					if (triggerError) throw apiErrorException(triggerError, "Unable to start review");
 					await queryClient.invalidateQueries({ queryKey: ["session-reviews", action.sessionId] });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (!isCurrentRun()) break;

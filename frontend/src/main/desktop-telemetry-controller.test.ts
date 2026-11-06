@@ -7,6 +7,30 @@ import { DesktopTelemetryController, telemetryRetryDelayMs } from "./desktop-tel
 import { nodeTelemetryPolicyFileSystem, TelemetryPolicyAuthority } from "./telemetry-policy-file";
 
 describe("DesktopTelemetryController", () => {
+	it.each(["daemon", "side_chat"] as const)("gates held %s errors on consent and discards them before a later opt-in", async (category) => {
+		const { captureMainError, resetMainErrorCaptureForTests, setMainErrorSink } = await import("./main-error-capture");
+		resetMainErrorCaptureForTests();
+		try {
+			const authority = new AuthorityFake(false, "generation-off");
+			const captureMain = vi.fn();
+			const controller = new DesktopTelemetryController({
+				authority, environmentAllowsEvents: true, productionEnabled: true,
+				transportFactory: async () => ({ capture: vi.fn(), captureMain, closeAndDrain: async () => {}, clearCache: async () => {} }),
+			});
+			captureMainError({ category, reason: category === "daemon" ? "spawn_failed" : "recovery" });
+			await controller.initialize();
+			setMainErrorSink((capture) => { controller.captureMain(capture); });
+			expect(captureMain).not.toHaveBeenCalled();
+			await controller.setEventsEnabled(true, "generation-off");
+			expect(captureMain).not.toHaveBeenCalled();
+			captureMainError({ category, reason: category === "daemon" ? "exited" : "recovery" });
+			expect(captureMain).toHaveBeenCalledOnce();
+			await controller.setEventsEnabled(false, controller.snapshot().consentGeneration);
+			captureMainError({ category, reason: category === "daemon" ? "exited" : "recovery" });
+			expect(captureMain).toHaveBeenCalledOnce();
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
 	it("blocks a later opt-in until a failed startup queue purge succeeds", async () => {
 		const authority = new AuthorityFake(false, "generation-off");
 		const clearTransportCache = vi.fn().mockRejectedValueOnce(new Error("queue purge failed")).mockRejectedValueOnce(new Error("queue purge failed")).mockResolvedValue(undefined);

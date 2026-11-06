@@ -32,9 +32,9 @@ default DSN is distinct from the daemon project; Electron main uses
 builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
-Desktop error reports are sampled at 25%. Fatal crashes are kept at full rate.
-Unhandled renderer window errors and rejected promises are nonfatal, so they
-are sampled at 25% too. An isolated one has a 25% chance of reaching Sentry.
+All consented desktop error reports are kept, subject to the renderer's
+per-error budget and side-chat recovery budgets. This includes fatal crashes, handled main-process failures,
+unhandled renderer window errors, and rejected promises.
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
@@ -52,6 +52,21 @@ filename. The asset filename preserves the location needed for source map matchi
 filesystem paths, full URLs, and raw exception messages are removed before sending.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
+Preload installs main-world error and rejection handlers before renderer imports
+and reads the consent policy itself. An import failure can therefore report even
+when the renderer never starts. Early reports contain fixed text, a standard
+exception type, and validated asset locations only. Once the renderer starts,
+the same listeners hand off to its normal reporter. Early captures are not
+replayed through the later renderer boundaries.
+Router error boundaries and query/mutation cache callbacks also report unexpected
+client failures. Query keys, mutation inputs, route parameters and error text are
+not sent. API failures retain a local ownership marker through message wrapping,
+so these callbacks do not duplicate the API client's report or escalate expected
+API state. Repeated observations of the same exception object are reported once.
+Background side-chat restore and snapshot failures use the same main-owned
+consent gate, with fixed titles and no launch-state payload. Expected connection,
+authentication, cancellation and stale-attachment states stay out. Repeated
+recovery reports are limited to five per minute and 200 per UTC day.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
@@ -586,6 +601,23 @@ mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
 is identified.
 
+A release build returns from the sign-in page through
+`https://orchestrator.inc/app/auth/return/` on the Orchestrator.inc website.
+If you accepted analytics on that website, the page passes your website
+PostHog `distinct_id` to the desktop app along with the sign-in result. The
+desktop app uses it only when Share usage analytics is on: right after it
+identifies you, it calls PostHog `alias` once, which links your website visits
+to your AO Cloud person, and sends one `ao.renderer.cloud_web_visitor_link_requested`
+event carrying that website ID as `website_distinct_id`. The event records
+that the link was requested: PostHog can still refuse the merge, for example
+when that website ID already belongs to an identified person. This can link your
+website visit to your AO Cloud account. The website ID plays no part in signing
+in, is not written to disk, settings, or logs, and is not sent again on later
+launches, token refreshes, or a repeated return link. If you did not accept
+website analytics, or desktop analytics are off, nothing is linked. Builds that
+sign in against another WorkOS environment, and development builds, return
+through other pages that never add a website ID.
+
 AO Cloud itself reports a few server-side events for signed-in users, currently
 `invite.sent` (organization role and a hash of the organization ID, never the
 invitee's email). Event names for pricing, checkout, and subscriptions are
@@ -625,10 +657,11 @@ interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
-only: the daemon's Sentry capture of reportable 5xx errors, failed agent
-relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
-goroutine panics; and Electron main capture of process crashes, uncaught
-exceptions, unhandled rejections, and reportable renderer errors. Sentry
+only: the daemon's Sentry capture of reportable 5xx errors, registered fault
+codes answered as 4xx or 503, background failures, and handler or background
+goroutine panics; and Electron main capture of process crashes, handled
+daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
+and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry
@@ -643,15 +676,20 @@ a fixed function name or bounded bundle location; renderer API titles use a
 fixed error code or category.
 Both have scrubbed exception values and the same
 installation ID as Sentry `user.id`.
-Canceled requests, transient 503 responses, and expected upstream link-preview
-502 responses do not create Sentry issues. Registered route templates remain
+Canceled requests, plain transient 503 responses, and expected upstream link-preview
+502 responses do not create Sentry issues. A 503 caused by a server deadline or
+a registered daemon fault code is reportable. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
 Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
 Sentry policy. Untyped renderer 503 responses remain reportable. The existing
 API client skips its confirmed expected 409 probes, while other 409 responses
 remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
-name at five per minute and 200 per day. The daemon admits the first five
+name and call site at five per minute and 200 per day. Background daemon sends
+admit at most four concurrent reports, dropping diagnostics at capacity without
+retaining a queue. Their transport runs outside the caller's locks and database
+transactions, and opt-out waits for admitted sends before it completes.
+The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then
 uses one overflow group. It samples

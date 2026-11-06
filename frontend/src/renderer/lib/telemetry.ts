@@ -4,10 +4,13 @@ import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
+import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
+import { reserveException } from "./reported-errors";
+import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -360,6 +363,46 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 		...(githubLogin ? { github_login: githubLogin } : {}),
 	});
 	identifiedId = user.id;
+	linkPendingWebVisitor(user.id);
+}
+
+// A website visit to link to the account a sign-in just completed. The
+// orchestrator.inc return page adds the visitor's website PostHog id only for
+// visitors who accepted analytics there, and main hands it over once, with that
+// sign-in's notification. Held in memory only, and spent by the first identify
+// of that account, or at once when the account is already identified.
+let pendingWebVisitor: { userId: string; webDistinctId: string } | null = null;
+// alias() queues $create_alias; PostHog can still refuse the merge (the
+// website id already belongs to an identified person), so this records that
+// the link was asked for, not that it happened.
+const WEB_VISITOR_LINK_REQUESTED_EVENT = "ao.renderer.cloud_web_visitor_link_requested";
+
+/**
+ * Notes a cloud session notification: the signed-in WorkOS user (null when
+ * signed out or local) and the website visitor id a new sign-in carried. Another
+ * account or a sign-out drops a visit not yet linked; a token refresh of the
+ * same account keeps it.
+ */
+export function noteCloudSignInWebVisitor(userId: string | null, webDistinctId?: unknown): void {
+	if (pendingWebVisitor && pendingWebVisitor.userId !== userId) pendingWebVisitor = null;
+	if (!userId || webDistinctId === undefined) return;
+	pendingWebVisitor = null;
+	if (analyticsOptedOut || !isWebDistinctId(webDistinctId) || webDistinctId === userId) return;
+	pendingWebVisitor = { userId, webDistinctId };
+	if (identifiedId === userId) linkPendingWebVisitor(userId);
+}
+
+function linkPendingWebVisitor(userId: string): void {
+	const pending = pendingWebVisitor;
+	if (!pending || pending.userId !== userId) return;
+	pendingWebVisitor = null;
+	if (analyticsOptedOut || !posthogReady) return;
+	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINK_REQUESTED_EVENT)) return;
+	// alias(alias, original) sends $create_alias, which merges the website
+	// visitor's distinct id into the person already identified as this user.
+	const aliased = posthog.alias(pending.webDistinctId, userId);
+	if (typeof aliased !== "object" || aliased === null) return;
+	void captureRendererEvent(WEB_VISITOR_LINK_REQUESTED_EVENT, { website_distinct_id: pending.webDistinctId });
 }
 
 /**
@@ -370,6 +413,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 export function clearCloudUser(): void {
 	cloudUser = null;
 	signInKnown = true;
+	pendingWebVisitor = null;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -387,6 +431,8 @@ export function clearCloudUser(): void {
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
+		// A website visit not linked yet is dropped, not kept for a later opt-in.
+		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
 		// after a later opt-in, so the streak and pending daily counts go too.
 		try {
@@ -823,6 +869,10 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
 			break;
+		case "ao.renderer.cloud_web_visitor_link_requested":
+			// The website's own pseudonymous PostHog id, never anything typed.
+			if (isWebDistinctId(properties?.website_distinct_id)) safe.website_distinct_id = properties.website_distinct_id;
+			break;
 		case "ao.renderer.cloud_offering_resolved": {
 			safe.org_kind = enumValue(properties?.org_kind, CLOUD_ORG_KINDS);
 			safe.billing_mode = enumValue(properties?.billing_mode, CLOUD_BILLING_MODES);
@@ -874,6 +924,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 
 const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_signed_in",
+	"ao.renderer.cloud_web_visitor_link_requested",
 	"ao.renderer.cloud_offering_resolved",
 	"ao.renderer.cloud_project_created",
 	"ao.renderer.cloud_session_create_requested",
@@ -1176,18 +1227,7 @@ export async function sanitizeRendererExceptionProperties(
 export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
-	window.addEventListener("error", (event) => {
-		void captureRendererException(event.error ?? new Error(event.message), {
-			source: "window-error",
-			unhandled: true,
-		});
-	});
-	window.addEventListener("unhandledrejection", (event) => {
-		void captureRendererException(normalizeException(event.reason), {
-			source: "unhandledrejection",
-			unhandled: true,
-		});
-	});
+	installRendererErrorHandlers((error, source) => { void captureRendererException(error, { source, unhandled: true }); });
 }
 
 type PostHogClient = typeof posthogModule;
@@ -1407,13 +1447,21 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+	if (!reserveException(error)) return;
 	try {
 		await initTelemetry();
 	} catch {
 		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
 	}
 	if (isDeniedEvent("$exception")) return;
-	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
+	// Budget per error type and call site, so one noisy TypeError cannot starve
+	// a different failure that happens to share the same constructor name.
+	const site = typeof properties?.operation === "string" ? properties.operation : typeof properties?.source === "string" ? properties.source : "unknown";
+	// The source labels are shared by many locations (window-error,
+	// unhandledrejection, react_render). Use the first stack frame as well.
+	// This bounded key stays in memory and is never sent as telemetry.
+	const frame = error instanceof Error ? error.stack?.split("\n").slice(1).find((line) => /^\s*at\s/.test(line))?.trim().slice(0, 256) : undefined;
+	if (!reserveCapture(`exception:${exceptionName(error)}:${site.slice(0, 64)}:${frame ?? "unknown"}`)) return;
 	// The main-owned policy gate decides whether this reaches Sentry. Renderer
 	// exceptions no longer enter the PostHog product-analytics path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;

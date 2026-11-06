@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
@@ -1119,7 +1120,7 @@ export function useIndependentSideChats(
 					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
 						await aoBridge.sideChats.capture(sideId, true);
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
-					throw new Error(apiErrorMessage(requestError));
+					throw apiErrorException(requestError);
 				}
 				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {

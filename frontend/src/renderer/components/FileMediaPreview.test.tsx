@@ -10,18 +10,21 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
+const textLayer = vi.hoisted(() => ({ render: vi.fn(async () => {}), cancel: vi.fn() }));
 vi.mock("pdfjs-dist", () => ({
 	GlobalWorkerOptions: {},
 	getDocument: vi.fn(),
 	TextLayer: class {
-		render() { return Promise.resolve(); }
-		cancel() {}
+		render = textLayer.render;
+		cancel = textLayer.cancel;
 	},
 }));
 
 describe("FileMediaPreview", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		textLayer.render.mockClear();
+		textLayer.cancel.mockClear();
 	});
 
 	it.each(["image", "video", "audio"] as const)("uses renderer-origin CORS for protected %s", (kind) => {
@@ -133,7 +136,9 @@ describe("FileMediaPreview", () => {
 		expect(fetchFile).toHaveBeenCalledWith(source.rawUrl);
 		expect(getDocument).toHaveBeenCalledWith({ data: bytes });
 		expect(browserFetch).not.toHaveBeenCalled();
+		await waitFor(() => expect(textLayer.render).toHaveBeenCalledTimes(2));
 		view.unmount();
+		expect(textLayer.cancel).toHaveBeenCalledTimes(2);
 		fetchFile.mockRestore();
 	});
 
