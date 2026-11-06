@@ -239,6 +239,7 @@ func (s *Service) Search(ctx context.Context, parsed domain.SessionSearchParsedQ
 		params.MatchQuery = match
 		if match == parsed.MatchQuery {
 			params.AllTermsQuery = parsed.AllTermsQuery
+			params.ExactQuery = parsed.ExactQuery
 			params.HighlightTerms = parsed.HighlightTerms
 		}
 		hits, err = s.store.SearchSessionSearchDocs(ctx, params)

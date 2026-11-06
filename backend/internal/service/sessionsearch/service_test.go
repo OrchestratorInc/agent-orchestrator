@@ -1063,7 +1063,7 @@ func TestGroupedRowShowsTheBestMessageAndCountsMessages(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	named := seedChatSession(t, f.store, "proj", "sess-named", "conv-named")
 	renameForSearch(t, f, named, "Flaky login investigation")
-	appendUserMessage(t, f.store, named, "conv-named", "named-user", "named-turn", "the login test flakes on CI")
+	appendUserMessage(t, f.store, named, "conv-named", "named-user", "named-turn", "the flaky login test fails on CI")
 	settleAssistantMessage(t, f.store, "conv-named", "named-reply", "named-turn", "Fixed the flaky login race in the helper.")
 	addCommandActivity(t, f.store, "conv-named", "named-turn", "named-cmd", "go test ./login",
 		"--- FAIL: flaky login spec", domain.ActivityStatusFailed)
@@ -1078,12 +1078,13 @@ func TestGroupedRowShowsTheBestMessageAndCountsMessages(t *testing.T) {
 		t.Fatalf("results = %s, want the named session first, each session once", describe(got.Results))
 	}
 	top := got.Results[0]
-	// Both messages match both words; the person's own words weigh more.
+	// Both messages hold both words as typed, so neither is in a better exact
+	// tier; the person's own words weigh more.
 	if top.Kind == domain.SessionSearchKindTitle || top.MessageID != "named-user" {
 		t.Fatalf("top row = %s %q, want the best-matching message, not the name", top.Kind, top.MessageID)
 	}
-	if top.Snippet != "the login test flakes on CI" || len(top.Highlights) != 2 {
-		t.Fatalf("snippet = %q highlights %v, want the message with login and flakes marked", top.Snippet, top.Highlights)
+	if top.Snippet != "the flaky login test fails on CI" || len(top.Highlights) != 2 {
+		t.Fatalf("snippet = %q highlights %v, want the message with flaky and login marked", top.Snippet, top.Highlights)
 	}
 	// named-user and the reply; the failing command is shown with named-user.
 	if top.SessionMatches != 2 || got.Results[1].SessionMatches != 1 {

@@ -35,6 +35,38 @@ func TestParseSessionSearchQueryWithOptions(t *testing.T) {
 	}
 }
 
+// The exact tier's expression holds each ranked word as typed, so a document
+// with the word itself can outrank one that matches only its stem or a longer
+// word. It is empty when nothing was widened (no stem, no prefix) or for an
+// explicit OR, where it would only cost a second full-text pass.
+func TestParseSessionSearchQueryExactTier(t *testing.T) {
+	cases := []struct {
+		name, input string
+		options     domain.SessionSearchMatchOptions
+		match       string
+		exact       string
+	}{
+		{"one word, widened to its stem", "rebasing", domain.SessionSearchMatchOptions{}, `"rebas"*`, `"rebasing"`},
+		{"each word as typed", "flaky login", domain.SessionSearchMatchOptions{}, `("flak"* OR "login"*)`, `"flaky" AND "login"`},
+		{"stopwords stay out", "how did we fix the failing login tests?", domain.SessionSearchMatchOptions{},
+			`("fix" OR "fail"* OR "login" OR "test"*)`, `"fix" AND "failing" AND "login" AND "tests?"`},
+		{"a required phrase stays required", `"race condition" flaky`, domain.SessionSearchMatchOptions{},
+			`"race condition" AND "flak"*`, `"race condition" AND "flaky"`},
+		{"a half-typed word is its own exact form", "notariz", domain.SessionSearchMatchOptions{}, `"notariz"*`, `"notariz"`},
+		{"explicit OR has no tier", "flaky OR login", domain.SessionSearchMatchOptions{}, `"flak"* OR "login"*`, ""},
+		{"nothing widened, nothing to tier", "flaky login",
+			domain.SessionSearchMatchOptions{NoStemming: true, Prefix: domain.SessionSearchPrefixNone}, `("flaky" OR "login")`, ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			query := domain.ParseSessionSearchQueryWith(testCase.input, testCase.options)
+			if query.MatchQuery != testCase.match || query.ExactQuery != testCase.exact {
+				t.Fatalf("match = %q exact = %q, want %q and %q", query.MatchQuery, query.ExactQuery, testCase.match, testCase.exact)
+			}
+		})
+	}
+}
+
 func TestParseSessionSearchQuery(t *testing.T) {
 	cases := []struct {
 		name  string

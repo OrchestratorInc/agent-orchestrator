@@ -265,6 +265,10 @@ type SessionSearchParams struct {
 	// AllTermsQuery, when set, marks the candidates that match every typed word;
 	// with Ranking.AllTermsTier they rank ahead of partial matches.
 	AllTermsQuery string
+	// ExactQuery, when set, marks the candidates that hold every ranked word as
+	// typed (see SessionSearchParsedQuery.ExactQuery); they rank ahead of
+	// candidates that match only a widened form.
+	ExactQuery string
 	// HighlightTerms are the tokens the result snippets mark.
 	HighlightTerms []SessionSearchHighlightTerm
 	// Ranking tunes the score. The zero value is the shipped ranking.
@@ -337,12 +341,18 @@ type SessionSearchRanking struct {
 	// nothing indexed but its name (a harness whose transcripts AO cannot read)
 	// could not win at all. Benchmark-only.
 	NameTierOff bool
+	// ExactTierOff turns off the exact tier: candidates holding every ranked
+	// word as typed rank ahead of those that match only its stem or a longer
+	// word. Without it, on real transcripts a session holding "rebased" a
+	// hundred times outranked the one session that said "rebasing", the word
+	// searched for. Benchmark-only.
+	ExactTierOff bool
 }
 
 // IsZero reports the shipped ranking (no override set).
 func (r SessionSearchRanking) IsZero() bool {
 	return r.KindWeights == nil && !r.KindTierFirst && !r.AllTermsTier && r.SessionTailWeight == 0 &&
-		!r.CombMax && r.SessionTailDepth == 0 && !r.NameTierOff
+		!r.CombMax && r.SessionTailDepth == 0 && !r.NameTierOff && !r.ExactTierOff
 }
 
 // TailDepth returns how many of a session's other matches its score counts;
@@ -548,6 +558,12 @@ type SessionSearchParsedQuery struct {
 	// benchmark's all-terms-tier variant ranks those first. Empty when
 	// MatchQuery already requires every term.
 	AllTermsQuery string
+	// ExactQuery matches the documents that hold every ranked word exactly as
+	// typed: no stem, no prefix. MatchQuery widens each word to the prefix of
+	// its stem so "verified" finds "verification", and that widening must not
+	// let a longer word outrank the word itself; the store ranks this exact tier
+	// first. Empty when no word was widened, or for an explicit OR.
+	ExactQuery string
 	// Terms are the positive search terms, used for match stepping in a session.
 	Terms []string
 	// HighlightTerms are the folded tokens a snippet marks: every token the
@@ -733,7 +749,7 @@ func ParseSessionSearchQueryWith(raw string, options SessionSearchMatchOptions) 
 
 	parsed.Text = strings.TrimSpace(strings.Join(textParts, " "))
 	parsed.Terms = append(append(append(append([]string{}, phrases...), words...), exacts...), prefixes...)
-	parsed.MatchQuery, parsed.AllTermsQuery, parsed.HighlightTerms = buildMatchExpressions(phrases, prefixes, exacts, words, parsed.HasOr, options)
+	parsed.MatchQuery, parsed.AllTermsQuery, parsed.ExactQuery, parsed.HighlightTerms = buildMatchExpressions(phrases, prefixes, exacts, words, parsed.HasOr, options)
 	parsed.ExcludeQuery = buildExcludeExpression(excluded)
 	return parsed
 }
@@ -920,7 +936,7 @@ func parsePRURL(token string) (SessionSearchPRRef, bool) {
 //   - Only the last word is prefix-matched. It is the one still being typed;
 //     expanding every word ("i"* matches every token starting with i) floods
 //     the candidates. This is Algolia's default queryType, prefixLast.
-func buildMatchExpressions(phrases, prefixes, exacts, words []string, useOr bool, options SessionSearchMatchOptions) (match, allTerms string, highlights []SessionSearchHighlightTerm) {
+func buildMatchExpressions(phrases, prefixes, exacts, words []string, useOr bool, options SessionSearchMatchOptions) (match, allTerms, exact string, highlights []SessionSearchHighlightTerm) {
 	required := make([]string, 0, len(phrases)+len(prefixes)+len(exacts))
 	seen := map[string]struct{}{}
 	add := func(list *[]string, term string, prefix bool) {
@@ -958,6 +974,10 @@ func buildMatchExpressions(phrases, prefixes, exacts, words []string, useOr bool
 		ranked = searchableWords(words)
 	}
 	optional := make([]string, 0, len(ranked))
+	// The words as typed, for the exact tier, and whether any was widened.
+	asTyped := make([]string, 0, len(ranked))
+	typedSeen := map[string]struct{}{}
+	widened := false
 	for index, word := range ranked {
 		prefix := index == len(ranked)-1
 		switch options.Prefix {
@@ -978,27 +998,41 @@ func buildMatchExpressions(phrases, prefixes, exacts, words []string, useOr bool
 			}
 		}
 		add(&optional, term, prefix)
+		if prefix || term != word {
+			widened = true
+		}
+		if quoted := quoteFTS(word); quoted != `""` {
+			if _, ok := typedSeen[quoted]; !ok {
+				typedSeen[quoted] = struct{}{}
+				asTyped = append(asTyped, quoted)
+			}
+		}
+	}
+	if widened && !useOr && len(asTyped) > 0 {
+		exact = strings.Join(append(append([]string{}, required...), asTyped...), " AND ")
 	}
 
 	if useOr {
 		all := make([]string, 0, len(required)+len(optional))
 		all = append(all, required...)
 		all = append(all, optional...)
-		return strings.Join(all, " OR "), "", highlights
+		return strings.Join(all, " OR "), "", "", highlights
 	}
 	switch {
 	case len(required) == 0 && len(optional) == 0:
-		return "", "", nil
+		return "", "", "", nil
 	case len(optional) <= 1:
 		// One word (or none) is not a ranking problem: every term is required.
-		return strings.Join(append(required, optional...), " AND "), "", highlights
+		// It is still a widened one ("rebasing" also finds "rebased"), so the
+		// exact tier still applies.
+		return strings.Join(append(required, optional...), " AND "), "", exact, highlights
 	}
 	anyWord := "(" + strings.Join(optional, " OR ") + ")"
 	every := strings.Join(append(append([]string{}, required...), optional...), " AND ")
 	if len(required) > 0 {
-		return strings.Join(required, " AND ") + " AND " + anyWord, every, highlights
+		return strings.Join(required, " AND ") + " AND " + anyWord, every, exact, highlights
 	}
-	return anyWord, every, highlights
+	return anyWord, every, exact, highlights
 }
 
 // stemRoot is the prefix a word's inflected forms share: its Porter stem, cut

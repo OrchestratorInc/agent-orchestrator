@@ -315,9 +315,10 @@ func TestALongSessionDoesNotOutrankTheOneNamedForTheQuery(t *testing.T) {
 		t.Fatalf("results = %v, want the session named for the query first", got)
 	}
 	// The unbounded tail is what let volume win; keep the failure visible. The
-	// name tier would now put the named session first on its own, so it is off.
+	// name tier and the exact tier (its title holds all three words as typed)
+	// would each put the named session first on their own, so both are off.
 	unbounded := searchWith(t, f.svc, "status endpoint review",
-		domain.SessionSearchParams{Ranking: domain.SessionSearchRanking{SessionTailDepth: -1, NameTierOff: true}})
+		domain.SessionSearchParams{Ranking: domain.SessionSearchRanking{SessionTailDepth: -1, NameTierOff: true, ExactTierOff: true}})
 	if got := sessionIDs(unbounded.Results); strings.Join(got, ",") != ids(hub, named) {
 		t.Fatalf("unbounded tail = %v; this test no longer reproduces the hub bias it guards against", got)
 	}
@@ -474,5 +475,45 @@ func TestCoverageIsBackfillingUntilTheFirstPassCompletes(t *testing.T) {
 	}
 	if after.State != "ready" || after.IndexedDocs == 0 {
 		t.Fatalf("after the first pass = %+v, want ready with documents", after)
+	}
+}
+
+// Found comparing AO with Orca on 126 real Claude Code transcripts: searching
+// for a rare word, AO found the right session within five results 87% of the
+// time but first only 67%. In 68 of the 87 misses, the session ranked first
+// held only a longer word sharing the stem ("rebased" for "rebasing"), which
+// the match admits so word forms are found. The word as typed now ranks first;
+// widened forms still match, after it.
+func TestTheWordAsTypedOutranksItsWidenedForms(t *testing.T) {
+	f := newFixture(t, sessionsearch.TranscriptRoots{})
+	busy := seedChatSession(t, f.store, "proj", "sess-busy", "conv-busy")
+	for i := range 40 {
+		appendUserMessage(t, f.store, busy, "conv-busy", fmt.Sprintf("busy-%d", i), fmt.Sprintf("busy-turn-%d", i),
+			fmt.Sprintf("rebased worker %d onto main and rebased again after review", i))
+	}
+	exact := seedChatSession(t, f.store, "proj", "sess-exact", "conv-exact")
+	appendUserMessage(t, f.store, exact, "conv-exact", "exact-widened", "exact-turn-1", "rebased it, rebased it again, then rebased once more")
+	appendUserMessage(t, f.store, exact, "conv-exact", "exact-typed", "exact-turn-2", "we were rebasing the release branch when it broke")
+	if _, err := f.svc.IndexAll(context.Background()); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+
+	got := search(t, f.svc, "rebasing")
+	if strings.Join(sessionIDs(got.Results), ",") != ids(exact, busy) {
+		t.Fatalf("results = %s, want the session holding the word as typed first", describe(got.Results))
+	}
+	// The row opens on the message holding the word as typed, not on the one
+	// that matches it most often in a widened form.
+	if got.Results[0].MessageID != "exact-typed" {
+		t.Fatalf("top row = %q, want the message that says \"rebasing\"", got.Results[0].MessageID)
+	}
+	// Word forms still match: a session that only says "rebased" is still found.
+	if len(got.Results) != 2 {
+		t.Fatalf("results = %s, want the widened session still listed", describe(got.Results))
+	}
+	// Without the tier, volume wins: the failure this guards against.
+	off := searchWith(t, f.svc, "rebasing", domain.SessionSearchParams{Ranking: domain.SessionSearchRanking{ExactTierOff: true}})
+	if strings.Join(sessionIDs(off.Results), ",") != ids(busy, exact) {
+		t.Fatalf("exact tier off = %v; this test no longer reproduces the stem bias it guards against", sessionIDs(off.Results))
 	}
 }

@@ -388,10 +388,12 @@ Sources: [Agent session history](https://www.onorca.dev/docs/agents/session-hist
 
 **What we do better**
 
-- **Orca searches preview text and metadata.** Its docs describe filtering "by
-  session title, working directory, branch, model, or preview text"; tool calls
-  are not documented as indexed. AO indexes every tool call, its arguments, its
-  output, every command's output, and diff text.
+- **Orca indexes less of each session.** Its docs describe filtering "by
+  session title, working directory, branch, model, or preview text"; its source
+  (read for §8.11) indexes messages, one argument per tool call and the first
+  3,072 characters of each tool result, but not Claude's reasoning or the text
+  an edit wrote. AO indexes every tool call, its arguments, its output (the
+  last 8 KiB), reasoning, and diff text.
 - **Orca resumes; it does not land on the match.** Its result opens the session.
   AO opens at the exact message with the match highlighted, then steps through
   the rest with Enter/Shift-Enter.
@@ -1515,3 +1517,51 @@ the same path, so they are fixed too. Tests: `CollapsibleHumanBody.test.tsx`
 (above the fold stays folded; in the fade or below opens) and
 `ChatWorkspace.test.tsx` (a navigation request at a word below a long prompt's
 fold opens it and highlights the word). Both fail without the fix.
+
+### 8.11 Exact words first, from a comparison with Orca (7 Nov 2026)
+
+Orca shipped Agent Session Search (BM25 over FTS5, like AO), so both were run
+on the same content: AO's benchmark exported every corpus, question and answer;
+each session was written as a Claude Code transcript and indexed by Orca's own
+parser and engine (`stablyai/orca` main `c5383afb`, unmodified), and one scorer
+graded both. The scorer reproduces this branch's committed baselines exactly.
+A fourth test used 321 rare-word searches generated from 126 real Claude Code
+transcripts on this machine, each placed by where its word sits in the session.
+
+| R@1 | AO before | AO now | Orca |
+|---|---|---|---|
+| Real transcripts (321) | 66.7 | **91.3** | 71.0 |
+| Agentic (43) | **93.0** | **93.0** | 81.4 |
+| LongMemEval-S (470) | **88.3** | **88.3** | 86.8 |
+| LoCoMo (1,536) | **62.8** | 62.6 | 61.6 |
+| The same three, one typo per query | 52.0-83.4 | 51.9-83.4 | **59.0-87.2** |
+
+**The change.** On real transcripts AO found the right session in its top five
+87% of the time but first only 67%. In 68 of the 87 misses, the session ranked
+first held only a longer word sharing the stem ("rebased" for "rebasing"): the
+match widens each word to the prefix of its stem so word forms are found, and
+bm25 scores the widened match like the word itself. The ranking now has an
+exact tier (`SessionSearchParsedQuery.ExactQuery`, `exact_tier` in the store):
+a document holding every ranked word as typed ranks ahead of one that matches
+only a widened form, below the name tier and above the score, and a grouped
+session is shown as its exact document. Word forms and half-typed words still
+match; they rank after the word itself. On real transcripts R@1 went from 66.7
+to 91.3 (better on 80 searches, worse on none); the other suites are unchanged
+within one query in a thousand, and p95 latency did not rise. The benchmark's
+`exact-tier-off` variant is the previous ranking.
+`TestTheWordAsTypedOutranksItsWidenedForms` fails without the tier.
+
+**What the comparison found in Orca.** Orca tries the exact phrase, then every
+word, then a typo repair, then any word; it does not stem. Its typo repair (a
+word with no hits is replaced by the closest indexed word, similarity 0.82 or
+more) is why it leads once a query has a typo: AO loses 5 to 11 points of R@1,
+Orca almost none. Orca keeps the first 3,072 characters of tool output (AO the
+last 8 KiB), one argument per tool call (so an edit keeps its path and loses
+its text), and drops Claude's reasoning: its decoder reads `text` and `content`,
+and Claude writes `thinking`. Orca indexes four times faster into an index 2.5
+times smaller; AO uses a quarter of the memory.
+
+**Still open.** The start of a long command output is not indexed (R@1 38.5 on
+those searches; Orca 100): keeping a head as well as the tail would close it.
+Typo repair would close the typo gap; it is on hold pending a decision.
+

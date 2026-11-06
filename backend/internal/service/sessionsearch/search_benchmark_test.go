@@ -95,6 +95,9 @@ var benchVariants = []benchVariant{
 	{name: "prefix-all", match: domain.SessionSearchMatchOptions{Prefix: domain.SessionSearchPrefixAll}},
 	{name: "prefix-none", match: domain.SessionSearchMatchOptions{Prefix: domain.SessionSearchPrefixNone}},
 	{name: "keep-stopwords", match: domain.SessionSearchMatchOptions{KeepStopwords: true}},
+	// The ranking before the exact tier: a widened match (the stem's prefix, or
+	// a longer word) scored like the word as typed.
+	{name: "exact-tier-off", ranking: domain.SessionSearchRanking{ExactTierOff: true}},
 }
 
 // selectedVariants is "shipped" unless AO_SEARCH_BENCH_VARIANTS names others
