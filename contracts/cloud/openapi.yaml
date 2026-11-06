@@ -3265,14 +3265,14 @@ paths:
       security:
         - workerAuth: []
       description: |
-        Registers paths in the worker's own session as its deliverables,
-        which is what ao artifact add calls, and returns every path the session
-        has registered. A path need not be committed yet: it applies to the
-        file once one is committed at that path. Registering a path again
-        changes nothing; a new path appends an artifact.changed event and
-        moves the updatedAt of the files it names. A session holds at most 100
-        paths (artifact_registration_limit otherwise). Requires
-        `worker:connect`.
+        Registers the committed files at paths in the worker's own session as
+        its deliverables, including the files inside a bundle directory, which
+        is what ao artifact add calls, and returns every file the session has
+        registered. A path with no committed file registers nothing and is
+        absent from the result, so the caller asks again once the worker's sync
+        has committed it. Registering a file again changes nothing; a newly
+        registered file appends an artifact.changed event and moves its
+        updatedAt. Requires `worker:connect`.
       requestBody:
         required: true
         content:
@@ -3281,7 +3281,7 @@ paths:
               $ref: "#/components/schemas/WorkerArtifactRegistrationInput"
       responses:
         "200":
-          description: The paths are registered.
+          description: The committed files at the paths are registered.
           content:
             application/json:
               schema:
@@ -3290,8 +3290,6 @@ paths:
           $ref: "#/components/responses/WorkerUnauthorized"
         "403":
           $ref: "#/components/responses/WorkerScopeRequired"
-        "409":
-          $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
@@ -8067,7 +8065,7 @@ components:
       properties:
         registered:
           type: array
-          description: Every path the session has registered.
+          description: Every file the session has registered.
           items:
             type: string
     SessionStartupError:

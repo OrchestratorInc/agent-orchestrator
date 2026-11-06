@@ -2148,14 +2148,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Registers paths in the worker's own session as its deliverables,
-         *     which is what ao artifact add calls, and returns every path the session
-         *     has registered. A path need not be committed yet: it applies to the
-         *     file once one is committed at that path. Registering a path again
-         *     changes nothing; a new path appends an artifact.changed event and
-         *     moves the updatedAt of the files it names. A session holds at most 100
-         *     paths (artifact_registration_limit otherwise). Requires
-         *     `worker:connect`.
+        /** @description Registers the committed files at paths in the worker's own session as
+         *     its deliverables, including the files inside a bundle directory, which
+         *     is what ao artifact add calls, and returns every file the session has
+         *     registered. A path with no committed file registers nothing and is
+         *     absent from the result, so the caller asks again once the worker's sync
+         *     has committed it. Registering a file again changes nothing; a newly
+         *     registered file appends an artifact.changed event and moves its
+         *     updatedAt. Requires `worker:connect`.
          *      */
         post: operations["registerWorkerArtifacts"];
         delete?: never;
@@ -4420,7 +4420,7 @@ export interface components {
             paths: string[];
         };
         WorkerArtifactRegistrationResult: {
-            /** @description Every path the session has registered. */
+            /** @description Every file the session has registered. */
             registered: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
@@ -8841,7 +8841,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The paths are registered. */
+            /** @description The committed files at the paths are registered. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8852,7 +8852,6 @@ export interface operations {
             };
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
-            409: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

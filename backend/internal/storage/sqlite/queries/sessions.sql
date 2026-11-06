@@ -145,16 +145,6 @@ UPDATE sessions
 SET artifact_dir = sqlc.arg(artifact_dir), session_output_type = sqlc.arg(session_output_type)
 WHERE id = sqlc.arg(id);
 
--- name: GetSessionRegisteredArtifactPaths :one
-SELECT registered_artifact_paths FROM sessions WHERE id = sqlc.arg(id);
-
--- name: UpdateSessionRegisteredArtifactPaths :execrows
--- Narrow write for the same reason as UpdateSessionArtifactOutput: it can never
--- replay a stale SessionRecord over newer lifecycle state.
-UPDATE sessions
-SET registered_artifact_paths = sqlc.arg(registered_artifact_paths)
-WHERE id = sqlc.arg(id);
-
 -- name: UpdateBrowserCapabilityVerifier :execrows
 -- Rotate only the browser credential for the exact controller owner observed by
 -- the launcher. This must not replay a stale SessionRecord over newer lifecycle,
@@ -297,7 +287,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type, registered_artifact_paths,
+    artifact_dir, session_output_type,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -319,7 +309,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type, registered_artifact_paths,
+    artifact_dir, session_output_type,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -341,7 +331,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type, registered_artifact_paths,
+    artifact_dir, session_output_type,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
@@ -363,7 +353,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    artifact_dir, session_output_type, registered_artifact_paths,
+    artifact_dir, session_output_type,
     latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,

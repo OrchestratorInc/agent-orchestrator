@@ -1,8 +1,6 @@
 package domain
 
 import (
-	"errors"
-	"slices"
 	"strings"
 	"time"
 )
@@ -121,43 +119,8 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
-// MaxRegisteredArtifactPaths bounds how many paths one session can register as
-// deliverables.
-const MaxRegisteredArtifactPaths = 100
-
-// ErrRegisteredArtifactLimit reports a registration past
-// MaxRegisteredArtifactPaths.
-var ErrRegisteredArtifactLimit = errors.New("session has too many registered artifacts")
-
-// AddRegisteredArtifactPaths returns current with paths added. Paths left behind
-// by renamed or deleted files never leave the list on their own, so a result
-// past MaxRegisteredArtifactPaths first drops as many paths gone reports as it
-// needs, oldest first, keeping any in paths. It returns
-// ErrRegisteredArtifactLimit when that is not enough.
-func AddRegisteredArtifactPaths(current, paths []string, gone func(path string) bool) ([]string, error) {
-	added := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if !slices.Contains(current, path) && !slices.Contains(added, path) {
-			added = append(added, path)
-		}
-	}
-	if len(added) == 0 {
-		return slices.Clone(current), nil
-	}
-	over := len(current) + len(added) - MaxRegisteredArtifactPaths
-	kept := make([]string, 0, len(current)+len(added))
-	for _, path := range current {
-		if over > 0 && !slices.Contains(paths, path) && gone(path) {
-			over--
-			continue
-		}
-		kept = append(kept, path)
-	}
-	if over > 0 {
-		return nil, ErrRegisteredArtifactLimit
-	}
-	return append(kept, added...), nil
-}
+// MaxArtifactRegistrationPaths bounds how many paths one ao artifact add sends.
+const MaxArtifactRegistrationPaths = 100
 
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
@@ -404,11 +367,7 @@ type SessionRecord struct {
 	// RequestedOutput is the deliverable requested at spawn. It is fixed after
 	// insertion so restore and agent switching rebuild the same worker prompt.
 	RequestedOutput RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
-	// RegisteredArtifactPaths are the artifact-directory-relative paths the agent
-	// registered as deliverables with ao artifact add. A path may name a file
-	// that no longer exists; reads ignore it until the path is written again.
-	RegisteredArtifactPaths []string        `json:"-"`
-	Metadata                SessionMetadata `json:"-"`
+	Metadata        SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a

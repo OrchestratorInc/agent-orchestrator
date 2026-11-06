@@ -40,15 +40,7 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 		}
 		paths = append(paths, path)
 	}
-	gone := func(path string) bool {
-		_, err := sessionartifacts.Registrable(dir, path)
-		return errors.Is(err, sessionartifacts.ErrNotFound)
-	}
-	registered, found, err := s.store.AddSessionRegisteredArtifactPaths(ctx, id, paths, gone)
-	if errors.Is(err, domain.ErrRegisteredArtifactLimit) {
-		return ArtifactRegistration{}, apierr.Conflict("ARTIFACT_REGISTRATION_LIMIT",
-			fmt.Sprintf("A session can register at most %d artifacts.", domain.MaxRegisteredArtifactPaths), nil)
-	}
+	registered, found, err := s.store.AddSessionArtifacts(ctx, id, paths, s.clock())
 	if err != nil {
 		return ArtifactRegistration{}, err
 	}
@@ -74,7 +66,7 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 
 // UnregisterArtifact forgets one registered path, after the user deleted it.
 func (s *Service) UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error {
-	return s.store.RemoveSessionRegisteredArtifactPath(ctx, id, path)
+	return s.store.RemoveSessionArtifact(ctx, id, path)
 }
 
 func registrationError(reference string, err error) error {

@@ -258,8 +258,8 @@ func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	if len(in.Paths) == 0 || len(in.Paths) > domain.MaxRegisteredArtifactPaths {
-		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxRegisteredArtifactPaths), nil))
+	if len(in.Paths) == 0 || len(in.Paths) > domain.MaxArtifactRegistrationPaths {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_ARTIFACT_PATHS", fmt.Sprintf("paths must list 1 to %d paths", domain.MaxArtifactRegistrationPaths), nil))
 		return
 	}
 	result, err := c.Svc.RegisterArtifacts(r.Context(), sessionID(r), in.Paths)

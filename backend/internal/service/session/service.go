@@ -38,9 +38,10 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
-	AddSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID, paths []string, gone func(path string) bool) ([]string, bool, error)
-	RemoveSessionRegisteredArtifactPath(ctx context.Context, id domain.SessionID, path string) error
-	ClearSessionRegisteredArtifactPaths(ctx context.Context, id domain.SessionID) error
+	AddSessionArtifacts(ctx context.Context, id domain.SessionID, paths []string, registeredAt time.Time) ([]string, bool, error)
+	ListSessionArtifactPathsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]string, error)
+	RemoveSessionArtifact(ctx context.Context, id domain.SessionID, path string) error
+	ClearSessionArtifacts(ctx context.Context, id domain.SessionID) error
 	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error)
@@ -1250,7 +1251,7 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 	}
 	err = s.artifactDeleter.DeleteSession(ctx, id)
 	if err == nil {
-		err = s.store.ClearSessionRegisteredArtifactPaths(ctx, id)
+		err = s.store.ClearSessionArtifacts(ctx, id)
 	}
 	// Reconcile even after a failure: the files may already be gone while the
 	// version rows were not dropped, and OutputType must follow what is on disk.
@@ -1645,6 +1646,10 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 	if err != nil {
 		return nil, fmt.Errorf("list interrupted sessions: %w", err)
 	}
+	artifactsBySession, err := s.store.ListSessionArtifactPathsForSessions(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list session artifacts: %w", err)
+	}
 	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
 	if len(archived) > 0 {
 		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
@@ -1655,7 +1660,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], interrupted[rec.ID], currentWorkspaceCleanup(rec, facts, found))
+		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], interrupted[rec.ID], artifactsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
 		if err != nil {
 			return nil, err
 		}
@@ -1757,7 +1762,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, registered []string, cleanup domain.SessionCleanupRecord) (domain.Session, error) { //nolint:unparam // Every read-model caller propagates this error.
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1782,7 +1787,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 			backfilledArtifactDir = true
 		}
 	}
-	artifactFiles, err := sessionartifacts.ListRegistered(ctx, rec.Metadata.ArtifactDir, rec.RegisteredArtifactPaths)
+	artifactFiles, err := sessionartifacts.ListRegistered(ctx, rec.Metadata.ArtifactDir, registered)
 	if err != nil {
 		// An unwalkable artifact root must not fail the session read (and with
 		// it the whole board); the artifact list is simply empty for this read.
@@ -2153,7 +2158,11 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	artifacts, err := s.store.ListSessionArtifactPathsForSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		return domain.Session{}, fmt.Errorf("list session artifacts %s: %w", rec.ID, err)
+	}
+	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], artifacts[rec.ID], cleanup)
 	if err != nil {
 		return domain.Session{}, err
 	}
