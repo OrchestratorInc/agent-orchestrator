@@ -22,7 +22,7 @@ its artifact directory instead.
 Register each deliverable once, as soon as it exists:
 
 ```bash
-ao artifact add "$AO_SESSION_ARTIFACTS_DIR/report.html"
+ao artifact add report.html
 ```
 
 - **Edits** need no command. AO records new versions on its own.
@@ -32,5 +32,6 @@ ao artifact add "$AO_SESSION_ARTIFACTS_DIR/report.html"
 The command prints how many files stay unlisted and names the ones at the root
 of the directory. If one of those is a deliverable, register it too.
 
-`ao report --artifact` and `ao render --artifact` do not register a file. A
-session can register up to 100 paths.
+`ao report --artifact` does not register a file. Neither does keeping a render
+with `ao render --artifact` or `artifact: true` in `html_render`: run
+`ao artifact add` on the path it returns. A session can register up to 100 paths.

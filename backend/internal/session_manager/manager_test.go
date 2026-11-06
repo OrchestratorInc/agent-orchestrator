@@ -6534,6 +6534,9 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
 	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "Run `ao artifact add <path>`") {
+		t.Fatal("artifact guidance does not say how to register a deliverable")
+	}
 	if !strings.Contains(sp, "## Session Artifacts") {
 		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
 	}
@@ -6565,6 +6568,14 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
+	}
+	// A kept render is not registered, and only a chat session can keep one.
+	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
+	if !strings.Contains(chatPrompt, keptRender) {
+		t.Fatalf("chat session prompt missing %q", keptRender)
+	}
+	if strings.Contains(sp, "ao render --artifact") {
+		t.Fatalf("terminal session prompt names ao render:\n%s", sp)
 	}
 }
 
