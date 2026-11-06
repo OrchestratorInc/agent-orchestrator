@@ -19,6 +19,8 @@ test("diagram annotations navigate to the selected repeated block and fall back 
 		return rect.top >= view.top && rect.bottom <= view.bottom;
 	});
 	const scrollAway = async () => {
+		// Reader scroll intent cancels source-anchor following before moving away.
+		await scroller.dispatchEvent("wheel");
 		await scroller.evaluate(element => { element.scrollTop = 0; });
 		await expect.poll(targetVisible).toBe(false);
 	};
