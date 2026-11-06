@@ -64,13 +64,3 @@ export function unusedMachineSymbol(preferred: MachineSymbol, taken: ReadonlySet
 	if (!taken.has(preferred)) return preferred;
 	return machineAppearancePalette.symbols.find((symbol) => !taken.has(symbol)) ?? preferred;
 }
-
-/** Symbols more than one of these machines uses, so a list can tell them apart. */
-export function sharedMachineSymbols(machines: readonly MachineIdentity[]): ReadonlySet<MachineSymbol> {
-	const counts = new Map<MachineSymbol, number>();
-	for (const machine of machines) {
-		const { symbol } = machineAppearance(machine);
-		counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
-	}
-	return new Set([...counts].filter(([, count]) => count > 1).map(([symbol]) => symbol));
-}
