@@ -5,7 +5,9 @@ import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
-type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean };
+// idleFallback: the sidebar asked for wake, not specifically closed-lid wake,
+// so a lid setup failure must still leave idle wake on.
+type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; idleFallback?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
 /** The desktop and mobile controls share intent, pending state, and ownership. */
@@ -136,7 +138,15 @@ export function useStayAwake(enabled = true) {
 				} else await updateMobile(true, false);
 			} else if (change.lidClosed === true) {
 				// Reject a failed lid opt-in before creating or resuming desktop ownership.
-				await updateMobile(true, true);
+				try {
+					await updateMobile(true, true);
+				} catch (e) {
+					if (!change.idleFallback) throw e;
+					// Helper setup can fail (launchctl, incompatible helper). The
+					// sidebar worked without the helper before, so keep idle wake.
+					await ensureDesktop();
+					return;
+				}
 				await ensureDesktop();
 				await confirmLid();
 			} else {
@@ -164,7 +174,7 @@ export function useStayAwake(enabled = true) {
 			const on = !(latestChange()?.on ?? requested);
 			// Sidebar and Settings are one switch: where closed-lid wake is
 			// supported, turning on here arms the same mode Settings shows.
-			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true } : { on });
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on });
 		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),

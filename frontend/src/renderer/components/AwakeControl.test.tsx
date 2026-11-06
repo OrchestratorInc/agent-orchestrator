@@ -133,6 +133,29 @@ describe("combined mobile wake with the shared hook", () => {
 		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
 	});
 
+	it("falls back to idle wake from the sidebar when closed-lid setup fails", async () => {
+		await showCombinedMobile();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/keep-awake" && options.body.lidClosed) return { error: "helper setup failed" };
+			return post(path, options);
+		});
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(state.sessions.some((s) => !s.endedAt)).toBe(true);
+		expect(toggle).not.toBeChecked();
+		expect(screen.queryByText(/helper setup failed/)).not.toBeInTheDocument();
+	});
+
+	it("shows a closed-lid lease that never armed once no request is in flight", async () => {
+		Object.assign(mobile.keepAwake, { enabled: true, lidClosed: true, active: false, lidReason: "starting" });
+		await showCombinedMobile();
+		expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
+		expect(screen.getByText("Starting closed-lid keep awake…")).toBeInTheDocument();
+	});
+
 	it.each([false, true])("keeps both wake modes independent of mobile access (initially enabled=%s)", async (bridgeEnabled) => {
 		await showCombinedMobile(bridgeEnabled);
 		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
