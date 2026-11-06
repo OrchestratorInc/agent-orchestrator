@@ -12,6 +12,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
  */
 
 import type { ScriptRun } from "../lib/cloud-script-runs";
+import type { CloudAttachment } from "../lib/cloud-attachments";
 
 /** Which controller currently owns the AO session. */
 export type SessionMode = "chat" | "tui";
@@ -103,6 +104,8 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
 	spansTurns?: boolean;
+	/** A later turn or run carries a newer copy of this list; the daemon sets it. */
+	superseded?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -216,6 +219,8 @@ export interface ConversationMessage {
 	senderDisplayName?: string;
 	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
 	clientMessageId?: string;
+	/** Files a cloud message carries, read back from the control plane. */
+	cloudAttachments?: CloudAttachment[];
 	createdAt: string;
 }
 
@@ -545,6 +550,10 @@ export interface SystemEventDetail {
 export interface PlanDetail {
 	explanation?: string;
 	steps?: PlanStep[];
+	/** The list spans turns; see ConversationPlan.spansTurns. */
+	spansTurns?: boolean;
+	/** See ConversationPlan.superseded. */
+	superseded?: boolean;
 }
 
 export interface UsageDetail {
@@ -614,7 +623,8 @@ export function reviewedPaths(activity: ConversationActivity): string[] {
  * The daemon writes both: the turn column answers "what is the plan now" and this
  * row answers "where in the conversation did the agent plan". They cannot disagree —
  * both are written from one event — so the surface prefers the turn's copy and only
- * falls back to this for a plan whose turn predates the controller.
+ * falls back to this for a plan no turn holds: work the agent did on its own outside
+ * an AO turn, or a provider turn AO never correlated.
  */
 export function activityPlan(activity: ConversationActivity): ConversationPlan | undefined {
 	const steps = activity.detail?.steps;

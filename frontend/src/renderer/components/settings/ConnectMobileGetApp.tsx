@@ -49,18 +49,18 @@ export function ConnectMobileGetApp() {
 					>
 						{t("mobile.getApp")}
 					</Button>
-					<button
+					<Button
 						type="button"
+						variant="quiet"
+						size="none"
 						aria-label={showQR ? t("mobile.hideQR") : t("mobile.showQR")}
 						aria-expanded={showQR}
+						data-active={showQR}
 						onClick={() => setShowQR((v) => !v)}
-						className={cn(
-							"inline-flex size-(--size-settings-action-height) items-center justify-center rounded-md border border-transparent transition-colors hover:border-(--color-border-settings-input) hover:bg-[var(--color-bg-settings-input)]",
-							showQR ? "bg-[var(--color-bg-settings-input)] text-settings-title" : "text-settings-muted",
-						)}
+						className="size-(--size-settings-action-height)"
 					>
 						<QrCode className="size-4" aria-hidden="true" />
-					</button>
+					</Button>
 				</div>
 			</div>
 

@@ -87,7 +87,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
 				<div className="settings-row-bar">
 					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
-					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
+					<Button variant="quiet" size="sm" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
 				</div>
 			</SettingsSection>
 		);
@@ -145,7 +145,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
 						</p>
 						{manage ? (
-							<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openPortal()}>
+							<Button size="sm" variant="quiet" disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 								{t("settings.billing.keepPlan", { plan: planName(currentPlan) })}
 							</Button>
@@ -282,7 +282,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
 								: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
 						>
-							<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
+							<Button size="sm" variant="quiet" disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
 								{t("settings.billing.resetNow")}
 							</Button>
 						</SettingsRow> : null}
@@ -316,9 +316,6 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 		</SettingsSection>
 	);
 }
-
-/** Muted ghost row action, the settings default for every non-primary action. */
-const ghostAction = "text-settings-muted hover:text-settings-label";
 
 /** A theme token as a hex string, resolved from the live document so every theme style is followed. */
 function tokenHex(name: string): string | null {

@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
@@ -18,13 +19,14 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { isFileViewCapture } from "../../shared/chat-file-reference";
-import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
-import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
+import { CHAT_EVENTS_SAFETY_POLL_MS, CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
+import { useCloudOpening } from "../lib/cloud-opening";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
+import { CloudReviewerChatSurface } from "./chat/CloudReviewerChatSurface";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
@@ -40,6 +42,7 @@ import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
@@ -60,7 +63,10 @@ import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfac
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
-import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
+import { sessionWasSharedWithYou } from "../lib/shared-session-memory";
 import {
 	refetchCloudProjectsForUnknownSessions,
 	refreshCloudSessionLifecycle,
@@ -73,10 +79,10 @@ import {
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
-import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
+import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
-import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
+import { cloudChatEventsQueryKey, recordCloudScriptStepEvents, useCachedQueryData, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -107,9 +113,10 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type Sessio
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
+import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
-import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
 import {
@@ -134,7 +141,6 @@ const INSPECTOR_COMPACT_MAX_PX = 325;
 const TOPBAR_SECONDARY_COMPACT_MAX_PX = 759;
 const isMac = isMacPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
-const newTerminalShortcutLabel = shortcutBindingLabel(defaultShortcutBindings("new-shell-terminal", isMac)[0], isMac);
 
 type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
 type ReviewerSurface = components["schemas"]["DomainReviewerSurface"];
@@ -199,6 +205,11 @@ function cloudReviewRunForTerminal(
 	return data?.runs.find((run) => run.reviewerTerminalId === terminalID);
 }
 
+function cloudReviewerChatFromReviews(data: CloudCpSessionReviewState | undefined): ReviewerChatTarget | undefined {
+	const surface = data?.reviewerSurface;
+	return surface?.mode === "chat" && surface.reviewId ? { reviewId: surface.reviewId, harness: surface.harness || "claude-code" } : undefined;
+}
+
 function reviewerChatFromReviews(data?: ReviewsResponse): ReviewerChatTarget | undefined {
 	const surface = workingReviewerSurface(data) ?? data?.reviewerSurface;
 	if (surface?.mode !== "chat" || !surface.reviewId) return undefined;
@@ -235,10 +246,41 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
+/** How often the startup screen reads the session's events while their stream is down or still opening. */
+const STARTUP_EVENTS_POLL_MS = 2_000;
+
+/**
+ * The furthest startup step a session's events confirm, with when it was
+ * reached. Events from before the cutoff are an earlier epoch's: one can hold
+ * agent.ready long before this workspace restarted.
+ */
+function startupEventProgress(events: readonly CloudCpClientEvent[], cutoff: number): { index: number; since: string } | undefined {
+	let latest: { index: number; since: string } | undefined;
+	for (const event of events) {
+		const occurredAt = Date.parse(event.createdAt);
+		if (!Number.isFinite(occurredAt) || occurredAt < cutoff) continue;
+		const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
+			: event.type === "agent.ready" ? 3
+			: undefined;
+		if (index !== undefined) latest = { index, since: event.createdAt };
+	}
+	return latest;
+}
+
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl, eventsFromChat = false, queuedMessage }: {
+	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string; queuedMessage?: string;
+	/**
+	 * The session's events are the chat's to read: its Chat surface is mounted
+	 * under this screen (it reads them as it opens, then polls only as a safety
+	 * net while the stream is up), or the session has not resolved yet and may
+	 * be one. The steps then follow the chat's list rather than a poll here.
+	 */
+	eventsFromChat?: boolean;
+}) {
 	const { baseUrl, client } = useCloudCp();
 	const queryClient = useQueryClient();
-	// The project's Setup log, fed by this loader's own stream and poll below.
+	// The project's Setup log, fed by this loader's own stream and poll below,
+	// or read from the chat's own list under a Chat session.
 	const scriptRuns = useCloudScriptRuns(orgId || undefined, sessionId, { fetch: false });
 	const latestSetup = terminalOnly ? undefined : latestScriptRun(scriptRuns, "setup");
 	const setupRun = latestSetup?.status === "running" || latestSetup?.status === "failed" ? latestSetup : undefined;
@@ -256,32 +298,29 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
-	useEffect(() => {
-		if (!baseUrl || !orgId || terminalOnly) return;
-		const controller = new AbortController();
-		void subscribeSessionEventsBridged({
-			baseUrl,
-			orgId,
-			sessionId,
-			after: 0,
-			signal: controller.signal,
-			onEvent: (event) => {
-				if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
-				const occurredAt = Date.parse(event.createdAt);
-				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
-				// sandbox.provisioning only marks the start of workspace creation;
-				// the workspace's completion comes from the observed state above.
-				const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
-					: event.type === "agent.ready" ? 3
-					: undefined;
-				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
-				// A connect from before this loader (allowing for clock skew) is an
-				// earlier worker's, not the one it waits for.
-				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
-			},
-		});
-		return () => controller.abort();
-	}, [baseUrl, orgId, queryClient, sessionId, terminalOnly]);
+	// The session's shared event stream, from its start: the Setup log and the
+	// stages need every event.
+	const streamOpen = useCloudSessionEventStream({
+		baseUrl,
+		orgId,
+		sessionId,
+		enabled: !terminalOnly,
+		resumeAfter: () => 0,
+		onEvent: (event) => {
+			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			const occurredAt = Date.parse(event.createdAt);
+			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
+			// sandbox.provisioning only marks the start of workspace creation;
+			// the workspace's completion comes from the observed state above.
+			const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
+				: event.type === "agent.ready" ? 3
+				: undefined;
+			if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+			// A connect from before this loader (allowing for clock skew) is an
+			// earlier worker's, not the one it waits for.
+			if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
+		},
+	});
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);
@@ -310,36 +349,46 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
 	}, [baseUrl, client, orgId, queryClient, sessionId, terminalOnly]);
+	// Under a Chat session the steps follow the chat's own list of the events.
+	const chatEvents = useCachedQueryData<CloudCpClientEvent[]>(cloudChatEventsQueryKey(orgId, sessionId), Boolean(orgId) && !terminalOnly && eventsFromChat);
 	useEffect(() => {
-		if (!orgId || terminalOnly) return;
+		const latest = chatEvents && startupEventProgress(chatEvents, replayCutoff.current);
+		if (latest) setProgress((current) => latest.index > current.index ? latest : current);
+	}, [chatEvents]);
+	// Otherwise this screen reads them: once as it opens, then, while the stream
+	// carries them, only as the chat's safety net does, and every two seconds
+	// only while the stream is down. A boot takes minutes.
+	const streamOpenRef = useRef(streamOpen);
+	streamOpenRef.current = streamOpen;
+	const pollEvents = Boolean(orgId) && !terminalOnly && !eventsFromChat;
+	useEffect(() => {
+		if (!pollEvents) return;
 		const controller = new AbortController();
 		let after = 0;
+		let readAt: number | undefined;
 		let timer: number | undefined;
 		const poll = async () => {
 			try {
-				let latest: { index: number; since: string } | undefined;
+				const interval = streamOpenRef.current ? CHAT_EVENTS_SAFETY_POLL_MS : STARTUP_EVENTS_POLL_MS;
+				if (readAt !== undefined && Date.now() - readAt < interval) return;
+				readAt = Date.now();
+				const events: CloudCpClientEvent[] = [];
 				for (;;) {
 					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
 					if (controller.signal.aborted) return;
 					recordCloudScriptStepEvents(queryClient, orgId, sessionId, page.events);
-					for (const event of page.events) {
-						// Complete the replay before painting a stage. Old epochs can
-						// contain agent.ready long before this workspace restart.
-						const occurredAt = Date.parse(event.createdAt);
-						if (!Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) continue;
-						const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
-							: event.type === "agent.ready" ? 3
-							: undefined;
-						if (index !== undefined) latest = { index, since: event.createdAt };
-					}
+					events.push(...page.events);
 					after = page.nextAfter;
 					if (!page.hasMore) break;
 				}
+				// The whole replay is read before a stage is painted.
+				const latest = startupEventProgress(events, replayCutoff.current);
 				if (latest) setProgress((current) => latest.index > current.index ? latest : current);
 			} catch {
 				// Keep the current stage and retry while the session is loading.
 			} finally {
-				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), 2_000);
+				// Checked every two seconds, so a stream that drops is noticed soon.
+				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), STARTUP_EVENTS_POLL_MS);
 			}
 		};
 		void poll();
@@ -347,16 +396,16 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, queryClient, sessionId, terminalOnly]);
+	}, [client, orgId, pollEvents, queryClient, sessionId]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} queuedMessage={terminalOnly ? undefined : queuedMessage} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
 	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
 	return (
-		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen">
+		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen" data-startup-cover="">
 			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
 				<Loader2 aria-hidden="true" className="size-6 animate-spin" />
 				<span className="text-sm">{label}</span>
@@ -423,6 +472,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudLookupEnabled,
 		!listedSession,
 	);
+	// The person's own workspace: a missing session in another one was shared
+	// with them, so it is gone because it no longer is.
+	const { org: ownCloudOrg } = useCloudOrg(Boolean(routeCloudOrgId) && !hostId);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
 		Boolean(routedWorkspace) || cloudRouteSession.isError ||
@@ -487,7 +539,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		() => () => aoBridge.app.setChatDraftRisk?.([]),
 		[sessionId],
 	);
-	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl } = useCloudCp();
+	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl, userId: cloudCpUserId } = useCloudCp();
+	// The session's own organization decides whether it can be shared (feature=share).
+	const sessionOffering = useCloudOffering(Boolean(session?.cloud), session?.cloud?.orgId);
 	const theme = useResolvedTheme();
 	const browserOnly = Boolean(session && isOrchestratorSession(session));
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
@@ -671,6 +725,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => stopTerminalLiveResize, [stopTerminalLiveResize]);
 
 	const cloudStage = cloudLifecycleStage(session);
+	// The first message this device sent to a new Chat session. The startup
+	// screen shows it while it covers the chat the message went to; the session
+	// may not have resolved yet, so the interface comes from the send.
+	const cloudOpening = useCloudOpening(session?.cloud?.orgId ?? cloudOrgId, sessionId);
+	const startupQueuedMessage = cloudOpening && (session ? session.mode === "chat" : cloudOpening.interfaceMode === "chat")
+		? cloudOpening.text
+		: undefined;
 	// A startup failure AO gave up on (or a runtime that ended without one)
 	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
@@ -793,7 +854,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
+			if (error) throw apiErrorException(error, "Unable to load reviews");
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});
@@ -833,8 +894,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerTerminal = session && sessionIsActive(session)
 		? availableReviewerTerminal ?? retainedCloudReviewerTerminal
 		: undefined;
-	const availableReviewerChat = reviewerChatFromReviews(reviewerQuery.data);
+	// A Cloud review that runs in Chat shows as a reviewer chat tab, as a local one does.
+	const availableReviewerChat = session?.cloud
+		? cloudReviewerChatFromReviews(cloudReviewerQuery.data)
+		: reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;
+	// The selected reviewer chat: a Cloud review's conversation lives on the
+	// control plane, a local one on this session's daemon.
+	const reviewerChatContent = !reviewerChatId ? undefined : session?.cloud ? (
+		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewerChatId} harness={reviewerChat?.harness ?? "claude-code"} />
+	) : (
+		<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
+	);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
@@ -1339,12 +1410,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<Plus aria-hidden="true" className="size-icon-md" />
 					</TopbarButton>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">
-					{newTerminalError ?? t("terminal.newWithShortcut", { shortcut: newTerminalShortcutLabel })}
+				<TooltipContent shortcut={newTerminalError ? undefined : "new-shell-terminal"} side="bottom">
+					{newTerminalError ?? t("terminal.new")}
 				</TooltipContent>
 			</Tooltip>
 		) : null,
-		[addShellTerminal, isOrchestrator, newTerminalError, newTerminalShortcutLabel, session, t],
+		[addShellTerminal, isOrchestrator, newTerminalError, session, t],
 	);
 	const sendCloudFileAnnotation = useCallback(async (message: string) => {
 		const orgId = session?.cloud?.orgId;
@@ -1542,13 +1613,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
-			{/* Who else is here, or Share; only the session's own organization can share it. */}
+			{/* On a session shared with this person: what they can do in it, and through which team. */}
+			{session ? <SessionAccessTag session={session} /> : null}
+			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
 					orgId={session.cloud.orgId}
 					projectId={session.workspaceId}
 					sessionId={session.id}
-					canShare={session.cloud.orgId === cloudOrgId}
+					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE)}
 				/>
 			) : null}
 			<SessionTopbarActions />
@@ -1781,7 +1854,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Explicit open commands reveal once per command. A fast command's start
 	// and finish can share a React render, so either event can consume its ID.
-	// Later completion and UI changes must not override a user's close.
+	// Later completion and UI changes must not override a user's close. Only a
+	// command whose start arrived while this session was on screen counts: one
+	// begun while the user was elsewhere would otherwise pop Browser open a
+	// moment after they switch in.
 	useEffect(() => {
 		if (revealedBrowserCommandsRef.current.sessionId !== uiSessionId) {
 			revealedBrowserCommandsRef.current = { sessionId: uiSessionId, commands: new Set() };
@@ -1789,7 +1865,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!hasInspector || terminated) return;
 		const activity = browserView.agentBrowserActivity;
 		if (activity && BROWSER_REVEAL_ACTIONS.has(activity.action)) {
-			if (!activity.commandId || activity.viewId !== browserView.viewId) return;
+			if (!activity.commandId || activity.viewId !== browserView.viewId || !activity.startObserved) {
+				if (browserView.agentBrowserActive && !browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
+				return;
+			}
 			const commands = revealedBrowserCommandsRef.current.commands;
 			if (commands.has(activity.commandId)) return;
 			commands.add(activity.commandId);
@@ -1799,10 +1878,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!browserView.agentBrowserActive) return;
+		// Passive activity only badges Browser, including an orchestrator's.
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
-			setInspectorOpenForSession(uiSessionId, true);
-			return;
 		}
 		if (!browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
 	}, [
@@ -1818,7 +1896,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 		browserOnly,
 		setBrowserContentRevealed,
-		setInspectorOpenForSession,
 		revealBrowserPanel,
 	]);
 
@@ -1888,6 +1965,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		hasInspector,
 	);
 	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {
@@ -1949,11 +2027,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
+		// A shared session's route names no organization, and once its sharing
+		// ends it is gone from the shared list too: it reads as shared because
+		// the list showed it earlier in this run.
+		const routeError = cloudRouteSession.error;
+		const noLongerShared = !hostId && (
+			sessionWasSharedWithYou(cloudCpBaseUrl, cloudCpUserId, sessionId) ||
+			(Boolean(routeCloudOrgId) && (
+				(ownCloudOrg !== undefined && routeCloudOrgId !== ownCloudOrg.id) ||
+				(routeError instanceof CloudCpError && routeError.status === 403)
+			))
+		);
 		return (
 			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
 				<PageTopbar />
 				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : remoteLoading ? "status" : undefined}>
-					{remoteLoading ? t("remote.loadingSession") : remoteError ?? t("session.notFound")}
+					{remoteLoading ? t("remote.loadingSession") : remoteError ?? t(noLongerShared ? "session.noLongerShared" : "session.notFound")}
 				</div>
 			</div>
 		);
@@ -2011,7 +2100,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
 							    asks this machine's daemon, which has never heard of a Cloud
 							    session and answers "session not found". */}
-							{showChatSurface && session?.cloud && !reviewerChatId ? (
+							{showChatSurface && session?.cloud ? (
+								<>
 								<CloudSessionChatSurface
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
@@ -2032,9 +2122,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
+									tabStripAction={newShellTerminalAction}
+									workspaceTabs={centerFileTabs}
+									workspaceActiveTabKey={activeWorkspaceTabKey}
+									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									reviewerChat={reviewerChat}
+									reviewerChatSelected={Boolean(reviewerChatId)}
+									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
 								/>
+								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
+								</>
 							) : showChatSurface ? (
 								<>
 								<SessionChatSurface
@@ -2099,11 +2198,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								{reviewerChatId ? (
-									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
-									</div>
-								) : null}
+								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
 								</>
 							) : (
 								<CenterPane
@@ -2122,7 +2217,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatContent}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}
@@ -2199,10 +2294,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? (
 					<SessionInspectorRail
 						sessionKey={uiSessionId}
-						showCollapsedHandle={!browserOnly}
 						isOpen={isInspectorOpen}
 						onCloseAnimationComplete={handleInspectorCloseAnimationComplete}
-						onExpand={() => setInspectorOpenForSession(uiSessionId, true)}
 						restoreMinWidth={
 							sizing.mode === "browser" ? (browserEntryWidthFloorRef.current ?? undefined) : undefined
 						}
@@ -2262,7 +2355,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
 							}
 							aria-pressed={isInspectorOpen}
-							onClick={handleToggleInspector}
+							onClick={() => {
+								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
+								handleToggleInspector();
+							}}
 							style={noDragStyle}
 							variant="icon"
 						>
@@ -2282,10 +2378,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							)}
 						</TopbarButton>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">
+					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
 						{browserOnly
 							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>
@@ -2303,6 +2399,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						completed={showCompletedLoader}
 						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
 						coderWorkspaceUrl={session?.cloud?.coderWorkspaceUrl}
+						eventsFromChat={!session || Boolean(showChatSurface && session.cloud)}
+						queuedMessage={startupQueuedMessage}
 					/>
 					: null}
 			{interfaceUi.dialogs}

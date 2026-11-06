@@ -27,7 +27,7 @@ vi.mock("../lib/host-clients", () => ({
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 
-import { useTerminateSession, useTerminateSessionState } from "./useTerminateSession";
+import { useProjectTerminateSessionStates, useTerminateSession, useTerminateSessionState } from "./useTerminateSession";
 import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 const localSession: WorkspaceSession = {
@@ -318,5 +318,22 @@ describe("durable workspace cleanup feedback", () => {
 		await act(async () => { setCleanup("removed"); });
 		await waitFor(() => expect(result.current.error).toBeNull());
 		expect(result.current.isPending).toBe(false);
+	});
+
+	it("raises nothing for a cleanup a sweep recorded", async () => {
+		const queryClient = new QueryClient();
+		const sweep = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{
+			...workspaces[0], sessions: [{ ...session, isTerminated: true, workspaceCleanup, workspaceCleanupReportOnly: true }],
+		}]);
+		sweep("preserved_dirty");
+		const { result } = renderHook(() => ({
+			session: useTerminateSessionState(session.id),
+			project: useProjectTerminateSessionStates(workspaces[0].id),
+		}), { wrapper: wrapper(queryClient) });
+		expect(result.current.session).toEqual({ error: null, isPending: false });
+		expect(result.current.project).toEqual([]);
+		await act(async () => { sweep("pending"); });
+		expect(result.current.session.isPending).toBe(false);
+		expect(result.current.project).toEqual([]);
 	});
 });

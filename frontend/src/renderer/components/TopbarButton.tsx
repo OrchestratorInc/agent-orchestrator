@@ -1,12 +1,13 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
+import { Pressable } from "./ui/pressable";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
 // Utility controls rest muted and brighten on hover or while their menu or toggle is on.
 const topbarActionClass = "border-0 bg-transparent text-muted-foreground hover:text-foreground aria-expanded:text-foreground aria-pressed:text-foreground";
 
 const topbarButtonVariants = cva(
-	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[transform,filter,background-color,color,border-color] duration-fast ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[filter,background-color,color,border-color] duration-fast ease-out",
 	{
 		variants: {
 			variant: {
@@ -30,27 +31,30 @@ export function TopbarButton({
 	children,
 	className,
 	highlight = true,
+	highlightActive,
 	variant = "action",
 	type = "button",
 	...props
 }: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants> & {
 	/** Joined controls can let their surrounding group own the highlight. */
 	highlight?: boolean;
+	/** Overrides the pressed/expanded highlight, e.g. for a menu that opens on hover. */
+	highlightActive?: boolean;
 }) {
 	// Accent keeps its bordered raised surface; every other utility control
 	// shares the sidebar's hover highlight.
 	const useHighlight = highlight && (variant === "action" || variant === "icon" || variant === "secondary");
-	const active = props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
-		props["aria-expanded"] === true || props["aria-expanded"] === "true";
+	const active = highlightActive ?? (props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
+		props["aria-expanded"] === true || props["aria-expanded"] === "true");
 	return (
-		<button
+		<Pressable
 			className={cn(topbarButtonVariants({ variant }), useHighlight && NAV_ROW_HIGHLIGHT_HOST_CLASS, useHighlight && "isolate", className)}
 			type={type}
 			{...props}
 		>
 			{useHighlight ? <NavRowHighlight active={active} disabled={props.disabled} /> : null}
 			{children}
-		</button>
+		</Pressable>
 	);
 }
 

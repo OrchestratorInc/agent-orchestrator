@@ -124,6 +124,18 @@ describe("WindowTitlebar", () => {
     ).toBeInTheDocument();
   });
 
+  it("enables Settings Back without route history and restores its disabled state on close", async () => {
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    const onBack = vi.fn();
+    const { rerender } = render(<TooltipProvider><WindowTitlebar onBack={onBack} /></TooltipProvider>);
+    const back = screen.getByRole("button", { name: "Go back" });
+    expect(back).toBeEnabled();
+    await userEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    rerender(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    expect(back).toBeDisabled();
+  });
+
   it("switches the maximize control to a restore icon when the window is maximized", async () => {
     let reportMaximized: ((maximized: boolean) => void) | undefined;
     window.ao!.window.isMaximized = vi.fn().mockResolvedValue(false);
@@ -211,7 +223,7 @@ describe("WindowTitlebar", () => {
       /html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.browser-popout-overlay,\s*html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
-      /body:has\(#root \.platform-windows\) > \.browser-popout-overlay,\s*body:has\(#root \.platform-windows\) > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
+      /html\[data-shell-windows\] body > \.browser-popout-overlay,\s*html\[data-shell-windows\] body > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
       /\.platform-windows\s*{\s*--size-center-panel-inset: 8px;\s*--size-center-panel-inline-inset: 8px;\s*--size-center-panel-bottom-inset: 8px;/s,

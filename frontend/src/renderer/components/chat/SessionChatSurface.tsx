@@ -1,3 +1,4 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -18,7 +19,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
-import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
+import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
@@ -230,7 +231,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data?.status === "ok" ? data.project : undefined;
 		},
 	});
@@ -431,8 +432,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
-	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
+	// Applied once: the chat below unmounts while the conversation reloads, and
+	// a request still held would scroll it back to the same message on return.
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string; revision?: number }>(uiSessionId);
+	const navigateToAnnotation = annotationNavigation.navigate;
+	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -444,7 +448,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		session.id, models, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")), sideEnabled,
 		(annotation) => {
 			onSelectChat?.();
-			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
+			navigateToAnnotation({ ...annotation, id: crypto.randomUUID() });
 		},
 		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
 		sideCreationEnabled,
@@ -695,7 +699,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
-				annotationNavigationRequest={annotationNavigationRequest}
+				annotationNavigationRequest={annotationNavigation.request}
+				onAnnotationNavigationHandled={annotationNavigation.handled}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
@@ -796,7 +801,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					const switchFailed = (error: unknown) => {
 						if (error instanceof ProviderSwitchFailed) setChosenSwitch(undefined);
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
-						return Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+						return Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
 					};
 					const switched = () => {
 						setChosenSwitch(undefined);

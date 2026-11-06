@@ -4,9 +4,10 @@ import * as Sentry from "@sentry/electron/main";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
-import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_FUNCTION, safeSentryExceptionType, sentryEnvironment } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
+import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
 
 export function electronMainSentryDsn(isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isDev ? "" : DEFAULT_ELECTRON_SENTRY_DSN);
@@ -31,8 +32,15 @@ const LOCAL_URL = /(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:l
 const HOME_PATH = /\/(?:Users|home)\/[^\s"']+/g;
 const WIN_PATH = /[A-Za-z]:\\[^\s"']+|\\\\[^\s"']+/g;
 const SAFE_CATEGORIES = new Set(["agent_runtime", "http_5xx", "integration", "native_crash", "render_crash", "update"]);
-const SAFE_CODES = new Set(["AGENT_RESUME_FAILED", "INTERNAL_ERROR", "WORKSPACE_GIT_READ_FAILED"]);
+const MAIN_CATEGORIES = new Set<string>(MAIN_ERROR_CATEGORIES);
+const MAIN_REASONS = new Set<string>(MAIN_ERROR_REASONS);
+const SAFE_CODES = new Set([
+	"AGENT_RESUME_FAILED", "CHAT_DELIVERY_FAILED", "CONVERSATION_READ_FAILED",
+	"INTERNAL_ERROR", "ORCHESTRATOR_SPAWN_FAILED", "REPORT_CREATE_FAILED",
+	"REPORT_LIST_FAILED", "REVIEW_OPERATION_FAILED", "WORKSPACE_GIT_READ_FAILED",
+]);
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
+const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
@@ -58,19 +66,16 @@ async function waitForInFlightSends(inFlight: Set<Promise<unknown>>): Promise<vo
 
 function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 	const values = [event.message, ...(event.exception?.values ?? []).flatMap((value) => [value.type, value.value])];
-	return values.some((value) => typeof value === "string" && (
-		/^AbortError$/i.test(value) ||
-		/\b(?:ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_IO_SUSPENDED|network changed|daemon not ready|DAEMON_NOT_READY|daemon_unavailable)\b/i.test(value)
-	));
+	return values.some((value) => typeof value === "string" && EXPECTED_NOISE.test(value));
 }
 
 function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent | null {
 	if (isExpectedNoise(event)) return null;
+	if (event.tags?.["ao.origin"] === "main_handled") return scrubMainHandledEvent(event, installId, version, environment);
 	const renderer = event.tags?.["ao.origin"] === "renderer";
 	const processReason = typeof event.message === "string"
 		? PROCESS_REASONS.find((reason) => event.message?.endsWith(`process exited with '${reason}'`))
 		: undefined;
-	const title = scrubTelemetryText(renderer ? "Renderer error" : processReason ? "Electron process failure" : "Electron main error");
 	const rendererKind = event.tags?.["ao.kind"];
 	const kind = renderer
 		? (rendererKind === "exception" || rendererKind === "message" ? rendererKind : "unknown")
@@ -86,21 +91,64 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
 		.slice(-8)
-		.map((frame) => ({ function: frame.function, lineno: frame.lineno, in_app: true }));
-	const topFunction = frames?.at(-1)?.function ?? "unknown";
+		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), ...(typeof frame.colno === "number" && Number.isSafeInteger(frame.colno) && frame.colno >= 1 && frame.colno <= 10_000_000 ? { colno: frame.colno } : {}), in_app: true }));
+	const topFrame = frames?.at(-1);
+	const topLocation = renderer && topFrame && "filename" in topFrame && typeof topFrame.filename === "string" && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? `${topFrame.filename.replace(/-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/, "")}:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
+		: undefined;
+	const mainLocation = !renderer && topFrame && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? `main:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
+		: undefined;
+	const rendererLocation = renderer && topFrame && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? topLocation ?? `renderer:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
+		: undefined;
+	const topFunction = topFrame?.function === "renderer_frame" ? rendererLocation ?? "renderer_frame"
+		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
+	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
+	const title = renderer
+		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
+		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
 		event_id: event.event_id,
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
-		fingerprint: ["electron", kind, renderer ? safeCode : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
+		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
 		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
 		exception: { values: [{ type: exceptionType, value: "", ...(frames?.length ? { stacktrace: { frames } } : {}) }] },
 	};
+}
+
+// A handled main-process failure reported through captureMainError. Its title
+// and grouping come only from the fixed category and reason.
+function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent | null {
+	const category = event.tags?.["ao.category"];
+	const reason = event.tags?.["ao.reason"];
+	if (typeof category !== "string" || !MAIN_CATEGORIES.has(category) || typeof reason !== "string" || !MAIN_REASONS.has(reason)) return null;
+	const detail = event.tags?.["ao.detail"];
+	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
+	return {
+		type: undefined,
+		event_id: event.event_id,
+		timestamp: event.timestamp,
+		level: event.level === "fatal" || event.level === "warning" ? event.level : "error",
+		message: `Electron main ${category} failure (${reason})`,
+		// IPC failures group per channel; everything else per category and reason.
+		fingerprint: ["electron", "handled", category, reason, ...(category === "ipc" && isSafeMainErrorDetail(detail) ? [detail] : []), "electron-main"],
+		tags: { surface: "electron-main", kind: "handled", category, reason, ...(isSafeMainErrorDetail(detail) ? { detail } : {}) },
+		user: { id: installId },
+		release: version,
+		environment,
+		exception: { values: [{ type: exceptionType, value: "" }] },
+	};
+}
+
+function errorTypeOf(error: unknown): string {
+	return error instanceof Error ? safeSentryExceptionType(error.name) : "Error";
 }
 
 export async function initMainSentry(version: string, dataDir: string, cacheRoot: string, isDev = false): Promise<DesktopTelemetryTransport> {
@@ -140,6 +188,10 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
+		// Every consented error is kept. Volume is bounded by the renderer's
+		// per-error budget and by fixed fingerprints, not by random sampling,
+		// which hid low-volume regressions.
+		sampleRate: 1,
 		tracesSampleRate: 0,
 		skipOpenTelemetrySetup: true,
 		beforeBreadcrumb: () => null,
@@ -153,7 +205,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		capture(request) {
 			if (!accepting) return;
 			const safe = sanitizeRendererCapture(request);
-			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || /\b(?:AbortError|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|DAEMON_NOT_READY)\b/i.test(safe.message)) return;
+			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || EXPECTED_NOISE.test(safe.message)) return;
 			const category = safe.tags?.category;
 			const code = safe.tags?.code;
 			Sentry.captureEvent({
@@ -165,6 +217,22 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 					"ao.kind": safe.kind,
 					"ao.category": category && SAFE_CATEGORIES.has(category) ? category : "unknown",
 					"ao.code": code && SAFE_CODES.has(code) ? code : "unknown",
+				},
+			});
+		},
+		captureMain(request: MainErrorCapture) {
+			if (!accepting) return;
+			const safe = sanitizeMainErrorCapture(request);
+			if (!safe) return;
+			Sentry.captureEvent({
+				message: "Electron main handled error",
+				level: "error",
+				exception: { values: [{ type: errorTypeOf(safe.error), value: "" }] },
+				tags: {
+					"ao.origin": "main_handled",
+					"ao.category": safe.category,
+					"ao.reason": safe.reason,
+					...(safe.detail ? { "ao.detail": safe.detail } : {}),
 				},
 			});
 		},
@@ -207,10 +275,12 @@ export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapt
 		for (const frame of value.frames) {
 			if (!frame || typeof frame !== "object" || Array.isArray(frame)) return null;
 			const entry = frame as Record<string, unknown>;
-			if (Object.keys(entry).some((key) => key !== "function" && key !== "lineno")) return null;
+			if (Object.keys(entry).some((key) => key !== "function" && key !== "filename" && key !== "lineno" && key !== "colno")) return null;
 			if (typeof entry.function !== "string" || entry.function.length > 128 || !SAFE_FUNCTION.test(entry.function)) return null;
+			if (entry.filename !== undefined && (typeof entry.filename !== "string" || !SAFE_APP_ASSET.test(entry.filename))) return null;
 			if (entry.lineno !== undefined && (typeof entry.lineno !== "number" || !Number.isSafeInteger(entry.lineno) || entry.lineno < 1 || entry.lineno > 1_000_000)) return null;
-			frames.push({ function: entry.function, ...(entry.lineno === undefined ? {} : { lineno: entry.lineno as number }) });
+			if (entry.colno !== undefined && (typeof entry.colno !== "number" || !Number.isSafeInteger(entry.colno) || entry.colno < 1 || entry.colno > 10_000_000)) return null;
+			frames.push({ function: safeSentryFunctionName(entry.function, "renderer_frame"), ...(entry.filename === undefined ? {} : { filename: entry.filename as string }), ...(entry.lineno === undefined ? {} : { lineno: entry.lineno as number }), ...(entry.colno === undefined ? {} : { colno: entry.colno as number }) });
 		}
 		exception = { type: value.type, frames };
 	}

@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
-import { ACCENT_ACTION_PILL, QUIET_ACTION_PILL } from "./action-pill";
+import { Button } from "../ui/button";
+import { CloseButton } from "../ui/close-button";
+import { Pressable } from "../ui/pressable";
 
 type InputAction = "accept" | "decline" | "cancel";
 type InputValue = string | number | boolean | string[];
@@ -195,28 +197,25 @@ function DockHeader({
 				</p>
 			</div>
 			{onToggleCollapsed ? (
-				<button
-					type="button"
+				<Pressable
 					aria-label={collapsed ? "Expand question" : "Collapse question"}
 					aria-expanded={!collapsed}
 					title={collapsed ? "Expand" : "Collapse"}
 					onClick={onToggleCollapsed}
-					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
 				>
 					<ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")} />
-				</button>
+				</Pressable>
 			) : null}
 			{onDismiss ? (
-				<button
-					type="button"
+				<CloseButton
+					size="icon-xs"
 					aria-label="Cancel"
 					title="Cancel"
 					disabled={disabled}
 					onClick={onDismiss}
-					className="-mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
-				>
-					<X aria-hidden="true" className="size-3.5" />
-				</button>
+					className="-mr-1"
+				/>
 			) : null}
 		</div>
 	);
@@ -286,16 +285,18 @@ function URLRequest({
 			) : null}
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
+					<Button type="button" variant="secondary" size="sm" shape="pill" disabled={disabled} onClick={() => onResolve("cancel")}>
 						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
+					</Button>
+					<Button type="button" variant="secondary" size="sm" shape="pill" disabled={disabled} onClick={() => onResolve("decline")}>
 						Decline
-					</button>
+					</Button>
 				</div>
-				<button
+				<Button
 					type="button"
-					className={ACCENT_ACTION_PILL}
+					variant="accent"
+					size="sm"
+					shape="pill"
 					disabled={disabled || !parsed}
 					onClick={() => void consent()}
 				>
@@ -305,7 +306,7 @@ function URLRequest({
 						<ExternalLink aria-hidden="true" className="size-3.5" />
 					)}
 					Open {parsed?.hostname ?? "link"}
-				</button>
+				</Button>
 			</DockFooter>
 		</div>
 	);
@@ -468,11 +469,13 @@ function FormRequest({
 				<DockFooter>
 					<div className="flex items-center gap-1">
 						{hasPreviousQuestion ? (
-							<button
+							<Button
 								type="button"
+								variant="quiet"
+								size="icon-sm"
+								shape="pill"
 								aria-label="Back"
 								title="Back"
-								className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 								disabled={disabled}
 								onClick={() => {
 									setMissing(new Set());
@@ -480,14 +483,13 @@ function FormRequest({
 								}}
 							>
 								<ChevronLeft aria-hidden="true" className="size-4" />
-							</button>
+							</Button>
 						) : null}
 						{questionGroups && questionGroups.length > 1 ? (
 							<div className="flex items-center gap-1 px-1" aria-hidden="true">
 								{questionGroups.map((group, step) => (
-									<button
+									<Pressable
 										key={group[0]?.[0] ?? step}
-										type="button"
 										tabIndex={-1}
 										disabled={disabled || step >= activeQuestion}
 										onClick={() => {
@@ -506,21 +508,24 @@ function FormRequest({
 								))}
 							</div>
 						) : null}
-						<button
+						<Button
 							type="button"
-							className="h-7 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
+							variant="quiet"
+							size="sm"
+							shape="pill"
 							disabled={disabled}
 							onClick={() => onResolve("decline")}
 						>
 							Skip
-						</button>					</div>
+						</Button>
+					</div>
 					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
-					<button
+					<Button
 						type="submit"
-						className={cn(
-							ACCENT_ACTION_PILL,
-							"min-w-20 justify-center bg-foreground text-background hover:bg-foreground/90",
-						)}
+						variant="primary"
+						size="sm"
+						shape="pill"
+						className="min-w-20"
 						disabled={disabled}
 					>
 						{disabled ? (
@@ -533,7 +538,7 @@ function FormRequest({
 								<ArrowUp aria-hidden="true" className="size-3.5" />
 							</>
 						)}
-					</button>
+					</Button>
 				</DockFooter>
 				</>
 			)}

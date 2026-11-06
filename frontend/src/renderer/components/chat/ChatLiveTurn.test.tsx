@@ -1,4 +1,4 @@
-import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -72,15 +72,24 @@ describe("settling under a reader who scrolled up", () => {
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
 	let restoreLayout: (() => void) | undefined;
-	afterEach(() => {
+	afterEach(async () => {
+		cleanup();
+		// TanStack Virtual's scroll-reset debounce survives unmount in jsdom.
+		// Drain it while window still exists, before this file's DOM is torn down.
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		});
 		restoreLayout?.();
 		restoreLayout = undefined;
 	});
 
-	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" is 28px) under a scrollable log. */
+	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
 	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
-		const height = (row: Element) => (row.hasAttribute("data-turn-worked") ? 28 : 100);
+		// The empty row reserved under the prompt is as tall as "Worked for", which
+		// takes its place as the turn settles.
+		const height = (row: Element) =>
+			row.hasAttribute("data-turn-worked") || row.hasAttribute("data-turn-worked-gap") ? 28 : 100;
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
@@ -94,10 +103,12 @@ describe("settling under a reader who scrolled up", () => {
 		});
 		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
 		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
-		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: scrollTop });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: log.scrollHeight });
 		restoreLayout = () => spy.mockRestore();
-		// Reading back up the turn releases the follow.
+		// Browser wheel intent precedes the viewport movement. Cancelling a recent
+		// programmatic scroll must record the old position, not the reader's destination.
 		fireEvent.wheel(log, { deltaY: -120 });
+		log.scrollTop = scrollTop;
 		fireEvent.scroll(log);
 	}
 
@@ -108,7 +119,7 @@ describe("settling under a reader who scrolled up", () => {
 	it("lands Worked for at the top of the view when the reader was among the steps", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// Rows: prompt 20, note 120, ls 220, second note 320, npm test 420, reply 520.
+		// Rows: prompt 20, reserved row 120, note 148, ls 248, second note 348, npm test 448, reply 548.
 		// At 350 the second note sits across the top edge.
 		stubTurnLayout(log, 350);
 
@@ -122,8 +133,8 @@ describe("settling under a reader who scrolled up", () => {
 	it("holds the reply still when the reader was already on it", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// The reply starts at 520, 40px above the top edge.
-		stubTurnLayout(log, 560);
+		// The reply starts at 548, 40px above the top edge.
+		stubTurnLayout(log, 588);
 
 		settle(rerender);
 

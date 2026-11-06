@@ -1,13 +1,19 @@
 package telemetrymeta
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
+
+	sqlite3 "modernc.org/sqlite"
 
 	"github.com/go-chi/chi/v5"
 
@@ -22,6 +28,43 @@ func ErrorKindAndCode(err error) (kind, code string) {
 		return ErrorKind(apiErr.Kind), apiErr.Code
 	}
 	return kind, ""
+}
+
+// ErrorType returns a fixed diagnostic type from the wrapped cause chain.
+func ErrorType(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context_deadline"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "context_canceled"
+	}
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return "sqlite"
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return "exec_exit"
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return "filesystem"
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return "network"
+	}
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.Cause != nil {
+			return "unknown"
+		}
+		return "api_error"
+	}
+	return "unknown"
 }
 
 var errorKinds = map[apierr.Kind]string{
