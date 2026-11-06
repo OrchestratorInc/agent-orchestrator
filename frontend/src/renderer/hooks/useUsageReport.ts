@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import type { UsageReport } from "../lib/usage-report";
 import type { UsageLimitWindows } from "../lib/usage-limits";
 
@@ -23,7 +24,7 @@ export function useUsageReport(days: number, offset: number, projectId: string |
 			const { data, error } = await apiClient.GET("/api/v1/usage/report", {
 				params: { query: { days, offset, tz: timeZone, ...(projectId ? { projectId } : {}) } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data as UsageReport;
 		},
 		placeholderData: keepPreviousData,
@@ -37,7 +38,7 @@ export function useUsageLimitWindows(days: number, enabled: boolean) {
 		queryKey: [...usageReportQueryKey, "limit-windows", days],
 		queryFn: async (): Promise<UsageLimitWindows> => {
 			const { data, error } = await apiClient.GET("/api/v1/usage/limit-windows", { params: { query: { days } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data as UsageLimitWindows;
 		},
 		enabled,
@@ -55,7 +56,7 @@ export function useUsagePrices() {
 		queryKey: usagePricesQueryKey,
 		queryFn: async (): Promise<UsagePrices> => {
 			const { data, error } = await apiClient.GET("/api/v1/usage/prices");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 	});
@@ -66,7 +67,7 @@ export function useSaveUsagePrices() {
 	const queryClient = useQueryClient();
 	return async (overrides: UsagePriceOverride[]) => {
 		const { data, error } = await apiClient.PUT("/api/v1/usage/prices", { body: { overrides } });
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw apiErrorException(error);
 		queryClient.setQueryData(usagePricesQueryKey, data);
 		// Repricing runs in the background; look again once it has had a moment.
 		await queryClient.invalidateQueries({ queryKey: usageReportQueryKey });
@@ -83,7 +84,7 @@ export function useCursorUsage() {
 		queryKey: cursorUsageQueryKey,
 		queryFn: async (): Promise<CursorUsageStatus> => {
 			const { data, error } = await apiClient.GET("/api/v1/usage/cursor");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		refetchInterval: 60_000,
@@ -95,7 +96,7 @@ export function useSetCursorUsage() {
 	const queryClient = useQueryClient();
 	return async (enabled: boolean) => {
 		const { data, error } = await apiClient.PUT("/api/v1/usage/cursor", { body: { enabled } });
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw apiErrorException(error);
 		queryClient.setQueryData(cursorUsageQueryKey, data);
 		// The first read runs in the background; look again once it has had a moment.
 		window.setTimeout(() => {
