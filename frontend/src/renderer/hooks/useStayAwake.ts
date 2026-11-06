@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
@@ -17,7 +18,7 @@ export function useStayAwake(enabled = true) {
 		enabled,
 		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET("/api/v1/mobile/status", { signal });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Mobile status is unavailable");
 			return data;
 		},
@@ -63,7 +64,7 @@ export function useStayAwake(enabled = true) {
 				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed && r.lidClosed)) || current?.lidActive;
 			const updateMobile = async (on: boolean, lidClosed: boolean) => {
 				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: on, lidClosed } });
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
 			};

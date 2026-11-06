@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -139,7 +139,19 @@ vi.mock("../lib/cloud-session", () => ({
 }));
 
 describe("SettingsDialog", () => {
+	let reconcileCallbacks: Array<() => void>;
 	beforeEach(() => {
+		reconcileCallbacks = [];
+		const setTimeout = window.setTimeout.bind(window);
+		vi.spyOn(window, "setTimeout").mockImplementation(((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+			if (delay === 1_500 && typeof handler === "function") {
+				reconcileCallbacks.push(() => handler(...args));
+				const timer = setTimeout(() => undefined, 0);
+				clearTimeout(timer);
+				return timer;
+			}
+			return setTimeout(handler, delay, ...args);
+		}) as typeof window.setTimeout);
 		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
 		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
@@ -176,6 +188,8 @@ describe("SettingsDialog", () => {
 		expect(teamsGate.myTeamsAsked.length).toBeGreaterThan(0);
 		expect(teamsGate.myTeamsAsked).not.toContain(true);
 	});
+
+	afterEach(() => vi.restoreAllMocks());
 
 	function renderSettingsDialog() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -421,10 +435,11 @@ describe("SettingsDialog", () => {
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
 		);
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
-		), { timeout: 3_000 });
+		);
 	});
 
 	it("scrolls to and briefly highlights the setting a deep link names", async () => {
@@ -483,13 +498,18 @@ describe("SettingsDialog", () => {
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
 	});
 
-	it("refreshes accounts once when global Settings opens, not when its pages change", async () => {
+	it("refreshes accounts in two phases when global Settings opens, not when its pages change", async () => {
 		useUiStore.getState().openGlobalSettings();
 		renderSettingsDialog();
 
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(reconcileCallbacks).toHaveLength(1);
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(postMock.mock.calls[1][1].body).toMatchObject({ forceAuthentication: true, forceDeviceReconciliation: true });
 		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
-		expect(postMock).toHaveBeenCalledTimes(1);
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(reconcileCallbacks).toHaveLength(1);
 	});
 
 	it("mounts dialog chrome before the selected settings form", async () => {
@@ -601,7 +621,11 @@ describe("SettingsDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
+		await act(async () => reconcileCallbacks[0]());
+		expect(postMock.mock.calls.map(([path]) => path)).toEqual([
+			"/api/v1/agents/codex/accounts/ensure",
+			"/api/v1/agents/codex/accounts/ensure",
+		]);
 	});
 
 	it("renders inside the page and closes from Escape or Back", async () => {

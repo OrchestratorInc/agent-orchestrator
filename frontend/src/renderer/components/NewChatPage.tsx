@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
@@ -287,7 +288,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
-			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
+			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
 	};
 
@@ -356,9 +357,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
-				{t("newTask.modelNotice.retry")}
-			</Button>
+			{task.modelWarningRetries ? (
+				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
+			) : null}
 		</div>
 	) : task.modelWarning;
 
@@ -421,6 +424,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
+								cloudOrgId: task.catalogCloudOrgId,
 								hostId,
 								agents: task.agentChoices,
 								disabled: task.agent.disabled,

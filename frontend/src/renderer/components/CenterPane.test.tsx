@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
+import { TabSplitMenuContext } from "./TabContextMenu";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -44,6 +45,9 @@ vi.mock("motion/react", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		editorHandoff: {
+			getState: async () => ({ workspaceAvailable: false, targets: [] }),
+		},
 		app: {
 			setCloseShellTerminalShortcutEnabled: (enabled: boolean) => shortcutMocks.closeableStates.push(enabled),
 			onCloseShellTerminalShortcut: (listener: () => void) => {
@@ -160,7 +164,7 @@ describe("CenterPane toolbar session label", () => {
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 		const renameItem = await screen.findByRole("menuitem", { name: "Rename do the thing" });
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(renameItem).toHaveTextContent(/^RenameF2$/);
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
@@ -195,7 +199,7 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 	});
 
@@ -823,5 +827,83 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.keyDown(sessionTab, { key: "ArrowRight" });
 		expect(document.activeElement).toBe(firstShellTab);
 		expect(screen.queryByRole("textbox", { name: /rename terminal/i })).toBeNull();
+	});
+});
+
+describe("CenterPane tab context menu", () => {
+	const shells = ["one", "two"].map((title, index) => ({
+		handleId: `h-${index}`,
+		title,
+		workingDir: "/tmp/ws",
+		createdAt: "2026-07-22T00:00:00Z",
+	}));
+
+	it("closes a shell tab from its menu", async () => {
+		const onCloseShellTerminal = vi.fn();
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onCloseShellTerminal).toHaveBeenCalledExactlyOnceWith("h-1");
+	});
+
+	it("closes a file tab with its own close action", async () => {
+		const onClose = vi.fn();
+		renderCenterPane({
+			session: worker,
+			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+		});
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("offers split actions only while split panes provide them", async () => {
+		const right = vi.fn();
+		const { unmount } = renderCenterPane({ session: worker, shellTerminals: shells });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(screen.queryByRole("menuitem", { name: "Split right" })).not.toBeInTheDocument();
+		unmount();
+
+		const split = vi.fn((key: string) => (key === "h-1" ? { right } : {}));
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<TabSplitMenuContext.Provider value={split}>
+						<CenterPane daemonReady session={worker} shellTerminals={shells} theme="dark" />
+					</TabSplitMenuContext.Provider>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		expect(await screen.findByRole("menuitem", { name: "Split down" })).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(screen.getByRole("menuitem", { name: "Split right" }));
+
+		expect(split).toHaveBeenCalledWith("h-1");
+		expect(right).toHaveBeenCalledOnce();
+	});
+
+	it("offers Archive only where the archive confirmation is mounted", async () => {
+		const { unmount } = renderCenterPane({ session: worker });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		unmount();
+
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
+	});
+
+	it("never closes the session's own tab", async () => {
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+
+		expect(await screen.findByRole("menuitem", { name: "Close tab" })).toHaveAttribute("aria-disabled", "true");
 	});
 });

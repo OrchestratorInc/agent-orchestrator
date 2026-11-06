@@ -4,11 +4,11 @@ import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
-import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
+import { TabContextMenu, TabRenameItem } from "./TabContextMenu";
 import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
@@ -29,9 +29,9 @@ type ShellTerminalTabProps = {
 // tabs use a connected treatment that visually continues into xterm below.
 // The full title only becomes the hover tooltip when the strip truncates it.
 //
-// Renaming happens inline with the platform's native gesture: double-click on
-// macOS/Linux, right-click on Windows. Enter or blur commits, Escape cancels,
-// and an empty or unchanged name is discarded. The close control is a sibling
+// Renaming happens inline: double-click, F2, or Rename in the right-click menu.
+// Enter or blur commits, Escape cancels, and an empty or unchanged name is
+// discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
 // invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
 // the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
@@ -70,10 +70,6 @@ export function ShellTerminalTab({
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
 	}, [isActive, markSeen, shell.handleId, unseenDone]);
-	// Rename gesture per platform: Windows uses right-click (its convention for
-	// tab/file renames); macOS and Linux use double-click.
-	const renameViaRightClick = isWindowsPlatform();
-
 	useEffect(() => {
 		if (isEditing) {
 			inputRef.current?.focus();
@@ -96,26 +92,16 @@ export function ShellTerminalTab({
 		// Roving tab navigation activates the focused tab with HTMLElement.click(),
 		// whose detail is 0. It should select, but must not participate in the
 		// pointer-only double-click rename gesture.
-		if (renameViaRightClick || event.detail === 0) return;
+		if (event.detail === 0) return;
 		const now = Date.now();
 		const isDoubleClick = now - lastClickAtRef.current < 500;
 		lastClickAtRef.current = isDoubleClick ? 0 : now;
 		if (isDoubleClick) beginEdit();
 	};
 
-	// The selection button owns the whole visible tab surface. Windows uses
-	// right-click for rename; macOS/Linux use the click-timing detector above.
-	const tabRenameHandlers = isEditing
-		? {}
-		: renameViaRightClick
-			? {
-					onClick: handleClick,
-					onContextMenu: (event: MouseEvent) => {
-						event.preventDefault();
-						beginEdit();
-					},
-				}
-			: { onClick: handleClick, onDoubleClick: beginEdit };
+	// The selection button owns the whole visible tab surface; the
+	// click-timing detector above catches the double-click rename.
+	const tabRenameHandlers = isEditing ? {} : { onClick: handleClick, onDoubleClick: beginEdit };
 
 	const renameKeyProps = canEdit
 		? {
@@ -148,7 +134,6 @@ export function ShellTerminalTab({
 			onClose();
 		},
 		onDoubleClick: (event: MouseEvent) => event.stopPropagation(),
-		onContextMenu: (event: MouseEvent) => event.stopPropagation(),
 		type: "button" as const,
 	};
 	if (appearance === "connected") {
@@ -177,36 +162,42 @@ export function ShellTerminalTab({
 			/>
 		) : undefined;
 		return (
-			<TerminalTabFrame
-				wide={Boolean(agent)}
-				action={closeAction}
-				active={isActive}
-				buttonProps={{
-					"aria-current": isActive,
-					"aria-selected": isActive,
-					...tabRenameHandlers,
-					...renameKeyProps,
-					role: "tab",
-					tabIndex: isActive ? 0 : -1,
-					title: isTruncated
-						? title
-						: t(renameViaRightClick ? "terminal.renameHintRightClick" : "terminal.renameHintDoubleClick", {
-								workingDir: shell.workingDir,
-							}),
-					type: "button",
-				}}
-				buttonRef={ref}
-				editingContent={editingContent}
-				icon={
-					agent ? (
-						<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
-					) : (
-						<SquareTerminal aria-hidden="true" className="size-icon-sm" />
-					)
-				}
-				label={title}
-				trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
-			/>
+			<TabContextMenu
+				closeShortcut={isActive}
+				disabled={isEditing || shell.optimistic}
+				items={<TabRenameItem ariaLabel={t("terminal.rename", { title })} onRename={canEdit ? beginEdit : undefined} />}
+				onClose={onClose}
+				tabKey={shell.handleId}
+			>
+				<TerminalTabFrame
+					wide={Boolean(agent)}
+					action={closeAction}
+					active={isActive}
+					buttonProps={{
+						"aria-current": isActive,
+						"aria-selected": isActive,
+						...tabRenameHandlers,
+						...renameKeyProps,
+						role: "tab",
+						tabIndex: isActive ? 0 : -1,
+						title: isTruncated
+							? title
+							: t("terminal.renameHintDoubleClick", { workingDir: shell.workingDir }),
+						type: "button",
+					}}
+					buttonRef={ref}
+					editingContent={editingContent}
+					icon={
+						agent ? (
+							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+						) : (
+							<SquareTerminal aria-hidden="true" className="size-icon-sm" />
+						)
+					}
+					label={title}
+					trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
+				/>
+			</TabContextMenu>
 		);
 	}
 
@@ -252,9 +243,7 @@ export function ShellTerminalTab({
 					title={
 						isTruncated
 							? title
-							: t(renameViaRightClick ? "terminal.renameHintRightClick" : "terminal.renameHintDoubleClick", {
-									workingDir: shell.workingDir,
-								})
+							: t("terminal.renameHintDoubleClick", { workingDir: shell.workingDir })
 					}
 					type="button"
 				>
@@ -284,7 +273,7 @@ const AGENT_STATUS = {
 
 // The sidebar's status vocabulary: a spinner while the agent works, the red
 // alert while it waits on the user, and a dot for a finished turn not yet seen.
-function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+export function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
 	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
 	if (!state) return null;

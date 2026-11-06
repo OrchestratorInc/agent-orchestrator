@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localGet: vi.fn(), remoteConnect: vi.fn(), remotePreviewUrl: vi.fn() }));
-vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true, reportingFetch: (input: Request) => fetch(input) }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));

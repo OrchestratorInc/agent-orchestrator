@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
@@ -8,7 +9,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -110,6 +112,7 @@ export function CommandPalette() {
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
+	const splitPanes = useSplitPanesEnabled();
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -309,10 +312,10 @@ export function CommandPalette() {
 				cloudReady,
 				developerMode,
 			}, t),
-			...buildShortcutCommands(t),
+			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -682,7 +685,7 @@ export function CommandPalette() {
 					const { error: triggerError } = await apiClient.POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 						params: { path: { sessionId: action.sessionId } },
 					});
-					if (triggerError) throw new Error(apiErrorMessage(triggerError, "Unable to start review"));
+					if (triggerError) throw apiErrorException(triggerError, "Unable to start review");
 					await queryClient.invalidateQueries({ queryKey: ["session-reviews", action.sessionId] });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (!isCurrentRun()) break;

@@ -110,7 +110,9 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
+import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
+import { TabContextMenu } from "../TabContextMenu";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -265,7 +267,7 @@ export interface ChatRetryControl {
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
 type ShellTerminalTarget = Extract<TerminalTarget, { kind: "shell" }>;
-type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void };
+type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void; menuItems?: ReactNode };
 type ChatAuxiliaryTab =
 	| { key: string; kind: "reviewer"; terminal: { handleId: string; harness: string } }
 	| { key: string; kind: "reviewer-chat"; terminal: { reviewId: string; harness: string } }
@@ -982,6 +984,8 @@ function ChatWorkspaceContent({
 	// session temporarily becomes terminated and later returns.
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
+	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -992,8 +996,8 @@ function ChatWorkspaceContent({
 				: []),
 			...(shellTerminals ?? []).map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableTabKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
@@ -1445,28 +1449,31 @@ function ChatWorkspaceContent({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
-				if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
+			!hideHeader ? aoBridge.app.onCloseShellTerminalShortcut(() => {
+				if (closeFocusedSplitPane) closeFocusedSplitPane();
+				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
-			}),
-		[activeWorkspaceTab, onCloseShellTerminal, shellTarget],
+			}) : undefined,
+		[activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget],
 	);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
 		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
 		};
-	}, [selectAdjacentTab]);
+	}, [hideHeader, selectAdjacentTab]);
 
 	useEffect(() => {
+		if (hideHeader) return;
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
-			Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
+			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || Boolean(shellTarget && onCloseShellTerminal),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, onCloseShellTerminal, shellTarget]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, hideHeader, onCloseShellTerminal, shellTarget]);
 
 	// Keep the rollback affordance mounted while a new turn runs; disable it until
 	// the daemon can safely accept it so the action row never shifts.
@@ -2432,7 +2439,7 @@ function ChatHeader({
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
-								<div className="flex shrink-0 self-stretch">
+								<SessionTabSlot>
 									{session ? (
 										<SessionPaneTab
 											isActive={timelineActive}
@@ -2452,7 +2459,7 @@ function ChatHeader({
 											title={label}
 										/>
 									)}
-								</div>
+								</SessionTabSlot>
 								<Reorder.Group
 									as="div"
 									axis="x"
@@ -2479,10 +2486,14 @@ function ChatHeader({
 													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
 													label={t("terminal.reviewer")}
 													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
+													tabKey={tab.key}
+													tabMenu
 													title={tab.terminal.harness}
 												/>
 											) : (
-												tab.tab.content
+												<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
+													{tab.tab.content}
+												</TabContextMenu>
 											)}
 										</DraggableWorkspaceTab>
 									))}

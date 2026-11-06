@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
@@ -9,7 +10,7 @@ import { clearTerminateSessionState } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, FREESTYLE_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
@@ -37,7 +38,7 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		queryKey: ["project", projectId],
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
 		},
@@ -54,14 +55,14 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 			...(steps.preRemove && { preRemove: steps.preRemove.map(serializeLocalScriptStep) }),
 		};
 		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
-		if (current.error) throw new Error(apiErrorMessage(current.error));
+		if (current.error) throw apiErrorException(current.error);
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
 		const latest = current.data.project as Project;
 		const { error } = await apiClient.PUT("/api/v1/projects/{id}", {
 			params: { path: { id: project.id } },
 			body: { displayName: latest.name, config: { ...latest.config, ...scripts } },
 		});
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw apiErrorException(error);
 	};
 	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
 		save={save} onSaveState={onSaveState} onSaved={() => {
@@ -284,7 +285,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	const retry = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/sessions/cleanup", { params: { query: { project: projectId ?? "" } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: (result) => {

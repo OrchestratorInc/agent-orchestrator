@@ -753,8 +753,9 @@ export interface CloudCpArtifactAccessResponse {
  * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
  * worker_never_started, bootstrap_failed, workspace_build_failed,
  * workspace_create_failed, working_directory_not_durable (the project's
- * working folder is outside the Coder durable root); treat any other code
- * generically.
+ * working folder is outside the Coder durable root), sandbox_unresponsive (a
+ * running session's compute stopped responding and every repair failed, so
+ * it was stopped); treat any other code generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;
@@ -1326,6 +1327,17 @@ export interface CloudCpChatModelsResponse {
 		 * them. Absent from an older worker: every mode the session allows is offered.
 		 */
 		approvalModes?: Array<"default" | "accept-edits" | "auto" | "bypass-permissions">;
+		/**
+		 * The model the account's provider listed behind this entry: its own ID,
+		 * or the model an alias such as "opus" resolves to. Absent when the
+		 * provider did not confirm it for the account, or from an older worker.
+		 */
+		providerId?: string;
+		/**
+		 * On a session's own list, a model its worker added only so the session
+		 * keeps its own selection; the account's provider did not list it.
+		 */
+		sessionOnly?: boolean;
 	}>;
 	/**
 	 * Where a new task's catalog came from: a Cloud worker running this CLI
@@ -1341,6 +1353,8 @@ export interface CloudCpChatModelsResponse {
 	 * signed-in account rather than from the CLI's built-in list.
 	 */
 	accountListed?: boolean;
+	/** On a session's own list, whether its worker marks the models it added for the session (sessionOnly). */
+	sessionOnlyMarked?: boolean;
 }
 
 export interface CloudCpClientEvent {
