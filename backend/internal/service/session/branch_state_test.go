@@ -75,17 +75,17 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 
 	// Tracking origin/main is not a push: the branch itself is not on the remote.
 	runGit(t, repo, "branch", "--set-upstream-to", "origin/main")
-	reconcile(domain.SessionBranchState{Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
 
 	runGit(t, repo, "push", "-u", "origin", "feat/x")
 	pushed := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
-	reconcile(domain.SessionBranchState{Commits: 2, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 0, Base: "main", BaseRef: "origin/main"})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 2, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 0, Base: "main", BaseRef: "origin/main"})
 
 	commitFile(t, repo, "c.go")
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 3, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 
 	writes := st.writes
-	reconcile(domain.SessionBranchState{Commits: 3, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 3, RemoteBranch: "origin/feat/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 	if st.writes != writes {
 		t.Fatalf("unchanged facts were rewritten (%d writes, want %d)", st.writes, writes)
 	}
@@ -103,13 +103,23 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	st.sessions["s1"] = domain.SessionRecord{ID: "s1", Metadata: domain.SessionMetadata{
 		Branch: "ao/s1/root", WorkspacePath: worktree, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	if err := (&Service{store: st}).ReconcileBranchStates(context.Background()); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	svc := &Service{store: st}
+	reconcile := func(want domain.SessionBranchState) {
+		t.Helper()
+		if err := svc.ReconcileBranchStates(context.Background()); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		want = headed(t, worktree, want)
+		if got := st.sessions["s1"].BranchState; got == nil || *got != want {
+			t.Fatalf("branch state = %+v, want %+v", got, want)
+		}
 	}
-	want := headed(t, worktree, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
-	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
-		t.Fatalf("branch state = %+v, want %+v", got, want)
-	}
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/feature", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+
+	// A new branch on the same commit moves no tip, but it is still the
+	// branch a restore has to come back on.
+	runGit(t, worktree, "checkout", "-b", "ao/s1/pr")
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 }
 
 func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
@@ -151,7 +161,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 	if got := pass(); got != 2 {
 		t.Fatalf("pass after one commit ran %d git processes, want 2", got)
 	}
-	want := headed(t, worktrees["s1"], domain.SessionBranchState{Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
+	want := headed(t, worktrees["s1"], domain.SessionBranchState{Branch: "ao/s1", Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("s1 branch state = %+v, want %+v", got, want)
 	}
@@ -180,7 +190,7 @@ func TestReconcileSessionBranchStateCountsHowFarBehindTheBase(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 2})
+	want := headed(t, repo, domain.SessionBranchState{Branch: "feat/x", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 2})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -209,7 +219,7 @@ func TestReconcileSessionBranchStateReportsConflictsWithTheBase(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 1, Conflicts: true})
+	want := headed(t, repo, domain.SessionBranchState{Branch: "feat/x", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 1, Conflicts: true})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -225,7 +235,7 @@ func TestReconcileSessionBranchStateLabelsALocalBase(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/heads/main",
 	}}
-	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "main"})
+	want := headed(t, repo, domain.SessionBranchState{Branch: "feat/x", Commits: 1, Unpushed: 1, Base: "main", BaseRef: "main"})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -244,7 +254,7 @@ func TestReconcileSessionBranchStateLeavesBaseUnsetForARecordedCommit(t *testing
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseSHA: baseSHA,
 	}}
-	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1})
+	want := headed(t, repo, domain.SessionBranchState{Branch: "feat/x", Commits: 1, Unpushed: 1})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}

@@ -21843,6 +21843,8 @@ components:
           type: string
         behind:
           type: integer
+        branch:
+          type: string
         commits:
           type: integer
         conflicts:

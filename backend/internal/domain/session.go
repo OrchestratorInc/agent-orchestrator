@@ -552,6 +552,11 @@ type SessionWait struct {
 
 // SessionBranchState is the session branch's commit and push facts.
 type SessionBranchState struct {
+	// Branch is the branch checked out in the worktree. It differs from the
+	// session branch once the agent switches to another branch, such as a PR
+	// branch, and restore brings a removed worktree back on it. Empty on a
+	// detached HEAD.
+	Branch string `json:"branch,omitempty"`
 	// Commits is how many commits the branch has on top of its base.
 	Commits int `json:"commits"`
 	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".

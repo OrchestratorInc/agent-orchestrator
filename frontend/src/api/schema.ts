@@ -7681,6 +7681,7 @@ export interface components {
             base?: string;
             baseRef?: string;
             behind: number;
+            branch?: string;
             commits: number;
             conflicts: boolean;
             head?: string;
