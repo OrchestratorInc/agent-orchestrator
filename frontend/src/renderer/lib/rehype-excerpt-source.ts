@@ -1,7 +1,7 @@
 import type { Element, ElementContent, Root, Text } from "hast";
 
 /** Map decoded visible text back to its bounded AST source segment. */
-function excerptSourceOffsets(raw: string, value: string, start: number, literal = false): number[] | undefined {
+export function excerptSourceOffsets(raw: string, value: string, start: number, literal = false): number[] | undefined {
 	const offsets = [start];
 	let visible = "";
 	for (let i = 0; i < raw.length;) {
@@ -25,30 +25,29 @@ function excerptSourceOffsets(raw: string, value: string, start: number, literal
 	return visible === value ? offsets : undefined;
 }
 
-function textSpan(text: Text, source: string, base: number): ElementContent {
+function textSpan(text: Text, base: number): ElementContent {
 	const start = text.position?.start.offset;
 	const end = text.position?.end.offset;
 	if (start === undefined || end === undefined || !text.value.trim()) return text;
-	const map = excerptSourceOffsets(source.slice(start, end), text.value, base + start);
 	return { type: "element", tagName: "span", properties: {
 		"data-excerpt-start": base + start, "data-excerpt-end": base + end,
-		...(map ? { "data-excerpt-map": JSON.stringify(map) } : { "data-excerpt-block": "" }),
+		"data-excerpt-kind": "text",
 	}, children: [text] };
 }
 
 /** Preserve source positions before React custom renderers/highlighters transform it. */
-export function rehypeExcerptSource({ source, offset }: { source: string; offset: number }) {
+export function rehypeExcerptSource({ offset }: { offset: number }) {
 	return (tree: Root) => {
 		function walk(parent: Root | Element) {
 			const only = parent.children.length === 1 ? parent.children[0] : undefined;
 			if (parent.type === "element" && only?.type === "text" &&
 				["strong", "em", "del", "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th"].includes(parent.tagName)) {
-				const mapped = textSpan(only, source, offset);
+				const mapped = textSpan(only, offset);
 				if (mapped.type === "element") Object.assign(parent.properties, mapped.properties);
 				return;
 			}
 			parent.children = parent.children.map(child => {
-				if (child.type === "text") return textSpan(child, source, offset);
+				if (child.type === "text") return textSpan(child, offset);
 				if (child.type !== "element") return child;
 				const start = child.position?.start.offset;
 				const end = child.position?.end.offset;

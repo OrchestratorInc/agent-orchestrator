@@ -1,5 +1,5 @@
 import type { Element as HastElement } from "hast";
-import { rehypeExcerptSource, excerptElementProps, codeSourceOffsets } from "../../lib/rehype-excerpt-source";
+import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
 /**
  * Markdown for agent prose.
  *
@@ -86,7 +86,6 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 });
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
-const ExcerptSource = createContext({ source: "", offset: 0 });
 const PLUGINS = [remarkGfm, remarkSessionLinks];
 const MATH_PLUGINS = [...PLUGINS, remarkMath];
 // Reduced motion gets plain text, not a span per character that never animates.
@@ -254,17 +253,17 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 		katex: false, setextHeadings: false, comparisonOperators: false,
 	}) : source, [source, streaming, repairInline]);
 	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
-		// Repaired streaming tails cannot be selected. Map the final source once
-		// it settles instead of rebuilding source-offset arrays on every delta.
-		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { source, offset: sourceOffset }]];
+		// Repaired streaming tails cannot be selected. Settled chunks retain only
+		// source bounds; detailed mappings are built when a selection is captured.
+		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
 		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
 		return entries;
-	}, [source, sourceOffset, streaming, fading, settledOffset]);
-	return <ExcerptSource.Provider value={{ source, offset: sourceOffset }}><StreamingProse.Provider value={streaming}>
+	}, [sourceOffset, streaming, fading, settledOffset]);
+	return <StreamingProse.Provider value={streaming}>
 		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
 		</Markdown>
-	</StreamingProse.Provider></ExcerptSource.Provider>;
+	</StreamingProse.Provider>;
 });
 
 /**
@@ -287,11 +286,7 @@ let preferredWrap = false;
  * line, where scrolling means losing the rest of the block.
  */
 function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
-	const origin = useContext(ExcerptSource);
 	const positions = excerptElementProps(sourceNode);
-	const start = positions["data-excerpt-start"];
-	const end = positions["data-excerpt-end"];
-	const map = start !== undefined && end !== undefined ? codeSourceOffsets(origin.source.slice(start - origin.offset, end - origin.offset), code, start, true) : undefined;
 	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
@@ -299,7 +294,6 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 	return (
 		<div
 			{...positions}
-			data-excerpt-block={map ? undefined : ""}
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
@@ -329,7 +323,7 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 				</div>
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-				<code data-excerpt-map={map ? JSON.stringify(map) : undefined} className="font-mono text-xs leading-[1.6] text-foreground">
+				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -547,18 +541,14 @@ export function ArtifactPathCode({ text, children }: { text: string; children: R
 }
 
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
-	const origin = useContext(ExcerptSource);
 	const positions = excerptElementProps(node);
-	const start = positions["data-excerpt-start"];
-	const end = positions["data-excerpt-end"];
 	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
 	if (isInlineMath(className)) return <span {...positions} data-excerpt-block=""><MathFormula tex={text ?? ""} /></span>;
-	const map = text !== undefined && start !== undefined && end !== undefined ? codeSourceOffsets(origin.source.slice(start - origin.offset, end - origin.offset), text, start, false) : undefined;
 	const code = (
-		<code {...positions} data-excerpt-map={map ? JSON.stringify(map) : undefined} data-excerpt-block={map ? undefined : ""} className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
+		<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
@@ -576,7 +566,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node: _node, ...props }) => <span {...props}>{compactEmoji(children)}</span>,
+	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (

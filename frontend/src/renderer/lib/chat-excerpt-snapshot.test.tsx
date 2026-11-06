@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { captureExcerptSnapshot, captureExcerptTurn, excerptRenderedText, renderedExcerptRange, upgradeExcerpt } from "./chat-excerpt-snapshot";
 import { codeSourceOffsets } from "./rehype-excerpt-source";
+import * as sourceMapping from "./rehype-excerpt-source";
 import { excerptSizeError, fitExcerptContext, formatSnapshotExcerpt, formatNumberedAnnotations, isExcerptSnapshot, utf8Bytes } from "../../shared/chat-excerpt";
 import { captureFileReference } from "../../shared/chat-file-reference";
 import { renderMermaidDiagram } from "./mermaid-diagram";
@@ -25,6 +26,49 @@ function select(body: HTMLElement, first: string, last: string = first) {
 }
 
 describe("captured chat excerpts", () => {
+	it("builds each selected element's map once at capture time, never on render", () => {
+		const mapping = vi.spyOn(sourceMapping, "excerptSourceOffsets");
+		try {
+			const source = `Unselected ${"long prose ".repeat(1000)}\n\nSelected &amp; **other**`;
+			const { container } = render(<ChatMarkdown text={source} />);
+			expect(mapping).not.toHaveBeenCalled();
+			expect(container.querySelector("[data-excerpt-map]")).toBeNull();
+			const captured = captureExcerptSnapshot(container, select(container, "Selected &"), source);
+			expect(captured.snapshot.rawText).toBe("Selected &amp;");
+			expect(mapping).toHaveBeenCalledTimes(1);
+		} finally {
+			mapping.mockRestore();
+		}
+	});
+	it.each([
+		["Repeat **same** and **same**", "same"],
+		["## Heading\r\n\r\n- One\r\n- Two **🙂text**", "🙂text"],
+		["| First | Second |\n| --- | --- |\n| Same | **target** |", "target"],
+		["    first\n    second", "second"],
+		["```ts\nconst a = 1;\nconst a = 2;\n```", "const a = 2;"],
+		["Prefix ` first  second ` suffix", "first  second"],
+	])("maps only the selected source occurrence after rendering: %s", (source, text) => {
+		const { container } = render(<ChatMarkdown text={source} />);
+		const projection = excerptRenderedText(container);
+		const from = projection.text.lastIndexOf(text), to = from + text.length;
+		const first = projection.entries.find(entry => entry.start <= from && entry.end > from)!;
+		const last = projection.entries.find(entry => entry.start < to && entry.end >= to)!;
+		const range = document.createRange();
+		range.setStart(first.node, from - first.start); range.setEnd(last.node, to - last.start);
+		const captured = captureExcerptSnapshot(container, range, source);
+		expect(captured.snapshot.captureMode).toBe("exact");
+		expect(captured.snapshot.sourceRange?.start).toBe(source.lastIndexOf(text));
+		expect(captured.snapshot.rawText).toBe(text);
+		expect(container.querySelector("[data-excerpt-map]")).toBeNull();
+	});
+	it("falls back to bounded transformed text even when it is inside the selection", () => {
+		const source = "before transformed after";
+		const body = document.createElement("div");
+		body.innerHTML = '<span data-excerpt-kind="text" data-excerpt-start="0" data-excerpt-end="6">before</span> <span data-excerpt-kind="text" data-excerpt-start="7" data-excerpt-end="18">different</span> <span data-excerpt-kind="text" data-excerpt-start="19" data-excerpt-end="24">after</span>';
+		const captured = captureExcerptSnapshot(body, select(body, "before", "after"), source);
+		expect(captured.snapshot.captureMode).toBe("block");
+		expect(captured.snapshot.rawText).toBe(source);
+	});
 	it("captures exact source after a repaired streaming tail settles", () => {
 		const source = "**finished** and `code`";
 		const { container, rerender } = render(<ChatMarkdown streaming text="**finished** and `code" />);

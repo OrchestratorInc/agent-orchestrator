@@ -1,6 +1,7 @@
 import { EXCERPT_TURN_BYTES, truncateExcerptUtf8, utf8Bytes, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
 import type { ChatDraftExcerptReference } from "./chat-drafts";
+import { codeSourceOffsets, excerptSourceOffsets } from "./rehype-excerpt-source";
 
 const BLOCKS = new Set(["P", "PRE", "LI", "TR", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE"]);
 const EXCLUDED = 'button, input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude]';
@@ -34,23 +35,6 @@ export function excerptRenderedText(root: HTMLElement): { text: string; entries:
 	return { text, entries };
 }
 
-function rawBoundary(node: Text, offset: number, endBoundary = false): { position: number; broad: boolean } | undefined {
-	const mapped = node.parentElement?.closest<HTMLElement>("[data-excerpt-map]");
-	if (mapped) {
-		try {
-			const map = JSON.parse(mapped.dataset.excerptMap!) as number[];
-			const walker = document.createTreeWalker(mapped, NodeFilter.SHOW_TEXT);
-			let local = offset;
-			while (walker.nextNode() && walker.currentNode !== node) local += (walker.currentNode as Text).length;
-			const position = map[local];
-			if (Number.isSafeInteger(position)) return { position, broad: false };
-		} catch { /* An unavailable map falls back to a bounded source block. */ }
-	}
-	const block = node.parentElement?.closest<HTMLElement>("[data-excerpt-start][data-excerpt-end]");
-	if (!block) return undefined;
-	return { position: Number(endBoundary ? block.dataset.excerptEnd : block.dataset.excerptStart), broad: true };
-}
-
 export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: string): { text: string; snapshot: ChatExcerptSnapshot } {
 	const rendered = excerptRenderedText(body);
 	const selected = rendered.entries.flatMap(entry => {
@@ -60,6 +44,37 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 		return end > start ? [{ ...entry, from: start, to: end }] : [];
 	});
 	if (!selected.length) throw new Error("chat.draft.excerptBodySelection");
+	// Only selected source elements need detailed mappings. Keep them local to
+	// this capture so rerenders and subsequent selections cannot reuse stale DOM.
+	const maps = new Map<HTMLElement, number[] | undefined>();
+	const broadBlocks = new Set(body.querySelectorAll<HTMLElement>("[data-excerpt-block]"));
+	for (const entry of selected) {
+		const element = entry.node.parentElement?.closest<HTMLElement>("[data-excerpt-kind]");
+		if (!element || maps.has(element)) continue;
+		const start = Number(element.dataset.excerptStart), end = Number(element.dataset.excerptEnd);
+		let map: number[] | undefined;
+		if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end > start && end <= source.length) {
+			const raw = source.slice(start, end), visible = element.textContent ?? "";
+			map = element.dataset.excerptKind === "text" ? excerptSourceOffsets(raw, visible, start)
+				: codeSourceOffsets(raw, visible, start, element.dataset.excerptKind === "block-code");
+		}
+		maps.set(element, map);
+		if (!map) broadBlocks.add(element);
+	}
+	function rawBoundary(node: Text, offset: number, endBoundary = false): { position: number; broad: boolean } | undefined {
+		const element = node.parentElement?.closest<HTMLElement>("[data-excerpt-kind]");
+		const map = element && maps.get(element);
+		if (element && map) {
+			const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+			let local = offset;
+			while (walker.nextNode() && walker.currentNode !== node) local += (walker.currentNode as Text).length;
+			const position = map[local];
+			if (Number.isSafeInteger(position)) return { position, broad: false };
+		}
+		const block = node.parentElement?.closest<HTMLElement>("[data-excerpt-start][data-excerpt-end]");
+		if (!block) return undefined;
+		return { position: Number(endBoundary ? block.dataset.excerptEnd : block.dataset.excerptStart), broad: true };
+	}
 	const first = selected[0];
 	const last = selected[selected.length - 1];
 	const start = first.start + first.from;
@@ -88,7 +103,7 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 	let to = rawEnd?.position ?? source.length;
 	let broad = !rawStart || !rawEnd || rawStart.broad || rawEnd.broad;
 	// A transformed block touched inside the range needs its full underlying source.
-	for (const block of body.querySelectorAll<HTMLElement>("[data-excerpt-block]")) {
+	for (const block of broadBlocks) {
 		if (!selected.some(entry => block.contains(entry.node))) continue;
 		from = Math.min(from, Number(block.dataset.excerptStart));
 		to = Math.max(to, Number(block.dataset.excerptEnd));
