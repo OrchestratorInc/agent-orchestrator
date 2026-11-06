@@ -349,7 +349,7 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, sessionFlag
 		return err
 	}
 	if wait.noWait {
-		fmt.Fprintf(w, "Ran in %s: %s\n", tab, command)
+		_, _ = fmt.Fprintf(w, "Ran in %s: %s\n", tab, command)
 		return nil
 	}
 	deadline := time.Now().Add(wait.timeout)
@@ -375,7 +375,7 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, sessionFlag
 			break
 		}
 		if now.After(deadline) {
-			fmt.Fprintf(w, "(still changing after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
+			_, _ = fmt.Fprintf(w, "(still changing after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
 			break
 		}
 	}
@@ -399,39 +399,39 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 	if !layout.Enabled {
 		state = "off (turn on Split panes under Developer Mode in Settings → General)"
 	}
-	fmt.Fprintf(w, "Split panes: %s\n", state)
-	fmt.Fprintf(w, "On screen: %s\n", layout.Selected)
+	_, _ = fmt.Fprintf(w, "Split panes: %s\n", state)
+	_, _ = fmt.Fprintf(w, "On screen: %s\n", layout.Selected)
 	// Keys line up in one column; a terminal's key is long.
 	width := 0
 	for _, tab := range layout.Tabs {
 		width = max(width, len(tab.Key))
 	}
-	fmt.Fprintln(w, "Tabs:")
+	_, _ = fmt.Fprintln(w, "Tabs:")
 	for _, tab := range layout.Tabs {
 		title := tab.Title
 		if tab.Agent != nil && *tab.Agent != "" {
 			title += " (" + *tab.Agent + ")"
 		}
-		fmt.Fprintf(w, "  %-*s  %-8s  %s\n", width, tab.Key, tab.Kind, title)
+		_, _ = fmt.Fprintf(w, "  %-*s  %-8s  %s\n", width, tab.Key, tab.Kind, title)
 	}
 	defer writePaneTerminalHint(w, layout)
 	if len(layout.Groups) == 0 {
-		fmt.Fprintln(w, "Splits: none")
+		_, _ = fmt.Fprintln(w, "Splits: none")
 		return nil
 	}
-	fmt.Fprintln(w, "Splits:")
+	_, _ = fmt.Fprintln(w, "Splits:")
 	for _, group := range layout.Groups {
 		marker := ""
 		if layout.Shown != nil && *layout.Shown == group.ID {
 			marker = " (on screen)"
 		}
-		fmt.Fprintf(w, "  %s%s\n", group.ID, marker)
+		_, _ = fmt.Fprintf(w, "  %s%s\n", group.ID, marker)
 		for _, pane := range group.Panes {
 			focus := ""
 			if pane.Key == group.Focus {
 				focus = "  focused"
 			}
-			fmt.Fprintf(w, "    %-*s  %s%s\n", width, pane.Key, paneRegion(pane), focus)
+			_, _ = fmt.Fprintf(w, "    %-*s  %s%s\n", width, pane.Key, paneRegion(pane), focus)
 		}
 	}
 	return nil
@@ -442,11 +442,11 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 func writePaneTerminalHint(w io.Writer, layout paneLayoutDTO) {
 	for _, tab := range layout.Tabs {
 		if tab.Kind == "terminal" {
-			fmt.Fprintf(w, "\nRun a command in a terminal tab: ao pane run %s <command>  (read it: ao pane read %s)\n", tab.Key, tab.Key)
+			_, _ = fmt.Fprintf(w, "\nRun a command in a terminal tab: ao pane run %s <command>  (read it: ao pane read %s)\n", tab.Key, tab.Key)
 			return
 		}
 	}
-	fmt.Fprintln(w, "\nOpen a terminal and run a command in it: ao pane split terminal --run <command>")
+	_, _ = fmt.Fprintln(w, "\nOpen a terminal and run a command in it: ao pane split terminal --run <command>")
 }
 
 // paneRegion describes where a pane sits, e.g. "x 50%, y 0%, 50% wide, 100% tall".

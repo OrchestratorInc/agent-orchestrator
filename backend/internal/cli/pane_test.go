@@ -132,15 +132,15 @@ func paneTerminalServer(t *testing.T) (*httptest.Server, *[]string) {
 		body, _ := io.ReadAll(r.Body)
 		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+string(body))
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/api/v1/sessions/aa-47/panes/input":
+		switch r.URL.Path {
+		case "/api/v1/sessions/aa-47/panes/input":
 			var req map[string]any
 			_ = json.Unmarshal(body, &req)
 			if text, ok := req["text"].(string); ok {
 				screen = "$ " + text + "\nREADME.md\n$ "
 			}
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/api/v1/sessions/aa-47/panes/output":
+		case "/api/v1/sessions/aa-47/panes/output":
 			_ = json.NewEncoder(w).Encode(map[string]string{"sessionId": "aa-47", "tab": r.URL.Query().Get("tab"), "output": screen})
 		default:
 			http.NotFound(w, r)
