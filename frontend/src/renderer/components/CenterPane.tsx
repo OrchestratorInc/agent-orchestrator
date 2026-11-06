@@ -1,5 +1,4 @@
-import { Archive } from "lucide-react";
-import { isSettingsPageOpen, runAppShortcut } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
@@ -44,8 +43,7 @@ import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
 import { SessionContextMenuItems } from "./SessionContextMenuItems";
-import { TabContextMenu, TabMenuShortcut } from "./TabContextMenu";
-import { ContextMenuItem } from "./ui/context-menu";
+import { ArchiveSessionMenuItem, TabContextMenu } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -828,18 +826,7 @@ export function SessionPaneTab({
 	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud?.shared);
 	return (
 		<TabContextMenu
-			destructive={canArchive ? (
-				<ContextMenuItem
-					className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-					// After the menu closes, like the command palette, so the
-					// confirmation dialog takes focus from the session.
-					onSelect={() => window.setTimeout(() => runAppShortcut({ id: "archive-session" }), 0)}
-				>
-					<Archive aria-hidden="true" />
-					{t("shell.archiveSession")}
-					<TabMenuShortcut id="archive-session" />
-				</ContextMenuItem>
-			) : undefined}
+			destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
 			items={session ? (
 				<SessionContextMenuItems
 					onRename={renameSession ? rename.begin : undefined}

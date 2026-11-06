@@ -23,7 +23,8 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
-import { TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
+import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { ArchiveSessionMenuItem, TabMenuBody, TabSplitMenuContext, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { SplitDivider, SplitGroupTab, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
@@ -1894,6 +1895,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
 		};
+		// The focused member's own tab menu, below the group's Ungroup.
+		const memberMenu = (key: string, shown: boolean) => {
+			const filePath = key.startsWith("file:") ? key.slice("file:".length) : undefined;
+			const request = filePath ? centerFileRequestsBySession[uiSessionId]?.[filePath] : undefined;
+			const items = key === SESSION_TAB_KEY
+				? session ? <SessionContextMenuItems session={session} /> : undefined
+				: filePath
+					? <FileTabMenuItems path={request?.path ?? filePath} remote={Boolean(hostId || session?.cloud)} sessionId={sessionId} source={request?.source} />
+					: undefined;
+			const canArchive = key === SESSION_TAB_KEY && session && !isOrchestrator && !session.cloud?.shared;
+			return (
+				<TabMenuBody
+					closeShortcut={shown}
+					destructive={canArchive ? <ArchiveSessionMenuItem /> : undefined}
+					items={items}
+					onClose={() => closePane(key)}
+					tabKey={key}
+				/>
+			);
+		};
 		return groups.map((group) => ({
 			key: groupTabKey(group),
 			content: (
@@ -1901,6 +1922,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					active={group === shownGroup}
 					focusedKey={group === shownGroup ? selectedTabKey : groupFocus(group)}
 					members={leafKeys(group.root).map(groupMember)}
+					menuItems={memberMenu(group === shownGroup ? selectedTabKey : groupFocus(group), group === shownGroup)}
 					onUngroup={() => updateGroups((current) => ungroupById(current, group.id))}
 				/>
 			),
@@ -1911,9 +1933,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		closePane,
 		developerMode,
 		groups,
+		hostId,
+		isOrchestrator,
 		reviewerHarness,
 		selectTab,
 		selectedTabKey,
+		session,
+		sessionId,
 		sessionLabel,
 		sessionProvider,
 		shellTerminals,

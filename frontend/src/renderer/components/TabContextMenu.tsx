@@ -1,7 +1,8 @@
-import { Columns2, Pencil, Rows2, X } from "lucide-react";
+import { Archive, Columns2, Pencil, Rows2, X } from "lucide-react";
 import { createContext, useContext, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AppShortcutId } from "../../shared/shortcuts";
+import { runAppShortcut } from "../hooks/useAppShortcut";
 import { isMacPlatform } from "../lib/platform";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut, ContextMenuTrigger } from "./ui/context-menu";
 import { useShortcutKeys } from "./ui/tooltip";
@@ -67,8 +68,6 @@ export function TabContextMenu({
 	closeShortcut?: boolean;
 	disabled?: boolean;
 }) {
-	const { t } = useTranslation();
-	const split = useContext(TabSplitMenuContext);
 	if (disabled) return children;
 	return (
 		<ContextMenu>
@@ -90,22 +89,66 @@ export function TabContextMenu({
 				</span>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-56">
-				{items}
-				{items ? <ContextMenuSeparator /> : null}
-				{split && tabKey ? <TabSplitItems actions={split(tabKey)} /> : null}
-				<ContextMenuItem disabled={!onClose} onSelect={onClose}>
-					<X aria-hidden="true" />
-					{t("tabMenu.close")}
-					{closeShortcut ? <TabMenuShortcut id="close-shell-terminal" /> : null}
-				</ContextMenuItem>
-				{destructive ? (
-					<>
-						<ContextMenuSeparator />
-						{destructive}
-					</>
-				) : null}
+				<TabMenuBody closeShortcut={closeShortcut} destructive={destructive} items={items} onClose={onClose} tabKey={tabKey} />
 			</ContextMenuContent>
 		</ContextMenu>
+	);
+}
+
+/**
+ * The rows of a tab's menu: its own actions, Split (while split panes are on),
+ * Close tab, then `destructive` behind one separator. A split group's tab
+ * shows these for its focused member below Ungroup.
+ */
+export function TabMenuBody({
+	tabKey,
+	items,
+	destructive,
+	onClose,
+	closeShortcut = false,
+}: {
+	tabKey?: string;
+	items?: ReactNode;
+	destructive?: ReactNode;
+	onClose?: () => void;
+	closeShortcut?: boolean;
+}) {
+	const { t } = useTranslation();
+	const split = useContext(TabSplitMenuContext);
+	return (
+		<>
+			{items}
+			{items ? <ContextMenuSeparator /> : null}
+			{split && tabKey ? <TabSplitItems actions={split(tabKey)} /> : null}
+			<ContextMenuItem disabled={!onClose} onSelect={onClose}>
+				<X aria-hidden="true" />
+				{t("tabMenu.close")}
+				{closeShortcut ? <TabMenuShortcut id="close-shell-terminal" /> : null}
+			</ContextMenuItem>
+			{destructive ? (
+				<>
+					<ContextMenuSeparator />
+					{destructive}
+				</>
+			) : null}
+		</>
+	);
+}
+
+/** Archive the session on screen, through the same confirmation as ⇧⌘A. */
+export function ArchiveSessionMenuItem() {
+	const { t } = useTranslation();
+	return (
+		<ContextMenuItem
+			className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+			// After the menu closes, like the command palette, so the
+			// confirmation dialog takes focus from the session.
+			onSelect={() => window.setTimeout(() => runAppShortcut({ id: "archive-session" }), 0)}
+		>
+			<Archive aria-hidden="true" />
+			{t("shell.archiveSession")}
+			<TabMenuShortcut id="archive-session" />
+		</ContextMenuItem>
 	);
 }
 

@@ -25,7 +25,7 @@ import { ShellAgentStatus } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "./ui/context-menu";
 import { terminalTabActionClassName } from "./TerminalTabFrame";
 
 /**
@@ -197,18 +197,20 @@ export type SplitGroupMember = {
  * target: clicking it shows the group with that pane focused, and dragging it
  * moves it within the split or out of the group. Hovering the tab swaps the
  * focused member's icon for a close button, as on other tabs, and its context
- * menu ungroups it.
+ * menu ungroups it, followed by `menuItems`: the focused member's own tab menu.
  */
 export function SplitGroupTab({
 	active,
 	focusedKey,
 	members,
 	onUngroup,
+	menuItems,
 }: {
 	active: boolean;
 	focusedKey?: string;
 	members: SplitGroupMember[];
 	onUngroup: () => void;
+	menuItems?: ReactNode;
 }) {
 	const { t } = useTranslation();
 	// A shell in a split has no strip tab of its own, so the group tab keeps
@@ -320,11 +322,17 @@ export function SplitGroupTab({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>{frame}</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
+			<ContextMenuContent className={menuItems ? "min-w-56" : "min-w-44"}>
 				<ContextMenuItem onSelect={onUngroup}>
 					<Ungroup aria-hidden="true" />
 					{t("splitPane.ungroup")}
 				</ContextMenuItem>
+				{menuItems ? (
+					<>
+						<ContextMenuSeparator />
+						{menuItems}
+					</>
+				) : null}
 			</ContextMenuContent>
 		</ContextMenu>
 	);
