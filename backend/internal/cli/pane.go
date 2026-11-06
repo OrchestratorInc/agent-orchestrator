@@ -399,6 +399,7 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 		}
 		fmt.Fprintf(w, "  %-*s  %-8s  %s\n", width, tab.Key, tab.Kind, title)
 	}
+	defer writePaneTerminalHint(w, layout)
 	if len(layout.Groups) == 0 {
 		fmt.Fprintln(w, "Splits: none")
 		return nil
@@ -419,6 +420,18 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 		}
 	}
 	return nil
+}
+
+// writePaneTerminalHint tells an agent reading the layout how to use a
+// terminal tab, so it need not remember the command from the guide.
+func writePaneTerminalHint(w io.Writer, layout paneLayoutDTO) {
+	for _, tab := range layout.Tabs {
+		if tab.Kind == "terminal" {
+			fmt.Fprintf(w, "\nRun a command in a terminal tab: ao pane run %s <command>  (read it: ao pane read %s)\n", tab.Key, tab.Key)
+			return
+		}
+	}
+	fmt.Fprintln(w, "\nOpen a terminal and run a command in it: ao pane split terminal --run <command>")
 }
 
 // paneRegion describes where a pane sits, e.g. "x 50%, y 0%, 50% wide, 100% tall".
