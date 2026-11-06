@@ -432,6 +432,8 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	const { t } = useTranslation();
 	const index = useContext(WorkerUpdateIndexContext);
 	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
+	// One logo per sender, however many reports it sent.
+	const senders = [...new Map(updates.map((update) => [update.sessionId ?? update.key, update])).values()];
 	return (
 		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="worker-reports">
 			<Pressable
@@ -441,10 +443,10 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 				className="-mx-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-foreground/80 transition-colors hover:bg-interactive-hover hover:text-foreground"
 			>
 				<span aria-hidden="true" className="flex shrink-0 items-center">
-					{updates.slice(0, 3).map((update, position) => (
+					{senders.slice(0, 3).map((update, position) => (
 						<ReportLogo key={update.key} update={update} first={position === 0} />
 					))}
-					{updates.length > 3 ? <span className="ml-1 leading-none text-muted-foreground">...</span> : null}
+					{senders.length > 3 ? <span className="ml-1 leading-none text-muted-foreground">...</span> : null}
 				</span>
 				<span className="truncate">{t("chat.reports.count", { count: updates.length })}</span>
 				{needsYou > 0 ? (
@@ -461,7 +463,7 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean }) {
 	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
 	return (
-		<span className={cn("grid size-[22px] shrink-0 place-items-center rounded-full border-2 border-background bg-muted", !first && "-ml-1.5")}>
+		<span data-report-logo="" className={cn("grid size-[22px] shrink-0 place-items-center rounded-full border-2 border-background bg-muted", !first && "-ml-1.5")}>
 			{provider ? <AgentAvatar provider={provider} decorative className="size-3.5 grayscale" /> : <Bot className="size-3.5 text-muted-foreground" />}
 		</span>
 	);
