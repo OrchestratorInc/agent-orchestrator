@@ -102,7 +102,7 @@ func TestAOActionOutlivesItsRolledBackTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, activities := range map[string][]domain.ConversationActivity{"full": full.Activities, "page": page.Activities} {
-		var ids []string
+		ids := make([]string, 0, len(activities))
 		for _, activity := range activities {
 			ids = append(ids, activity.ID)
 		}
