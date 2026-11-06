@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
+import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudOffering } from "../../hooks/useCloudOffering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -31,11 +32,16 @@ import { cloudModelLabel } from "../../lib/agent-model-choices";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
+import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
+import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.user_message: the files the message carries. */
+	attachments?: unknown;
 	/** workspace.setup */
 	status?: unknown;
 	step?: unknown;
@@ -188,6 +194,18 @@ function readRememberedApprovalMode(key: string): ApprovalMode | undefined {
 
 function eventPayload(event: CloudCpClientEvent): EventPayload {
 	return event.payload && typeof event.payload === "object" ? (event.payload as EventPayload) : {};
+}
+
+/** The files a chat.user_message event lists. */
+function eventAttachments(event: CloudCpClientEvent): CloudAttachment[] {
+	const listed = eventPayload(event).attachments;
+	if (!Array.isArray(listed)) return [];
+	return listed.flatMap((item: unknown) => {
+		if (!item || typeof item !== "object") return [];
+		const { id, fileName, contentType, size } = item as Record<string, unknown>;
+		return typeof id === "string" && typeof fileName === "string" && typeof contentType === "string" && typeof size === "number"
+			? [{ id, fileName, contentType, size }] : [];
+	});
 }
 
 function eventText(event: CloudCpClientEvent): string | undefined {
@@ -796,7 +814,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			continue;
 		}
 		const text = eventText(event);
-		if (!text) continue;
+		// A message of only files has no text.
+		const attachments = event.type === "chat.user_message" ? eventAttachments(event) : [];
+		if (!text && attachments.length === 0) continue;
 		if (event.type === "chat.user_message") {
 			const payload = eventPayload(event);
 			const automation = payload.origin === "automation";
@@ -811,16 +831,18 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
 				// An empty typed text is not recorded, so a message with captures and
-				// no display text was only the captures.
+				// no display text was only the captures, and one with neither only its files.
 				text: automation && typeof payload.displayText === "string" ? payload.displayText
-					: content ? (typeof payload.displayText === "string" ? payload.displayText : "") : text,
+					: content ? (typeof payload.displayText === "string" ? payload.displayText : "") : text ?? "",
 				...(content ? { content } : {}),
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
+				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});
 			continue;
 		}
+		if (!text) continue;
 		if (event.type === "chat.turn_steered") {
 			const clientMessageID = eventPayload(event).clientMessageId;
 			items.push({
@@ -1308,8 +1330,28 @@ export function CloudSessionChatSurface({
 	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: !readOnly });
 	const leaseRef = useRef(lease);
 	leaseRef.current = lease;
+	const attachmentSource = useMemo(
+		() => cloud && ready && baseUrl ? { baseUrl, orgId: cloud.orgId, sessionId: session.id } : undefined,
+		[baseUrl, cloud, ready, session.id],
+	);
+	// Files are offered only while the control plane takes them (attachments in
+	// the session organization's offering), up to its per-file limit.
+	const offering = useCloudOffering(Boolean(cloud), cloud?.orgId);
+	const attachmentMaxBytes = offering.maxAttachmentBytes;
+	// No more than the main process carries in one request, either.
+	const cloudAttachments = useMemo(() => attachmentMaxBytes === undefined
+		? undefined : { maxBytes: Math.min(attachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) }, [attachmentMaxBytes]);
+	// A file attached in the composer is uploaded to the session right away;
+	// the composer lists it by reference until the message is sent.
+	const stageAttachments = useMemo(() => {
+		if (!attachmentSource || !cloudAttachments || readOnly || session.isTerminated === true) return undefined;
+		return (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise.all(attachments.map(async (attachment) =>
+			cloudAttachmentReference(await uploadCloudAttachment(attachmentSource.baseUrl, attachmentSource.orgId, attachmentSource.sessionId, {
+				name: attachment.name || "attachment", data: attachment.data,
+			}, { signal }))));
+	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
 	const send = useMutation({
-		mutationFn: async ({ text, clientMessageId, display }: { text: string; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
@@ -1324,6 +1366,7 @@ export function CloudSessionChatSurface({
 			const composerEpoch = leaseRef.current.epoch;
 			const request = {
 				text,
+				...(attachmentIds?.length ? { attachmentIds } : {}),
 				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
 				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
 				...(mode ? { mode } : {}),
@@ -1557,7 +1600,8 @@ export function CloudSessionChatSurface({
 		[catalogDefaultUnknown, choiceModels],
 	);
 	return (
-		// Replies pace their reveal to how the stream arrives (a poll at a time while it is down).
+		<CloudAttachmentSourceProvider source={attachmentSource}>
+		{/* Replies pace their reveal to how the stream arrives (a poll at a time while it is down). */}
 		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
 			snapshot={snapshot}
@@ -1648,15 +1692,21 @@ export function CloudSessionChatSurface({
 			filePathsTruncated={filesQuery.data?.truncated}
 			onFileQuery={setFileQuery}
 			fileReferenceDelivery="text"
+			onStageAttachments={stageAttachments}
+			cloudAttachments={stageAttachments ? cloudAttachments : undefined}
 			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {
-				// With text delivery the composer has inlined its file captures; a
-				// caller that hands them over separately gets them inlined here.
-				const withCaptures = displayText === undefined ? formatCapturedFileReferences(text, fileReferences) : text;
+				// Staged cloud files travel as the message's attachment ids, and the
+				// worker writes the real paths: no reference reaches the agent or the
+				// transcript. The captures stay inlined, and the quotes follow them.
+				const message = cloudMessageAttachments(text, displayText, fileReferences);
 				const content = cloudAnnotationContent(excerpts, fileReferences);
+				const agentText = excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				return send.mutateAsync({
-					text: excerpts?.length ? withCaptures + cloudExcerptText(excerpts, snapshot) : withCaptures,
+					// A message of only files and captures or quotes starts with them.
+					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
+					attachmentIds: message.attachmentIds,
 					clientMessageId,
-					...(content.length ? { display: { text: displayText ?? text, content } } : {}),
+					...(content.length ? { display: { text: message.displayText, content } } : {}),
 				});
 			}}
 			session={chatSession}
@@ -1694,5 +1744,6 @@ export function CloudSessionChatSurface({
 			workspaceActiveTabKey={workspaceActiveTabKey}
 		/>
 		</AdaptiveStreamPacingContext.Provider>
+		</CloudAttachmentSourceProvider>
 	);
 }

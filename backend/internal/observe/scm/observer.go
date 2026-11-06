@@ -21,6 +21,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -681,6 +682,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
@@ -696,11 +698,13 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			cancel()
 			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "notify"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
 			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
@@ -1253,6 +1257,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// durable, and the session could terminate while that PR is still open.
 			if err := o.store.WriteSCMObservation(ctx, known, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: persist discovered PR failed", "session", sr.session.ID, "pr", known.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "persist"})
 				if markRepoFailed != nil {
 					markRepoFailed(repo)
 				}

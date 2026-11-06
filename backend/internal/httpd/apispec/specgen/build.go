@@ -19,6 +19,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -529,6 +530,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"AgentauthPlan":                               "AgentAuthPlan",
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
+	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
+	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
+	"AgentauthLoginMethod":                        "AgentLoginMethod",
+	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
@@ -1164,17 +1169,6 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/session-interface", id: "updateSessionInterface", tag: "settings",
 			summary: "Choose the default interface for new sessions",
 			reqBody: controllers.UpdateSessionInterfaceRequest{},
-			resps: []respUnit{
-				{http.StatusOK, controllers.SettingsResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodPatch, path: "/api/v1/settings/cloud-offering", id: "updateCloudOffering", tag: "settings",
-			summary: "Turn the cloud offering on or off for this machine",
-			reqBody: controllers.UpdateCloudOfferingRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -1939,6 +1933,32 @@ func cueOperations() []operation {
 func agentOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",
+			summary:    "Submit a one-time Claude sign-in code to the existing native login",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			reqBody:    controllers.SubmitAgentUILoginCodeRequest{},
+			resps:      []respUnit{{http.StatusAccepted, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations", id: "startAgentUILogin", tag: "agents",
+			summary:    "Start a fixed native login in the background without exposing a terminal",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    controllers.StartAgentUILoginRequest{},
+			resps:      []respUnit{{http.StatusAccepted, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/operations/{operationId}", id: "getAgentUILogin", tag: "agents",
+			summary:    "Read recognized login prompts and background process state",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/{agent}/auth/operations/{operationId}", id: "cancelAgentUILogin", tag: "agents",
+			summary:    "Cancel a background login and wait for its native process to stop",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/agents/auth-plans", id: "listAgentAuthPlans", tag: "agents",
 			summary: "Return display-safe native authentication plans for supported agents",
 			resps: []respUnit{
@@ -1981,6 +2001,7 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StartAgentAuthResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -1992,6 +2013,7 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusCreated, controllers.StartAgentAuthResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -3059,6 +3081,18 @@ func sessionOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
+			summary:    "Stream changes to the files in a session's artifact directory",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, ""},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}/artifact-files", id: "deleteSessionArtifactFile", tag: "sessions",

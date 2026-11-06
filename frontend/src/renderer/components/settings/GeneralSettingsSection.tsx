@@ -6,9 +6,9 @@ import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
+import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
-import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
 import { Button } from "../ui/button";
@@ -21,7 +21,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -259,6 +259,9 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const projectAvatars = useUiStore((state) => state.projectAvatars);
+	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
 	const chatSendKeyOptions = [
@@ -318,6 +321,11 @@ export function GeneralSettingsSection({
 					</div>
 				</SettingsRow>
 				{isMacPlatform() && <WindowTranslucencyRow />}
+				{newSidebarDesign && (
+					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
+						<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
+					</SettingsRow>
+				)}
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -400,10 +408,11 @@ export function GeneralSettingsSection({
 						onCheckedChange={setDeveloperMode}
 					/>
 				</SettingsRow>
-				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <NewSidebarDesignRow />}
+				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -508,6 +517,30 @@ function SideChatsRow() {
 	);
 }
 
+/** Developer Mode-only switch for the new left sidebar design. On by default. */
+function NewSidebarDesignRow() {
+	const { t } = useTranslation();
+	const newSidebarDesign = useUiStore((state) => state.newSidebarDesign);
+	const setNewSidebarDesign = useUiStore((state) => state.setNewSidebarDesign);
+	return (
+		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
+			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
+function SimplifiedTopbarRow() {
+	const { t } = useTranslation();
+	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
+	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
+	return (
+		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
+			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
+		</SettingsRow>
+	);
+}
+
 /**
  * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
  * browser settings, so this row only takes the user there.
@@ -541,59 +574,5 @@ function WindowTranslucencyRow() {
 				onCheckedChange={setWindowTranslucency}
 			/>
 		</SettingsRow>
-	);
-}
-
-/**
- * Developer Mode-only toggle for the cloud offering. Persisted daemon-side (a
- * preference, not renderer state) so every surface resolves the same gate; the
- * daemon combines it with its baked control-plane URL into cloudEnabled, which
- * is what reveals sign-in, cloud projects, and sandbox sessions.
- */
-function CloudOfferingRow() {
-	const { t } = useTranslation();
-	const { settings, isLoading } = useSettings();
-	const { update, saving, error } = useUpdateCloudOffering();
-	// Enabling requires an explicit confirmation (the offering is an unstable
-	// preview); disabling never does.
-	const [confirmOpen, setConfirmOpen] = useState(false);
-	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow
-				label={t("settings.cloud")}
-				description={
-					<>
-						{t("settings.cloudToggleHint")}
-						{error ? <span role="alert" className="block text-error">{error}</span> : null}
-					</>
-				}
-			>
-				<Switch
-					aria-label={t("settings.cloud")}
-					checked={settings?.cloudOffering ?? false}
-					disabled={isLoading || saving}
-					onCheckedChange={(enabled) => {
-						if (enabled) {
-							setConfirmOpen(true);
-							return;
-						}
-						update(false);
-					}}
-				/>
-			</SettingsRow>
-			<ConfirmDialog
-				open={confirmOpen}
-				title={t("settings.cloudConfirm.title")}
-				description={t("settings.cloudConfirm.description")}
-				confirmLabel={t("settings.cloudConfirm.confirm")}
-				destructive
-				busy={saving}
-				onConfirm={() => {
-					update(true);
-					setConfirmOpen(false);
-				}}
-				onOpenChange={setConfirmOpen}
-			/>
-		</div>
 	);
 }

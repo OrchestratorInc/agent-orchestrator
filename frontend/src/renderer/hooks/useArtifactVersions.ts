@@ -1,6 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiErrorMessage } from "../lib/api-client";
+import { artifactChangeError } from "../lib/artifacts";
 import type { CloudCpClient } from "../lib/cloud-cp";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionArtifactFileQueryOptions } from "./useSessionWorkspaceFiles";
@@ -29,7 +31,7 @@ export function useArtifactVersions({ cloud, enabled, hostId, path, sessionId }:
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/artifact-versions", {
 				params: { path: { sessionId }, query: { path } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load version history"));
+			if (error) throw apiErrorException(error, "Unable to load version history");
 			return data?.versions ?? [];
 		},
 	});
@@ -49,7 +51,7 @@ export function useSyncArtifactVersions({ cloud, hostId, path, sessionId }: { cl
 				params: { path: { sessionId } },
 				body: { path },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load version history"));
+			if (error) throw apiErrorException(error, "Unable to load version history");
 			return data?.versions ?? [];
 		},
 		onSuccess: (versions) => queryClient.setQueryData(versionsKey(sessionId, path, hostId), versions),
@@ -66,7 +68,7 @@ export function useArtifactVersion({ cloud, hostId, path, sessionId, version }: 
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/artifact-versions/{version}", {
 				params: { path: { sessionId, version: version! }, query: { path } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load this version"));
+			if (error) throw apiErrorException(error, "Unable to load this version");
 			if (!data) throw new Error("Unable to load this version");
 			return data;
 		},
@@ -76,15 +78,19 @@ export function useArtifactVersion({ cloud, hostId, path, sessionId, version }: 
 
 /** Rewrites the file with an earlier version; the restore becomes the newest version. */
 export function useRestoreArtifactVersion({ cloud, hostId, path, rawUrl, sessionId }: { cloud?: CloudArtifactVersions; hostId?: string; path: string; rawUrl?: string; sessionId: string }) {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async ({ version }: { version: number }) => {
-			if (cloud) return cloud.client.restoreSessionArtifactVersion(cloud.orgId, sessionId, path, version);
+			if (cloud) {
+				return cloud.client.restoreSessionArtifactVersion(cloud.orgId, sessionId, path, version)
+					.catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); });
+			}
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/artifact-versions/restore", {
 				params: { path: { sessionId } },
 				body: { path, version },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to restore this version"));
+			if (error) throw apiErrorException(error, "Unable to restore this version");
 			if (!data) throw new Error("Unable to restore this version");
 			return data;
 		},

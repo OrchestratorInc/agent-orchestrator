@@ -1,6 +1,6 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -470,7 +470,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					accountSource?.close();
 					accountSourceBaseUrl = baseUrl;
 					try {
-						accountSource = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/agents/codex/accounts/events`);
+						accountSource = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/agents/codex/accounts/events`);
 						accountSource.onopen = () => {
 							if (disposed) return;
 							void queryClient.invalidateQueries({ queryKey: codexAccountsQueryKey });
@@ -498,7 +498,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// sends a cursor id, so the browser's own reconnect replays only the gap.
 					// A daemon from before the cursor existed answers 400; that base URL
 					// falls back to the cursorless stream (see probeCursorSupport).
-					const streamUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+					const streamUrl = `${eventStreamBaseUrl(baseUrl)}/api/v1/events`;
 					const useCursor = cursorUnsupportedBaseUrl !== baseUrl;
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;

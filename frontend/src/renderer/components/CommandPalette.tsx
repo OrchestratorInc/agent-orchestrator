@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
@@ -8,7 +9,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -60,6 +61,7 @@ import { useUiStore } from "../stores/ui-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
+import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
@@ -679,7 +681,7 @@ export function CommandPalette() {
 					const { error: triggerError } = await apiClient.POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 						params: { path: { sessionId: action.sessionId } },
 					});
-					if (triggerError) throw new Error(apiErrorMessage(triggerError, "Unable to start review"));
+					if (triggerError) throw apiErrorException(triggerError, "Unable to start review");
 					await queryClient.invalidateQueries({ queryKey: ["session-reviews", action.sessionId] });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (!isCurrentRun()) break;
@@ -886,14 +888,16 @@ export function CommandPalette() {
 	// Nested views keep the bar as it is: Back takes the search glyph's place,
 	// so the field never moves.
 	const backButton = view.mode === "root" ? undefined : (
-		<button
+		<Button
 			type="button"
 			onClick={() => requestDismiss("pop")}
-			className="-m-1 grid shrink-0 place-items-center rounded-sm p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground"
+			className="-m-1"
 			aria-label={t("command.back")}
+			size="icon-xs"
+			variant="quiet"
 		>
 			<ArrowLeft className="size-icon-base" aria-hidden="true" />
-		</button>
+		</Button>
 	);
 
 	return (

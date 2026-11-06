@@ -36,6 +36,18 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the first run experiment variants and prompt actions", async () => {
+		for (const variant of ["prompt", "control"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
+		}
+		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
+		}
+		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
+		}
+	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
 		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
@@ -659,6 +671,15 @@ describe("telemetry sanitizers", () => {
 		});
 		expect(
 			await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "everything" }),
+		).toEqual({});
+	});
+
+	it("keeps only known action and view values on topbar clicks", async () => {
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "run_cue", view: "worker" }),
+		).toEqual({ action: "run_cue", view: "worker" });
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "/Users/me/repo", view: "settings", extra: 1 }),
 		).toEqual({});
 	});
 

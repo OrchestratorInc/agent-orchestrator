@@ -81,7 +81,7 @@ describe("TopbarOpenEditorButton", () => {
 
 	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
 	// method 'editorHandoff:open': Error: <reason>", and the topbar used to paint
-	// that whole string into the actions row.
+	// that whole string into the error.
 	it("shows the reason, not Electron's remote-method wrapper, when the open fails", async () => {
 		setState(availableState);
 		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
@@ -91,9 +91,10 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
 
-		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("Session workspace is not available");
-		expect(alert.textContent).not.toContain("Error invoking remote method");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			body: "Session workspace is not available",
+			tone: "error",
+		}));
 	});
 
 
@@ -129,7 +130,7 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Copy path" }));
 		await waitFor(() => expect(copy).toHaveBeenCalledWith("sess-1"));
 		expect(openMock).not.toHaveBeenCalled();
-		expect(useUiStore.getState().globalToast?.title).toBe("Session path copied");
+		expect(useUiStore.getState().globalToast?.title).toBe("Copied to clipboard");
 	});
 
 	it("reports copy failures and refreshes workspace availability", async () => {
@@ -164,7 +165,7 @@ describe("TopbarOpenEditorButton", () => {
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "ghostty" }));
 	});
 
-	it("always shows Finder and the original Terminal SVG symbols, even when native images are supplied", async () => {
+	it("preserves the original Finder, Terminal, Cursor and VS Code symbols over native app tiles", async () => {
 		const iconDataUrl = "data:image/png;base64,dGVzdA==";
 		setState({ ...availableState, targets: availableState.targets.map((target) => ({ ...target, iconDataUrl })) });
 		renderButton();
@@ -175,6 +176,13 @@ describe("TopbarOpenEditorButton", () => {
 		expect(finder.querySelector("image")).not.toBeInTheDocument();
 		expect(terminal.querySelector("svg.lucide-square-terminal")).toBeInTheDocument();
 		expect(terminal.querySelector("image")).not.toBeInTheDocument();
+		for (const name of ["Cursor", "VS Code"]) {
+			const item = screen.getByRole("menuitem", { name });
+			expect(item.querySelector("image")).not.toBeInTheDocument();
+			expect(item.querySelector("svg path")).toBeInTheDocument();
+		}
+		expect(screen.getByRole("menuitem", { name: "VS Code" }).querySelector("svg")).toHaveStyle({ color: "#1F9CF0" });
+		expect(screen.getByLabelText("Open in Cursor").querySelector("image")).not.toBeInTheDocument();
 	});
 
 	it.each(["wezterm", "kitty"] as const)("keeps a visible SVG fallback when the %s app icon fails to load", async (id) => {
@@ -476,6 +484,11 @@ describe("TopbarOpenEditorButton", () => {
 		openMock.mockRejectedValueOnce(new Error("Could not open Cursor. Check that it is installed and try again."));
 		renderButton();
 		await userEvent.click(await screen.findByRole("button", { name: "Open in Cursor" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Cursor");
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Open in Cursor",
+			body: "Could not open Cursor. Check that it is installed and try again.",
+			tone: "error",
+		}));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });

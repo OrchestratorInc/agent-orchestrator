@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { captureFileReference } from "../../../shared/chat-file-reference";
+import { captureFileReference, formatCapturedFileReferences } from "../../../shared/chat-file-reference";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
@@ -26,8 +27,16 @@ const cloudMocks = vi.hoisted(() => ({
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
+// The control plane's base URL and attachment limit, for the tests that attach files.
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ ready: true, client: cloudMocks }),
+	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl }),
+}));
+vi.mock("../../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({
+		features: cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"],
+		maxAttachmentBytes: cloudSetup.maxAttachmentBytes,
+	}),
 }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
@@ -71,6 +80,26 @@ describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+		cloudSetup.baseUrl = "";
+		cloudSetup.maxAttachmentBytes = undefined;
+	});
+
+	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudSetup.baseUrl = "https://cp.example.com";
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		// No attachments feature: no attach control, paste or drop.
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].cloudAttachments).toBeUndefined();
+		cloudSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeTypeOf("function");
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].cloudAttachments).toEqual({ maxBytes: 25 * 1024 * 1024 });
+		// A deleted session takes none either.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, isTerminated: true, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onStageAttachments).toBeUndefined();
 	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
@@ -144,6 +173,39 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage.mock.calls[1][2].text).toContain("const ttl = 60;");
 	});
 
+	it("sends a message's files as attachment ids when code captures follow them, with no reference for the agent or the transcript", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const attachmentId = "6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11";
+		const capture = captureFileReference({ path: "cache.ts", side: "file", line: 3, endLine: 3, lines: [{ kind: "context", oldNo: 3, newNo: 3, text: "const ttl = 60;" }] }, session.id);
+		const excerpt = { id: "ex-1", order: 1, conversationId: `cloud:${session.id}`, messageId: "m-1", revision: 1, text: "the cache", role: "assistant" as const };
+		// As the composer sends it: the staged files listed under the typed
+		// text, the captures inlined after them, and the request text beside.
+		const requestText = `Is this right?\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: attachmentId, fileName: "notes.txt" })}`;
+		await props.onSend(formatCapturedFileReferences(requestText, [capture]), undefined, "files-capture-1", [excerpt], [capture], requestText);
+		// Files only, with a capture and no typed text.
+		const onlyFiles = `Attached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: attachmentId, fileName: "notes.txt" })}`;
+		await props.onSend(formatCapturedFileReferences(onlyFiles, [capture]), undefined, "files-capture-2", undefined, [capture], onlyFiles);
+		const [[, , first], [, , second]] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first.attachmentIds).toEqual([attachmentId]);
+		expect(first.displayText).toBe("Is this right?");
+		expect(first.text.startsWith("Is this right?\n\nUser-supplied captured code")).toBe(true);
+		expect(first.text).toContain("const ttl = 60;");
+		expect(first.text).toContain("Selected text:\n---\nthe cache");
+		expect(first.content).toHaveLength(2);
+		expect(second.attachmentIds).toEqual([attachmentId]);
+		expect(second).not.toHaveProperty("displayText");
+		expect(second.text.startsWith("User-supplied captured code")).toBe(true);
+		for (const body of [first, second]) {
+			expect(JSON.stringify(body)).not.toContain("ao-cloud-attachment:");
+			expect(JSON.stringify(body)).not.toContain("Attached files");
+		}
+	});
+
 	it("goes as text alone when the control plane refuses its display text", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -179,6 +241,30 @@ describe("CloudSessionChatSurface", () => {
 			createdAt: session.updatedAt,
 		}]);
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
+	});
+
+	it("shows a message of only files, with its files and no text", () => {
+		const files = [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615, sha256: "0".repeat(64) },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		];
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1", attachments: files }, createdAt: session.updatedAt },
+			// A malformed entry is dropped, not shown.
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "   ", turnId: "turn-2", attachments: [{ id: "bad" }, null] }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message", payload: { text: "And this one", turnId: "turn-3", attachments: [files[1]] }, createdAt: session.updatedAt },
+		]);
+		const messages = snapshot.items.filter((item) => item.kind === "message");
+		expect(messages).toHaveLength(2);
+		expect(messages[0]).toMatchObject({ role: "user", text: "", turnId: "turn-1", cloudAttachments: [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615 },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		] });
+		expect(messages[1]).toMatchObject({ text: "And this one", cloudAttachments: [{ id: "a2", fileName: "spec.pdf" }] });
+		// A message with neither text nor files is still not shown.
+		expect(toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1" }, createdAt: session.updatedAt },
+		]).items.filter((item) => item.kind === "message")).toEqual([]);
 	});
 
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
