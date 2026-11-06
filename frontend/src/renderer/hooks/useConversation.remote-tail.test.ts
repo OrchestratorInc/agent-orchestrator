@@ -13,6 +13,8 @@ const message = (id: string, turnId: string, sequence: number, text = id): Conve
 	({ kind: "message", id, turnId, sequence, revision: 1, role: "user", origin: "human", text, content: [], createdAt: "" }) as unknown as ConversationItem;
 const tool = (id: string, turnId: string, sequence: number, status = "completed"): ConversationItem =>
 	({ kind: "activity", id, turnId, sequence, revision: 1, activityKind: "command", status, summary: id, createdAt: "" }) as unknown as ConversationItem;
+const plan = (id: string, turnId: string, sequence: number, spansTurns = true): ConversationItem =>
+	({ kind: "activity", id, turnId, sequence, revision: 1, activityKind: "plan", status: "completed", summary: id, createdAt: "", detail: { spansTurns } }) as ConversationItem;
 const page = (turns: ConversationTurn[], items: ConversationItem[], extra: Partial<ConversationSnapshot> = {}): ConversationSnapshot =>
 	({
 		conversationId: "c1", sessionId: "s1", harness: "codex", mode: "chat", controller: { state: "busy" },
@@ -66,6 +68,24 @@ describe("remote conversation tail", () => {
 		expect(mergeRemoteConversationTail(prior, undone, 3)).toBeUndefined();
 		expect(mergeRemoteConversationTail(prior, page([turn("t2", "running")], [], { activeBranchId: "b2" }), 3)).toBeUndefined();
 		expect(mergeRemoteConversationTail(prior, page([turn("t2", "running")], [], { hasMoreBefore: true }), 3)).toBeUndefined();
+	});
+
+	it("refuses a tail that brings a new copy of a list kept across turns", () => {
+		// The daemon marks t1's copy superseded, and that row is below the floor.
+		const listed = page([turn("t1", "completed"), turn("t2", "running")], [message("m1", "t1", 1), plan("p1", "t1", 2), message("m2", "t2", 3)]);
+		const floor = remoteConversationFloor(listed);
+		expect(floor).toBe(2);
+		const newCopy = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p2", "t2", 4)], { oldestSequence: 3 });
+		expect(mergeRemoteConversationTail(listed, newCopy, floor)).toBeUndefined();
+
+		// The whole page now holds that copy, and later revisions rewrite the same row.
+		const reread = page(listed.turns, [...listed.items, plan("p2", "t2", 4)]);
+		const revised = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p2", "t2", 4), tool("a1", "t2", 5)], { oldestSequence: 3 });
+		expect(mergeRemoteConversationTail(reread, revised, floor)?.items.map((item) => item.id)).toEqual(["m1", "p1", "m2", "p2", "a1"]);
+
+		// A list that belongs to one turn supersedes nothing.
+		const ownList = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p3", "t2", 4, false)], { oldestSequence: 3 });
+		expect(mergeRemoteConversationTail(listed, ownList, floor)?.items.map((item) => item.id)).toEqual(["m1", "p1", "m2", "p3"]);
 	});
 });
 

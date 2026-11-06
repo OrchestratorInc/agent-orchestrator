@@ -440,8 +440,9 @@ export function remoteConversationFloor(page: ConversationSnapshot): number {
 /**
  * A tail holds every row that can still change, so it replaces the rows above its
  * floor. A turn that starts, settles or is taken back, a branch switch, compaction,
- * or a tail that did not reach its floor can change rows below it, so those cases
- * read the whole live page instead.
+ * a new copy of a list kept across turns, which supersedes the older copy, or a tail
+ * that did not reach its floor can change rows below it, so those cases read the
+ * whole live page instead.
  */
 export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: ConversationSnapshot, floor: number): ConversationSnapshot | undefined {
 	if (tail.conversationId !== prior.conversationId || tail.activeBranchId !== prior.activeBranchId || tail.hasMoreBefore) return undefined;
@@ -452,6 +453,8 @@ export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: C
 		return before?.state === turn.state && Boolean(before.rolledBack) === Boolean(turn.rolledBack);
 	});
 	if (!turnsUnchanged) return undefined;
+	const priorIds = new Set(prior.items.map((item) => item.id));
+	if (tail.items.some((item) => item.kind === "activity" && item.activityKind === "plan" && item.detail?.spansTurns && !priorIds.has(item.id))) return undefined;
 	const kept = prior.items.filter((item) => item.sequence <= floor);
 	const keptTurnIds = new Set(kept.map((item) => item.turnId));
 	return mergeConversationPages([tail, { ...prior, items: kept, turns: prior.turns.filter((turn) => keptTurnIds.has(turn.id)) }]);
