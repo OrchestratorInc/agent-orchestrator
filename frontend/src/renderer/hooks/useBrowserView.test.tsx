@@ -361,6 +361,25 @@ describe("useBrowserView", () => {
 		expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true }));
 	});
 
+	it("leaves a hidden page alone while another inspector tab slides", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const gap = document.createElement("div");
+		gap.setAttribute("data-slot", "inspector-gap");
+		document.body.appendChild(gap);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+
+		const event = new Event("transitionrun", { bubbles: true });
+		Object.defineProperty(event, "propertyName", { value: "width" });
+		act(() => { gap.dispatchEvent(event); });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
 	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
 		createSlot();

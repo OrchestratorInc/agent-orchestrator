@@ -807,13 +807,16 @@ export function useBrowserView({
 			return (slot === "inspector-gap" || slot === "inspector-container") &&
 				(event.propertyName === "width" || event.propertyName === "transform");
 		};
+		// Only while the page is on screen: a hidden view would otherwise be
+		// re-parked through IPC on every frame of a Summary or Files slide.
 		const step = () => {
 			frame = null;
+			if (!activeRef.current) return;
 			measureAndSend();
 			if (running.size > 0 && performance.now() < deadline) frame = window.requestAnimationFrame(step);
 		};
 		const onRun = (event: TransitionEvent) => {
-			if (!isInspectorSlide(event)) return;
+			if (!isInspectorSlide(event) || !activeRef.current) return;
 			running.add(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
 			// Backstop for a transition whose end event never arrives (hidden window).
 			deadline = performance.now() + 1_000;
@@ -822,7 +825,7 @@ export function useBrowserView({
 		const onEnd = (event: TransitionEvent) => {
 			if (!isInspectorSlide(event)) return;
 			running.delete(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
-			if (running.size === 0) measureAndSend();
+			if (running.size === 0 && activeRef.current) measureAndSend();
 		};
 		document.addEventListener("transitionrun", onRun);
 		document.addEventListener("transitionend", onEnd);
