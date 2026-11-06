@@ -907,7 +907,7 @@ async function createWindowInternal(): Promise<void> {
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden" as const,
-					// The renderer paints the titlebar; the user can disable Alt-to-reveal.
+					// Hide the native menu; the renderer paints the titlebar.
 					autoHideMenuBar: true,
 				}
 			: process.platform === "linux"
