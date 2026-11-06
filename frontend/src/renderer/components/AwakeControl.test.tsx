@@ -127,8 +127,8 @@ describe("combined mobile wake with the shared hook", () => {
 		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
 		await userEvent.click(toggle);
 		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
-		await waitFor(() => expect(screen.getByText("Closed-lid keep awake is armed.")).toBeInTheDocument(), { timeout: 3_000 });
-		expect(statusReads).toBeGreaterThan(0);
+		await waitFor(() => expect(statusReads).toBeGreaterThan(0), { timeout: 3_000 });
+		await waitFor(() => expect(screen.getByText("Closed-lid keep awake is armed.")).toBeInTheDocument());
 		expect(toggle).toBeChecked();
 		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
 	});
