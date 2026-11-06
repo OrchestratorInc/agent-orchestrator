@@ -19,6 +19,7 @@ import { isSteer, type ConversationItem, type ConversationTurn } from "../../typ
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";
 
 export interface WorkerUpdate {
@@ -407,12 +408,12 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 /**
  * Reports AO delivered together, as one line that opens to their rows: under the
  * human message they travelled with, or alone for a batch that woke the
- * orchestrator. A report whose worker still waits on the user (stuck counts too)
- * keeps its count on the closed line; a newer update from that worker clears it.
+ * orchestrator. It leads with the first senders' agents, in black and white. A
+ * report whose worker still waits on the user (stuck counts too) keeps its count
+ * on the closed line; a newer update from that worker clears it.
  */
-export function ReportsLine({ updates, withMessage, open, onOpenChange }: {
+export function ReportsLine({ updates, open, onOpenChange }: {
 	updates: readonly WorkerUpdate[];
-	withMessage: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
@@ -420,21 +421,37 @@ export function ReportsLine({ updates, withMessage, open, onOpenChange }: {
 	const index = useContext(WorkerUpdateIndexContext);
 	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
 	return (
-		<div className="min-w-0 text-xs" data-testid="worker-reports">
+		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="worker-reports">
 			<Pressable
 				aria-expanded={open}
 				onClick={() => onOpenChange(!open)}
 				// As tall as the hover actions that float under a message, so opened rows start below them.
-				className="inline-flex h-7 max-w-full items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+				className="-mx-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-foreground/80 transition-colors hover:bg-interactive-hover hover:text-foreground"
 			>
-				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-				<span className="truncate">{t(withMessage ? "chat.reports.sentWith" : "chat.reports.count", { count: updates.length })}</span>
+				<span aria-hidden="true" className="flex shrink-0 items-center">
+					{updates.slice(0, 3).map((update, position) => (
+						<ReportLogo key={update.key} update={update} first={position === 0} />
+					))}
+					{updates.length > 3 ? <span className="ml-1 leading-none text-muted-foreground">...</span> : null}
+				</span>
+				<span className="truncate">{t("chat.reports.count", { count: updates.length })}</span>
 				{needsYou > 0 ? (
 					<span className="shrink-0 font-medium text-status-needs-you">· {t("chat.reports.needsYou", { count: needsYou })}</span>
 				) : null}
+				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
 			{open ? <WorkerUpdateRows updates={updates} /> : null}
 		</div>
+	);
+}
+
+/** One sender's agent on a reports line: its logo in black and white, stacked over the one before. */
+function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean }) {
+	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
+	return (
+		<span className={cn("grid size-[22px] shrink-0 place-items-center rounded-full border-2 border-background bg-muted", !first && "-ml-1.5")}>
+			{provider ? <AgentAvatar provider={provider} decorative className="size-3.5 grayscale" /> : <Bot className="size-3.5 text-muted-foreground" />}
+		</span>
 	);
 }
 
