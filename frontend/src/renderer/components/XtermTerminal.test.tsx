@@ -1943,6 +1943,79 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith("shortcut paste", "paste");
 	});
 
+	describe("while the terminal search box has focus", () => {
+		async function openSearch() {
+			const onInput = vi.fn();
+			const { container } = render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+			const shell = container.firstElementChild!;
+			fireEvent.contextMenu(shell);
+			fireEvent.click(await screen.findByText("Search terminal"));
+			const input = await screen.findByRole("searchbox", { name: "Search terminal" });
+			await waitFor(() => expect(screen.queryByText("Paste")).not.toBeInTheDocument());
+			return { input, onInput, shell };
+		}
+
+		function clipboardEvent(type: "copy" | "paste", text = "") {
+			const event = new Event(type, { bubbles: true, cancelable: true }) as ClipboardEvent;
+			Object.defineProperty(event, "clipboardData", {
+				value: { getData: vi.fn().mockReturnValue(text), setData: vi.fn() },
+			});
+			return event;
+		}
+
+		it("leaves a paste to the input and never sends it to the terminal", async () => {
+			const { input, onInput } = await openSearch();
+			const event = clipboardEvent("paste", "secret\nrm -rf /");
+
+			input.dispatchEvent(event);
+			await Promise.resolve();
+
+			expect(event.defaultPrevented).toBe(false);
+			expect(onInput).not.toHaveBeenCalled();
+		});
+
+		it("still sends a paste aimed at the terminal itself to the terminal", async () => {
+			const { onInput, shell } = await openSearch();
+			const event = clipboardEvent("paste", "for the terminal");
+
+			shell.firstElementChild!.dispatchEvent(event);
+
+			expect(event.defaultPrevented).toBe(true);
+			expect(onInput).toHaveBeenCalledWith("for the terminal", "paste");
+		});
+
+		it("does not send committed IME text to the terminal", async () => {
+			const { input, onInput } = await openSearch();
+
+			fireEvent.compositionEnd(input, { data: "検索" });
+
+			expect(onInput).not.toHaveBeenCalled();
+		});
+
+		it("copies the input's text, not the terminal's selected match", async () => {
+			const { input } = await openSearch();
+			state.lastTerminal!.selection = "terminal match";
+
+			const copy = clipboardEvent("copy");
+			input.dispatchEvent(copy);
+			const shortcut = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "c", metaKey: true });
+			input.dispatchEvent(shortcut);
+
+			expect(copy.defaultPrevented).toBe(false);
+			expect(shortcut.defaultPrevented).toBe(false);
+			expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+		});
+
+		it("does not open the terminal context menu, whose Paste writes to the terminal", async () => {
+			const { input } = await openSearch();
+
+			fireEvent.contextMenu(input);
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+			expect(screen.queryByText("Paste")).not.toBeInTheDocument();
+		});
+	});
+
 	it("supports classic Windows terminal copy and paste shortcuts", async () => {
 		const onInput = vi.fn();
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("insert paste");
