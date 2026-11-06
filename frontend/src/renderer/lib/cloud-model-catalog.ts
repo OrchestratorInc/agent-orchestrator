@@ -39,21 +39,60 @@ export function listsLocalModelsForCloud(gap: CloudModelCatalogGap | undefined, 
  * yes, because a model it wrongly says the list lacks is one a task stops
  * using: the same ID in any case; a bracketed variant of a listed model
  * ("sonnet[1m]" of "sonnet"); a listed dated release named without its date
- * ("claude-opus-4-5" of "claude-opus-4-5-20251101"). An empty id is the
- * agent's own default, which every list offers.
+ * ("claude-opus-4-5" of "claude-opus-4-5-20251101") and a dated release of a
+ * listed undated ID; a Claude model the list offers through the alias Claude
+ * Code describes it by ("claude-opus-5-5" through "opus", described
+ * "Opus 5.5 · ..."); and "opusplan" when the list offers opus. An empty id is
+ * the agent's own default, which every list offers.
  */
-export function cloudCatalogOffers(models: ReadonlyArray<{ id: string }>, id: string): boolean {
+export function cloudCatalogOffers(models: ReadonlyArray<{ id: string; description?: string }>, id: string): boolean {
 	const wanted = id.trim();
 	if (!wanted) return true;
 	const open = wanted.indexOf("[");
 	const base = open > 0 && wanted.endsWith("]") ? wanted.slice(0, open) : wanted;
-	return models.some((model) => {
+	const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+	const datedReleaseOf = (listed: string, undated: string) =>
+		listed.length === undated.length + 9 && same(listed.slice(0, undated.length), undated) && /^-\d{8}$/.test(listed.slice(undated.length));
+	const listedByID = models.some((model) => {
 		const listed = model.id.trim();
 		if (!listed) return false;
-		const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-		return same(listed, wanted) || same(listed, base) ||
-			(listed.length === base.length + 9 && same(listed.slice(0, base.length), base) && /^-\d{8}$/.test(listed.slice(base.length)));
+		return same(listed, wanted) || same(listed, base) || datedReleaseOf(listed, base) || datedReleaseOf(base, listed);
 	});
+	if (listedByID) return true;
+	const name = claudeModelName(base);
+	if (name && models.some((model) => {
+		const described = describedModel(model.description);
+		return described !== "" && (same(described, name) || same(described, `Claude ${name}`));
+	})) return true;
+	return same(base, "opusplan") && cloudCatalogOffers(models, "opus");
+}
+
+/**
+ * The name Claude Code describes a full Claude model ID by: "claude-opus-5-5"
+ * and "claude-opus-5-5-20260101" are "Opus 5.5", "claude-3-7-sonnet-20250219"
+ * is "Sonnet 3.7". It needs exactly one family word and at least one version
+ * number, so anything else has no name.
+ */
+export function claudeModelName(id: string): string | undefined {
+	const lower = id.toLowerCase();
+	if (!lower.startsWith("claude-")) return undefined;
+	let parts = lower.slice("claude-".length).split("-");
+	if (parts.length > 1 && /^\d{8}$/.test(parts[parts.length - 1])) parts = parts.slice(0, -1);
+	let family = "";
+	const version: string[] = [];
+	for (const part of parts) {
+		if (/^\d+$/.test(part)) version.push(part);
+		else if (!family && /^\p{L}+$/u.test(part)) family = part;
+		else return undefined;
+	}
+	if (!family || version.length === 0) return undefined;
+	return `${family[0].toUpperCase()}${family.slice(1)} ${version.join(".")}`;
+}
+
+/** The model a Claude Code entry says it runs: its description before "·". */
+function describedModel(description: string | undefined): string {
+	const at = description?.indexOf("·") ?? -1;
+	return at < 0 || !description ? "" : description.slice(0, at).trim();
 }
 
 /**
