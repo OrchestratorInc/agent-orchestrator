@@ -72,6 +72,7 @@ export function AgentModelCombobox({
 	onUseDefault,
 	emptyLabel,
 	footer,
+	modelHint,
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
@@ -102,6 +103,8 @@ export function AgentModelCombobox({
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
 	footer?: ReactNode;
+	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
+	modelHint?: { id: string; label: string };
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
@@ -451,6 +454,9 @@ export function AgentModelCombobox({
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
 											</div>
+											{modelHint?.id === item.id && (
+												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+											)}
 											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
@@ -470,6 +476,9 @@ export function AgentModelCombobox({
 														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 													)}
 												</div>
+												{modelHint?.id === item.id && (
+													<span className="shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+												)}
 												{group.kind !== "provider" && item.provider !== "Other" && (
 													<span className="shrink-0 text-xs text-settings-muted">{item.provider}</span>
 												)}

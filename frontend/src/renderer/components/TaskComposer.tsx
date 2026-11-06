@@ -33,6 +33,7 @@ import { invalidateCloudModelCatalogs, useCloudModelCatalog } from "../hooks/use
 import { cloudModelCatalogGap, cloudModelVerdict, listsLocalModelsForCloud } from "../lib/cloud-model-catalog";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
@@ -517,6 +518,19 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// nothing picks it for a cloud task on its own: not a remembered pick, not the
 	// project's model, not a suggestion carried in from elsewhere.
 	const cloudModelUnavailable = (id: string) => isCloudProject && cloudModelVerdict(cloudCatalog, id) === "unavailable";
+	// A task started beside a Cloud project's running orchestrator, with the
+	// orchestrator's agent, starts on the model the orchestrator runs now (its
+	// Chat's pick, else the model it started with), as long as the account can run it.
+	const cloudOrchestrator = useCloudOrchestratorModel({
+		baseUrl: cloudBaseUrl,
+		orgId: cloudOrg?.id,
+		projectId,
+		enabled: isCloudProject,
+	});
+	const orchestratorModelForSelectedAgent = isCloudProject && cloudOrchestrator && cloudOrchestrator.harness === selectedAgent &&
+		isConcreteModelID(cloudOrchestrator.model) && !cloudModelUnavailable(cloudOrchestrator.model)
+		? cloudOrchestrator.model
+		: "";
 	const localCatalogForCloud = listsLocalModelsForCloud(cloudCatalogGap, selectedAgent, modelScope);
 	const localCatalogInUse = !isCloudProject || localCatalogForCloud;
 	// Shares the picker's query key, so this is the same fetch, not a second one.
@@ -661,7 +675,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		defaultEffort: item.defaultEffort,
 	})), [cloudCatalog, selectedAgent]);
 	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
-		keep: [model, mode, ...[projectModelForSelectedAgent, rememberedModel].filter((id) => !cloudModelUnavailable(id))],
+		keep: [model, mode, ...[orchestratorModelForSelectedAgent, projectModelForSelectedAgent, rememberedModel].filter((id) => !cloudModelUnavailable(id))],
 		skip: !isCloudProject,
 	});
 	// The daemon marks models this computer's agent CLI is too old for. A cloud task
@@ -684,7 +698,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// No catalog default is a cloud task's: Default sends no model, so the
 	// project's or the agent's own applies. A configured or remembered model the
 	// catalog does not list stays selectable, with a warning that it may not run.
-	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel]
+	const keptCloudModels = [orchestratorModelForSelectedAgent, projectModelForSelectedAgent, rememberedModel]
 		.filter((id) => isConcreteModelID(id) && !cloudModelUnavailable(id)).join("\n");
 	const cloudModels = useMemo((): AgentModelOption[] => {
 		if (cloudCatalog) {
@@ -738,6 +752,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 			modelCatalog &&
 				(modelCatalog.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
 		);
+	// The orchestrator's model, unless the picker shows it as one that cannot be picked.
+	const orchestratorModelIsValid = orchestratorModelForSelectedAgent !== "" &&
+		!catalogModels.some((item) => item.id === orchestratorModelForSelectedAgent && !isModelSelectable(item));
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	// A model is always selected: the provider's default, else the first one listed.
@@ -745,6 +762,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const catalogPick = isCloudProject ? "" : catalogDefaultOption || selectableModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
+		(orchestratorModelIsValid ? orchestratorModelForSelectedAgent : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) && !cloudModelUnavailable(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
@@ -775,11 +793,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
+	// The orchestrator's effort comes with its model, only where Cloud's catalog
+	// lists that level for it: a turn with a level its model lacks is refused.
+	const orchestratorEffort = orchestratorModelIsValid && selectedModel === orchestratorModelForSelectedAgent &&
+		cloudOrchestrator?.reasoningEffort &&
+		cloudCatalog?.models.find((item) => item.id === orchestratorModelForSelectedAgent)?.efforts?.includes(cloudOrchestrator.reasoningEffort)
+		? cloudOrchestrator.reasoningEffort
+		: "";
 	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
 		? (rememberedConfigForSelectedAgent?.effort ?? "")
-		: selectedAgent === configuredProjectAgent
+		: orchestratorEffort || (selectedAgent === configuredProjectAgent
 			? defaultWorkerEffort
-			: "";
+			: "");
 	// A model Cloud's catalog lists takes only the levels it reports: Claude
 	// refuses a turn whose effort its model does not offer (Haiku offers none).
 	// Any other model that reports no levels, such as one the catalog does not
@@ -1205,13 +1230,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const shownEffort = isCloudProject ? effectiveEffort : effort;
 	const showEffort = cursorChoice ? cursorChoice.family.efforts.length > 1 : !requiresTuiFallback && (effortOptions.length > 0 || Boolean(shownEffort && shownEffort !== "default"));
 	// The same choices in the chat composer's shape, so the new chat page can use its settings bar.
+	// The orchestrator's model says so in the model menus.
+	const orchestratorModelHint = orchestratorModelIsValid
+		? { id: orchestratorModelForSelectedAgent, label: t("newTask.sameAsOrchestrator") }
+		: undefined;
 	const chatModels = useMemo<ChatModel[]>(() => catalogModels.map((item) => ({
 		id: item.id,
 		displayName: item.id === "auto" ? t("settings.models.autoRouteLabel") : catalogUsesModes ? modelChoiceLabel(item) : item.label,
 		default: Boolean(item.isDefault),
 		efforts: item.efforts,
 		defaultEffort: item.defaultEffort,
-	})), [catalogModels, catalogUsesModes, t]);
+		...(orchestratorModelHint?.id === item.id ? { hint: orchestratorModelHint.label } : {}),
+	})), [catalogModels, catalogUsesModes, orchestratorModelHint?.id, orchestratorModelHint?.label, t]);
 	const turnSettings: TurnSettings = {
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
@@ -1373,6 +1403,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}
+			modelHint={orchestratorModelHint}
 			showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />,
 	};
 }

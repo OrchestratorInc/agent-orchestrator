@@ -3959,6 +3959,7 @@
 	"settings.harness.loginUi.setupToken": "Token de configuración",
 	"settings.harness.loginUi.setupTokenPlaceholder": "sk-ant-oat01-…",
 	"newTask.cloudConfiguredDefault": "Predeterminado del proyecto o del agente",
+	"newTask.sameAsOrchestrator": "Igual que el orquestador",
 	"newTask.cloudCredentialModels": "De la lista de modelos de su proveedor conectado",
 	"newTask.cloudLegacyModels": "Este servidor en la nube no puede listar sus modelos. Estas sugerencias provienen de este equipo y es posible que no funcionen en la nube.",
 	"newTask.cloudModelsCatalog": "Modelos de {{agent}} en la nube",

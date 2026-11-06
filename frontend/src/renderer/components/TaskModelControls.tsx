@@ -52,6 +52,7 @@ export function TaskModelPicker({
 	showFollowAgentAction,
 	allowNativeSelection = false,
 	footer,
+	modelHint,
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
@@ -59,6 +60,8 @@ export function TaskModelPicker({
 	allowNativeSelection?: boolean;
 	/** Where the listed models come from. */
 	footer?: ReactNode;
+	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
+	modelHint?: { id: string; label: string };
 }) {
 	const { t } = useTranslation();
 
@@ -110,6 +113,7 @@ export function TaskModelPicker({
 			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
+			modelHint={modelHint}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
