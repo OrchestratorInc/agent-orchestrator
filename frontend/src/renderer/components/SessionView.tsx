@@ -2066,6 +2066,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				throw new PaneCommandError("NO_SPLIT", groupId ? `This session has no split "${groupId}".` : "No split is on screen.");
 			}
 			updateGroups((current) => ungroupById(current, groupId));
+		} else if (request.action === "close") {
+			// Close a terminal as its tab's ✕ does, so the strip, the split and
+			// the selection all follow. Other tabs are left to the user.
+			if (!shellTerminals.some((shell) => shell.handleId === tab)) {
+				throw new PaneCommandError("TAB_NOT_FOUND", `"${tab}" is not one of this session's terminal tabs.`);
+			}
+			if (groupContaining(groups, tab)) closePaneRef.current(tab);
+			else closeShellTerminalByHandle(tab);
 		} else if (request.action === "focus") {
 			requireTab(tab);
 			selectTab(tab);

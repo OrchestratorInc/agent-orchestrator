@@ -97,7 +97,7 @@ type PaneLayoutResponse struct {
 
 // PaneCommandRequest asks the desktop window to change a session's splits.
 type PaneCommandRequest struct {
-	Action string  `json:"action" enum:"split,remove,ungroup,focus" description:"split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen."`
+	Action string  `json:"action" enum:"split,remove,ungroup,focus,close" description:"split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen; close closes a terminal tab."`
 	Tab    *string `json:"tab,omitempty" description:"Tab key. For split, also terminal (open a new shell terminal) or file:<workspace-relative path> (open the file)."`
 	Beside *string `json:"beside,omitempty" description:"For split: key of the tab to split beside. Defaults to the tab on screen."`
 	Side   *string `json:"side,omitempty" enum:"left,right,top,bottom" description:"For split: which side of beside the tab goes. Defaults to right."`
@@ -276,13 +276,13 @@ func validatePaneCommand(in PaneCommandRequest) string {
 				return "side must be left, right, top or bottom"
 			}
 		}
-	case "remove", "focus":
+	case "remove", "focus", "close":
 		if tab == "" {
 			return in.Action + " needs a tab key"
 		}
 	case "ungroup":
 	default:
-		return "action must be split, remove, ungroup or focus"
+		return "action must be split, remove, ungroup, focus or close"
 	}
 	return ""
 }

@@ -208,7 +208,7 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		Short: "Close one of this session's terminal tabs, running or exited",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ctx.sendPaneInput(cmd.Context(), sessionFlag, paneInputAPIRequest{Tab: args[0], Close: true}); err != nil {
+			if err := ctx.closePaneTerminal(cmd.Context(), sessionFlag, args[0]); err != nil {
 				return err
 			}
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "Closed %s\n", args[0])
@@ -297,6 +297,22 @@ func (c *commandContext) paneCommandLayout(ctx context.Context, sessionFlag stri
 	var out paneLayoutResponseDTO
 	err = c.postJSON(ctx, path, req, &out)
 	return out, err
+}
+
+// closePaneTerminal closes a terminal tab through the window showing the
+// session, which updates its strip and split as the tab's ✕ does. With no
+// window showing it, the daemon closes the terminal directly.
+func (c *commandContext) closePaneTerminal(ctx context.Context, sessionFlag, tab string) error {
+	_, err := c.paneCommandLayout(ctx, sessionFlag, paneCommandAPIRequest{Action: "close", Tab: &tab})
+	var apiErr apiResponseError
+	if err == nil || !errors.As(err, &apiErr) {
+		return err
+	}
+	switch apiErr.ErrorBody.Code {
+	case "NO_DESKTOP_WINDOW", "SESSION_NOT_ON_SCREEN", "SPLIT_PANES_OFF":
+		return c.sendPaneInput(ctx, sessionFlag, paneInputAPIRequest{Tab: tab, Close: true})
+	}
+	return err
 }
 
 func (c *commandContext) sendPaneInput(ctx context.Context, sessionFlag string, req paneInputAPIRequest) error {
