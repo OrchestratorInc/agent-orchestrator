@@ -158,12 +158,6 @@ describe("ArtifactVersionPreview", () => {
 		expect(onRestore).toHaveBeenCalledTimes(1);
 	});
 
-	it("reads a cloud media version from the file's own link", () => {
-		renderPreview({ cloud: { client: {} as never, orgId: "o1" }, path: "song.mp3", rawUrl: "http://cp.test/api/cloud/v1/artifact-files/token/song.mp3" });
-		const audio = screen.getByLabelText("song.mp3");
-		expect(audio.getAttribute("src")).toBe("http://cp.test/api/cloud/v1/artifact-files/token/song.mp3?version=2");
-	});
-
 	it("offers no Restore to someone who only views the file", () => {
 		renderPreview({ onRestore: undefined });
 		expect(screen.getByText("the older text")).toBeTruthy();

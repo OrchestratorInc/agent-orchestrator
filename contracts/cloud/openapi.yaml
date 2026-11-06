@@ -2266,10 +2266,9 @@ paths:
       summary: Read one artifact file through an access prefix.
       security: []
       description: >-
-        Streams the committed version of one artifact file, or the kept
-        version the version query names. The token comes from
-        createSessionArtifactAccess and binds one organization and session.
-        Every response carries a Content-Security-Policy sandbox
+        Streams the committed version of one artifact file. The token comes
+        from createSessionArtifactAccess and binds one organization and
+        session. Every response carries a Content-Security-Policy sandbox
         without allow-same-origin, X-Content-Type-Options nosniff, and an
         ETag of the file's SHA-256. A listed file whose stored object is gone
         returns 404 with code artifact_unavailable.
@@ -2285,14 +2284,6 @@ paths:
           description: The file's path in the artifact directory; may contain slashes.
           schema:
             type: string
-        - name: version
-          in: query
-          required: false
-          description: A kept version to read instead of the committed file.
-          schema:
-            type: integer
-            format: int64
-            minimum: 1
         - name: If-None-Match
           in: header
           required: false

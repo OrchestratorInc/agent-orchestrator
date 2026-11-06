@@ -547,7 +547,7 @@ describe("SessionArtifactsView", () => {
 		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 
-	it("offers version history for text and media files but not for another binary file", async () => {
+	it("offers version history for text and local media files but not for another binary file", async () => {
 		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
 		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
 		renderView(<SessionArtifactsView session={session([...artifacts, image, archive])} />);
@@ -700,8 +700,10 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: path }));
 		const menu = screen.getByRole("menu");
-		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", ...actions]);
-		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + 1);
+		// A cloud media file keeps no reachable versions; only a local one does.
+		const hasHistory = !(cloud && path.endsWith(".png"));
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(hasHistory ? ["Version history", ...actions] : actions);
+		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + (hasHistory ? 1 : 0));
 		const children = Array.from(menu.children);
 		expect(children[0]).not.toHaveAttribute("role", "separator");
 		expect(children.at(-1)).not.toHaveAttribute("role", "separator");

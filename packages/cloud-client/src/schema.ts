@@ -1581,7 +1581,7 @@ export interface paths {
         };
         /**
          * Read one artifact file through an access prefix.
-         * @description Streams the committed version of one artifact file, or the kept version the version query names. The token comes from createSessionArtifactAccess and binds one organization and session. Every response carries a Content-Security-Policy sandbox without allow-same-origin, X-Content-Type-Options nosniff, and an ETag of the file's SHA-256. A listed file whose stored object is gone returns 404 with code artifact_unavailable.
+         * @description Streams the committed version of one artifact file. The token comes from createSessionArtifactAccess and binds one organization and session. Every response carries a Content-Security-Policy sandbox without allow-same-origin, X-Content-Type-Options nosniff, and an ETag of the file's SHA-256. A listed file whose stored object is gone returns 404 with code artifact_unavailable.
          */
         get: operations["getSessionArtifactFile"];
         put?: never;
@@ -7595,10 +7595,7 @@ export interface operations {
     };
     getSessionArtifactFile: {
         parameters: {
-            query?: {
-                /** @description A kept version to read instead of the committed file. */
-                version?: number;
-            };
+            query?: never;
             header?: {
                 "If-None-Match"?: string;
             };

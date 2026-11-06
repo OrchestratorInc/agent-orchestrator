@@ -178,15 +178,14 @@ export function ArtifactHistoryMenu({
 /**
  * A saved version shown read-only in place of the live file, with the actions
  * that leave it: restore it, or go back to the current file. Markdown renders,
- * an image, PDF, video or audio file plays as the live file does, and anything
- * else, HTML included for now, shows as source. A long version shows only its
+ * a local image, PDF, video or audio file plays as the live file does, and
+ * anything else, HTML included for now, shows as source. A long version shows only its
  * start, and a restore still writes all of it.
  */
 export function ArtifactVersionPreview({
 	artifactOrigin,
 	cloud,
 	hostId,
-	onAccessRefused,
 	onBack,
 	onRestore,
 	path,
@@ -199,13 +198,11 @@ export function ArtifactVersionPreview({
 	artifactOrigin?: string;
 	cloud?: CloudArtifactVersions;
 	hostId?: string;
-	/** Takes a fresh access link for a cloud file whose link was refused. */
-	onAccessRefused?: () => void;
 	onBack: () => void;
 	/** Absent when this person only views the file. */
 	onRestore?: () => void;
 	path: string;
-	/** The live file's link, which media versions load through. */
+	/** The live file's link, which a local media version loads through. */
 	rawUrl?: string;
 	restoreError?: string;
 	restoring: boolean;
@@ -238,7 +235,7 @@ export function ArtifactVersionPreview({
 			</div>
 			{media ? (
 				<div className="flex min-h-0 flex-1 flex-col">
-					<FileMediaPreview hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ cloud: Boolean(cloud), kind: "artifact", onAccessRefused, rawUrl, savedVersion: version }} version={version} />
+					<FileMediaPreview hostId={hostId} kind={media} path={path} sessionId={sessionId} source={{ kind: "artifact", rawUrl, savedVersion: version }} version={version} />
 				</div>
 			) : <div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain">
 				{query.isPending ? (
