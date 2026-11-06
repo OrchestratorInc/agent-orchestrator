@@ -2222,8 +2222,10 @@ textarea,
 	initial-value: 0px;
 }
 
+/* Sizes are read with fallbacks rather than declared here: this rule is
+   unlayered, so a declaration would beat a per-site Tailwind override
+   (`[--edge-fade-size:...]` lives in the utilities layer). */
 .edge-fade {
-	--edge-fade-size: 24px;
 	--edge-fade-direction: to bottom;
 	mask-image: linear-gradient(
 		var(--edge-fade-direction),
@@ -2242,11 +2244,11 @@ textarea,
 }
 
 .edge-fade[data-fade-start] {
-	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size));
+	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size, 24px));
 }
 
 .edge-fade[data-fade-end] {
-	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size));
+	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
 @media (prefers-reduced-motion: reduce) {
