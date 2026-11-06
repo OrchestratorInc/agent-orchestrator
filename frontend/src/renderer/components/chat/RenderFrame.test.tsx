@@ -65,6 +65,19 @@ describe("render activity", () => {
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
 	});
 
+	it("opens an image the reader clicks in the page at full size, only from the frame in use", async () => {
+		render(<ActivityRow activity={renderActivity()} />);
+		const src = "data:image/png;base64,iVBORw0KGgo=";
+		const request = { jsonrpc: "2.0", method: "ao/open-image", params: { src, alt: "Before" } };
+		// A page posting on load, before the reader is in its frame, opens nothing.
+		post(request, frame().contentWindow);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		act(() => frame().focus());
+		post(request, frame().contentWindow);
+		const dialog = await screen.findByRole("dialog", { name: "Before" });
+		expect(within(dialog).getByRole("img", { name: "Before" })).toHaveAttribute("src", src);
+	});
+
 	it("toggles reflow without reloading and shares the choice with the expanded page", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={renderActivity()} />);
