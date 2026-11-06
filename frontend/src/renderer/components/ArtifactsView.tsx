@@ -38,6 +38,7 @@ import {
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
 const MAX_LIVE_PREVIEWS = 4;
@@ -47,6 +48,7 @@ const MAX_LIVE_PREVIEWS = 4;
  * in cloud sessions when the control plane keeps artifacts.
  */
 export function ArtifactsView() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const { t } = useTranslation();
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
@@ -185,7 +187,7 @@ export function ArtifactsView() {
 			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
-					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
+					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none">
 						<div className={cn("pr-4 pb-4 pl-(--space-4_5)", visibleGroups.length === 1 && "pt-4")}>
 							{workspaceQuery.isLoading ? (
 								<p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("artifacts.loading")}</p>

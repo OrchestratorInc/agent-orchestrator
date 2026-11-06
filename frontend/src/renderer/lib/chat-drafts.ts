@@ -54,8 +54,6 @@ export interface ChatDraftInlineEdit {
 	turnId: string;
 	text: string;
 	content: ConversationContentSummary[];
-	/** True when the edit replays portable history instead of using a native fork. */
-	reconstructedContext?: boolean;
 }
 
 export interface ChatDraftQueuedEdit {
@@ -767,8 +765,6 @@ function isInlineEdit(value: unknown): value is ChatDraftInlineEdit {
 			typeof edit.turnId === "string" &&
 			edit.turnId.length > 0 &&
 			typeof edit.text === "string" &&
-			(edit.reconstructedContext === undefined ||
-				typeof edit.reconstructedContext === "boolean") &&
 			Array.isArray(edit.content) &&
 			edit.content.every(isContentSummary)
 	);
@@ -1332,7 +1328,6 @@ export function prepareChatInlineEditDelivery(
 	const exact =
 			current?.turnId === input.turnId &&
 			current.text === input.text &&
-			current.reconstructedContext === input.reconstructedContext &&
 			JSON.stringify(current.content) === JSON.stringify(input.content);
 	const inlineEdit: ChatDraftInlineEdit = exact
 		? current
@@ -1340,7 +1335,6 @@ export function prepareChatInlineEditDelivery(
 					turnId: input.turnId,
 					text: input.text,
 					content: input.content,
-					reconstructedContext: input.reconstructedContext,
 					revision: draftEditRevision(),
 			};
 	const mutation: ChatInlineEditDelivery = {

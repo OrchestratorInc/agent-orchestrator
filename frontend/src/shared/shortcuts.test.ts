@@ -138,7 +138,7 @@ describe("default shortcuts", () => {
 		["toggle-sidebar", chord({ key: "b", meta: true })],
 		["toggle-inspector", chord({ key: "b", code: "KeyB", meta: true, alt: true })],
 		["toggle-terminal", chord({ key: "`", code: "Backquote", ctrl: true })],
-		["toggle-diff", chord({ key: "D", meta: true, shift: true })],
+		["toggle-diff", chord({ key: "Î", code: "KeyD", alt: true, shift: true })],
 		["toggle-inspector", chord({ key: "B", meta: true, shift: true })],
 		["jump-to-session", chord({ key: "1", meta: true })],
 		["jump-to-session", chord({ key: "9", meta: true })],
@@ -158,10 +158,20 @@ describe("default shortcuts", () => {
 		["open-in-editor", chord({ key: "o", meta: true })],
 		["copy-session-path", chord({ key: "C", meta: true, shift: true })],
 		["model-picker", chord({ key: "M", meta: true, shift: true })],
-		["dictate", chord({ key: "d", meta: true })],
+		["split-shell-terminal", chord({ key: "d", meta: true })],
+		["split-shell-terminal-down", chord({ key: "D", meta: true, shift: true })],
+		["dictate", chord({ key: "∂", code: "KeyD", alt: true })],
 		["open-orchestrator", chord({ key: "O", meta: true, shift: true })],
 	] as const)("macOS binds %s to its chord", (id, pressed) => {
 		expect(matchesAppShortcut(id, pressed, true)).toBe(true);
+	});
+
+	it.each([
+		["split-shell-terminal", "D"],
+		["split-shell-terminal-down", "_"],
+	] as const)("Windows/Linux binds %s without taking Alt+Shift layout switching", (id, key) => {
+		expect(matchesAppShortcut(id, chord({ key, ctrl: true, alt: true, shift: true }), false)).toBe(true);
+		expect(matchesAppShortcut(id, chord({ key, alt: true, shift: true }), false)).toBe(false);
 	});
 
 	it("tells ⌘[ (history) apart from ⌘⇧[ (previous session)", () => {
@@ -289,7 +299,8 @@ describe("shortcut binding matching and validation", () => {
 			for (const { id } of APP_SHORTCUTS) {
 				for (const bound of defaultShortcutBindings(id, isMac)) {
 					if (/^[a-z0-9]$/i.test(bound.key)) {
-						expect(bound.code === undefined || bound.code === "KeyB", `${id} carries code ${bound.code}`).toBe(true);
+						// Option+letter types a character on macOS, so those chords match the physical key.
+						expect(bound.code === undefined || (bound.alt && ["KeyB", "KeyD"].includes(bound.code)), `${id} carries code ${bound.code}`).toBe(true);
 					}
 				}
 			}

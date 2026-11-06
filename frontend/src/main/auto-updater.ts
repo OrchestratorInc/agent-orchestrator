@@ -26,6 +26,7 @@ import {
   type UpdateInstallResult,
 } from "./update-settings";
 import { reconcileFeaturePin } from "./feature-builds";
+import { captureMainError, type MainErrorReason } from "./main-error-capture";
 import { evaluateEscalation } from "./escalation-evaluator";
 import {
   boundPlainReleaseNotes,
@@ -465,6 +466,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
     // No cancel API: do not start another native request on top of this one.
     // A matching late success can recover it; otherwise offer a plain relaunch.
     console.error(`native update preparation stalled after ${Math.round((preparationNow() - startedAt) / 1000)}s with no staging progress`);
+    captureMainError({ category: "update", reason: "stage", detail: "kind:stalled" });
     blockNativePreparation(STAGE_STALL_MESSAGE);
     timedOutNativePreparation = { version, error: nativePreparationBlocked! };
     preparation.finish(nativePreparationBlocked);
@@ -1334,6 +1336,7 @@ function handleMacStagingFailure(err: unknown, requestId = activeUpdaterRequestI
     !/No such file or directory/i.test(message)
   ) return false;
   console.error("macOS update staging failed:", err);
+  reportUpdateFailure(err, "install", "stage");
   // AO's download event precedes native extraction. A failure can also arrive
   // before that stamp exists; neither case proves an installer is ready.
   discardStagedBuild();
@@ -1736,6 +1739,18 @@ function clearUnrecoverableRememberedBuild(): void {
 // to fetch its build again fails mid-check or mid-download, but the person asked
 // to install, and the restart dialog says the install failed, so Settings says
 // the same. Likewise a failed return-home check is a failed return.
+// Network loss, server outages, rate limits and a missing release are the
+// update server's or the connection's state, not AO faults; they stay out of
+// Sentry. Everything else (bad signature, unreadable feed, staging and install
+// failures, unrecognized errors) is reported under a fixed phase and kind.
+const UNREPORTED_UPDATE_KINDS = new Set(["timeout", "unreachable", "rate-limited", "not-found", "unavailable"]);
+
+export function reportUpdateFailure(err: unknown, phase: UpdateErrorPhase, reason?: MainErrorReason): void {
+  const kind = describeUpdateFailure(err, phase).info?.kind;
+  if (kind && UNREPORTED_UPDATE_KINDS.has(kind)) return;
+  captureMainError({ category: "update", reason: reason ?? phase, error: err, ...(kind ? { detail: `kind:${kind}` } : {}) });
+}
+
 function failedUpdatePhase(): UpdateErrorPhase {
   if (activeUpdaterOperation === "manual-install") return "install";
   if (activeUpdaterOperation === "return-home" && activeUpdaterPhase === "check") return "return";
@@ -2044,6 +2059,7 @@ function wireUpdaterEvents(): void {
       recordUpdateDiagnostic("native-error", { userMessage: shortStagingMessage(error) }, error);
       // Log the full detail; surface only a short line.
       console.error("native macOS updater error during staging:", error);
+      reportUpdateFailure(error, "install", "stage");
       const short = new Error(shortStagingMessage(error));
       nativePreparation?.finish(short);
       nativeReadyVersion = undefined;
@@ -2332,6 +2348,7 @@ function wireUpdaterEvents(): void {
         `staged update rejected at install time (attempt ${failures}${exhausted ? ", discarding cached download and stopping automatic retries" : ""}):`,
         err,
       );
+      reportUpdateFailure(err, "install");
       broadcast(
         withActiveRequest({
           state: "error",
@@ -2349,6 +2366,7 @@ function wireUpdaterEvents(): void {
     }
     if (activeUpdaterOperation === "automatic-check" && activeUpdaterPhase === "check") {
       console.error("auto-update check failed:", err);
+      reportUpdateFailure(err, "check");
       recordAutomaticCheckFailure(err);
       restoreAutomaticCheckPreviousStatus();
       publishFailingChecks();
@@ -2378,6 +2396,7 @@ function wireUpdaterEvents(): void {
     const failedAs = failedUpdatePhase();
     if (activeUpdaterOperation === undefined || activeUpdaterOperation === "automatic-check") {
       console.error(`update ${failedAs} failed:`, err);
+      reportUpdateFailure(err, failedAs);
     }
     const status: UpdateStatus = {
       state: "error",
@@ -2556,6 +2575,7 @@ async function runAutomaticUpdateCheck(
   } catch (err) {
     failed = true;
     console.error("auto-update check failed:", err);
+    reportUpdateFailure(err, "check");
   }
   if (failed || automaticCheckFailureCounted) {
     automaticRetryFailures = Math.min(automaticRetryFailures + 1, 5);
@@ -2766,6 +2786,7 @@ export async function checkForUpdatesNow(
       }
     } else {
       console.error(`manual update ${failed.phase} failed:`, err);
+      reportUpdateFailure(err, failed.phase);
       broadcastCompletedCheck({
         state: "error",
         ...updateErrorFields(err, failed.phase),
@@ -2838,6 +2859,7 @@ export async function returnToHome(
       return;
     }
     console.error(`return home ${failed.phase} failed:`, err);
+    reportUpdateFailure(err, failed.phase);
     broadcast({
       state: "error",
       ...updateErrorFields(err, failed.phase === "check" ? "return" : "download"),
@@ -2895,6 +2917,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
       return;
     }
     console.error("update download failed:", err);
+    reportUpdateFailure(err, "download");
     broadcast({
       state: "error",
       ...updateErrorFields(err, "download"),
@@ -3038,6 +3061,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         });
       } catch (err) {
         console.error("failed to prepare update for restart:", err);
+        reportUpdateFailure(err, "install", "restart_prep");
         throw userFacingInstallError(err);
       }
     }
@@ -3141,6 +3165,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
       console.error("failed to prepare update for restart:", err);
+      reportUpdateFailure(err, "install", "restart_prep");
       const failure = describeUpdateFailure(err, "install");
       await progress?.fail(failure.message).catch(() => undefined);
       broadcast({ state: "error", ...failureFields(failure) });

@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Live conversation data for a Chat session.
@@ -997,7 +998,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					body: { turnIds },
 				},
 			);
-			if (error) throw new Error(apiErrorMessage(error, "Could not reorder queued messages"));
+			if (error) throw apiErrorException(error, "Could not reorder queued messages");
 		},
 		onMutate: async (turnIds) => {
 			if (!sessionId) return;
@@ -1231,7 +1232,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				"/api/v1/sessions/{sessionId}/exit-agent",
 				{ params: { path: { sessionId: sessionId as string } } },
 			);
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			await resume.mutateAsync();
 		},
 		/** A compaction is in flight provider-side and takes seconds, so it reads as

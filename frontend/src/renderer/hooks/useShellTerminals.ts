@@ -12,7 +12,6 @@ import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { mockShellTerminals } from "../lib/mock-data";
-import { isWindowsPlatform } from "../lib/platform";
 import { terminalShellRequestValue, useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useCloudCp } from "./useCloudCp";
 
@@ -295,7 +294,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		if (projectId) body.projectId = projectId;
 		if (sessionId) body.sessionId = sessionId;
 		if (remote && shell) body.shell = shell;
-		if (!remote && isWindowsPlatform()) {
+		if (!remote) {
 			await useTerminalShellStore.getState().load();
 			body.shell = shell ?? terminalShellRequestValue(useTerminalShellStore.getState().preference);
 		}
@@ -359,7 +358,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				current?.filter((shell) => shell.handleId !== context?.optimisticHandleId),
 			);
 			console.error("Failed to open shell terminal:", error);
-			if (!remote && isWindowsPlatform() && apiErrorCode(error) === "SHELL_TERMINAL_SHELL_UNAVAILABLE") {
+			if (!remote && apiErrorCode(error) === "SHELL_TERMINAL_SHELL_UNAVAILABLE") {
 				void useTerminalShellStore.getState().setPreference({ kind: "auto" });
 			}
 		},

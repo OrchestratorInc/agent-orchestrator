@@ -25,7 +25,7 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	// Use the streamed preview route: the image-diff blob route buffers whole
 	// revisions and caps them at 16 MiB, which is too small for recordings.
-	const rawUrl = source.kind === "snapshot" ? base === undefined ? undefined : snapshotBlobUrl(base,sessionId,path,source,side) : source.kind === "artifact" ? artifactContentUrl(sessionId, path, source.rawUrl) : base === undefined ? undefined
+	const rawUrl = source.kind === "snapshot" ? base === undefined ? undefined : snapshotBlobUrl(base,sessionId,path,source,side) : source.kind === "artifact" ? artifactContentUrl(sessionId, path, source.rawUrl, source.savedVersion) : base === undefined ? undefined
 		: `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true&v=${encodeURIComponent(version)}`;
 	// A cloud file's URL already carries its version.
 	const src = source.kind === "artifact" && rawUrl && !source.cloud ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}` : rawUrl;

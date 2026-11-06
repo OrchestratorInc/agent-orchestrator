@@ -93,6 +93,30 @@ type Service struct {
 	// there, rather than inferring "still blocked" from a goroutine that simply
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
+
+	agents AgentTracker // set once at boot; nil without agent detection
+}
+
+// AgentTracker follows the agent, if any, running in a user shell.
+type AgentTracker interface {
+	TrackShellTerminal(handleID string)
+	UntrackShellTerminal(handleID string)
+}
+
+// SetAgentTracker registers every open shell for agent detection. Watches start
+// only while a client subscribes. Call once at boot, before serving requests.
+func (s *Service) SetAgentTracker(ctx context.Context, tracker AgentTracker) {
+	s.agents = tracker
+	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+	if err != nil {
+		s.log.Warn("shell terminal agent tracking: list terminals failed", "err", err)
+		return
+	}
+	for _, rec := range recs {
+		if !rec.Transient {
+			tracker.TrackShellTerminal(rec.HandleID)
+		}
+	}
 }
 
 // IsShellTerminalChildAlive reports whether the command inside a shell
@@ -728,6 +752,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: persist: %w", handle.ID, err)
 	}
 	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
+	// Login terminals run an agent CLI on purpose; only user shells are tracked.
+	if s.agents != nil && !cfg.transient {
+		s.agents.TrackShellTerminal(handle.ID)
+	}
 	return shellTerminalFromRecord(rec), nil
 }
 
@@ -959,6 +987,9 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
 	if stillAlive {
 		return true, destroyErr
+	}
+	if s.agents != nil {
+		s.agents.UntrackShellTerminal(handleID)
 	}
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)

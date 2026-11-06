@@ -28,6 +28,16 @@
 	mix-blend-mode: normal;
 }
 
+/* Translucent window: no animation at all. The group's own 250 ms animation
+ * keeps the transition (and its frozen snapshot) alive, and the old snapshot
+ * would show its tint through the new one, so it is hidden. */
+html[data-window-translucent="true"]::view-transition-group(root) {
+	animation: none;
+}
+html[data-window-translucent="true"]::view-transition-old(root) {
+	display: none;
+}
+
 /* While data-theme flips, kill per-element color tweens (composer, search,
    switches). Without this they animate for hundreds of ms and read as a
    white box in dark mode / a black strip in light mode. */
@@ -235,6 +245,7 @@
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
+	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -623,15 +634,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * its own space after the last tab's separator; the action region starts one
  * gap after it; and the reserve for the panel's trailing controls drops the
  * surface's 1px edge padding. */
-/* Tab-strip scroll fades blend into the window chrome the bar floats on. */
-.center-panel-shell--floating-topbar .session-tab-scroll-fade {
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
-}
-
-.center-panel-shell--floating-topbar .session-tab-scroll-fade--left {
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-sidebar) 82%);
-}
-
 .center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
 	padding-inline-start: var(--space-2);
 }
@@ -776,6 +778,19 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background-color: color-mix(in oklch, var(--color-foreground) 9%, transparent);
 }
 
+/* Light: the selected tab matches the center panel instead of a gray wash
+ * over the chrome. --solid-bg-primary exists only in a translucent window. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	border-color: color-mix(in oklch, var(--color-foreground) 12%, transparent);
+	background-color: var(--solid-bg-primary, var(--color-bg-primary));
+}
+
+/* Muted gray icons wash out on the light chrome; bar icons use the full
+ * foreground there. Disabled controls keep their own reduced opacity. */
+html[data-theme="light"] .center-panel-shell--floating-topbar :is(.topbar-control, .session-inspector__tab-button) {
+	color: var(--color-foreground);
+}
+
 .center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
 	display: none;
 }
@@ -859,45 +874,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	border-bottom-color: transparent;
 }
 
-/* A persistent edge fade signals that the tab strip can scroll horizontally. */
-.session-tab-scroll-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: var(--space-8);
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-primary) 82%);
-}
-
-.session-tab-scroll-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
-}
-
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
 .sidebar-sections-container {
 	container-type: size;
-}
-
-/* Persistent edge fades show when a sidebar section has more content to scroll. */
-.sidebar-section-scroll-fade {
-	position: absolute;
-	inset-inline: 0;
-	z-index: 10;
-	height: var(--space-4);
-	pointer-events: none;
-}
-
-.sidebar-section-scroll-fade--top {
-	top: 0;
-	background: linear-gradient(180deg, var(--color-bg-sidebar) 0%, transparent 100%);
-}
-
-.sidebar-section-scroll-fade--bottom {
-	bottom: 0;
-	background: linear-gradient(0deg, var(--color-bg-sidebar) 0%, transparent 100%);
 }
 
 /* Session actions are portaled into the center pane. Make their responsive
@@ -1428,17 +1407,6 @@ button.settings-row-bar {
 	&::-webkit-scrollbar {
 		display: none;
 	}
-}
-
-.model-menu-overflow-cue {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
-	height: var(--space-8);
-	pointer-events: none;
-	background: linear-gradient(to bottom, transparent, var(--color-bg-settings-menu));
-	transition: opacity var(--duration-fast) ease-out;
 }
 
 /* Search field inside a dropdown menu. settings-inline-input cannot be reused
@@ -2235,46 +2203,56 @@ textarea,
 	}
 }
 
-/* Chat scroll windows (the plan): content fades out at
-   whichever edge still has more to scroll to, so a long list reads as continuing
-   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
-   from the scroll position; the lengths are registered so the fade eases in and out
-   instead of snapping. */
-@property --edge-fade-top {
+/* Scroll edge fades (hooks/useEdgeFade.ts): content fades out at whichever
+   edge still has more to scroll to, so a list reads as continuing rather than
+   cut off. The fade is a mask on the scroller itself, never a gradient painted
+   in a surface color, so it holds over the translucent window tint and in every
+   theme. The hook sets the data attributes from the scroll position; the lengths
+   are registered so a fade eases in and out instead of snapping. Masks do not
+   affect hit testing, so faded content stays clickable. */
+@property --edge-fade-start {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-@property --edge-fade-bottom {
+@property --edge-fade-end {
 	syntax: "<length>";
 	inherits: false;
 	initial-value: 0px;
 }
 
-.edge-fade-viewport {
+/* Sizes are read with fallbacks rather than declared here: this rule is
+   unlayered, so a declaration would beat a per-site Tailwind override
+   (`[--edge-fade-size:...]` lives in the utilities layer). */
+.edge-fade {
+	--edge-fade-direction: to bottom;
 	mask-image: linear-gradient(
-		to bottom,
+		var(--edge-fade-direction),
 		transparent,
-		#000 var(--edge-fade-top),
-		#000 calc(100% - var(--edge-fade-bottom)),
+		#000 var(--edge-fade-start),
+		#000 calc(100% - var(--edge-fade-end)),
 		transparent
 	);
 	transition:
-		--edge-fade-top 150ms ease-out,
-		--edge-fade-bottom 150ms ease-out;
+		--edge-fade-start 150ms ease-out,
+		--edge-fade-end 150ms ease-out;
 }
 
-.edge-fade-viewport[data-fade-top] {
-	--edge-fade-top: 24px;
+.edge-fade-x {
+	--edge-fade-direction: to right;
 }
 
-.edge-fade-viewport[data-fade-bottom] {
-	--edge-fade-bottom: 24px;
+.edge-fade[data-fade-start] {
+	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size, 24px));
+}
+
+.edge-fade[data-fade-end] {
+	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.edge-fade-viewport {
+	.edge-fade {
 		transition: none;
 	}
 }
@@ -2951,16 +2929,6 @@ html.sidebar-reordering * {
 	position: relative;
 	z-index: 1;
 	background: transparent;
-}
-
-.chat-composer-fade {
-	position: absolute;
-	right: 0;
-	bottom: 100%;
-	left: 0;
-	height: 10px;
-	background: linear-gradient(to top, var(--color-bg-primary), transparent);
-	pointer-events: none;
 }
 
 .cursor-chat-composer textarea {
@@ -5725,22 +5693,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 	display: none;
 }
 
-.browser-panel__tab-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: 24px;
-	background: linear-gradient(90deg, transparent 0%, var(--bg) 82%);
-}
-
-.browser-panel__tab-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
-}
-
 .browser-panel__tab {
 	position: relative;
 	display: flex;
@@ -6359,6 +6311,14 @@ html:root[data-window-translucent="true"] {
 	--solid-sidebar-accent: var(--sidebar-accent);
 }
 
+/* Light follows native light apps: a frosted sidebar over a solid content
+ * panel (below). The light material itself is a mid gray, so the sidebar
+ * tint is pushed toward white to keep the chrome bright, at 72% so the
+ * material still shows through. */
+html:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
+}
+
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
  * :root values stay intact for the solid copies above. */
 html[data-window-translucent="true"] body {
@@ -6398,6 +6358,27 @@ html[data-window-translucent="true"] :is(
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Light: the center panel keeps the solid surfaces, so content reads as it does
+ * in an opaque window. It clears over a live browser page exactly as the
+ * opaque panel does (the native browser rules above). Dark keeps the clear
+ * single-tint panel. */
+html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
 }
 
 /* A Cloud session's startup and interface-switch screens cover the session
@@ -6466,8 +6447,19 @@ html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
 }
 
 /* The live page is a native view below the shell. Cut the tint out over its
- * rect (published by useBrowserView) so the page is not tinted. */
+ * rect (published by useBrowserView on .app-shell-root) so the page is not
+ * tinted. The rect changes every frame while the inspector slides, so the
+ * properties do not inherit: only this pseudo-element restyles, not the app. */
+@property --browser-hole-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-y { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-w { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-h { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
 html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	--browser-hole-x: inherit;
+	--browser-hole-y: inherit;
+	--browser-hole-w: inherit;
+	--browser-hole-h: inherit;
 	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
 	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
 	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
@@ -6537,4 +6529,189 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 }
 .group\/nav-row[data-preview-open] {
 	color: var(--color-foreground);
+}
+
+/* ── Split panes: tab drag ghost, drop preview, divider ──────────────────── */
+/* Positioned by lib/pane-drag.ts: the ghost moves by transform only, the
+ * preview box moves only when the zone under the pointer changes. */
+body.is-pane-dragging {
+	cursor: grabbing;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Embedded documents would swallow the pointer stream mid-drag. */
+body.is-pane-dragging iframe,
+body.is-pane-dragging webview {
+	pointer-events: none;
+}
+
+[data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source][data-terminal-tab-frame] {
+	opacity: 0.4;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: calc(var(--z-overlay) + 2);
+	display: flex;
+	overflow: hidden;
+	pointer-events: none;
+	/* Exactly the tab's box: square like the tab, no ring or scale that would
+	   read larger. Only a soft shadow lifts it off the page. */
+	background: var(--color-bg-elevated);
+	box-shadow: var(--shadow-popover);
+	opacity: 0;
+	will-change: transform;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost > [data-terminal-tab-frame] {
+	flex: 1;
+	min-width: 0;
+	max-width: none;
+}
+
+/* On the floating top bar a tab is a pill: round the ghost to match and
+   drop the trailing separator. */
+.pane-drag-ghost.center-panel-shell--floating-topbar {
+	border-radius: var(--radius-topbar-control);
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+	background: none;
+}
+
+.pane-drag-ghost[data-lifted] {
+	opacity: 0.96;
+}
+
+.pane-drag-ghost[data-leaving] {
+	opacity: 0;
+	transition-timing-function: ease-in;
+}
+
+.pane-drop-preview {
+	position: fixed;
+	z-index: calc(var(--z-overlay) + 1);
+	pointer-events: none;
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--primary) 7%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	opacity: 0;
+	contain: strict;
+	transition:
+		opacity var(--duration-fast) ease-out,
+		left 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		top 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		height 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pane-drop-preview[data-visible] {
+	opacity: 1;
+}
+
+.pane-drop-preview[data-instant] {
+	transition: none;
+}
+
+/* Unfocused panes of a split rest under a light veil of the background, so
+ * the focused one stands out in either theme. */
+.pane-split-dim {
+	z-index: 5;
+	pointer-events: none;
+	background: color-mix(in oklch, var(--background) 45%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-dim[data-dimmed] {
+	opacity: 1;
+}
+
+/* Divider between the panes: a hairline, with the shared hover-only grip line. */
+.pane-split-divider {
+	position: absolute;
+	z-index: 6;
+	touch-action: none;
+}
+
+.pane-split-divider[data-orientation="vertical"] {
+	top: 0;
+	bottom: 0;
+	width: 9px;
+	margin-left: -4px;
+	cursor: col-resize;
+}
+
+.pane-split-divider[data-orientation="horizontal"] {
+	left: 0;
+	right: 0;
+	height: 9px;
+	margin-top: -4px;
+	cursor: row-resize;
+}
+
+.pane-split-divider::before,
+.pane-split-divider::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The resting hairline. */
+.pane-split-divider[data-orientation="vertical"]::before {
+	top: 0;
+	bottom: 0;
+	left: 4px;
+	width: 1px;
+	background: var(--color-border);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::before {
+	left: 0;
+	right: 0;
+	top: 4px;
+	height: 1px;
+	background: var(--color-border);
+}
+
+/* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
+.pane-split-divider::after {
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-divider[data-orientation="vertical"]::after {
+	top: 0;
+	bottom: 0;
+	left: 3.5px;
+	width: 2px;
+	background: linear-gradient(to bottom, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::after {
+	left: 0;
+	right: 0;
+	top: 3.5px;
+	height: 2px;
+	background: linear-gradient(to right, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider:hover::after,
+.pane-split-divider:focus-visible::after {
+	opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pane-drag-ghost,
+	.pane-drop-preview,
+	.pane-split-dim,
+	.pane-split-divider::after {
+		transition: none;
+	}
 }

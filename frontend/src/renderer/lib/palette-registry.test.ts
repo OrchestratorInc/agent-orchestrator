@@ -16,6 +16,15 @@ describe("palette registry", () => {
 		}
 	});
 
+	it("offers the split shortcuts only while split panes are on", () => {
+		const off = buildShortcutCommands(t).map((item) => item.id);
+		const on = buildShortcutCommands(t, { splitPanes: true }).map((item) => item.id);
+		expect(off).not.toContain("shortcut:split-shell-terminal");
+		expect(off).not.toContain("shortcut:split-shell-terminal-down");
+		expect(on).toContain("shortcut:split-shell-terminal");
+		expect(on).toContain("shortcut:split-shell-terminal-down");
+	});
+
 	it("follows the settings catalog's visibility rules", () => {
 		const regular = buildSettingsCommands(t, { developerMode: false, diagnostics: false }).map((item) => item.id);
 		const developer = buildSettingsCommands(t, { developerMode: true, diagnostics: true }).map((item) => item.id);

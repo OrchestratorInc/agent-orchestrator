@@ -11,8 +11,15 @@ vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Keyboard: { dismiss: vi.fn() },
 	PanResponder: { create: () => ({ panHandlers: {} }) }, Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
+	useWindowDimensions: () => ({ fontScale: 1 }),
 }));
-vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, Easing: { out: () => {}, cubic: () => {} }, interpolateColor: () => "gray", runOnJS: (cb: unknown) => cb, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: () => {}, withTiming: () => {} }));
+vi.mock("react-native-reanimated", () => {
+	const spring = (): object => new Proxy({}, { get: () => () => spring() });
+	return { default: { View: "AnimatedView" }, FadeIn: { duration: () => undefined }, FadeOut: { duration: () => undefined }, ZoomIn: spring(), interpolate: () => 0, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: (value: unknown) => value, withTiming: (value: unknown) => value };
+});
+vi.mock("../useReducedMotion", () => ({ useReducedMotion: () => false }));
+vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
+vi.mock("../ui", () => ({ Button: "Button" }));
 vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("expo-secure-store", () => ({}));
@@ -33,7 +40,8 @@ vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handle
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
-vi.mock("./PRReviewPrompt", () => ({ PRReviewPrompt: "PRReviewPrompt" }));
+vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
+vi.mock("./PRChip", () => ({ PRChipContent: "PRChipContent", prChipAccessibilityLabel: () => "Pull request" }));
 
 import { ChatComposer } from "./ChatComposer";
 import { ComposerGlass } from "./composer-glass";
@@ -45,7 +53,7 @@ import { launchImageLibraryAsync } from "expo-image-picker";
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
 
 const props = () => ({
-	sessionId: "session", config: null,
+	sessionId: "session", config: null, machine: "",
 	snapshot: { turns: [], items: [], controller: { state: "idle" }, settings: {} },
 	skills: [], filePaths: [], models: [], restingInset: 0,
 	onSend: vi.fn(async () => "send-id"), onSteer: vi.fn(), onAcknowledgeSend: vi.fn(async () => {}), onQuoteHandled: vi.fn(),
@@ -97,6 +105,7 @@ it("keeps a quote added while an earlier send is waiting for acknowledgement", a
 it("restores a saved quote alongside a typed draft", async () => {
 	const p = props();
 	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test" } as ComponentProps<typeof ChatComposer>["config"];
+	p.machine = "http.localhost.1234";
 	storage.getItem.mockResolvedValueOnce(encodeResponseDraft("Saved reply", [{ id: "saved", text: "Saved excerpt", source }]));
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Saved reply");
@@ -115,8 +124,9 @@ it("saves an immediately submitted reply and quote before an old host rejects it
 	vi.mocked(launchImageLibraryAsync).mockResolvedValue({ canceled: false, assets: [{ uri: "qa-image", width: 1, height: 1, base64: "aGVsbG8=", mimeType: "image/png" }] });
 	const p = props();
 	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "draft-rejection-host" };
+	p.machine = "host.draft-rejection-host";
 	function Harness({ quote = true }: { quote?: boolean }) {
-		const conversation = useMobileConversation(p.config, p.sessionId);
+		const conversation = useMobileConversation(p.config, p.machine, p.sessionId);
 		return <ChatComposer {...p} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend}
 			quoteRequest={quote ? { id: "immediate", text: "Quoted context", source, composerKey: "session" } : undefined} />;
 	}

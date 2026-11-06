@@ -7,6 +7,7 @@ import {
 	getApiBaseUrl,
 	hasTrustedApiBaseUrl,
 	normalizeApiOperation,
+	reportingFetch,
 	setApiDaemonStatus,
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
@@ -24,6 +25,34 @@ vi.mock("./sentry", () => ({
 
 const captureMock = vi.mocked(captureRendererEvent);
 const sentryCaptureMock = vi.mocked(captureApiErrorToSentry);
+
+describe("remote daemon reporting fetch", () => {
+	afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+	it("reports a failure once and leaves the response body available", async () => {
+		const body = { code: "INTERNAL_ERROR", message: "private details" };
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 500 }));
+		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
+		expect(await response.json()).toEqual(body);
+		expect(sentryCaptureMock).toHaveBeenCalledExactlyOnceWith("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", undefined);
+	});
+
+	it.each(["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"])("keeps remote proxy state %s out of Sentry without consuming the response", async (code) => {
+		const body = { code, message: "private remote" };
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 502 }));
+		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
+		expect(await response.json()).toEqual(body);
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+		expect(captureMock).not.toHaveBeenCalled();
+	});
+
+	it("preserves cancellation without reporting an error", async () => {
+		const error = new DOMException("cancelled", "AbortError");
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+		await expect(reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"))).rejects.toBe(error);
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+	});
+});
 
 describe("apiClient runtime base URL", () => {
 	afterEach(() => {
@@ -393,9 +422,9 @@ describe("api error telemetry", () => {
 	it("drops expected Codex and closed-shell outcomes and still reports GitHub auth and other 401 and 404 responses", async () => {
 		const fetchMock = vi.spyOn(globalThis, "fetch");
 		setApiBaseUrl("http://127.0.0.1:3037");
-		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND"]) {
+		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND", "UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"]) {
 			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code, message: "expected" }), {
-				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : 404,
+				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : ["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"].includes(code) ? 502 : 404,
 				headers: { "Content-Type": "application/json" },
 			}));
 			await apiClient.GET("/api/v1/agents");

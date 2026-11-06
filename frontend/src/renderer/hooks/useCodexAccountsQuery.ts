@@ -1,7 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { apiClient, apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
 import { codexAccountsPollPaused, noteCodexAccountsAvailable, noteCodexAccountsUnavailable } from "./codex-accounts-pause";
 import { codexAccountsQueryKey, mergeCodexAccounts, writeCodexAccounts } from "./codex-accounts-state";
 
@@ -40,7 +41,7 @@ function codexEnsureShouldBackOff(error: unknown): boolean {
 }
 
 function throwCodexRequest(error: unknown): never {
-	const err = new Error(apiErrorMessage(error)) as Error & { code?: string };
+	const err = apiErrorException(error) as Error & { code?: string };
 	const code = readApiErrorCode(error);
 	if (code) err.code = code;
 	throw err;
@@ -77,13 +78,13 @@ export async function consumeCodexAccountResetCredit(accountId: string, idempote
 		params: { path: { accountId } },
 		body: { idempotencyKey },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountsResponse;
 }
 
 export async function openCodexAccountLoginTerminal(): Promise<CodexAccountLoginTerminalStart> {
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/login-terminal");
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountLoginTerminalStart;
 }
 
@@ -91,7 +92,7 @@ export async function openCodexAccountReauthenticationTerminal(accountId: string
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/{accountId}/login-terminal", {
 		params: { path: { accountId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountLoginTerminalStart;
 }
 
@@ -99,7 +100,7 @@ export async function logoutCodexAccount(accountId: string): Promise<CodexAccoun
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/{accountId}/logout", {
 		params: { path: { accountId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountsResponse;
 }
 
@@ -107,25 +108,25 @@ export async function deleteCodexAccount(accountId: string): Promise<CodexAccoun
 	const { data, error } = await apiClient.DELETE("/api/v1/agents/codex/accounts/{accountId}", {
 		params: { path: { accountId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountsResponse;
 }
 
 export async function verifyCodexAccountLogin(operationId: string): Promise<CodexAccountLoginOperation> {
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/login-operations/{operationId}/verify", { params: { path: { operationId } } });
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountLoginOperation;
 }
 
 export async function cancelCodexAccountLogin(operationId: string): Promise<CodexAccountLoginOperation> {
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/accounts/login-operations/{operationId}/cancel", { params: { path: { operationId } } });
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountLoginOperation;
 }
 
 export async function startCodexAccountSwitch(targetAccountId: string, idempotencyKey: string): Promise<CodexAccountSwitch> {
 	const { data, error } = await apiClient.POST("/api/v1/agents/codex/account-switches", { body: { targetAccountId, idempotencyKey } });
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountSwitch;
 }
 
@@ -133,7 +134,7 @@ export async function fetchCodexAccountSwitch(switchId: string): Promise<CodexAc
 	const { data, error } = await apiClient.GET("/api/v1/agents/codex/account-switches/{switchId}", {
 		params: { path: { switchId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as CodexAccountSwitch;
 }
 
