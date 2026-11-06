@@ -83,7 +83,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
-import type { DaemonFailureCode, DaemonStatus } from "./shared/daemon-status";
+import type { DaemonStatus } from "./shared/daemon-status";
 import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
@@ -241,7 +241,7 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { captureMainError, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink, type MainErrorReason } from "./main/main-error-capture";
+import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
 
 // Every ipcMain.handle registered from here on reports unexpected throws.
 installIpcErrorCapture(ipcMain);
@@ -746,19 +746,6 @@ app.once("will-quit", () => {
 	if (sideStateTimer) clearInterval(sideStateTimer);
 	sideStateTimer = undefined;
 });
-
-// Daemon failures the user cannot fix by waiting. not_ready, not_configured
-// and daemon_unreachable are transitional and are not reported.
-const REPORTED_DAEMON_FAILURES = new Set<DaemonFailureCode>(["binary_missing", "spawn_failed", "exited", "port_unconfirmed", "identity_mismatch", "datadir_unwritable"]);
-
-function reportDaemonFailure(previous: DaemonStatus, next: DaemonStatus): void {
-	const code = next.code;
-	if (!code || !REPORTED_DAEMON_FAILURES.has(code)) return;
-	// One report per transition into a failure, not one per status refresh.
-	if (previous.code === code && previous.state === next.state) return;
-	const detail = next.signal ? `signal:${next.signal}` : typeof next.exitCode === "number" ? `code:${next.exitCode}` : undefined;
-	captureMainError({ category: "daemon", reason: code as MainErrorReason, ...(detail ? { detail } : {}) });
-}
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	reportDaemonFailure(daemonStatus, nextStatus);

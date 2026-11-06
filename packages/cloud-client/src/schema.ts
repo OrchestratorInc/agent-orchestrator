@@ -3560,6 +3560,10 @@ export interface components {
             defaultEffort?: string;
             /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
             approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
+            /** @description The model the account's provider listed behind this entry: its own ID, or the model an alias such as opus resolves to. Absent when the provider did not confirm the entry for the account, or from an older worker. Only such a confirmation says the account runs the model an alias describes. */
+            providerId?: string;
+            /** @description On a session's own list, a model its worker added only so the session keeps its own selection. The account's provider did not list it, so it is not kept as the account's. */
+            sessionOnly?: boolean;
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
@@ -3572,6 +3576,8 @@ export interface components {
             cliVersion?: string;
             /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
             accountListed?: boolean;
+            /** @description On a session's list, true when its worker marks the models it added for the session (sessionOnly). A Claude Code list without it does not become the user's catalog. */
+            sessionOnlyMarked?: boolean;
         };
         SendMessageInput: {
             text: string;

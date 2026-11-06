@@ -7,7 +7,6 @@ export function composerDeliveryRoute(intent: ComposerDeliveryIntent, steerEligi
 export function composerDeliveryPresentation(state: { active: boolean; canSteer: boolean; hasDraft: boolean; hasAttachments: boolean; hasQueued: boolean }) {
 	return {
 		placeholder: state.active ? "Send after this…" : "Message this worker…",
-		showQueueNote: state.active,
 		showSteerAction: state.active && state.canSteer && state.hasDraft && !state.hasAttachments && !state.hasQueued,
 	};
 }

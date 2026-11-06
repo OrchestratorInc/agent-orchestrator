@@ -17,7 +17,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
-import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import {
 	cacheAgentReadiness,
@@ -29,6 +29,8 @@ import { useChatPermissionModesQuery } from "../hooks/useChatPermissionModes";
 import { useSettings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { invalidateCloudModelCatalogs, useCloudModelCatalog } from "../hooks/useCloudModelCatalog";
+import { cloudModelCatalogGap, cloudModelVerdict, listsLocalModelsForCloud } from "../lib/cloud-model-catalog";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -274,12 +276,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 				return session.id;
 			} catch (err) {
 				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				// Cloud refused a model the account's list lacks: the list the picker
+				// showed is older than Cloud's, so it is read again (the message says why).
+				if (err instanceof CloudCpError && err.code === "MODEL_UNAVAILABLE" && cloudOrg?.id && input.agent) {
+					void invalidateCloudModelCatalogs(queryClient, { baseUrl: cloudBaseUrl, userId: cloudUserId, orgId: cloudOrg.id, agent: input.agent });
+				}
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -499,32 +506,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// Cloud worker on the same CLI version and credential reported, or the ones
 	// its pinned CLI release supports. Neither depends on this computer's login.
 	const cloudCatalogAgent = isCloudProject && (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(selectedAgent);
-	const cloudModelCatalogQuery = useQuery({
-		queryKey: [
-			"cloud-agent-models",
-			cloudBaseUrl,
-			cloudUserId,
-			cloudOrg?.id ?? "",
-			selectedAgent,
-			selectedCloudConnection?.id ?? "",
-			selectedCloudConnection?.updatedAt ?? "",
-		],
-		queryFn: ({ signal }): Promise<CloudCpChatModelsResponse> =>
-			cloudClient.listUserAgentModels(cloudOrg?.id ?? "", selectedAgent as CloudCpAgentProvider, { signal }),
-		// Asked once the connections are known, so their arrival does not ask twice.
-		enabled: cloudCatalogAgent && Boolean(cloudOrg?.id) && (cloudConnectionsQuery.data !== undefined || cloudConnectionsQuery.isError),
-		staleTime: 5 * 60_000,
-		refetchOnWindowFocus: false,
-		refetchOnReconnect: false,
-		retry: false,
-	});
-	const cloudCatalog = cloudCatalogAgent ? cloudModelCatalogQuery.data : undefined;
+	const cloudCatalogState = useCloudModelCatalog({ orgId: cloudOrg?.id, agent: selectedAgent, enabled: cloudCatalogAgent });
+	const cloudModelCatalogQuery = cloudCatalogState.query;
+	const cloudCatalog = cloudCatalogState.catalog;
 	// Until the catalog arrives no listed model vouches for the effort, so a task
 	// does not start yet with a level its model refuses.
-	const cloudCatalogLoading = cloudCatalogAgent && Boolean(cloudOrg?.id) && cloudCatalog === undefined && !cloudModelCatalogQuery.isError;
-	const cloudCatalogGap = cloudCatalogAgent && !cloudCatalog && cloudModelCatalogQuery.isError
-		? cloudModelCatalogGap(cloudModelCatalogQuery.error)
-		: undefined;
+	const cloudCatalogLoading = cloudCatalogState.loading;
+	const cloudCatalogGap = cloudCatalogState.gap;
+	// A model the account's own Cloud list verifiably lacks fails every turn, so
+	// nothing picks it for a cloud task on its own: not a remembered pick, not the
+	// project's model, not a suggestion carried in from elsewhere.
+	const cloudModelUnavailable = (id: string) => isCloudProject && cloudModelVerdict(cloudCatalog, id) === "unavailable";
 	const localCatalogForCloud = listsLocalModelsForCloud(cloudCatalogGap, selectedAgent, modelScope);
 	const localCatalogInUse = !isCloudProject || localCatalogForCloud;
 	// Shares the picker's query key, so this is the same fetch, not a second one.
@@ -567,6 +559,53 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setModelTouched(false);
 		setEffortTouched(false);
 	}, [agentDrafts, cloudBaseUrl, cloudConnectionsQuery.data, cloudOrg?.id, cloudUserId, isCloudProject, projectId, selectedAgent, selectedCloudConnection?.id, selectedCloudConnection?.updatedAt]);
+	// Local picks name this computer's models, which a Cloud worker may not run,
+	// and Cloud picks name the account's, which this computer may not. Moving
+	// between a local and a Cloud project parks the picks of the project left,
+	// with the picks it remembers for each agent. A pick comes back only to the
+	// project it was made in, and only for the agent it was made with: another
+	// project, or the same one with another agent now, starts from its own
+	// defaults (its project's model and effort, and the agent picks it
+	// remembers), as it does without a move. Within one kind picks carry from
+	// project to project as they always did.
+	const pickOrigin = useRef({ cloud: isCloudProject, context: preferenceContext, agent: selectedAgent });
+	const parkedPicks = useRef<Record<string, ParkedComposerPicks>>({});
+	const parkedDrafts = useRef<Record<string, Record<string, TaskComposerAgentPreference>>>({});
+	// Set for the update that brings a pick back, so the defaults below (which
+	// still see that update's untouched state) do not replace it. Only what is
+	// brought back is held; everything else follows the project's defaults.
+	const restoringModel = useRef(false);
+	const restoringEffort = useRef(false);
+	useEffect(() => {
+		const origin = pickOrigin.current;
+		if (origin.context === preferenceContext) return;
+		if (origin.cloud === isCloudProject) {
+			pickOrigin.current = { ...origin, context: preferenceContext };
+			return;
+		}
+		parkedPicks.current[origin.context] = { agent: origin.agent, model, mode, effort, modelTouched, effortTouched };
+		parkedDrafts.current[origin.context] = { ...agentDrafts };
+		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext, agent: selectedAgent };
+		const entered = parkedPicks.current[preferenceContext];
+		const ownAgent = entered !== undefined && entered.agent === selectedAgent;
+		const keepModel = ownAgent && entered.modelTouched;
+		const keepEffort = ownAgent && entered.effortTouched;
+		restoringModel.current = keepModel;
+		restoringEffort.current = keepEffort;
+		for (const key of Object.keys(agentDrafts)) delete agentDrafts[key];
+		Object.assign(agentDrafts, parkedDrafts.current[preferenceContext] ?? readTaskComposerPreferences(preferenceContext)?.agents);
+		setModel(keepModel ? entered.model : "");
+		setMode(keepModel ? entered.mode : "");
+		setModelTouched(keepModel);
+		setEffort(keepEffort ? entered.effort : "");
+		setEffortTouched(keepEffort);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- runs on a move only, with the picks as they were
+	}, [isCloudProject, preferenceContext]);
+	// A pick (model, effort, agent) is made in the project shown, with the agent shown.
+	useEffect(() => {
+		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext, agent: selectedAgent };
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- records where each pick was made
+	}, [model, mode, effort, agent, selectedAgent]);
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
@@ -622,7 +661,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		defaultEffort: item.defaultEffort,
 	})), [cloudCatalog, selectedAgent]);
 	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
-		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
+		keep: [model, mode, ...[projectModelForSelectedAgent, rememberedModel].filter((id) => !cloudModelUnavailable(id))],
 		skip: !isCloudProject,
 	});
 	// The daemon marks models this computer's agent CLI is too old for. A cloud task
@@ -645,7 +684,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// No catalog default is a cloud task's: Default sends no model, so the
 	// project's or the agent's own applies. A configured or remembered model the
 	// catalog does not list stays selectable, with a warning that it may not run.
-	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel].filter(isConcreteModelID).join("\n");
+	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel]
+		.filter((id) => isConcreteModelID(id) && !cloudModelUnavailable(id)).join("\n");
 	const cloudModels = useMemo((): AgentModelOption[] => {
 		if (cloudCatalog) {
 			const listed = offeredCloudModels;
@@ -692,6 +732,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			: "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
+		!cloudModelUnavailable(rememberedModel) &&
 		!catalogModels.some((item) => item.id === rememberedModel && !isModelSelectable(item)) &&
 		Boolean(
 			modelCatalog &&
@@ -704,7 +745,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const catalogPick = isCloudProject ? "" : catalogDefaultOption || selectableModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
-		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
+		(isConcreteModelID(projectModelForSelectedAgent) && !cloudModelUnavailable(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
@@ -830,12 +871,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 				: cloudModelCatalogQuery.isFetching
 					? t("settings.models.loading")
 					: undefined;
+	// Only the account's own list says a model will not run. Before Cloud has it
+	// (the release list), a model that list lacks may well run, and Cloud is
+	// learning the account's list, so nothing is flagged.
+	const projectModelUnavailable = isConcreteModelID(projectModelForSelectedAgent) && cloudModelUnavailable(projectModelForSelectedAgent);
 	const cloudModelWarning = !isCloudProject
 		? undefined
 		: cloudCatalog
-			? isConcreteModelID(selectedModelOrMode) && !cloudCatalog.models.some((item) => item.id === selectedModelOrMode)
-				? t("newTask.cloudModelUnlisted", { model: selectedModelOrMode, agent: selectedAgentLabel })
-				: undefined
+			? cloudModelUnavailable(selectedModelOrMode)
+				? t("newTask.cloudModelUnavailable", { model: selectedModelOrMode, agent: selectedAgentLabel })
+				: projectModelUnavailable
+					? t("newTask.cloudProjectModelUnavailable", { model: projectModelForSelectedAgent, agent: selectedAgentLabel })
+					: undefined
 			: cloudCatalogGap === "legacy"
 				? t("newTask.cloudLegacyModels")
 				: cloudCatalogGap === "unavailable" && !localCatalogForCloud
@@ -854,7 +901,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		selectedAgent !== "" &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
-		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
+		(!hostId || (agentsQuery.isSuccess && settings !== undefined)) &&
+		// Cloud refuses a model the account's own list lacks (MODEL_UNAVAILABLE),
+		// so the picker's warning asks for another before a send.
+		!cloudModelUnavailable(selectedModelOrMode);
 	// Named for its remote origins; a local project that failed to load reports here too.
 	// A cloud project is not read locally, so a lookup made before it was known to be
 	// a cloud project must not linger as its error.
@@ -897,6 +947,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// that still rejects the spawn for a stale catalog, so keep the notice there.
 	const loginRenewsItself = modelAuthIssue === "expired" && !hostId;
 	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself;
+	// Reading the list again can clear a failed or stale read, not a model the
+	// account's own list lacks: that one is changed in the picker or settings.
+	const modelWarningRetries = !(isCloudProject && cloudCatalog !== undefined &&
+		(cloudModelUnavailable(selectedModelOrMode) || projectModelUnavailable));
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
 		: modelAuthIssue && showModelNotice ? (
@@ -912,14 +966,19 @@ export function useTaskLaunch({ projectId, hostId }: {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
 	useEffect(() => {
-		if (!modelTouched) {
+		if (!modelTouched && !restoringModel.current) {
 			setModel(defaultModelForSelectedAgent);
 			setMode(defaultModeForSelectedAgent);
 		}
 	}, [defaultModelForSelectedAgent, defaultModeForSelectedAgent, modelTouched]);
 	useEffect(() => {
-		if (!effortTouched) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
+		if (!effortTouched && !restoringEffort.current) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
 	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
+	// The update that brought a pick back is over; defaults apply again.
+	useEffect(() => {
+		restoringModel.current = false;
+		restoringEffort.current = false;
+	});
 
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
@@ -1125,7 +1184,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const switchAgent = (harness: string, pick: { model?: string; effort?: string } = {}) => {
 		if (harness !== selectedAgent) changeAgent(harness);
 		if (pick.model) {
-			const catalog = queryClient.getQueryData(agentModelsQueryOptions(harness, catalogProjectId, hostId).queryKey);
+			// Cloud's lists name models only; this computer's may name launch modes.
+			const catalog = isCloudProject ? undefined : queryClient.getQueryData(agentModelsQueryOptions(harness, catalogProjectId, hostId).queryKey);
 			if (catalog?.selectionMode === "mode") {
 				setMode(pick.model);
 				setModel("");
@@ -1220,6 +1280,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		} : undefined,
 		remoteLoadError,
 		modelWarning,
+		modelWarningRetries,
 		fallbackAction,
 		fallbackLabel: fallbackAction === "bypass-permissions"
 			? t("newTask.startWithoutApprovals", { defaultValue: "Start without approvals" })
@@ -1302,6 +1363,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		chooseTurnSettings,
 		agentChoices,
 		catalogProjectId,
+		// A Cloud task's organization: the agent switch lists Cloud's models for the account.
+		catalogCloudOrgId: isCloudProject ? cloudOrg?.id : undefined,
 		switchAgent,
 		renderAgentControl: (control: TaskComposerAgentControl) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />,
 		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
@@ -1321,26 +1384,16 @@ function startsLocally(agent: AgentInfo): boolean {
 	return agent.installation.state === "installed" && (isReadyAgent(agent) || agent.authentication.state === "configured");
 }
 
-type CloudModelCatalogGap = "legacy" | "unavailable" | "failed";
-
-/** Why the control plane gave a cloud task no model catalog. */
-function cloudModelCatalogGap(error: unknown): CloudModelCatalogGap {
-	if (!(error instanceof CloudCpError)) return "failed";
-	// An older control plane has no such route and answers 404 or 501 without an
-	// error envelope. A handler's own 404 carries a code and is a real failure.
-	if (!error.code && (error.status === 404 || error.status === 501)) return "legacy";
-	if (error.status === 409 && error.code === "MODEL_CATALOG_UNAVAILABLE") return "unavailable";
-	return "failed";
-}
-
-/**
- * Whether a cloud task lists this computer's models in place of the control
- * plane's: an older control plane's suggestions, or opencode's own discovery,
- * scoped to the connected provider's credential type.
- */
-function listsLocalModelsForCloud(gap: CloudModelCatalogGap | undefined, agent: string, modelScope: string): boolean {
-	return gap === "legacy" || (gap === "unavailable" && agent === "opencode" && modelScope !== "");
-}
+/** The picks a composer had for one project, parked while it shows a project of the other kind (local or Cloud). */
+type ParkedComposerPicks = {
+	/** The agent the picks were made with; they never come back for another. */
+	agent: string;
+	model: string;
+	mode: string;
+	effort: string;
+	modelTouched: boolean;
+	effortTouched: boolean;
+};
 
 // The launch form as a standalone composer. The app starts tasks from the new
 // chat page; this view keeps the launch logic exercised in isolation.

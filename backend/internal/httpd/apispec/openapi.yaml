@@ -13525,6 +13525,40 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/terminal-shells:
+    get:
+      operationId: listTerminalShells
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellsResponse'
+          description: OK
+      summary: List the shells installed on this machine for new terminals
+      tags:
+      - shellTerminals
+  /api/v1/terminal-shells/check:
+    get:
+      operationId: checkTerminalShell
+      parameters:
+      - description: 'Custom shell: an absolute path, a ~/ path, or a command on PATH.'
+        in: query
+        name: path
+        schema:
+          description: 'Custom shell: an absolute path, a ~/ path, or a command on
+            PATH.'
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminalShellCheckResponse'
+          description: OK
+      summary: Check that a custom shell path is an executable
+      tags:
+      - shellTerminals
   /api/v1/usage/memory/pressure:
     get:
       operationId: getMemoryPressure
@@ -19436,8 +19470,8 @@ components:
             that session's tab strip. Omitted makes it a standalone shell.
           type: string
         shell:
-          description: 'Windows shell selector: auto, git-bash, pwsh, powershell,
-            cmd, or a custom executable path. Ignored on macOS and Linux.'
+          description: 'Shell to launch: auto (the user''s default shell), an executable
+            path, or on Windows a selector (git-bash, pwsh, powershell, cmd, wsl).'
           type: string
         startOnAttach:
           description: Start the shell when the requesting client attaches with its
@@ -22566,6 +22600,49 @@ components:
       required:
       - distinctId
       - optedOut
+      type: object
+    TerminalShellCheckResponse:
+      properties:
+        executable:
+          type: boolean
+        message:
+          description: Why the path cannot launch.
+          type: string
+        path:
+          description: Resolved executable path when executable.
+          type: string
+      required:
+      - executable
+      type: object
+    TerminalShellResponse:
+      properties:
+        id:
+          description: 'Value to send as a terminal''s shell: auto, a Windows selector,
+            or the executable path.'
+          type: string
+        name:
+          description: Display name, such as zsh or PowerShell.
+          type: string
+        path:
+          description: Executable path. Empty when the default shell cannot be resolved.
+          type: string
+      required:
+      - id
+      - name
+      type: object
+    TerminalShellsResponse:
+      properties:
+        default:
+          $ref: '#/components/schemas/TerminalShellResponse'
+          description: The shell auto resolves to.
+        shells:
+          description: Installed shells, one per real binary.
+          items:
+            $ref: '#/components/schemas/TerminalShellResponse'
+          type: array
+      required:
+      - default
+      - shells
       type: object
     TrackerIntakeConfig:
       properties:

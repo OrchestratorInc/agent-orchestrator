@@ -357,9 +357,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
-				{t("newTask.modelNotice.retry")}
-			</Button>
+			{task.modelWarningRetries ? (
+				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
+			) : null}
 		</div>
 	) : task.modelWarning;
 
@@ -422,6 +424,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
+								cloudOrgId: task.catalogCloudOrgId,
 								hostId,
 								agents: task.agentChoices,
 								disabled: task.agent.disabled,

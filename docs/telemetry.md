@@ -685,14 +685,14 @@ Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
 Sentry policy. Untyped renderer 503 responses remain reportable. The existing
 API client skips its confirmed expected 409 probes, while other 409 responses
 remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
-name and call site at five per minute and 200 per day. Background daemon sends
-admit at most four concurrent reports, dropping diagnostics at capacity without
+name and call site at five per minute and 200 per day. HTTP and background daemon sends
+share a limit of four concurrent reports, dropping diagnostics at capacity without
 retaining a queue. Their transport runs outside the caller's locks and database
 transactions, and opt-out waits for admitted sends before it completes.
 The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then
-uses one overflow group. It samples
+uses one overflow group per operation. It samples
 admitted errors at full rate. Project quota and spike protection still need
 verification before a stable release.
 The daemon tags these error events with the same `install_id` and sets Sentry
@@ -736,3 +736,5 @@ For the broader data policy, retention information, and contact options, see
 the [Orchestrator.inc privacy policy](https://orchestrator.inc/privacy). You can report a problem
 with this documentation in the
 [GitHub repository](https://github.com/OrchestratorInc/agent-orchestrator).
+
+Handled Electron main captures are limited per sanitized category, reason and detail to five per minute and 200 per UTC day, with at most 1,024 budget keys per day. Pending pre-policy captures count against the same limits. Renderer operation tags are forwarded only for fixed exception operations. Remote proxy connectivity and identity-verification refusals are expected states.
