@@ -825,7 +825,14 @@ export function useBrowserView({
 		const onEnd = (event: TransitionEvent) => {
 			if (!isInspectorSlide(event)) return;
 			running.delete(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
-			if (running.size === 0 && activeRef.current) measureAndSend();
+			if (running.size > 0) return;
+			// The slide has landed: send the final rect now and drop the frame
+			// already queued for it.
+			if (frame !== null) {
+				window.cancelAnimationFrame(frame);
+				frame = null;
+			}
+			if (activeRef.current) measureAndSend();
 		};
 		document.addEventListener("transitionrun", onRun);
 		document.addEventListener("transitionend", onEnd);
