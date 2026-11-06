@@ -291,6 +291,11 @@ describe("macOS signing", () => {
 		// Nested code embeds no profile, so it must never carry keychain-access-groups.
 		expect(macSignOptionsForFile(helper, "/tmp/app-entitlements.plist")).toEqual({});
 		expect(macSignOptionsForFile(executable, "/tmp/app-entitlements.plist")).toEqual({});
+		// The nested dictation helper is a .app too; it keeps only its audio entitlement.
+		const dictationHelper = join(app, "Contents", "Resources", "dictation-helper", "Orchestrator.app");
+		expect(macSignOptionsForFile(dictationHelper, "/tmp/app-entitlements.plist")).toEqual({
+			entitlements: ["com.apple.security.device.audio-input"],
+		});
 		// Without a profile the app keeps electron-osx-sign's defaults.
 		expect(macSignOptionsForFile(app)).toEqual({});
 	});
@@ -328,6 +333,9 @@ describe("macOS Touch ID passkeys", () => {
 		mkdirSync(join(resources, "wake-helper"), { recursive: true });
 		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
 		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
+		mkdirSync(dictationHelper, { recursive: true });
+		writeFileSync(join(dictationHelper, "Orchestrator"), "");
 		const hook = envConfig.hooks?.postPackage;
 		expect(hook).toBeTypeOf("function");
 		if (typeof hook !== "function") return;
@@ -339,8 +347,8 @@ describe("macOS Touch ID passkeys", () => {
 		await expect(hook(envConfig, packageResult)).rejects.toThrow("missing webauthn.json");
 		writeFileSync(join(resources, "webauthn.json"), "{}");
 		// Past both passkey checks, packaging moves on to the next bundled-resource
-		// verification. Upstream's cloudflared check now runs before tmux, and this
-		// fixture ships neither, so cloudflared is the next failure.
+		// verification. The cloudflared check runs after the dictation helper and
+		// before tmux, and this fixture ships neither, so cloudflared fails next.
 		await expect(hook(envConfig, packageResult)).rejects.toThrow("packaged cloudflared missing");
 	});
 });
