@@ -15,7 +15,7 @@ import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
-import { isSteer, type ConversationItem, type ConversationTurn } from "../../types/conversation";
+import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
@@ -180,39 +180,51 @@ export interface BatchedReports {
 export const BatchedReportsContext = createContext<BatchedReports | null>(null);
 
 /**
- * Where each batched report turn was delivered, from what the daemon recorded:
- * a steer lists the queued turns it carried; any other batched turn joined the
- * input of the turn it names, with that batch's last human message. A batch
- * with no human message keeps its reports on their own line.
+ * Where each batched report turn was delivered, from what the daemon recorded.
+ * A steer that carried it takes it, when that steer is loaded. A queue drain puts
+ * it under the last human message among the drained turns. Anything else, a
+ * steer outside the loaded page or a drain with no human message, keeps its
+ * reports on their own line.
  */
-export function placeBatchedReports(turns: readonly ConversationTurn[], items: readonly ConversationItem[]): BatchedReports {
+export function placeBatchedReports(deliveries: readonly BatchedDelivery[], items: readonly ConversationItem[]): BatchedReports {
 	const under = new Map<string, WorkerUpdate[]>();
 	const moved = new Set<string>();
-	const steerFor = new Map<string, string>();
-	const byTurn = new Map<string, ConversationItem[]>();
+	if (deliveries.length === 0) return { under, moved };
+	// One pass over the timeline: each turn's reports and last human message, and the loaded steers.
+	const reportsOf = new Map<string, WorkerUpdate[]>();
+	const lastHuman = new Map<string, { id: string; sequence: number }>();
+	const steers = new Set<string>();
 	for (const item of items) {
-		if (item.kind === "activity" && isSteer(item)) {
-			for (const turnId of item.detail?.providerInputSourceTurnIds ?? []) steerFor.set(turnId, item.id);
-		}
+		if (item.kind === "activity" && isSteer(item)) steers.add(item.id);
 		if (!item.turnId) continue;
-		const inTurn = byTurn.get(item.turnId);
-		if (inTurn) inTurn.push(item);
-		else byTurn.set(item.turnId, [item]);
-	}
-	const isHumanPrompt = (item: ConversationItem) => item.kind === "message" && item.role === "user" && item.origin === "human";
-	for (const turn of turns) {
-		const into = turn.deliveredWithTurnId;
-		if (!into) continue;
-		const reports = (byTurn.get(turn.id) ?? []).flatMap((item) => workerUpdatesOf(item).filter((update) => update.state !== undefined));
-		if (reports.length === 0) continue;
-		let target = steerFor.get(turn.id);
-		if (!target) {
-			const members = new Set([into, ...turns.filter((other) => other.deliveredWithTurnId === into && !steerFor.has(other.id)).map((other) => other.id)]);
-			target = items.filter((item) => item.turnId && members.has(item.turnId) && isHumanPrompt(item)).at(-1)?.id;
+		if (item.kind === "message" && item.role === "user" && item.origin === "human") {
+			lastHuman.set(item.turnId, { id: item.id, sequence: item.sequence });
+			continue;
 		}
+		const reports = workerUpdatesOf(item).filter((update) => update.state !== undefined);
+		if (reports.length > 0) reportsOf.set(item.turnId, [...(reportsOf.get(item.turnId) ?? []), ...reports]);
+	}
+	// A drain's human message: the latest one among its target and every turn drained with it.
+	const drainHuman = new Map<string, { id: string; sequence: number }>();
+	const consider = (target: string, turnId: string) => {
+		const human = lastHuman.get(turnId);
+		const best = drainHuman.get(target);
+		if (human && (!best || human.sequence > best.sequence)) drainHuman.set(target, human);
+	};
+	for (const delivery of deliveries) {
+		if (delivery.steerActivityId) continue;
+		consider(delivery.deliveredWithTurnId, delivery.deliveredWithTurnId);
+		consider(delivery.deliveredWithTurnId, delivery.turnId);
+	}
+	for (const delivery of deliveries) {
+		const reports = reportsOf.get(delivery.turnId);
+		if (!reports) continue;
+		const target = delivery.steerActivityId
+			? steers.has(delivery.steerActivityId) ? delivery.steerActivityId : undefined
+			: drainHuman.get(delivery.deliveredWithTurnId)?.id;
 		if (!target) continue;
 		under.set(target, [...(under.get(target) ?? []), ...reports]);
-		moved.add(turn.id);
+		moved.add(delivery.turnId);
 	}
 	return { under, moved };
 }
