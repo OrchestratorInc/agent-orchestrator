@@ -411,6 +411,7 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <SplitPanesRow />}
 				{developerMode && <NewSidebarDesignRow />}
 				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
@@ -513,6 +514,18 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for dragging center tabs into split panes. Off by default. */
+function SplitPanesRow() {
+	const { t } = useTranslation();
+	const splitPanes = useUiStore((state) => state.splitPanes);
+	const setSplitPanes = useUiStore((state) => state.setSplitPanes);
+	return (
+		<SettingsRow label={t("settings.splitPanes")} description={t("settings.splitPanesHint")}>
+			<Switch aria-label={t("settings.splitPanes")} checked={splitPanes} onCheckedChange={setSplitPanes} />
 		</SettingsRow>
 	);
 }

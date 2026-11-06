@@ -535,15 +535,15 @@ function LegacyTopbarArchiveButton({
 
 	return (
 		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<SessionArchiveDialog
-							onConfirm={confirmKill}
-							onOpenChange={setConfirmOpen}
-							open={confirmOpen}
-							session={session}
-							trigger={
+			<SessionArchiveDialog
+				onConfirm={confirmKill}
+				onOpenChange={setConfirmOpen}
+				open={confirmOpen}
+				session={session}
+				trigger={
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className="inline-flex">
 								<TopbarButton
 									aria-label={isPending ? t("shell.archiving") : t("shell.archiveSession")}
 									disabled={isPending}
@@ -556,12 +556,12 @@ function LegacyTopbarArchiveButton({
 								>
 									<Archive className="size-icon-md" aria-hidden="true" />
 								</TopbarButton>
-							}
-						/>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent shortcut="archive-session" side="bottom">{t("shell.archiveSession")}</TooltipContent>
-			</Tooltip>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent shortcut="archive-session" side="bottom">{t("shell.archiveSession")}</TooltipContent>
+					</Tooltip>
+				}
+			/>
 			{error ? <TopbarActionError>{error}</TopbarActionError> : null}
 		</div>
 	);

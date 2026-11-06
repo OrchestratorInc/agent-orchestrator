@@ -2678,10 +2678,13 @@ describe("SessionView", () => {
 			reviews: [], runs: [],
 		}));
 		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
-		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		// Outside a split, a reviewer chat that is not selected is not kept mounted.
 		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 	});
 
 	it("reveals the primary chat for each palette hit over a file tab", async () => {

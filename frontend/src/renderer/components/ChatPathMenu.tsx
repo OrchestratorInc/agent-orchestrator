@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { Copy, FileText } from "lucide-react";
+import { Code2, Copy, FileText } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ChatPathActionInput, EditorHandoffState } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
@@ -12,8 +12,9 @@ import { OpenTargetIcon } from "./OpenTargetIcon";
 /** Native actions are available only for the local desktop session. */
 export const ChatPathMenuContext = createContext<{ sessionId?: string; remote: boolean } | undefined>(undefined);
 
-/** Shared by markdown anchors and inline-code paths; mounts only while the menu is open. */
-export function ChatPathMenuItems({ path }: { path: string }) {
+/** Shared by markdown anchors and inline-code paths; mounts only while the menu is open.
+ *  `showUnavailable` keeps the native rows, disabled, where they cannot run. */
+export function ChatPathMenuItems({ path, showUnavailable = false, afterCopy }: { path: string; showUnavailable?: boolean; afterCopy?: ReactNode }) {
 	const context = useContext(ChatPathMenuContext);
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -38,6 +39,7 @@ export function ChatPathMenuItems({ path }: { path: string }) {
 	const perform = (action: ChatPathActionInput["action"], editorId?: ChatPathActionInput["editorId"]) =>
 		aoBridge.editorHandoff.pathAction({ sessionId: sessionId!, path: reference, action, ...(editorId ? { editorId } : {}) });
 	const fileManager = state?.targets.find((target) => target.kind === "file_manager");
+	const editors = state?.targets.filter((target) => target.kind === "editor") ?? [];
 	return <>
 		<ContextMenuItem onSelect={() => run(async () => {
 			await (native ? perform("copy") : aoBridge.clipboard.writeText(reference));
@@ -45,11 +47,15 @@ export function ChatPathMenuItems({ path }: { path: string }) {
 		})}>
 			<Copy aria-hidden="true" />{t("chat.path.copy")}
 		</ContextMenuItem>
-		{native && <ContextMenuItem disabled={!state?.workspaceAvailable} onSelect={() => run(() => perform("reveal"))}>
+		{afterCopy}
+		{(native || showUnavailable) && <ContextMenuItem disabled={!native || !state?.workspaceAvailable} onSelect={() => run(() => perform("reveal"))}>
 			<OpenTargetIcon target={fileManager ?? { id: "file-manager", name: "", kind: "file_manager" }} />{fileManager?.name === "Finder" ? t("chat.path.revealInFinder") : t("chat.path.revealInFileManager")}
 		</ContextMenuItem>}
-		{native && state?.targets.filter((target) => target.kind === "editor").map((editor) => (
-			<ContextMenuItem key={editor.id} disabled={!state.workspaceAvailable} onSelect={() => run(() => perform("open", editor.id as ChatPathActionInput["editorId"]))}>
+		{showUnavailable && editors.length === 0 && <ContextMenuItem disabled>
+			<Code2 aria-hidden="true" />{t("shortcut.open-in-editor")}
+		</ContextMenuItem>}
+		{native && editors.map((editor) => (
+			<ContextMenuItem key={editor.id} disabled={!state?.workspaceAvailable} onSelect={() => run(() => perform("open", editor.id as ChatPathActionInput["editorId"]))}>
 				<OpenTargetIcon target={editor} />{t("chat.path.openWith", { editor: editor.name })}
 			</ContextMenuItem>
 		))}

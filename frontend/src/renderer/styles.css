@@ -6602,3 +6602,188 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 .group\/nav-row[data-preview-open] {
 	color: var(--color-foreground);
 }
+
+/* ── Split panes: tab drag ghost, drop preview, divider ──────────────────── */
+/* Positioned by lib/pane-drag.ts: the ghost moves by transform only, the
+ * preview box moves only when the zone under the pointer changes. */
+body.is-pane-dragging {
+	cursor: grabbing;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Embedded documents would swallow the pointer stream mid-drag. */
+body.is-pane-dragging iframe,
+body.is-pane-dragging webview {
+	pointer-events: none;
+}
+
+[data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source][data-terminal-tab-frame] {
+	opacity: 0.4;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: calc(var(--z-overlay) + 2);
+	display: flex;
+	overflow: hidden;
+	pointer-events: none;
+	/* Exactly the tab's box: square like the tab, no ring or scale that would
+	   read larger. Only a soft shadow lifts it off the page. */
+	background: var(--color-bg-elevated);
+	box-shadow: var(--shadow-popover);
+	opacity: 0;
+	will-change: transform;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost > [data-terminal-tab-frame] {
+	flex: 1;
+	min-width: 0;
+	max-width: none;
+}
+
+/* On the floating top bar a tab is a pill: round the ghost to match and
+   drop the trailing separator. */
+.pane-drag-ghost.center-panel-shell--floating-topbar {
+	border-radius: var(--radius-topbar-control);
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+	background: none;
+}
+
+.pane-drag-ghost[data-lifted] {
+	opacity: 0.96;
+}
+
+.pane-drag-ghost[data-leaving] {
+	opacity: 0;
+	transition-timing-function: ease-in;
+}
+
+.pane-drop-preview {
+	position: fixed;
+	z-index: calc(var(--z-overlay) + 1);
+	pointer-events: none;
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--primary) 7%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	opacity: 0;
+	contain: strict;
+	transition:
+		opacity var(--duration-fast) ease-out,
+		left 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		top 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		height 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pane-drop-preview[data-visible] {
+	opacity: 1;
+}
+
+.pane-drop-preview[data-instant] {
+	transition: none;
+}
+
+/* Unfocused panes of a split rest under a light veil of the background, so
+ * the focused one stands out in either theme. */
+.pane-split-dim {
+	z-index: 5;
+	pointer-events: none;
+	background: color-mix(in oklch, var(--background) 45%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-dim[data-dimmed] {
+	opacity: 1;
+}
+
+/* Divider between the panes: a hairline, with the shared hover-only grip line. */
+.pane-split-divider {
+	position: absolute;
+	z-index: 6;
+	touch-action: none;
+}
+
+.pane-split-divider[data-orientation="vertical"] {
+	top: 0;
+	bottom: 0;
+	width: 9px;
+	margin-left: -4px;
+	cursor: col-resize;
+}
+
+.pane-split-divider[data-orientation="horizontal"] {
+	left: 0;
+	right: 0;
+	height: 9px;
+	margin-top: -4px;
+	cursor: row-resize;
+}
+
+.pane-split-divider::before,
+.pane-split-divider::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The resting hairline. */
+.pane-split-divider[data-orientation="vertical"]::before {
+	top: 0;
+	bottom: 0;
+	left: 4px;
+	width: 1px;
+	background: var(--color-border);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::before {
+	left: 0;
+	right: 0;
+	top: 4px;
+	height: 1px;
+	background: var(--color-border);
+}
+
+/* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
+.pane-split-divider::after {
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-divider[data-orientation="vertical"]::after {
+	top: 0;
+	bottom: 0;
+	left: 3.5px;
+	width: 2px;
+	background: linear-gradient(to bottom, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::after {
+	left: 0;
+	right: 0;
+	top: 3.5px;
+	height: 2px;
+	background: linear-gradient(to right, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider:hover::after,
+.pane-split-divider:focus-visible::after {
+	opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pane-drag-ghost,
+	.pane-drop-preview,
+	.pane-split-dim,
+	.pane-split-divider::after {
+		transition: none;
+	}
+}

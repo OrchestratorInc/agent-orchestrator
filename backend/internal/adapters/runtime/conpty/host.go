@@ -79,6 +79,7 @@ func newHost(cfg ServeConfig) *host {
 		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
 			func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface),
 		modes:     newModeTracker(),
+		da1C:      make(chan struct{}, 4),
 		shutdownC: make(chan struct{}),
 	}
 }
@@ -148,6 +149,8 @@ type host struct {
 	fg         *foregroundTracker // nil where the PTY cannot name its foreground
 	fgOnce     sync.Once
 	fgWatchers atomic.Int32
+	// da1C queues DA1 replies for writeDA1Replies (see deviceattrs.go).
+	da1C chan struct{}
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -202,6 +205,9 @@ func (h *host) applyLargestLocked() {
 func (h *host) run(ctx context.Context) error {
 	// Pump PTY output to ring + broadcast.
 	go h.pumpPTY()
+	if answersDeviceAttributes {
+		go h.writeDA1Replies()
+	}
 
 	// Watch for ctx cancellation and trigger shutdown.
 	go func() {
@@ -265,8 +271,12 @@ func (h *host) shutdown() {
 // update but does NOT close the listener (keep-alive).
 func (h *host) pumpPTY() {
 	buf := make([]byte, 32*1024)
+	var da1 da1Scanner
 	for {
 		n, err := h.cfg.PTY.Read(buf)
+		if n > 0 && answersDeviceAttributes {
+			h.queueDA1Replies(da1.scan(buf[:n]))
+		}
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
@@ -547,6 +557,9 @@ func (h *host) handleConn(conn net.Conn) {
 func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
+		if answersDeviceAttributes && da1Replies.Match(payload) {
+			return // the host already answered (see deviceattrs.go)
+		}
 		if h.fgWatchers.Load() > 0 {
 			h.fg.noteInput(time.Now())
 		}

@@ -1,6 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { repositoryOwnerAvatar } from "../lib/repository-avatar";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
@@ -87,7 +88,7 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 				const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 					params: { path: { id: project.id } },
 				});
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (data?.status !== "ok") return undefined;
 				return data.project;
 			},
