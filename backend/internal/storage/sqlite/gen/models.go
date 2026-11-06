@@ -1184,6 +1184,25 @@ type Workflow struct {
 	UpdatedAt      time.Time
 }
 
+type WorkflowArtifact struct {
+	ID               string
+	WorkflowID       string
+	TaskID           string
+	AttemptID        string
+	SessionID        string
+	Generation       string
+	RepoKey          string
+	ArtifactRevision int64
+	Fingerprint      string
+	SnapshotJson     string
+	RepoPath         string
+	WorktreePath     string
+	GitCommonDir     string
+	State            string
+	Revision         int64
+	CreatedAt        time.Time
+}
+
 type WorkflowAttempt struct {
 	ID          domain.WorkflowAttemptID
 	WorkflowID  domain.WorkflowID
@@ -1250,6 +1269,21 @@ type WorkflowEdge struct {
 	ToTaskID   domain.WorkflowTaskID
 }
 
+type WorkflowGateRun struct {
+	ID                  string
+	ArtifactID          string
+	ArtifactFingerprint string
+	PolicyDigest        string
+	Fingerprint         string
+	State               string
+	ResultsJson         string
+	OwnerID             string
+	Epoch               int64
+	Revision            int64
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
 type WorkflowIdempotency struct {
 	IdempotencyKey     string
 	WorkflowID         domain.WorkflowID
@@ -1258,6 +1292,58 @@ type WorkflowIdempotency struct {
 	ResultType         string
 	ResultID           string
 	CreatedAt          time.Time
+}
+
+type WorkflowIntegrationOperation struct {
+	ID            string
+	PlanID        string
+	WorkflowID    string
+	Action        string
+	RequestDigest string
+	RequestJson   string
+	ApprovalRef   string
+	OwnerID       string
+	Epoch         int64
+	State         string
+	Revision      int64
+	CreatedAt     time.Time
+}
+
+type WorkflowIntegrationPlan struct {
+	ID         string
+	WorkflowID string
+	Status     string
+	Revision   int64
+	PlanDigest string
+	CreatedAt  time.Time
+}
+
+type WorkflowIntegrationRepoOperation struct {
+	OperationID string
+	RepoKey     string
+	State       string
+	ObservedSha string
+	Revision    int64
+}
+
+type WorkflowIntegrationRepoPreview struct {
+	PlanID              string
+	RepoKey             string
+	ArtifactID          string
+	TaskCommitID        string
+	ArtifactFingerprint string
+	PolicyDigest        string
+	TargetRef           string
+	ExpectedTargetSha   string
+	TaskCommitSha       string
+	MergeMethod         string
+	Status              string
+	TreeSha             string
+	MergeCommitSha      string
+	DiffDigest          string
+	ConflictPathsJson   string
+	PreviewDigest       string
+	Revision            int64
 }
 
 type WorkflowIntervention struct {
@@ -1302,6 +1388,37 @@ type WorkflowMessage struct {
 	UpdatedAt       time.Time
 }
 
+type WorkflowQualityPolicy struct {
+	WorkflowID   string
+	PolicyJson   string
+	PolicyDigest string
+	Revision     int64
+	ActorRef     string
+	UpdatedAt    time.Time
+}
+
+type WorkflowQualityReview struct {
+	ID                  string
+	ArtifactID          string
+	ArtifactFingerprint string
+	PolicyRevision      int64
+	PolicyDigest        string
+	TargetSha           string
+	ActorJson           string
+	ActorDigest         string
+	OwnerID             string
+	Epoch               int64
+	State               string
+	Verdict             string
+	FindingsJson        string
+	RequestDigest       string
+	RootTaskID          string
+	FixRequestID        string
+	Revision            int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 type WorkflowRepository struct {
 	WorkflowID domain.WorkflowID
 	RepoKey    domain.WorkflowRepoKey
@@ -1326,6 +1443,25 @@ type WorkflowTask struct {
 	UpdatedAt    time.Time
 }
 
+type WorkflowTaskCommit struct {
+	ID                  string
+	ArtifactID          string
+	ArtifactFingerprint string
+	ArtifactRevision    int64
+	PolicyDigest        string
+	GateID              string
+	ReviewID            string
+	ParentSha           string
+	TreeSha             string
+	CommitSha           string
+	TargetSha           string
+	State               string
+	OwnerID             string
+	Epoch               int64
+	Revision            int64
+	CreatedAt           time.Time
+}
+
 type WorkflowTaskMaterialization struct {
 	RequestID              string
 	WorkflowID             string
@@ -1344,6 +1480,26 @@ type WorkflowTaskMaterializationKey struct {
 	IdempotencyKey     string
 	RequestFingerprint string
 	RequestID          string
+}
+
+type WorkflowTaskPathReservation struct {
+	ID           int64
+	AdmissionID  string
+	AttemptID    string
+	WorkflowID   string
+	TaskID       string
+	RepoKey      string
+	ProjectID    string
+	RepoPath     string
+	RepoIdentity string
+	ScopePath    string
+	SessionID    string
+	Generation   string
+	OwnerID      string
+	Epoch        int64
+	LeaseUntil   time.Time
+	Revision     int64
+	ReleasedAt   sql.NullTime
 }
 
 type WorkflowTaskRepo struct {

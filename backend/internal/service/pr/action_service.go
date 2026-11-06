@@ -150,6 +150,21 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if !ok || tracked.Number != prNumber {
 		return MergeResult{}, ErrPRNotFound
 	}
+	if tracked.SessionID != "" {
+		bindings, ok := s.store.(interface {
+			HasWorkflowSessionOwnership(context.Context, domain.SessionID) (bool, error)
+		})
+		if !ok {
+			return MergeResult{}, fmt.Errorf("%w: workflow ownership cannot be verified", ErrPRPreconditions)
+		}
+		bound, err := bindings.HasWorkflowSessionOwnership(ctx, tracked.SessionID)
+		if err != nil {
+			return MergeResult{}, fmt.Errorf("load workflow ownership: %w", err)
+		}
+		if bound {
+			return MergeResult{}, fmt.Errorf("%w: workflow delivery requires an approved integration plan", ErrPRPreconditions)
+		}
+	}
 	if tracked.Draft || tracked.Merged || tracked.Closed {
 		return MergeResult{}, ErrPRNotMergeable
 	}

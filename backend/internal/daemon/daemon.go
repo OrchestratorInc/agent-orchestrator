@@ -1127,7 +1127,7 @@ func Run(buildVersion string) error {
 	// routes (either proof) and by the approval-confirm route (the token alone).
 	operatorAuth := newWorkflowOperatorAuth(cfg.DataDir, store, browserAuthority, log)
 	logWorkflowOperatorAuth(log, operatorAuth)
-	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+	apiDeps := httpd.APIDeps{
 		Awake:                    awakeSvc,
 		Projects:                 projectSvc,
 		ArtifactVersions:         lcStack.ArtifactVersions,
@@ -1213,7 +1213,9 @@ func Run(buildVersion string) error {
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
-	})
+	}
+	wireQualityServices(&apiDeps, store, cfg.DataDir, operatorAuth.Approvals, log)
+	srv, err := httpd.NewWithDeps(cfg, log, termMgr, apiDeps)
 	if err != nil {
 		stop()
 		lcStack.Stop()

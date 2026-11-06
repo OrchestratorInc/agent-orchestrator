@@ -24,17 +24,10 @@ func newOperatorRequestCommand(c *commandContext) *cobra.Command {
 			}
 			var body []byte
 			if bodyFile != "" {
-				file, err := os.Open(bodyFile)
+				var err error
+				body, err = readOperatorBody(bodyFile)
 				if err != nil {
-					return fmt.Errorf("read operator payload: %w", err)
-				}
-				defer file.Close()
-				body, err = io.ReadAll(io.LimitReader(file, principal.MaxApprovalPayloadBytes+1))
-				if err != nil {
-					return fmt.Errorf("read operator payload: %w", err)
-				}
-				if len(body) > principal.MaxApprovalPayloadBytes {
-					return usageError{errors.New("operator payload exceeds 64 KiB")}
+					return err
 				}
 			}
 			result, err := c.performOperatorAction(cmd.Context(), operatorAction{method: method}, path, body)
@@ -49,4 +42,21 @@ func newOperatorRequestCommand(c *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&path, "path", "", "exact local API path including any query string")
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "file containing the exact JSON body (optional)")
 	return cmd
+}
+
+// readOperatorBody 保留原始正文供批准摘要使用，并在读取时限制大小。
+func readOperatorBody(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read operator payload: %w", err)
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, principal.MaxApprovalPayloadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read operator payload: %w", err)
+	}
+	if len(body) > principal.MaxApprovalPayloadBytes {
+		return nil, usageError{errors.New("operator payload exceeds 64 KiB")}
+	}
+	return body, nil
 }

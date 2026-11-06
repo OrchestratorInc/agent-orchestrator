@@ -80,6 +80,7 @@ type m3Control struct {
 	manager      *sessionmanager.Manager
 	capabilities *capability.Resolver
 	budget       *budget.Service
+	quality      *m4Services
 }
 
 // newM3Control 获取本实例任期；观测可替换，准入仍由真实服务裁决。
@@ -124,6 +125,9 @@ func (c *m3Control) wire(t *testing.T, deps *httpd.APIDeps, workflows *workflow.
 	}
 	deps.Scheduler, deps.Budget = c.scheduler, c.budget
 	deps.WorkflowMaterializer, deps.WorkflowMaterializations, deps.WorkflowRecovery = workflows, c.store, c.store
+	if c.quality != nil {
+		c.quality.wire(t, c, deps)
+	}
 }
 
 // newM3Fixture 复用真实 Manager/Git/Router，将所有持久数据放在测试临时目录。
@@ -171,14 +175,14 @@ func m3Policy(t *testing.T, f *m2ffFixture, harness domain.AgentHarness, limit i
 	}
 }
 
-// m3Create 以真实 HTTP 创建一个共享仓库范围的 DAG，返回调度器可以发现的任务。
+// m3Create 为容量/公平性用例分配互不重叠的写范围，避免被 M4 路径占位先行拦截。
 func m3Create(t *testing.T, f *m2ffFixture, key string, count int) domain.WorkflowID {
 	t.Helper()
 	tasks, repos := []map[string]any{}, []map[string]any{}
 	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("%s-task-%02d", key, i)
 		tasks = append(tasks, map[string]any{"id": id, "kind": "development", "title": id, "agentHarness": domain.HarnessCodex, "maxAttempts": 3})
-		repos = append(repos, map[string]any{"taskId": id, "repoKey": "repo-a"})
+		repos = append(repos, map[string]any{"taskId": id, "repoKey": "repo-a", "allowedPaths": []string{id}})
 	}
 	body := m3JSON(t, map[string]any{"title": key, "goal": "M3真实装配验收", "idempotencyKey": key,
 		"repositories": []map[string]any{{"repoKey": "repo-a", "projectId": f.projectA}}, "tasks": tasks, "taskRepositories": repos})

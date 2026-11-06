@@ -4604,6 +4604,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** commitWorkflowArtifact */
+        post: operations["commitWorkflowArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** runWorkflowArtifactGate */
+        post: operations["runWorkflowArtifactGate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** beginWorkflowArtifactReview */
+        post: operations["beginWorkflowArtifactReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/attempts/{attemptId}/artifacts/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** snapshotWorkflowArtifacts */
+        post: operations["snapshotWorkflowArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/attempts/{attemptId}/bind": {
         parameters: {
             query?: never;
@@ -4775,6 +4843,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/coordination-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getWorkflowCoordinationSummary */
+        get: operations["getWorkflowCoordinationSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integration-operations/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getWorkflowIntegrationOperation */
+        get: operations["getWorkflowIntegrationOperation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integration-operations/{operationId}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** reconcileWorkflowIntegrationOperation */
+        post: operations["reconcileWorkflowIntegrationOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integrations/{planId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getWorkflowIntegrationPlan */
+        get: operations["getWorkflowIntegrationPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integrations/{planId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** applyWorkflowIntegration */
+        post: operations["applyWorkflowIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integrations/{planId}/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** pushWorkflowIntegration */
+        post: operations["pushWorkflowIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/integrations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** previewWorkflowIntegration */
+        post: operations["previewWorkflowIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/messages": {
         parameters: {
             query?: never;
@@ -4810,6 +4997,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/quality-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** listWorkflowQualityPolicies */
+        get: operations["listWorkflowQualityPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/quality-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** configureWorkflowQualityPolicy */
+        put: operations["configureWorkflowQualityPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/quality-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getWorkflowQualitySummary */
+        get: operations["getWorkflowQualitySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/resume-scheduling": {
         parameters: {
             query?: never;
@@ -4821,6 +5059,23 @@ export interface paths {
         put?: never;
         /** Resume scheduling without bypassing recovery or budget fences */
         post: operations["resumeWorkflowScheduling"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/reviews/{reviewId}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** finishWorkflowArtifactReview */
+        post: operations["finishWorkflowArtifactReview"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5367,12 +5622,35 @@ export interface components {
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
+        ArtifactFile: {
+            blobSha: string;
+            deleted: boolean;
+            mode: string;
+            path: string;
+        };
         ArtifactFileResponse: {
             /** @description Hex SHA-256 of the file's content. */
             fileFingerprint: string;
             path: string;
             /** Format: int64 */
             size: number;
+        };
+        ArtifactSnapshot: {
+            /** Format: int64 */
+            artifactRevision: number;
+            attemptId: string;
+            /** Format: date-time */
+            createdAt: string;
+            fingerprint: string;
+            git: components["schemas"]["GitArtifact"];
+            id: string;
+            repo: components["schemas"]["DeliveryRepo"];
+            /** Format: int64 */
+            revision: number;
+            sessionId: string;
+            state: string;
+            taskId: string;
+            workflowId: string;
         };
         ArtifactVersionResponse: {
             /** @description The version's UTF-8 text content, cut short when truncated is set. */
@@ -6583,6 +6861,67 @@ export interface components {
             /** Format: int64 */
             totalTokens: number;
         };
+        CoordinationBudgetView: {
+            amountNanos: null | number;
+            policyId: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            window: string;
+        };
+        CoordinationMessageView: {
+            /** Format: date-time */
+            createdAt: string;
+            deliveryState: string;
+            id: string;
+            kind: string;
+            /** Format: int64 */
+            revision: number;
+            taskId?: string;
+            toTaskId?: string;
+        };
+        CoordinationSummaryView: {
+            messages: components["schemas"]["CoordinationMessageView"][];
+            /** Format: date-time */
+            observedAt: string;
+            reservations: components["schemas"]["PathReservationView"][];
+            tasks: components["schemas"]["CoordinationTaskView"][];
+            truncated: boolean;
+            workflowId: string;
+        };
+        CoordinationTaskView: {
+            /** Format: int64 */
+            admissionRevision: number;
+            admissionState: string;
+            attemptId: string;
+            /** Format: int64 */
+            attemptNo: number;
+            attemptState: string;
+            bindingState: string;
+            blockedReason: string;
+            budgetQuality: string;
+            budgetReservations: components["schemas"]["CoordinationBudgetView"][];
+            /** Format: date-time */
+            capabilityExpiresAt: string;
+            capabilityReadiness: string;
+            capabilitySource: string;
+            dependencies: string[];
+            harness: string;
+            /** Format: date-time */
+            heartbeatAt: string;
+            /** Format: date-time */
+            leaseUntil: string;
+            leaseValid: boolean;
+            model: string;
+            repositories: components["schemas"]["DomainWorkflowTaskRepository"][];
+            /** Format: int64 */
+            revision: number;
+            sessionId: string;
+            sessionReadiness: string;
+            sessionStatus: string;
+            state: string;
+            taskId: string;
+        };
         CreateAutomationRequest: {
             cron?: string;
             displayName: string;
@@ -6723,6 +7062,15 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        DeliveryRepo: {
+            allowedPaths: string[];
+            baseSha: string;
+            branch: string;
+            creationSha: string;
+            projectId: string;
+            repoKey: string;
+            targetRef: string;
+        };
         DesktopArtifactLocationResponse: {
             artifactDir: string;
             sessionId: string;
@@ -6777,6 +7125,13 @@ export interface components {
             revision: number;
             selection: string;
             sourceRole: string;
+        };
+        DomainWorkflowTaskRepository: {
+            allowedPaths: string[];
+            baseSha: string;
+            repoKey: string;
+            taskId: string;
+            workflowId: string;
         };
         EditConversationMessageRequest: {
             clientMessageId?: string;
@@ -6849,6 +7204,13 @@ export interface components {
         };
         GetWorkflowCapabilitiesResponse: {
             capabilities: components["schemas"]["WorkflowCapabilityResponse"][];
+        };
+        GitArtifact: {
+            files: components["schemas"]["ArtifactFile"][] | null;
+            headSha: string;
+            indexDigest: string;
+            treeSha: string;
+            workspaceDigest: string;
         };
         GitHubRepo: {
             clone_url: string;
@@ -6986,6 +7348,81 @@ export interface components {
              * @enum {string}
              */
             phase?: "downloading" | "installing";
+        };
+        IntegrationApplyRequest: {
+            entries: components["schemas"]["IntegrationRepoPreview"][];
+            /** Format: int64 */
+            expectedRevision: number;
+            idempotencyKey: string;
+            planDigest: string;
+            pushTargets?: components["schemas"]["IntegrationPushTarget"][];
+        };
+        IntegrationConflictPaths: string[] | null;
+        IntegrationOperation: {
+            action: string;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            planId: string;
+            requestDigest: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            workflowId: string;
+        };
+        IntegrationOperationResponse: {
+            operation: components["schemas"]["IntegrationOperation"];
+            repositories: components["schemas"]["IntegrationRepoOperation"][];
+        };
+        IntegrationPlan: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            planDigest: string;
+            /** Format: int64 */
+            revision: number;
+            status: string;
+            workflowId: string;
+        };
+        IntegrationPlanResponse: {
+            plan: components["schemas"]["IntegrationPlan"];
+            repositories: components["schemas"]["IntegrationRepoPreview"][];
+        };
+        IntegrationPushTarget: {
+            commitSha: string;
+            expectedRemoteSha: string;
+            remoteIdentity: string;
+            remoteKey: string;
+            repoKey: string;
+            targetRef: string;
+        };
+        IntegrationRepoOperation: {
+            observedSha: string;
+            operationId: string;
+            repoKey: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+        };
+        IntegrationRepoPreview: {
+            artifactFingerprint: string;
+            artifactId: string;
+            conflictPaths: components["schemas"]["IntegrationConflictPaths"];
+            diffDigest: string;
+            expectedTargetSha: string;
+            mergeCommitSha: string;
+            mergeMethod: string;
+            planId: string;
+            policyDigest: string;
+            previewDigest: string;
+            repoKey: string;
+            /** Format: int64 */
+            revision: number;
+            status: string;
+            targetRef: string;
+            taskCommitId: string;
+            taskCommitSha: string;
+            treeSha: string;
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -7335,6 +7772,21 @@ export interface components {
             targetSha: string;
             title: string;
         };
+        PathReservationView: {
+            attemptId: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            leaseUntil: string;
+            /** Format: date-time */
+            releasedAt?: null | string;
+            repoKey: string;
+            /** Format: int64 */
+            revision: number;
+            scopePath: string;
+            sessionId: string;
+            taskId: string;
+        };
         PrepareTaskResponse: {
             ok: boolean;
             taskPreparation?: string;
@@ -7521,6 +7973,111 @@ export interface components {
             /** Format: int64 */
             ramSoftPercent: number;
             reason: string;
+        };
+        QualityActionRequest: {
+            /** Format: int64 */
+            artifactRevision?: number;
+            idempotencyKey: string;
+        };
+        QualityArtifactsResponse: {
+            artifacts: components["schemas"]["ArtifactSnapshot"][];
+        };
+        QualityCommitResponse: {
+            commit: components["schemas"]["TaskCommit"];
+        };
+        QualityFinding: {
+            line: number;
+            path: string;
+            priority: number;
+            reason: string;
+        };
+        QualityGateResponse: {
+            artifactFingerprint: string;
+            artifactId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            fingerprint: string;
+            id: string;
+            policyDigest: string;
+            results: components["schemas"]["QualityGateResultResponse"][];
+            /** Format: int64 */
+            revision: number;
+            state: string;
+        };
+        QualityGateResultResponse: {
+            exitCode?: null | number;
+            /** Format: date-time */
+            finishedAt: string;
+            logDigest: string;
+            reason?: string;
+            ruleId: string;
+            /** Format: date-time */
+            startedAt: string;
+            state: string;
+            truncated: boolean;
+        };
+        QualityPoliciesResponse: {
+            policies: components["schemas"]["QualityPolicyResponse"][];
+        };
+        QualityPolicyRequest: {
+            /** Format: int64 */
+            expectedRevision: number;
+            policyId: string;
+        };
+        QualityPolicyResponse: {
+            digest: string;
+            id: string;
+            /** Format: int64 */
+            policyRevision: number;
+            /** Format: int64 */
+            revision: number;
+        };
+        QualityPreviewRequest: {
+            artifactIds: string[];
+            idempotencyKey: string;
+        };
+        QualityReconcileRequest: {
+            /** Format: int64 */
+            expectedRevision: number;
+        };
+        QualityReview: {
+            actor: components["schemas"]["QualityReviewActor"];
+            artifactFingerprint: string;
+            artifactId: string;
+            /** Format: date-time */
+            createdAt: string;
+            findings: components["schemas"]["QualityFinding"][];
+            fixRequestId?: string;
+            id: string;
+            policyDigest: string;
+            /** Format: int64 */
+            policyRevision: number;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            targetSha: string;
+            verdict: string;
+        };
+        QualityReviewActor: {
+            attemptId?: string;
+            generation?: string;
+            operatorRef?: string;
+            sessionId?: string;
+        };
+        QualityReviewFinishRequest: {
+            /** Format: int64 */
+            expectedRevision: number;
+            findings: components["schemas"]["QualityFinding"][];
+            verdict: string;
+        };
+        QualityReviewResponse: {
+            review: components["schemas"]["QualityReview"];
+        };
+        QualitySnapshotRequest: {
+            /** Format: int64 */
+            artifactRevision: number;
         };
         RecoverExpiredWorkflowsRequest: {
             idempotencyKey: string;
@@ -8686,6 +9243,25 @@ export interface components {
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
         };
+        TaskCommit: {
+            artifactFingerprint: string;
+            artifactId: string;
+            /** Format: int64 */
+            artifactRevision: number;
+            commitSha: string;
+            /** Format: date-time */
+            createdAt: string;
+            gateId: string;
+            id: string;
+            parentSha: string;
+            policyDigest: string;
+            reviewId: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            targetSha: string;
+            treeSha: string;
+        };
         TaskRequestMaterializationResponse: {
             /** Format: date-time */
             createdAt: string;
@@ -8950,6 +9526,12 @@ export interface components {
             /** @enum {string} */
             usage: "exact" | "estimated" | "unknown";
         };
+        WorkflowCoordinationResponse: {
+            budget: components["schemas"]["BudgetSnapshotsResponse"];
+            coordination: components["schemas"]["CoordinationSummaryView"];
+            quality: components["schemas"]["WorkflowQualitySummaryResponse"];
+            scheduler?: components["schemas"]["SchedulerStatusResponse"];
+        };
         WorkflowDefinitionResponse: {
             edges: components["schemas"]["WorkflowEdgeResponse"][];
             repositories: components["schemas"]["WorkflowRepositoryResponse"][];
@@ -9030,6 +9612,16 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             workflowId: string;
+        };
+        WorkflowQualitySummaryResponse: {
+            artifacts: components["schemas"]["ArtifactSnapshot"][];
+            commits: components["schemas"]["TaskCommit"][];
+            currentPolicy: null | components["schemas"]["QualityPolicyResponse"];
+            gates: components["schemas"]["QualityGateResponse"][];
+            integrations: components["schemas"]["IntegrationPlan"][];
+            operations: components["schemas"]["IntegrationOperation"][];
+            reviews: components["schemas"]["QualityReview"][];
+            truncated: boolean;
         };
         WorkflowReplanResponse: {
             interventionId: string;
@@ -26589,6 +27181,344 @@ export interface operations {
             };
         };
     };
+    commitWorkflowArtifact: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                artifactId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityCommitResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    runWorkflowArtifactGate: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                artifactId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityGateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    beginWorkflowArtifactReview: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                artifactId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityReviewResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    snapshotWorkflowArtifacts: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Workflow attempt identifier. */
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualitySnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     bindWorkflowAttempt: {
         parameters: {
             query?: never;
@@ -27517,6 +28447,582 @@ export interface operations {
             };
         };
     };
+    getWorkflowCoordinationSummary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCoordinationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getWorkflowIntegrationOperation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationOperationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reconcileWorkflowIntegrationOperation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationOperationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getWorkflowIntegrationPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationPlanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    applyWorkflowIntegration: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationOperationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    pushWorkflowIntegration: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                planId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationOperationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    previewWorkflowIntegration: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationPlanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listWorkflowMessages: {
         parameters: {
             query?: {
@@ -27781,6 +29287,250 @@ export interface operations {
             };
         };
     };
+    listWorkflowQualityPolicies: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityPoliciesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    configureWorkflowQualityPolicy: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityPolicyResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getWorkflowQualitySummary: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowQualitySummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     resumeWorkflowScheduling: {
         parameters: {
             query?: never;
@@ -27807,6 +29557,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowSchedulerResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    finishWorkflowArtifactReview: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                reviewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityReviewFinishRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualityReviewResponse"];
                 };
             };
             /** @description Bad Request */

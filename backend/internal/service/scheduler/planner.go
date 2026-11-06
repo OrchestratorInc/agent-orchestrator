@@ -239,6 +239,10 @@ func refusalReason(err error) string {
 		return ""
 	case errors.Is(err, domain.ErrSchedulerCapacity):
 		return "CAPACITY_UNAVAILABLE"
+	case errors.Is(err, domain.ErrPathReservationConflict):
+		return "PATH_RESERVATION_CONFLICT"
+	case errors.Is(err, domain.ErrDeliveryBlocked):
+		return "QUALITY_GATE_BLOCKED"
 	case errors.Is(err, domain.ErrCapabilityEvidenceInsufficient), errors.Is(err, domain.ErrInvalidCapabilityHarness):
 		return "CAPABILITY_UNAVAILABLE"
 	case errors.Is(err, domain.ErrBudgetExceeded):

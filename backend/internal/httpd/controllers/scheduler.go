@@ -64,6 +64,11 @@ func (c *SchedulerController) status(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, schedulerError(err))
 		return
 	}
+	envelope.WriteJSON(w, http.StatusOK, schedulerStatusResponse(status))
+}
+
+// schedulerStatusResponse 供原 Scheduler 路由与协调摘要共用同一投影，避免显示语义漂移。
+func schedulerStatusResponse(status schedulersvc.Status) SchedulerStatusResponse {
 	response := SchedulerStatusResponse{Epoch: status.Leader.Fence.Epoch, LeaderLeaseUntil: status.Leader.LeaseUntil, Recovered: status.Leader.Recovered,
 		ObservedAt: status.Resources.ObservedAt, TotalBytes: status.Resources.TotalBytes, AvailableBytes: status.Resources.AvailableBytes,
 		Limit: status.Capacity.Limit, MaxNewClaims: status.Capacity.MaxNewClaims, ReasonCode: status.Capacity.ReasonCode, Occupied: status.Occupied,
@@ -74,7 +79,7 @@ func (c *SchedulerController) status(w http.ResponseWriter, r *http.Request) {
 	for _, policy := range status.Policies {
 		response.Policies = append(response.Policies, schedulerPolicyResponse(policy))
 	}
-	envelope.WriteJSON(w, http.StatusOK, response)
+	return response
 }
 
 // putPolicy 只选择全局或一个已知 Harness，服务再次验证 Operator 与 revision。

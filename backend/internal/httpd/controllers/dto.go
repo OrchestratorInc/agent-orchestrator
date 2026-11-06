@@ -4808,3 +4808,114 @@ type MaterializeTaskRequestResponse struct {
 	Materialization TaskRequestMaterializationResponse `json:"materialization"`
 	Created         bool                               `json:"created"`
 }
+
+// 质量 API 仅选择服务端策略/工件 ID，绝不接受自报工具、环境、仓库路径或执行任期。
+type QualityPolicyRequest struct {
+	PolicyID         string `json:"policyId"`
+	ExpectedRevision int64  `json:"expectedRevision"`
+}
+type QualitySnapshotRequest struct {
+	ArtifactRevision int64 `json:"artifactRevision"`
+}
+type QualityActionRequest struct {
+	IdempotencyKey   string `json:"idempotencyKey"`
+	ArtifactRevision int64  `json:"artifactRevision,omitempty"`
+}
+type QualityReviewFinishRequest struct {
+	ExpectedRevision int64                   `json:"expectedRevision"`
+	Verdict          domain.ReviewVerdict    `json:"verdict"`
+	Findings         []domain.QualityFinding `json:"findings"`
+}
+type QualityPreviewRequest struct {
+	IdempotencyKey string   `json:"idempotencyKey"`
+	ArtifactIDs    []string `json:"artifactIds"`
+}
+type QualityReconcileRequest struct {
+	ExpectedRevision int64 `json:"expectedRevision"`
+}
+type QualityArtifactIDParam struct {
+	WorkflowID string `path:"workflowId"`
+	ArtifactID string `path:"artifactId"`
+}
+type QualityReviewIDParam struct {
+	WorkflowID string `path:"workflowId"`
+	ReviewID   string `path:"reviewId"`
+}
+type IntegrationPlanIDParam struct {
+	WorkflowID string `path:"workflowId"`
+	PlanID     string `path:"planId"`
+}
+type IntegrationOperationIDParam struct {
+	WorkflowID  string `path:"workflowId"`
+	OperationID string `path:"operationId"`
+}
+
+// QualityPolicyResponse 只公开策略身份；Revision 是工作流配置记录的 CAS 版本，未配置为 0。
+type QualityPolicyResponse struct {
+	ID             string `json:"id"`
+	PolicyRevision int64  `json:"policyRevision"`
+	Revision       int64  `json:"revision"`
+	Digest         string `json:"digest"`
+}
+type QualityPoliciesResponse struct {
+	Policies []QualityPolicyResponse `json:"policies"`
+}
+type QualityArtifactsResponse struct {
+	Artifacts []domain.ArtifactSnapshot `json:"artifacts"`
+}
+
+// QualityGateResultResponse 只暴露退出事实和完整日志摘要，不输出原始子进程日志。
+type QualityGateResultResponse struct {
+	RuleID     string    `json:"ruleId"`
+	State      string    `json:"state"`
+	Reason     string    `json:"reason,omitempty"`
+	ExitCode   *int      `json:"exitCode,omitempty"`
+	LogDigest  string    `json:"logDigest"`
+	Truncated  bool      `json:"truncated"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt"`
+}
+type QualityGateResponse struct {
+	ID                  string                      `json:"id"`
+	ArtifactID          string                      `json:"artifactId"`
+	ArtifactFingerprint string                      `json:"artifactFingerprint"`
+	PolicyDigest        string                      `json:"policyDigest"`
+	Fingerprint         string                      `json:"fingerprint"`
+	State               string                      `json:"state"`
+	Revision            int64                       `json:"revision"`
+	CreatedAt           time.Time                   `json:"createdAt"`
+	ExpiresAt           time.Time                   `json:"expiresAt"`
+	Results             []QualityGateResultResponse `json:"results"`
+}
+type QualityReviewResponse struct {
+	Review domain.QualityReview `json:"review"`
+}
+type QualityCommitResponse struct {
+	Commit domain.TaskCommit `json:"commit"`
+}
+type IntegrationPlanResponse struct {
+	Plan         domain.IntegrationPlan          `json:"plan"`
+	Repositories []domain.IntegrationRepoPreview `json:"repositories"`
+}
+type IntegrationOperationResponse struct {
+	Operation    domain.IntegrationOperation       `json:"operation"`
+	Repositories []domain.IntegrationRepoOperation `json:"repositories"`
+}
+
+// WorkflowQualitySummaryResponse 保留已选策略的持久化身份，未配置时 CurrentPolicy 明确返回 null。
+type WorkflowQualitySummaryResponse struct {
+	CurrentPolicy *QualityPolicyResponse        `json:"currentPolicy"`
+	Truncated     bool                          `json:"truncated"`
+	Artifacts     []domain.ArtifactSnapshot     `json:"artifacts"`
+	Gates         []QualityGateResponse         `json:"gates"`
+	Reviews       []domain.QualityReview        `json:"reviews"`
+	Commits       []domain.TaskCommit           `json:"commits"`
+	Integrations  []domain.IntegrationPlan      `json:"integrations"`
+	Operations    []domain.IntegrationOperation `json:"operations"`
+}
+type WorkflowCoordinationResponse struct {
+	Coordination domain.CoordinationSummaryView `json:"coordination"`
+	Quality      WorkflowQualitySummaryResponse `json:"quality"`
+	Scheduler    *SchedulerStatusResponse       `json:"scheduler,omitempty"`
+	Budget       BudgetSnapshotsResponse        `json:"budget"`
+}

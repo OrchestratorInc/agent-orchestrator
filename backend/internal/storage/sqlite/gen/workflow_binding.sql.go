@@ -81,8 +81,6 @@ FROM workflow_attempt_bindings
 WHERE attempt_id = ?
 `
 
-// Attempt-to-session binding queries (M2).
-//
 // These statements never read or write workflow_attempts.lease_token. The lease
 // capability stays in workflow_attempts so that exactly one response may return it;
 // a binding read is safe to hand to any authorized reader.
@@ -177,6 +175,25 @@ func (q *Queries) GetWorkflowAttemptSession(ctx context.Context, id domain.Workf
 	var session_id *domain.SessionID
 	err := row.Scan(&session_id)
 	return session_id, err
+}
+
+const hasWorkflowSessionOwnership = `-- name: HasWorkflowSessionOwnership :one
+
+SELECT EXISTS(
+    SELECT 1 FROM workflow_attempt_bindings b
+    WHERE b.session_id=?1
+) OR EXISTS(
+    SELECT 1 FROM scheduler_admissions a WHERE a.session_id=?1 AND a.attempt_id IS NOT NULL
+)
+`
+
+// Attempt-to-session binding queries (M2).
+// Accepted spawn intent owns the session before the later Bind acknowledgement.
+func (q *Queries) HasWorkflowSessionOwnership(ctx context.Context, sessionID *domain.SessionID) (sql.NullBool, error) {
+	row := q.db.QueryRowContext(ctx, hasWorkflowSessionOwnership, sessionID)
+	var column_1 sql.NullBool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const insertWorkflowAttemptBinding = `-- name: InsertWorkflowAttemptBinding :execrows

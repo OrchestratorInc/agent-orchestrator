@@ -53,6 +53,9 @@ func (s *Store) ReserveAndClaim(ctx context.Context, in domain.ClaimAdmissionInp
 		if t.AgentHarness != "" && t.AgentHarness != in.Evidence.Capability.Harness {
 			return domain.ErrCapabilityEvidenceInsufficient
 		}
+		if err := checkPredecessorQuality(ctx, q, in.Attempt.WorkflowID, in.Attempt.TaskID, t.Kind, in.Evidence.Now); err != nil {
+			return err
+		}
 		states, err := q.ListSchedulerWorkflowStates(ctx)
 		if err != nil {
 			return err
@@ -95,6 +98,9 @@ func (s *Store) ReserveAndClaim(ctx context.Context, in domain.ClaimAdmissionInp
 			return err
 		}
 		if err := persistAdmission(ctx, q, admission, reservations, in.Evidence); err != nil {
+			return err
+		}
+		if err := reserveTaskPaths(ctx, q, attempt, admission); err != nil {
 			return err
 		}
 		if err := insertWorkflowIdempotency(ctx, q, workflowIdempotencyInsert{Key: in.IdempotencyKey, WorkflowID: attempt.WorkflowID, Operation: domain.WorkflowOperationClaimTask, Fingerprint: in.RequestFingerprint, ResultType: "attempt", ResultID: string(attempt.ID), CreatedAt: attempt.CreatedAt}); err != nil {
@@ -251,6 +257,12 @@ func (s *Store) AdoptSchedulerAdmission(ctx context.Context, id string, revision
 			return domain.ErrSchedulerAdmissionConflict
 		}
 		r, err := q.GetSchedulerAdmission(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := q.AdoptPathReservations(ctx, gen.AdoptPathReservationsParams{AdmissionID: id, OwnerID: f.OwnerID, Epoch: f.Epoch}); err != nil {
+			return err
+		}
 		result = schedulerAdmissionFromGen(r)
 		return err
 	})

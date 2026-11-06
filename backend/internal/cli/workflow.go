@@ -20,5 +20,6 @@ func newWorkflowCommand(ctx *commandContext) *cobra.Command {
 			"reconcile, resume) after a human approves them in the desktop app.",
 	}
 	cmd.AddCommand(newWorkflowOperatorCommand(ctx))
+	cmd.AddCommand(newQualityCommand(ctx))
 	return cmd
 }

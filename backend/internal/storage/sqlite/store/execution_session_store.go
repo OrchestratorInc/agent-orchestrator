@@ -94,6 +94,11 @@ func (s *Store) CreateAdmittedSession(ctx context.Context, seed domain.SessionRe
 		if n != 1 {
 			return domain.ErrSchedulerAdmissionConflict
 		}
+		if ad.AttemptID != "" {
+			if err := bindPathReservations(ctx, q, ad.AttemptID, result.ID, domain.SessionExecutionGeneration(result), ad.Fence); err != nil {
+				return err
+			}
+		}
 		if generation := domain.SessionExecutionGeneration(result); generation != "" {
 			_, err = q.AcceptSessionRestart(ctx, gen.AcceptSessionRestartParams{ID: ad.ID, Revision: ad.Revision + 1, OwnerID: ad.Fence.OwnerID, Epoch: ad.Fence.Epoch, Generation: generation, Now: now.UTC()})
 			return err
@@ -141,6 +146,9 @@ func (s *Store) RecoverExecutionAdmissionSession(ctx context.Context, ad domain.
 		}
 		if n != 1 {
 			return domain.ErrSchedulerAdmissionConflict
+		}
+		if ad.AttemptID != "" {
+			return bindPathReservations(ctx, q, ad.AttemptID, rec.ID, domain.SessionExecutionGeneration(rec), ad.Fence)
 		}
 		return nil
 	})

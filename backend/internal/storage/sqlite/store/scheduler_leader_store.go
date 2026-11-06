@@ -66,6 +66,12 @@ func (s *Store) CompleteSchedulerRecovery(ctx context.Context, f domain.Schedule
 	defer s.writeMu.Unlock()
 	var leader domain.SchedulerLeader
 	err := s.inSchedulerTx(ctx, "complete scheduler recovery", func(q *gen.Queries) error {
+		if err := schedulerFence(ctx, q, f, now, false); err != nil {
+			return err
+		}
+		if err := recoverPathReservations(ctx, q, f); err != nil {
+			return err
+		}
 		n, err := q.CompleteSchedulerRecovery(ctx, gen.CompleteSchedulerRecoveryParams{OwnerID: f.OwnerID, Epoch: f.Epoch, Revision: revision, Now: now.UTC()})
 		if err != nil {
 			return err

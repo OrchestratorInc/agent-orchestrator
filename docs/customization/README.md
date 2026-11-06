@@ -1,5 +1,8 @@
 # 多编码 Agent 桌面编排改造区
 
+> **M3 已完成本地提交：** `129e13ca5d8df210cdafcc2e061d521109130e27`（2026-11-05，`feat/multi-agent-desktop`）。**M4 已完成主控实现和 G4 验证，当前 HANDOFF_READY，等待统筹终验：** [M4 详细设计 V0.3](m4-design.md)、[M4 实施计划 V0.3](m4-plan.md)、[M4 主 Agent 自主执行提示词 V2](m4-agent-prompt.md)、[M4 实施报告](m4-report.md)、[M4 主控验收](m4-acceptance.md)、[M4→M5 交接](m4-m5-handoff.md)。M4 开发由主 Agent 自主决定执行方式，可独立完成或按需委派；**只有调用子代理时才要求使用 Astra（当前模型标识 `gpt-6-astra`）**。不要求强制多 Agent、不要求反复调用 AgentDock/Task Manager。M0-05、真实 Provider、远程 Push/Merge、部署和生产数据边界仍有效。M4 文档与 M3 提交分离，尚未提交。
+
+
 > **当前有效状态（2026-11-05）：M2 第六轮 Windows 离线 G0 = PASS；M3 Windows 离线 G7 = PASS。** M2 的 [第六轮独立复验](m2-acceptance-round6.md)、M3 的 [独立验收](m3-acceptance.md)、[本轮再次复验](m3-independent-recheck.md) 及 [M3 实施报告](m3-report.md) 为最新事实来源。下方此前第五轮「NOT ACCEPTED」、M3「尚未编码」等段落为历史阶段记录，**不再代表当前状态**。真实四 Provider、Windows Hello 人工正向、完整桌面/安装包及发布验证仍 **NOT_TESTED**；M0-05 真实 Provider 预算未批准。
 
 > **M2 提交决定（2026-11-05）：** 用户要求先提交现有 M2 实现，将第六轮离线独立复验、真实 Agent 完整验收两项暂缓留档。后续入口见 [M2 提交与后续验收留档](m2-handoff.md)。提交不等于验收通过，M2 仍为 NOT ACCEPTED；真实 Provider 预算未批准。
@@ -60,6 +63,10 @@
 - [M3 实施报告](m3-report.md)：调度、预算、运行闭环、迁移/API 与完整普通/Race 证据。
 - [M3 独立验收](m3-acceptance.md)：限定 Windows 离线 G7 PASS、剩余真实环境边界。
 - [M3 最新独立复验](m3-independent-recheck.md)：再次执行 M3 6 项/Race、M2 F-03 真实 Git 异常回归、代码审查与已知两项历史 Domain 失败。
+- [M4 详细设计 V0.3](m4-design.md)：工件快照、四级 Gate、Review、自动本地 Commit、集成预演、Operator 审批、多仓恢复及产品运行时协同；开发期自主执行。
+- [M4 实施计划 V0.3](m4-plan.md)：M4-01～M4-09 任务拆分、技术依赖、按风险触发测试门禁；开发方式由主 Agent 自主选择。
+- [M4 产品运行时多 Agent 协同协议 V1.1](m4-coordination-protocol.md)：仅规范 AO 产品运行时的 DAG/调度复用、消息交接、路径所有权和恢复；不强制 M4 开发过程使用多 Agent。
+- [M4 主 Agent 自主执行提示词 V2](m4-agent-prompt.md)：主 Agent 可独立完成或按需委派；如使用子代理，显式指定 Astra（`gpt-6-astra`），主 Agent 对最终结果负责。
 
 ## 当前环境
 

@@ -128,6 +128,15 @@ func (s *Store) RenewExecutionLease(ctx context.Context, p domain.ExecutionPermi
 		if b.State != domain.WorkflowBindingStateBoundReady && b.State != domain.WorkflowBindingStateRunning {
 			return domain.ErrWorkflowAttemptLeaseConflict
 		}
+		paths, err := q.ListAttemptPathReservations(ctx, string(p.AttemptID))
+		if err != nil {
+			return err
+		}
+		for _, path := range paths {
+			if path.ReleasedAt.Valid || path.OwnerID != p.Fence.OwnerID || path.Epoch != p.Fence.Epoch || path.SessionID != string(p.SessionID) || path.Generation != p.Generation {
+				return domain.ErrSchedulerFence
+			}
+		}
 		n, err := q.RenewExecutionAttemptLease(ctx, gen.RenewExecutionAttemptLeaseParams{ID: p.AttemptID, WorkerID: p.WorkerID, LeaseToken: p.LeaseToken, Now: sql.NullTime{Time: now.UTC(), Valid: true}, LeaseUntil: sql.NullTime{Time: until.UTC(), Valid: true}, ExpectedLeaseUntil: sql.NullTime{Time: p.LeaseUntil, Valid: true}, ExpectedUpdatedAt: p.AttemptUpdatedAt})
 		if err != nil {
 			return err
@@ -135,7 +144,8 @@ func (s *Store) RenewExecutionLease(ctx context.Context, p domain.ExecutionPermi
 		if n != 1 {
 			return domain.ErrWorkflowAttemptLeaseConflict
 		}
-		return nil
+		return q.RenewPathReservations(ctx, gen.RenewPathReservationsParams{AttemptID: string(p.AttemptID), OwnerID: p.Fence.OwnerID, Epoch: p.Fence.Epoch,
+			SessionID: string(p.SessionID), Generation: p.Generation, LeaseUntil: until.UTC()})
 	})
 }
 
@@ -178,6 +188,16 @@ func (s *Store) ReleaseExecutionAdmission(ctx context.Context, ad domain.Schedul
 		if n != 1 {
 			return domain.ErrSchedulerAdmissionConflict
 		}
-		return q.FreezeExecutionBudgetReservations(ctx, ad.ID)
+		if err := q.FreezeExecutionBudgetReservations(ctx, ad.ID); err != nil {
+			return err
+		}
+		leader, err := q.GetSchedulerLeader(ctx)
+		if err != nil {
+			return err
+		}
+		if ad.AttemptID != "" && leader.Recovered == 1 {
+			_, err = releaseFrozenPaths(ctx, q, ad.AttemptID, ad.Fence, now)
+		}
+		return err
 	})
 }

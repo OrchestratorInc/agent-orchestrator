@@ -19,7 +19,9 @@ func TestM3AgentRequestRequiresIndependentMaterialization(t *testing.T) {
 	sid := *f.binding(aid).SessionID
 	agent := f.asAgent(f.issueAgentCapability(sid), "", aid)
 	requestPath := "/workflows/" + string(wid) + "/task-requests"
-	raised := f.do(http.MethodPost, requestPath, `{"requestId":"request-new","requestKind":"create_task","payload":{"task":{"kind":"development","title":"review follow-up"},"repositories":[{"repoKey":"repo-a"}]}}`, agent)
+	// 子任务保持夹具已授予的父任务范围，不能隐式申请整仓权限。
+	requestBody := fmt.Sprintf(`{"requestId":"request-new","requestKind":"create_task","payload":{"task":{"kind":"development","title":"review follow-up"},"repositories":[{"repoKey":"repo-a","allowedPaths":[%q]}]}}`, string(f.binding(aid).TaskID))
+	raised := f.do(http.MethodPost, requestPath, requestBody, agent)
 	if raised.Status != http.StatusCreated {
 		t.Fatalf("request: %d %s", raised.Status, raised.Raw)
 	}

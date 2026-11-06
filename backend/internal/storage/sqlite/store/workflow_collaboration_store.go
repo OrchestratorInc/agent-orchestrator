@@ -58,6 +58,17 @@ func (s *Store) CreateWorkflowMessage(
 				return err
 			}
 		}
+		existing, found, err := s.loadMessageByClientMessage(ctx, q, message.WorkflowID, message.ClientMessageID)
+		if err != nil {
+			return err
+		}
+		if found {
+			if existing.PayloadSHA != message.PayloadSHA || existing.FromTaskID != message.FromTaskID || existing.SenderKind != message.SenderKind {
+				return domain.ErrWorkflowMessageConflict
+			}
+			result = existing
+			return nil
+		}
 		// Queue depth, evaluated in this transaction so it cannot race with a sibling insert.
 		// This is a store check rather than a schema constraint by necessity: SQLite has no
 		// row-count CHECK. M2 defines no rate limit — only this depth cap.
@@ -286,7 +297,7 @@ func (s *Store) CreateWorkflowTaskRequest(
 			}
 			// Same id + same fingerprint is a replay. A different fingerprint under the same
 			// id is a conflict, so a request cannot be rewritten after it was raised.
-			if existing.RequestSHA != request.RequestSHA {
+			if existing.RequestSHA != request.RequestSHA || existing.RequesterTaskID != request.RequesterTaskID || existing.RequestKind != request.RequestKind {
 				return domain.ErrWorkflowTaskRequestConflict
 			}
 			result = existing

@@ -164,6 +164,47 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersWorkflowQualitySummaryResponse":            "WorkflowQualitySummaryResponse",
+	"ControllersWorkflowCoordinationResponse":              "WorkflowCoordinationResponse",
+	"ControllersQualityPoliciesResponse":                   "QualityPoliciesResponse",
+	"ControllersQualityPolicyRequest":                      "QualityPolicyRequest",
+	"ControllersQualityPolicyResponse":                     "QualityPolicyResponse",
+	"ControllersQualitySnapshotRequest":                    "QualitySnapshotRequest",
+	"ControllersQualityArtifactsResponse":                  "QualityArtifactsResponse",
+	"ControllersQualityArtifactIDParam":                    "QualityArtifactIDParam",
+	"ControllersQualityActionRequest":                      "QualityActionRequest",
+	"ControllersQualityGateResponse":                       "QualityGateResponse",
+	"ControllersQualityReviewResponse":                     "QualityReviewResponse",
+	"ControllersQualityReviewIDParam":                      "QualityReviewIDParam",
+	"ControllersQualityReviewFinishRequest":                "QualityReviewFinishRequest",
+	"ControllersQualityCommitResponse":                     "QualityCommitResponse",
+	"ControllersQualityPreviewRequest":                     "QualityPreviewRequest",
+	"ControllersIntegrationPlanResponse":                   "IntegrationPlanResponse",
+	"ControllersIntegrationPlanIDParam":                    "IntegrationPlanIDParam",
+	"ControllersIntegrationOperationResponse":              "IntegrationOperationResponse",
+	"ControllersIntegrationOperationIDParam":               "IntegrationOperationIDParam",
+	"ControllersQualityReconcileRequest":                   "QualityReconcileRequest",
+	"ControllersQualityGateResultResponse":                 "QualityGateResultResponse",
+	"DomainArtifactSnapshot":                               "ArtifactSnapshot",
+	"DomainDeliveryRepo":                                   "DeliveryRepo",
+	"DomainGitArtifact":                                    "GitArtifact",
+	"DomainArtifactFile":                                   "ArtifactFile",
+	"DomainQualityReview":                                  "QualityReview",
+	"DomainQualityReviewActor":                             "QualityReviewActor",
+	"DomainQualityFinding":                                 "QualityFinding",
+	"DomainTaskCommit":                                     "TaskCommit",
+	"DomainIntegrationPlan":                                "IntegrationPlan",
+	"DomainIntegrationRepoPreview":                         "IntegrationRepoPreview",
+	"DomainIntegrationConflictPaths":                       "IntegrationConflictPaths",
+	"DomainIntegrationOperation":                           "IntegrationOperation",
+	"DomainIntegrationRepoOperation":                       "IntegrationRepoOperation",
+	"DomainIntegrationApplyRequest":                        "IntegrationApplyRequest",
+	"DomainIntegrationPushTarget":                          "IntegrationPushTarget",
+	"DomainCoordinationSummaryView":                        "CoordinationSummaryView",
+	"DomainCoordinationTaskView":                           "CoordinationTaskView",
+	"DomainCoordinationBudgetView":                         "CoordinationBudgetView",
+	"DomainCoordinationMessageView":                        "CoordinationMessageView",
+	"DomainPathReservationView":                            "PathReservationView",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -761,6 +802,10 @@ func nonNullableSlices(p jsonschema.InterceptNullabilityParams) {
 	if p.Type.Elem().Kind() == reflect.Uint8 {
 		return
 	}
+	// 冻结工件和预演的 null/[] 参与摘要，HTTP 必须保留它们的原始表示。
+	if p.Type == reflect.TypeFor[domain.IntegrationConflictPaths]() || p.Type == reflect.TypeFor[[]domain.ArtifactFile]() {
+		return
+	}
 	p.Schema.TypeEns().WithSimpleTypes(jsonschema.Array)
 	p.Schema.Type.SliceOfSimpleTypeValues = nil
 }
@@ -839,6 +884,7 @@ func operations() []operation {
 	ops = append(ops, automationOperations()...)
 	ops = append(ops, workflowOperations()...)
 	ops = append(ops, schedulerOperations()...)
+	ops = append(ops, qualityOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)

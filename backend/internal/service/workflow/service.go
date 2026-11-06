@@ -837,6 +837,8 @@ func mapStoreError(code, message string, err error) error {
 	switch {
 	case errors.Is(err, domain.ErrAdmissionRequired), errors.Is(err, domain.ErrSchedulerFence),
 		errors.Is(err, domain.ErrSchedulerPolicy), errors.Is(err, domain.ErrSchedulerCapacity),
+		errors.Is(err, domain.ErrPathReservationConflict),
+		errors.Is(err, domain.ErrDeliveryBlocked),
 		errors.Is(err, domain.ErrBudgetPolicy), errors.Is(err, domain.ErrBudgetUnknown),
 		errors.Is(err, domain.ErrBudgetExceeded), errors.Is(err, domain.ErrBudgetOverflow),
 		errors.Is(err, domain.ErrCapabilityEvidenceInsufficient):

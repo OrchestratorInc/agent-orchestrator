@@ -223,7 +223,7 @@ func TestM2OperatorOperationsAllowlistIsClosed(t *testing.T) {
 				t.Fatalf("allowlisted operation %q has an unterminated parameter", op.Path)
 			}
 			concrete = strings.NewReplacer("{workflowId}", "w1", "{attemptId}", "a1",
-				"{requestId}", "r1", "{taskId}", "t1").Replace(op.Path)
+				"{requestId}", "r1", "{taskId}", "t1", "{planId}", "p1", "{artifactId}", "g1", "{reviewId}", "v1", "{operationId}", "o1").Replace(op.Path)
 		} else if !principal.IsOperatorOperation(op.Method, op.Path) {
 			t.Fatalf("static allowlisted operation %+v does not match itself", op)
 		}

@@ -106,6 +106,8 @@ type OperatorOperation struct {
 // be an approval for "anything", and the whole point is that the human approved a specific
 // operation. Adding a route here is a security-relevant edit and belongs with the route.
 var OperatorOperations = []OperatorOperation{
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integrations/{planId}/apply"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integrations/{planId}/push"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/recover-expired"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/activate"},
@@ -132,6 +134,19 @@ var OperatorOperations = []OperatorOperation{
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/messages"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/task-requests"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/quality-summary"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/coordination-summary"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/quality-policies"},
+	{Method: http.MethodPut, Path: "/api/v1/workflows/{workflowId}/quality-policy"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/artifacts/snapshot"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/gates"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/reviews"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/reviews/{reviewId}/finish"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/artifacts/{artifactId}/commit"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integrations/preview"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/integrations/{planId}"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/integration-operations/{operationId}"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integration-operations/{operationId}/reconcile"},
 }
 
 // IsOperatorOperation 验证具体本地 RequestURI 是否属于审批闭集，包含 query 时也绑定其精确字节。

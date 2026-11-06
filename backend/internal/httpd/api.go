@@ -19,10 +19,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/artifact"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/coordination"
+	integrationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/integration"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/principal"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualitygate"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/qualityreview"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/taskcommit"
 )
 
 // APIDeps bundles every service the API layer's controllers depend on.
@@ -97,6 +103,13 @@ type APIDeps struct {
 	// every workflow route mounted and answering 501, like the other optional
 	// surfaces.
 	Workflows                controllers.WorkflowService
+	WorkflowQualityReader    controllers.QualityReader
+	WorkflowArtifacts        *artifact.Service
+	WorkflowGates            *qualitygate.Service
+	WorkflowReviews          *qualityreview.Service
+	WorkflowCommits          *taskcommit.Service
+	WorkflowIntegrations     *integrationsvc.Service
+	WorkflowCoordination     *coordination.Service
 	Scheduler                controllers.SchedulerService
 	Budget                   controllers.BudgetService
 	WorkflowExecutionPermits controllers.ExecutionPermitReader
@@ -225,6 +238,7 @@ type API struct {
 	github        *controllers.GitHubController
 	workflows     *controllers.WorkflowsController
 	scheduler     *controllers.SchedulerController
+	quality       *controllers.WorkflowQualityController
 	operator      *controllers.OperatorController
 	events        *EventsController
 }
@@ -315,6 +329,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		events: &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
 	api.scheduler = &controllers.SchedulerController{Svc: deps.Scheduler, Budget: deps.Budget, Workflows: api.workflows}
+	api.quality = &controllers.WorkflowQualityController{Workflows: api.workflows, Scheduler: api.scheduler, Store: deps.WorkflowQualityReader, Artifacts: deps.WorkflowArtifacts, Gates: deps.WorkflowGates, Reviews: deps.WorkflowReviews, Commits: deps.WorkflowCommits, Integrations: deps.WorkflowIntegrations, Coordination: deps.WorkflowCoordination}
 	return api
 }
 
@@ -439,6 +454,7 @@ func (a *API) Register(root chi.Router) {
 			a.github.Register(r)
 			a.workflows.Register(r)
 			a.workflows.RegisterM2(r)
+			a.quality.Register(r)
 			a.scheduler.Register(r)
 			a.operator.Register(r)
 			// Sibling REST controllers plug in here.

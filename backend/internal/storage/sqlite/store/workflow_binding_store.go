@@ -161,6 +161,12 @@ func (s *Store) GetWorkflowAttemptBindingBySpawnRequest(
 	return workflowAttemptBindingFromGen(row), true, nil
 }
 
+// HasWorkflowSessionOwnership 包括已接受但尚未 Bind 的启动，供旧 PR 入口闭锁 Workflow 写入。
+func (s *Store) HasWorkflowSessionOwnership(ctx context.Context, sessionID domain.SessionID) (bool, error) {
+	bound, err := s.qr.HasWorkflowSessionOwnership(ctx, &sessionID)
+	return !bound.Valid || bound.Bool, err
+}
+
 // GetWorkflowAttemptBindingBySession reads one binding by the session it bound.
 //
 // It is the session-side lookup a RESUMED session uses to recover which attempt it
@@ -290,6 +296,13 @@ func (s *Store) BindWorkflowAttemptSession(
 			// forbids.
 			return domain.ErrWorkflowBindingAttemptAlreadyBound
 		}
+		permit, err := loadExecutionPermit(ctx, q, attemptID)
+		if err != nil {
+			return err
+		}
+		if err := bindPathReservations(ctx, q, attemptID, sessionID, controllerGeneration, permit.Fence); err != nil {
+			return err
+		}
 
 		stored, found, err := s.loadBinding(ctx, q, attemptID)
 		if err != nil {
@@ -391,6 +404,13 @@ func (s *Store) ReanchorWorkflowAttemptGeneration(
 			return domain.ErrWorkflowBindingRevisionConflict
 		}
 		if err := syncReanchoredAdmissionGeneration(ctx, q, attemptID, sessionID, generation, now); err != nil {
+			return err
+		}
+		permit, err := loadExecutionPermit(ctx, q, attemptID)
+		if err != nil {
+			return err
+		}
+		if err := bindPathReservations(ctx, q, attemptID, sessionID, generation, permit.Fence); err != nil {
 			return err
 		}
 

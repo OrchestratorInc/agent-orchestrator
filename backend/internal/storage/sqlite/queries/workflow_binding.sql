@@ -1,4 +1,13 @@
 -- Attempt-to-session binding queries (M2).
+
+-- name: HasWorkflowSessionOwnership :one
+-- Accepted spawn intent owns the session before the later Bind acknowledgement.
+SELECT EXISTS(
+    SELECT 1 FROM workflow_attempt_bindings b
+    WHERE b.session_id=sqlc.arg(session_id)
+) OR EXISTS(
+    SELECT 1 FROM scheduler_admissions a WHERE a.session_id=sqlc.arg(session_id) AND a.attempt_id IS NOT NULL
+);
 --
 -- These statements never read or write workflow_attempts.lease_token. The lease
 -- capability stays in workflow_attempts so that exactly one response may return it;

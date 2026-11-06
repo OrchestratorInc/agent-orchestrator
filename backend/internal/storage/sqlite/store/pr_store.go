@@ -78,6 +78,7 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 // ClaimPR moves (or creates) a PR row to pr.SessionID and applies the live SCM
 // observation in the same transaction. The session_id update is what fires the
 // pr_session_changed CDC trigger added in migration 0005.
+// 涉及 Workflow 的归属转移双向禁止，避免普通 Merge 在观察窗口内跨越审批边界。
 func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, allowActiveTakeover bool) (ports.ClaimOutcome, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -100,6 +101,15 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 			}
 			if owner.SessionID == pr.SessionID {
 				continue
+			}
+			for _, id := range []domain.SessionID{owner.SessionID, pr.SessionID} {
+				bound, err := q.HasWorkflowSessionOwnership(ctx, &id)
+				if err != nil {
+					return err
+				}
+				if !bound.Valid || bound.Bool {
+					return domain.ErrDeliveryBlocked
+				}
 			}
 			if outcome.PreviousOwner != "" && outcome.PreviousOwner != owner.SessionID {
 				return fmt.Errorf("pr identity resolves to multiple sessions: %s and %s", outcome.PreviousOwner, owner.SessionID)

@@ -2757,6 +2757,8 @@ func writeSessionPRError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_NOT_OPEN", "PR is not open", nil)
 	case errors.As(err, &claimed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_CLAIMED_BY_ACTIVE_SESSION", "PR is already claimed by active session "+string(claimed.Owner)+" (omit --no-takeover to steal)", map[string]any{"ownerSessionId": string(claimed.Owner)})
+	case errors.Is(err, domain.ErrDeliveryBlocked):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "DELIVERY_BLOCKED", "Workflow PR ownership must remain bound to its approved delivery", nil)
 	case errors.Is(err, sessionsvc.ErrSessionNotClaimable):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "SESSION_NOT_CLAIMABLE", "Session cannot claim PRs", nil)
 	case errors.Is(err, sessionsvc.ErrSessionNoWorkspace):

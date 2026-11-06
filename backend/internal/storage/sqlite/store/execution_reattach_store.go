@@ -192,6 +192,9 @@ func commitReattachedGeneration(ctx context.Context, q *gen.Queries, p domain.Se
 		if n != 1 {
 			return domain.ErrSchedulerAdmissionConflict
 		}
+		if err := bindPathReservations(ctx, q, p.Execution.AttemptID, p.SessionID, generation, p.Fence); err != nil {
+			return err
+		}
 	}
 	return nil
 }
