@@ -40,6 +40,7 @@ type ClonePreparationResult struct {
 // CloneProgressPhase names the git clone step a checkout is in.
 type CloneProgressPhase string
 
+// The steps a clone reports, in the order git reaches them.
 const (
 	ClonePhaseEnumeratingObjects CloneProgressPhase = "enumerating_objects"
 	ClonePhaseCountingObjects    CloneProgressPhase = "counting_objects"
