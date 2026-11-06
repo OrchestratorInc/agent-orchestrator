@@ -245,6 +245,9 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
+/** How long a running, worker-connected session may wait on its terminal before the startup screen gives way to the terminal pane. */
+const CLOUD_TERMINAL_WAIT_MS = 30_000;
+
 /** How often the startup screen reads the session's events while their stream is down or still opening. */
 const STARTUP_EVENTS_POLL_MS = 2_000;
 
@@ -796,7 +799,23 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	if (freestyleChat && (isCloudPausedStage(cloudStage) || cloudStage === "resuming_workspace")) chatWakingRef.current = sessionId;
 	else if (!chatStartingInPlace) chatWakingRef.current = "";
 	const chatWaking = chatWakingRef.current === sessionId && chatStartingInPlace;
-	const showLifecycleLoader = !startupFailure && !chatStartingInPlace && ((!session && cloudSessionResolving) || (hasConnectedOnce
+	// The control plane reports the workspace running with its worker connected,
+	// yet the terminal never reports attached (a long-running session whose
+	// replay is blank or whose attach keeps retrying, or a reconnect signal that
+	// never clears). The loader has no other way out, so after a grace period it
+	// yields to the terminal pane, which shows its own connecting/error state.
+	const terminalWaitStuck = cloudStage === "connected" && expectsTerminal && !terminalAttached;
+	const [terminalWaitGaveUp, setTerminalWaitGaveUp] = useState("");
+	useEffect(() => {
+		if (!terminalWaitStuck) {
+			setTerminalWaitGaveUp((current) => current ? "" : current);
+			return;
+		}
+		const timer = window.setTimeout(() => setTerminalWaitGaveUp(sessionId), CLOUD_TERMINAL_WAIT_MS);
+		return () => window.clearTimeout(timer);
+	}, [sessionId, terminalWaitStuck]);
+	const terminalWaitAbandoned = terminalWaitStuck && terminalWaitGaveUp === sessionId;
+	const showLifecycleLoader = !startupFailure && !chatStartingInPlace && !terminalWaitAbandoned && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");

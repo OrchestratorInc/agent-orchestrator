@@ -353,6 +353,7 @@
 	"cloud.startupError.repositoryCheckoutFailedTitle": "O checkout do repositório falhou",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Não é possível usar o diretório de trabalho",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "A pasta de trabalho já está em uso",
+	"cloud.startupError.workerLostTitle": "Esta sessão parou de responder",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "A pasta de trabalho não é mantida entre reinicializações",
 	"board.empty.body": "Descreva uma tarefa e o orchestrator a planeja, inicia sessões de worker e as acompanha aqui conforme o trabalho avança.",
 	"board.empty.title": "Nenhuma sessão de worker ainda",

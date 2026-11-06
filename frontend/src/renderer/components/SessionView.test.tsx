@@ -2228,6 +2228,23 @@ describe("SessionView", () => {
 		});
 	});
 
+	it("stops covering a running, worker-connected session whose terminal never reports attached", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			autoAttachSessionTerminal.current = false;
+			const session = workerSession("sess-2");
+			session.mode = "tui";
+			session.runtimeConnected = true;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
@@ -2517,6 +2534,26 @@ describe("SessionView", () => {
 			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
 			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] }));
+		});
+
+		it("shows a session parked after losing its running worker as stopped, with Retry", async () => {
+			// What the control plane reports once it gives up reinstalling a lost
+			// worker: parked (terminated runtime), no worker, not a deleted session.
+			const workerLost = {
+				code: "worker_lost",
+				message: "The session's sandbox stopped responding, and AO could not restart its worker after 4 attempts. The sandbox has been stopped.",
+				at: "2026-11-05T12:48:00Z",
+			};
+			failedCloudSession({ sandboxProvider: "freestyle", runtimeState: "terminated", startupError: workerLost });
+			render(<SessionView sessionId="sess-2" />);
+
+			const errorState = screen.getByTestId("cloud-session-startup-error");
+			expect(within(errorState).getByRole("heading", { name: "This session stopped responding" })).toBeInTheDocument();
+			expect(errorState).toHaveTextContent(workerLost.message);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+
+			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
+			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 		});
 
 		it("keeps a transiently failed runtime on the loader with its startup reason", () => {
