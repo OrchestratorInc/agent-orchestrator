@@ -743,6 +743,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
 				emit(event)
 			}
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -1237,6 +1238,28 @@ func (c *conversation) sessionFailureEvent(
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
+}
+
+// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
+// OpenCode ends a failed compaction with a normal end_turn, so this update is the
+// only sign that the history was left as it was.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
+	compaction := nestedMap(meta, "opencode/compaction")
+	if compaction == nil {
+		return
+	}
+	failure := ""
+	if status, _ := compaction["status"].(string); status == "failed" {
+		failure, _ = nestedMap(compaction, "error")["message"].(string)
+		if failure = strings.TrimSpace(failure); failure == "" {
+			failure = "Compaction failed"
+		}
+	}
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+	}
+	c.mu.Unlock()
 }
 
 func sessionFailure(meta map[string]any) map[string]any {
