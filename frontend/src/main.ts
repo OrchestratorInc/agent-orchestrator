@@ -20,6 +20,7 @@ import {
 	Notification as ElectronNotification,
 	powerMonitor,
 	protocol,
+	safeStorage,
 	shell,
 	session,
 	WebContentsView,
@@ -156,12 +157,14 @@ import {
 	registerCloudProtocol,
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
+	protectedStorageAvailable,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
 import { registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { ShareLinkRecords } from "./main/cloud-share-links";
+import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
@@ -3342,6 +3345,12 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
+// Session and project share links this device made, so Copy link works again later.
+registerSessionShareUrlsIpc(ipcMain, new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
+	available: protectedStorageAvailable,
+	encrypt: (text) => safeStorage.encryptString(text),
+	decrypt: (value) => safeStorage.decryptString(value),
+}));
 registerAgentLoginIpc({
 	ipcMain,
 	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),

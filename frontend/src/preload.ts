@@ -431,6 +431,15 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Session and project share links this device made (main/session-share-urls.ts).
+	sessionShareUrls: {
+		remember: (baseUrl: string, linkId: string, url: string) =>
+			ipcRenderer.invoke("sessionShareUrls:remember", { baseUrl, linkId, url }) as Promise<void>,
+		recall: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:recall", { baseUrl, linkIds }) as Promise<Record<string, string>>,
+		forget: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
+	},
 	// Public share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.

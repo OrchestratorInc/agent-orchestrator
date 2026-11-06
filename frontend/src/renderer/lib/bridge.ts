@@ -97,6 +97,23 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		// Outside the desktop app a made link is remembered for this page only.
+		sessionShareUrls: (() => {
+			const urls = new Map<string, string>();
+			return {
+				remember: async (baseUrl: string, linkId: string, url: string) => {
+					urls.set(`${baseUrl} ${linkId}`, url);
+				},
+				recall: async (baseUrl: string, linkIds: readonly string[]) =>
+					Object.fromEntries(linkIds.flatMap((id) => {
+						const url = urls.get(`${baseUrl} ${id}`);
+						return url ? [[id, url]] : [];
+					})),
+				forget: async (baseUrl: string, linkIds: readonly string[]) => {
+					for (const id of linkIds) urls.delete(`${baseUrl} ${id}`);
+				},
+			};
+		})(),
 		// Publishing reads local files in the main process: desktop only.
 		cloudShare: {
 			available: async () => false,

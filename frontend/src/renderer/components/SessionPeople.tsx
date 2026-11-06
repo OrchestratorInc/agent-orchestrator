@@ -1,4 +1,4 @@
-import { Share2 } from "lucide-react";
+import { ChevronDown, Link2, Share2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -6,9 +6,12 @@ import { useCloudSessionLive } from "../hooks/useCloudSessionLive";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { orderSessionPeople, personInitials, SESSION_PEOPLE_SHOWN, sessionPeopleFromLive, type SessionPerson } from "../lib/session-people";
 import { cn } from "../lib/utils";
-import { ShareLinkDialog } from "./ShareLinkDialog";
+import { useUiStore } from "../stores/ui-store";
+import { copyGeneralLink } from "./share/CopyLinkButton";
+import { anyoneSentence, MISSING_URL, useLinkAccess } from "./share/linkAccess";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TopbarButton } from "./TopbarButton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
 
@@ -112,39 +115,133 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
  * The session header's sharing control. While someone else has the session
  * open it shows who is there as circles; otherwise the owner sees a Share
  * button. Either opens the share dialog for the owner; a guest only sees who
- * is there.
+ * is there. Beside it, the owner's menu copies the session's link without
+ * opening the dialog.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
 	canShare: boolean;
+	sessionName?: string;
+	projectName?: string;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
 	const teams = useTeamsEnabled();
 	const [open, setOpen] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const live = useCloudSessionLive(orgId, sessionId, true);
 	const me = live?.you || userId;
 	const present = live ? sessionPeopleFromLive(live) : [];
 	const others = present.filter((person) => person.userId !== me);
 	if (others.length === 0 && !canShare) return null;
+	const trigger = others.length > 0 ? (
+		<span className="inline-flex px-1.5">
+			<SessionPeopleStack people={others} list={present} me={me} onActivate={canShare ? () => setOpen(true) : undefined} ringClassName="ring-background" />
+		</span>
+	) : (
+		<TopbarButton variant="accent" className="topbar-control--labeled rounded-r-none" onClick={() => setOpen(true)} data-share-session-button>
+			<Share2 className="size-icon-md" aria-hidden="true" />
+			<span data-compact-label>{t("share.button")}</span>
+		</TopbarButton>
+	);
 	return (
 		<>
-			{others.length > 0 ? (
-				<span className="inline-flex px-1.5">
-					<SessionPeopleStack people={others} list={present} me={me} onActivate={canShare ? () => setOpen(true) : undefined} ringClassName="ring-background" />
+			{canShare ? (
+				<span className="inline-flex items-center" data-share-split="">
+					{trigger}
+					<ShareMenu
+						orgId={orgId}
+						projectId={projectId}
+						sessionId={sessionId}
+						open={menuOpen}
+						onOpenChange={setMenuOpen}
+						onManage={() => setOpen(true)}
+						joined={others.length === 0}
+					/>
 				</span>
-			) : (
-				<TopbarButton variant="accent" className="topbar-control--labeled" onClick={() => setOpen(true)} data-share-session-button>
-					<Share2 className="size-icon-md" aria-hidden="true" />
-					<span data-compact-label>{t("share.button")}</span>
-				</TopbarButton>
-			)}
-			{/* Sharing with people and teams is Teams; without it, Share makes links. */}
-			{canShare ? (teams
-				? <ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />
-				: <ShareLinkDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />) : null}
+			) : trigger}
+			{canShare ? (
+				<ShareSessionDialog
+					open={open}
+					onOpenChange={setOpen}
+					orgId={orgId}
+					projectId={projectId}
+					sessionId={sessionId}
+					sessionName={sessionName}
+					projectName={projectName}
+					people={teams}
+				/>
+			) : null}
 		</>
+	);
+}
+
+/**
+ * The chevron beside Share: Copy link and Share…, as Google Docs' Share
+ * button has. Copy link follows the dialog's rules: the link this device
+ * made, else a new one with the same access; with link access off there is
+ * nothing to copy, so it says so. The toast names who the link lets in.
+ */
+function ShareMenu({ orgId, projectId, sessionId, open, onOpenChange, onManage, joined }: {
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onManage: () => void;
+	/** Joined to the Share button's edge, rather than standing beside the people circles. */
+	joined: boolean;
+}) {
+	const { t } = useTranslation();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const access = useLinkAccess({ orgId, projectId, sessionId, scope: "session", enabled: open });
+	const off = !access.loading && !access.broadest;
+	const copy = async () => {
+		try {
+			const { url, copied } = await copyGeneralLink(access);
+			const sentence = access.broadest ? anyoneSentence(t, "session", access.broadest.role) : undefined;
+			if (!copied) {
+				showGlobalToast(t("share.copyFailedTitle"), url, { tone: "error" });
+				return;
+			}
+			showGlobalToast(t("share.linkCopied"), sentence, { action: { label: t("share.manage"), run: onManage } });
+		} catch (error) {
+			const message = error instanceof Error && error.message !== MISSING_URL ? error.message : t("share.noToken");
+			showGlobalToast(t("share.copyFailedTitle"), message, { tone: "error" });
+		}
+	};
+	return (
+		<DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
+			<DropdownMenuTrigger asChild>
+				<TopbarButton
+					variant={joined ? "accent" : "icon"}
+					className={cn(joined ? "-ml-px rounded-l-none px-1.5" : "")}
+					aria-label={t("share.menu")}
+					data-share-menu=""
+				>
+					<ChevronDown className="size-icon-sm" aria-hidden="true" />
+				</TopbarButton>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="w-64">
+				<DropdownMenuItem
+					disabled={off || access.loading}
+					onSelect={() => void copy()}
+					className="items-start py-1.5"
+					data-share-menu-copy=""
+				>
+					<Link2 className="mt-0.5" aria-hidden="true" />
+					<span className="flex min-w-0 flex-1 flex-col">
+						<span>{access.broadest && !access.url && !access.urlsLoading ? t("share.copyNewLink") : t("share.copyLink")}</span>
+						{off ? <span className="text-xs text-muted-foreground">{t("share.menuLinkOff")}</span> : null}
+					</span>
+				</DropdownMenuItem>
+				<DropdownMenuItem onSelect={onManage} data-share-menu-manage="">
+					<Share2 aria-hidden="true" />
+					<span>{t("share.shareEllipsis")}</span>
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

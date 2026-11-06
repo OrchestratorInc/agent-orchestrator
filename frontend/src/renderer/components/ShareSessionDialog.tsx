@@ -1,6 +1,5 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Info } from "lucide-react";
-import { RadioGroup } from "radix-ui";
+import { ArrowLeft, ChevronRight, Info, Settings2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -19,17 +18,23 @@ import {
 import type {
 	CloudCpShareAccess,
 	CloudCpShareEntry,
+	CloudCpShareLink,
 	CloudCpShareRole,
 	CloudCpTeamMemberAccess,
 } from "../lib/cloud-cp";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { AccessMenu, CapMenu } from "./share/AccessMenu";
 import { defaultCap, effectiveAccessText, listNames, roleLabel, type ShareModeCap, type ShareScope } from "./share/accessLabels";
-import { ShareLinksSection, useActiveShareLinks } from "./share/ShareLinksSection";
+import { CopyLinkButton } from "./share/CopyLinkButton";
+import { GeneralAccessCard } from "./share/GeneralAccessCard";
+import { LinkSettings } from "./share/LinkSettings";
+import { anyoneSentence, DEFAULT_EXPIRY, isPersonalWorkspace, MISSING_URL, restrictedSentence, type ShareExpiry, useLinkAccess } from "./share/linkAccess";
 import { UndoNotice, useUndoNotice } from "./share/UndoNotice";
 import { NewTeamDialog } from "./teams/NewTeamDialog";
 import { PeopleField, recipientKey, type Recipient } from "./teams/PeopleField";
 import { PersonAvatar, TeamTile } from "./teams/TeamVisuals";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { CloseButton } from "./ui/close-button";
 import {
 	Dialog,
@@ -46,8 +51,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Pressable } from "./ui/pressable";
 
 export type { ShareScope, ShareModeCap } from "./share/accessLabels";
-export type { ShareAccess, ShareExpiry } from "./share/ShareLinksSection";
-export { createdShareLinkUrl, shareLinkLabel, shareLinkRequest, shareLinksQueryKey } from "./share/ShareLinksSection";
+export type { ShareExpiry } from "./share/linkAccess";
+export { shareLinkRequest, shareLinksQueryKey } from "./share/linkAccess";
 
 const ROLE_RANK: Record<string, number> = { viewer: 1, editor: 2, member: 3 };
 
@@ -172,34 +177,57 @@ function withoutGrants(data: AccessData | undefined, grantIds: ReadonlySet<strin
 	return data ? { ...data, entries: data.entries.filter((entry) => !grantIds.has(entry.grantId)) } : data;
 }
 
+/** Confirmation the link card asks for before a change it can't undo. */
+type LinkConfirm =
+	| { kind: "off" }
+	| { kind: "change"; role: CloudCpShareRole; modeCap: ShareModeCap }
+	| { kind: "revoke"; link: CloudCpShareLink };
+
 /**
- * Shares this cloud session, or its whole project, with teams and people,
- * and lists everyone who has access before asking for anything. Picking
- * someone turns the dialog into a short confirm step that names what will
- * happen to whom. Links stay below, under Anyone with the link. Against a
- * control plane from before teams the dialog is links only, as it was then.
+ * Shares this cloud session, or its whole project, the way Google Docs does:
+ * people and teams on top (named, with what each can do), then General
+ * access, one sentence that says who else the link lets in, then Copy link
+ * beside Done. Picking someone turns the dialog into a short confirm step
+ * that names what will happen to whom. Against a control plane from before
+ * teams, or in a build without Teams, it is General access and Copy link only.
  */
-export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId }: {
+export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	orgId: string;
 	projectId: string;
 	sessionId: string;
+	/** The session's title, for "Share \"<title>\"". */
+	sessionName?: string;
+	/** The project's name, for "Session in <project>". */
+	projectName?: string;
+	/** Sharing with people and teams (Teams builds); off, the dialog is links only. */
+	people?: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
-	const myEmail = useCloudSession().session?.user.email?.toLowerCase() ?? "";
+	const me = useCloudSession().session?.user;
+	const myEmail = me?.email?.toLowerCase() ?? "";
 	// A project belongs to its workspace: the access list names it on top.
 	const { org } = useCloudOrg(open);
 	const workspaceName = org?.id === orgId ? org.displayName : undefined;
+	// A personal workspace has nobody else in it, so "people in <it>" reads oddly.
+	const personal = org?.id === orgId && isPersonalWorkspace(org, me);
 	const queryClient = useQueryClient();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const [scope, setScope] = useState<ShareScope>("session");
+	const [view, setView] = useState<"main" | "settings">("main");
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
 	const [stagedCap, setStagedCap] = useState<ShareModeCap>("read-only");
 	const [newTeamFor, setNewTeamFor] = useState<{ people: Recipient[]; name: string } | null>(null);
+	const [expiry, setExpiry] = useState<ShareExpiry>(DEFAULT_EXPIRY);
+	const [confirm, setConfirm] = useState<LinkConfirm | null>(null);
+	const [removeJoined, setRemoveJoined] = useState(false);
+	// What the polite live region last said: a copy, with who the link lets in.
+	const [announcement, setAnnouncement] = useState("");
 	const fieldInputRef = useRef<HTMLInputElement>(null);
+	const copyButtonRef = useRef<HTMLButtonElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
 	// After a row is stopped, focus goes to the next row's menu (its row key), or the field.
 	const focusAfter = useRef<{ stopped: string; target: string } | null>(null);
@@ -213,7 +241,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const accessKey = shareAccessQueryKey(baseUrl, orgId, projectId, scopeSession);
 	const access = useQuery({
 		queryKey: accessKey,
-		enabled: open && ready,
+		enabled: open && ready && teams,
 		retry: retryCloudRead,
 		queryFn: async (): Promise<AccessData> => {
 			try {
@@ -230,8 +258,8 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		() => open && queryClient.getQueryCache().findAll({ queryKey: ["cloud-share-access", baseUrl] }).some((query) => query.state.data === null),
 		[baseUrl, open, queryClient],
 	);
-	const peopleAvailable = access.data === undefined ? !knownUnavailable : access.data !== null;
-	const links = useActiveShareLinks({ orgId, projectId, sessionId, scope, enabled: open });
+	const peopleAvailable = teams && (access.data === undefined ? !knownUnavailable : access.data !== null);
+	const links = useLinkAccess({ orgId, projectId, sessionId, scope, enabled: open });
 	const entries = access.data?.entries ?? [];
 	const ownEntries = entries.filter((entry) => entry.scope === scope);
 	const unavailable = useMemo(() => {
@@ -356,7 +384,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		onSuccess: (_result, { key, entry }, context) => {
 			const subject = subjectInput(entry);
 			undoNotice.show({
-				message: t("share.stopped", { name: subjectName(entry) }),
+				message: t("share.removed", { name: subjectName(entry) }),
 				...(subject ? { undo: () => restore.mutateAsync({ key, entry, subject, index: context?.index ?? -1 }) } : {}),
 			});
 		},
@@ -370,24 +398,29 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		share.reset();
 	};
 	// Closing forgets everything but the shares themselves, so the dialog
-	// opens fresh: no old errors, no picks, the default access of Watch.
+	// opens fresh: no old errors, no picks, the default access of Can watch.
 	useEffect(() => {
 		if (open) return;
 		setStaged([]);
 		setStagedRole("viewer");
 		setStagedCap("read-only");
 		setScope("session");
+		setView("main");
+		setConfirm(null);
+		setAnnouncement("");
 		setNewTeamFor(null);
 		share.reset();
 		update.reset();
 		stop.reset();
 		restore.reset();
+		for (const mutation of [links.turnOn, links.turnOff, links.replace, links.copyNew, links.revoke]) mutation.reset();
 		undoNotice.clearFailure();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
 	const switchScope = (next: ShareScope) => {
 		if (next === scope) return;
 		setScope(next);
+		setView("main");
 		resetStaging();
 	};
 	const submitShare = () => {
@@ -403,8 +436,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		resetStaging();
 		fieldInputRef.current?.focus();
 	};
+	const ordered = useMemo(() => orderEntries(entries, scope), [entries, scope]);
 	const stopEntry = (entry: CloudCpShareEntry) => {
-		const rows = entries.filter((other) => !(scope === "session" && other.scope === "project"));
+		const rows = ordered.filter((other) => !(scope === "session" && other.scope === "project"));
 		const at = rows.findIndex((other) => other.grantId === entry.grantId);
 		const next = rows[at + 1] ?? rows[at - 1];
 		focusAfter.current = { stopped: entry.grantId, target: next ? entryRowKey(next) : "field" };
@@ -423,9 +457,66 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [access.data]);
 
+	// General access. Turning link access on makes a Can watch link; anything
+	// that widens it, turns it off, or replaces a link asks first.
+	const restricted = restrictedSentence(t, { scope, workspaceName, personal, people: peopleAvailable });
+	const turnOnLinks = () => {
+		undoNotice.clearFailure();
+		links.turnOn.mutate({ role: "viewer", modeCap: "read-only", expiry });
+	};
+	const askTurnOff = () => {
+		setRemoveJoined(false);
+		setConfirm({ kind: "off" });
+	};
+	const askChange = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => {
+		setRemoveJoined(false);
+		setConfirm({ kind: "change", ...next });
+	};
+	const askRevoke = (link: CloudCpShareLink) => {
+		// A link nobody joined by stops at once; otherwise the owner chooses about them.
+		if (!links.canRemoveJoined || !link.joinedCount) {
+			links.revoke.mutate({ link, removeJoined: false });
+			return;
+		}
+		setRemoveJoined(false);
+		setConfirm({ kind: "revoke", link });
+	};
+	const runConfirm = () => {
+		const current = confirm;
+		if (!current) return;
+		setConfirm(null);
+		if (current.kind === "off") {
+			const joined = removeJoined ? links.joined : 0;
+			const count = links.links.length;
+			links.turnOff.mutate({ removeJoined }, {
+				onSuccess: () => undoNotice.show({
+					message: joined > 0
+						? t("share.general.turnedOffRemoved", { count: joined })
+						: t("share.general.turnedOff", { count }),
+				}),
+			});
+		} else if (current.kind === "change") {
+			links.replace.mutate({ role: current.role, modeCap: current.modeCap });
+		} else {
+			links.revoke.mutate({ link: current.link, removeJoined });
+		}
+	};
+	const announceCopy = () => {
+		const link = links.broadest;
+		const sentence = link ? anyoneSentence(t, scope, link.role) : "";
+		// Changing the text each time makes the region speak again for a second copy.
+		setAnnouncement((before) => `${t("share.linkCopied")}. ${sentence}${before.endsWith("​") ? "" : "​"}`);
+	};
+
 	const staging = staged.length > 0;
-	const peopleError = share.error ?? update.error ?? stop.error ?? access.error;
-	const error = peopleError ? (peopleError instanceof Error ? peopleError.message : String(peopleError)) : undoNotice.failed ? t("share.undoFailed") : null;
+	const linkError = links.turnOn.error ?? links.turnOff.error ?? links.replace.error ?? links.copyNew.error ?? links.revoke.error ?? links.error;
+	const failure = share.error ?? update.error ?? stop.error ?? access.error ?? linkError;
+	const error = failure
+		? failure instanceof Error ? (failure.message === MISSING_URL ? t("share.noToken") : failure.message) : String(failure)
+		: undoNotice.failed ? t("share.undoFailed") : null;
+	const title = scope === "project"
+		? projectName ? t("share.projectTitleNamed", { name: projectName }) : t("share.projectTitle")
+		: sessionName ? t("share.titleNamed", { name: sessionName }) : t("share.title");
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -438,125 +529,167 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				onInteractOutside={(event) => {
 					if (event.target instanceof Element && event.target.closest("[data-global-toast]")) event.preventDefault();
 				}}
-				// Opens ready to type a name; links only, the first control, as before teams.
+				// Opens ready to type a name; links only, on Copy link.
 				onOpenAutoFocus={(event) => {
-					if (!peopleAvailable) return;
 					event.preventDefault();
-					fieldInputRef.current?.focus();
+					if (peopleAvailable) fieldInputRef.current?.focus();
+					else copyButtonRef.current?.focus();
 				}}
 				onCloseAutoFocus={restoreFocusOnClose}
+				onEscapeKeyDown={(event) => {
+					// Esc steps back before it closes: out of link settings, then out of the confirm step.
+					if (view === "settings") {
+						event.preventDefault();
+						setView("main");
+					} else if (staging) {
+						event.preventDefault();
+						cancelStaging();
+					}
+				}}
 				data-share-session-dialog
 			>
-				<DialogClose asChild>
-					<CloseButton floating aria-label={t("confirm.close")} />
-				</DialogClose>
-				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12 pb-0")}>
-					<DialogTitle className="settings-dialog-title text-subtitle">{scope === "project" ? t("share.projectTitle") : t("share.title")}</DialogTitle>
-					{peopleAvailable ? (
-						<DialogDescription className={cn("text-control leading-5 text-settings-muted", scope === "project" ? "" : "sr-only")}>
-							{scope === "project" ? t("share.projectPeopleDescription") : t("share.peopleDescription")}
-						</DialogDescription>
-					) : (
-						<DialogDescription className="text-control leading-5 text-settings-muted">
-							{scope === "project" ? t("share.projectDescription") : t("share.description")}
-						</DialogDescription>
-					)}
+				<div className={cn(settingsDialogHeaderClass, "border-b-0 px-5 pt-4 pb-0")}>
+					<div className="flex items-center gap-1">
+						{view === "settings" ? (
+							<Button type="button" variant="quiet" size="icon-sm" className="-ml-1.5" aria-label={t("share.back")} onClick={() => setView("main")} data-share-back="">
+								<ArrowLeft className="size-3.5" aria-hidden="true" />
+							</Button>
+						) : null}
+						<DialogTitle className="settings-dialog-title min-w-0 flex-1 truncate text-subtitle" title={view === "settings" ? undefined : title}>
+							{view === "settings" ? t("share.general.linkSettings") : title}
+						</DialogTitle>
+						{view === "main" && !staging ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("share.general.linkSettings")} onClick={() => setView("settings")} data-share-settings="">
+										<Settings2 className="size-3.5" aria-hidden="true" />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent>{t("share.general.linkSettings")}</TooltipContent>
+							</Tooltip>
+						) : null}
+						<DialogClose asChild>
+							<CloseButton size="icon-sm" aria-label={t("confirm.close")} />
+						</DialogClose>
+					</div>
+					<DialogDescription asChild>
+						<p className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-xs leading-5 text-muted-foreground">
+							{view === "settings" ? (
+								<span>{scope === "project" ? t("share.settings.descriptionProject") : t("share.settings.description")}</span>
+							) : (
+								<>
+									<span className="min-w-0 truncate">
+										{scope === "project"
+											? t("share.projectIncludes")
+											: projectName ? t("share.sessionIn", { project: projectName }) : t("share.sessionInProject")}
+									</span>
+									<span aria-hidden="true">·</span>
+									<Button
+										type="button"
+										variant="link"
+										className="text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
+										onClick={() => switchScope(scope === "project" ? "session" : "project")}
+										data-share-switch-scope={scope === "project" ? "session" : "project"}
+									>
+										{scope === "project" ? t("share.backToSession") : t("share.shareProjectInstead")}
+									</Button>
+								</>
+							)}
+						</p>
+					</DialogDescription>
 				</div>
 				<div className={cn(settingsDialogBodyClass, "gap-3.5 px-5 pt-4 pb-5")}>
-					<RadioGroup.Root
-						value={scope}
-						onValueChange={(value) => switchScope(value as ShareScope)}
-						aria-label={t("share.scope")}
-						className="inline-flex gap-0.5 self-start rounded-md bg-(--color-bg-settings-input) p-0.5"
-						data-share-scope=""
-					>
-						{(["session", "project"] as const).map((value) => (
-							<RadioGroup.Item
-								key={value}
-								value={value}
-								className="h-6.5 rounded-sm px-2.5 text-[12.5px] text-muted-foreground outline-none transition-colors duration-(--duration-fast) hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=checked]:bg-foreground/10 data-[state=checked]:text-foreground"
-							>
-								{value === "session" ? t("share.scopeSession") : t("share.scopeProject")}
-							</RadioGroup.Item>
-						))}
-					</RadioGroup.Root>
-					{peopleAvailable ? (
+					{view === "settings" ? (
+						<LinkSettings scope={scope} access={links} expiry={expiry} onExpiryChange={setExpiry} onRevoke={askRevoke} locale={i18n.language} />
+					) : (
 						<>
-							<PeopleField
-								orgId={orgId}
-								value={staged}
-								inputRef={fieldInputRef}
-								onChange={(next) => {
-									setStaged(next);
-									undoNotice.clearFailure();
-									if (!share.isPending) share.reset();
-								}}
-								unavailable={unavailable}
-								workspaceHasAccess
-								placeholder={t("share.addPeopleOrTeams")}
-								ariaLabel={t("share.addPeopleOrTeams")}
-								onNewTeam={(people, typed) => {
-									// A typed email joins the new team; other text names it.
-									const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
-									const picked = people.filter((recipient) => recipient.kind === "person");
-									setNewTeamFor({
-										people: email && !picked.some((recipient) => recipient.kind === "person" && recipient.email === email) ? [...picked, { kind: "person", email }] : picked,
-										name: email ? "" : typed,
-									});
-								}}
-								onSubmit={submitShare}
-								trailing={staging ? (
-									<AccessMenu
-										role={stagedRole}
-										modeCap={stagedCap}
-										scope={scope}
-										showCap={false}
-										onChange={({ role, modeCap }) => {
-											setStagedRole(role);
-											setStagedCap(modeCap);
+							{peopleAvailable ? (
+								<>
+									<PeopleField
+										orgId={orgId}
+										value={staged}
+										inputRef={fieldInputRef}
+										onChange={(next) => {
+											setStaged(next);
+											undoNotice.clearFailure();
+											if (!share.isPending) share.reset();
 										}}
+										unavailable={unavailable}
+										workspaceHasAccess
+										placeholder={t("share.addPeopleOrTeams")}
+										ariaLabel={t("share.addPeopleOrTeams")}
+										onNewTeam={(people, typed) => {
+											// A typed email joins the new team; other text names it.
+											const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
+											const picked = people.filter((recipient) => recipient.kind === "person");
+											setNewTeamFor({
+												people: email && !picked.some((recipient) => recipient.kind === "person" && recipient.email === email) ? [...picked, { kind: "person", email }] : picked,
+												name: email ? "" : typed,
+											});
+										}}
+										onSubmit={submitShare}
+										trailing={staging ? (
+											<AccessMenu
+												role={stagedRole}
+												modeCap={stagedCap}
+												scope={scope}
+												showCap={false}
+												onChange={({ role, modeCap }) => {
+													setStagedRole(role);
+													setStagedCap(modeCap);
+												}}
+											/>
+										) : undefined}
+										invalid={Boolean(share.error)}
 									/>
-								) : undefined}
-								invalid={Boolean(share.error)}
-							/>
-							{error ? <p role="alert" className="-mt-1.5 text-caption leading-4 text-error">{error}</p> : null}
-							{staging ? (
-								<StagedSummary
-									orgId={orgId}
-									projectId={projectId}
-									sessionId={scopeSession}
+									{error ? <p role="alert" className="-mt-1.5 text-caption leading-4 text-error">{error}</p> : null}
+									{staging ? (
+										<StagedSummary
+											orgId={orgId}
+											projectId={projectId}
+											sessionId={scopeSession}
+											scope={scope}
+											staged={staged}
+											role={stagedRole}
+											modeCap={stagedCap}
+											onCapChange={setStagedCap}
+											entries={ownEntries}
+											me={myEmail}
+											locale={i18n.language}
+										/>
+									) : (
+										<AccessList
+											orgId={orgId}
+											projectId={projectId}
+											sessionId={scopeSession}
+											scope={scope}
+											access={access.data ?? undefined}
+											entries={ordered}
+											loading={access.isLoading}
+											me={myEmail}
+											workspaceName={workspaceName}
+											personal={personal}
+											onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
+											onStop={stopEntry}
+											onShowProject={() => switchScope("project")}
+										/>
+									)}
+								</>
+							) : error ? <p role="alert" className="text-caption leading-4 text-error">{error}</p> : null}
+							{staging ? null : (
+								<GeneralAccessCard
 									scope={scope}
-									staged={staged}
-									role={stagedRole}
-									modeCap={stagedCap}
-									onCapChange={setStagedCap}
-									entries={ownEntries}
-									me={myEmail}
+									access={links}
+									restricted={restricted}
 									locale={i18n.language}
-								/>
-							) : (
-								<AccessList
-									orgId={orgId}
-									projectId={projectId}
-									sessionId={scopeSession}
-									scope={scope}
-									access={access.data ?? undefined}
-									loading={access.isLoading}
-									hasLink={(links.data?.length ?? 0) > 0}
-									me={myEmail}
-									workspaceName={workspaceName}
-									onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
-									onStop={stopEntry}
-									onShowProject={() => switchScope("project")}
+									onTurnOn={turnOnLinks}
+									onTurnOff={askTurnOff}
+									onChangeRole={askChange}
+									onOpenSettings={() => setView("settings")}
 								/>
 							)}
 						</>
-					) : null}
-					{/* Stays mounted through the confirm step so a link made a moment ago,
-					    shown only once, is still there after; a new scope starts afresh. */}
-					<div hidden={staging} className="flex flex-col">
-						<ShareLinksSection key={scope} orgId={orgId} projectId={projectId} sessionId={sessionId} scope={scope} open={open} />
-					</div>
+					)}
 					<UndoNotice
 						notice={undoNotice.shown}
 						onUndo={() => {
@@ -565,17 +698,41 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 						}}
 						onDismiss={undoNotice.dismiss}
 					/>
+					<p className="sr-only" aria-live="polite" data-share-announcement="">{announcement}</p>
 				</div>
-				{staging ? (
-					<div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5" data-share-footer="">
-						<Button type="button" variant="ghost" onClick={cancelStaging}>
-							{t("confirm.cancel")}
-						</Button>
-						<Button type="button" variant="primary" onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
-							{share.isPending ? t("share.sharing") : t("share.shareAction")}
-						</Button>
-					</div>
-				) : null}
+				<div className="flex items-start justify-between gap-2 border-t border-border px-5 py-3.5" data-share-footer="">
+					{staging ? (
+						<>
+							{/* Where "Notify people" goes once sharing sends email; for now they find it in the app. */}
+							<p className="self-center text-xs text-muted-foreground" data-share-in-app="">{t("share.inAppNotice")}</p>
+							<div className="flex shrink-0 gap-2">
+								<Button type="button" variant="footer" onClick={cancelStaging}>
+									{t("confirm.cancel")}
+								</Button>
+								<Button type="button" variant="footer-primary" onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
+									{share.isPending ? t("share.sharing") : t("share.shareAction")}
+								</Button>
+							</div>
+						</>
+					) : (
+						<>
+							{view === "main" ? (
+								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} buttonRef={copyButtonRef} />
+							) : <span />}
+							{view === "settings" ? (
+								<Button type="button" variant="footer-primary" onClick={() => setView("main")} data-share-done="">
+									{t("share.done")}
+								</Button>
+							) : (
+								<DialogClose asChild>
+									<Button type="button" variant="footer-primary" data-share-done="">
+										{t("share.done")}
+									</Button>
+								</DialogClose>
+							)}
+						</>
+					)}
+				</div>
 				{newTeamFor ? (
 					<NewTeamDialog
 						orgId={orgId}
@@ -594,30 +751,117 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 						}}
 					/>
 				) : null}
+				<LinkConfirmDialog
+					confirm={confirm}
+					scope={scope}
+					links={links}
+					removeJoined={removeJoined}
+					onRemoveJoinedChange={setRemoveJoined}
+					onConfirm={runConfirm}
+					onCancel={() => setConfirm(null)}
+				/>
 			</DialogContent>
 		</Dialog>
 	);
 }
 
-function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLink, me, workspaceName, onChange, onStop, onShowProject }: {
+/**
+ * The questions General access asks before a change that can't be taken back:
+ * turning link access off (and whether the people who joined by it go too),
+ * letting anyone with the link write, and making a new link, which every
+ * change to a link's access does.
+ */
+function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoinedChange, onConfirm, onCancel }: {
+	confirm: LinkConfirm | null;
+	scope: ShareScope;
+	links: ReturnType<typeof useLinkAccess>;
+	removeJoined: boolean;
+	onRemoveJoinedChange: (value: boolean) => void;
+	onConfirm: () => void;
+	onCancel: () => void;
+}) {
+	const { t } = useTranslation();
+	if (!confirm) return null;
+	const count = links.links.length;
+	const joined = confirm.kind === "revoke" ? confirm.link.joinedCount ?? 0 : links.joined;
+	const offerRemove = confirm.kind !== "change" && links.canRemoveJoined && joined > 0;
+	const widening = confirm.kind === "change" && confirm.role === "editor" && links.broadest?.role !== "editor";
+	const title = confirm.kind === "off"
+		? t("share.confirm.offTitle")
+		: confirm.kind === "revoke"
+			? t("share.confirm.revokeTitle")
+			: widening ? t("share.confirm.writeTitle") : t("share.confirm.changeTitle");
+	const description = (
+		<div className="flex flex-col gap-2">
+			{widening ? <p>{scope === "project" ? t("share.confirm.writeProject") : t("share.confirm.writeSession")}</p> : null}
+			<p>
+				{confirm.kind === "off"
+					? t("share.confirm.offLinks", { count })
+					: confirm.kind === "revoke"
+						? t("share.confirm.revokeLink")
+						: t("share.confirm.changeLinks", { count })}
+				{" "}
+				{offerRemove ? null : t("share.confirm.keepJoined")}
+			</p>
+		</div>
+	);
+	return (
+		<ConfirmDialog
+			open
+			title={title}
+			description={description}
+			confirmLabel={confirm.kind === "off" ? t("share.confirm.offAction") : confirm.kind === "revoke" ? t("share.revoke") : widening ? t("share.confirm.writeAction") : t("share.confirm.changeAction")}
+			destructive={confirm.kind !== "change"}
+			onConfirm={onConfirm}
+			onOpenChange={(next) => {
+				if (!next) onCancel();
+			}}
+		>
+			{offerRemove ? (
+				<label className="flex items-start gap-2 text-control leading-5 text-foreground" data-share-remove-joined="">
+					<Checkbox className="mt-0.5" checked={removeJoined} onCheckedChange={(value) => onRemoveJoinedChange(value === true)} />
+					<span>{t("share.confirm.removeJoined", { count: joined })}</span>
+				</label>
+			) : null}
+		</ConfirmDialog>
+	);
+}
+
+/**
+ * Broadest to most specific, as Figma lists access: what comes from the whole
+ * project, then teams, then people, then emails still waiting for sign-in.
+ */
+export function orderEntries(entries: readonly CloudCpShareEntry[], scope: ShareScope): CloudCpShareEntry[] {
+	const rank = (entry: CloudCpShareEntry) =>
+		scope === "session" && entry.scope === "project" ? 0
+			: entry.subject.kind === "team" ? 1
+				: entry.subject.name ? 2
+					: 3;
+	return entries.map((entry, index) => ({ entry, index }))
+		.sort((a, b) => rank(a.entry) - rank(b.entry) || a.index - b.index)
+		.map(({ entry }) => entry);
+}
+
+function AccessList({ orgId, projectId, sessionId, scope, access, entries, loading, me, workspaceName, personal, onChange, onStop, onShowProject }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string | undefined;
 	scope: ShareScope;
 	access: CloudCpShareAccess | undefined;
+	/** The access's entries, broadest first. */
+	entries: CloudCpShareEntry[];
 	loading: boolean;
-	/** A live link opens it too, so "only people in this workspace" would be wrong. */
-	hasLink: boolean;
 	me: string | undefined;
-	/** The workspace that owns the project, shown on top of a project's list. */
+	/** The workspace that owns the project; its people have full access. */
 	workspaceName?: string;
+	/** A personal workspace has nobody but its owner, so it gets no row of its own. */
+	personal: boolean;
 	onChange: (entry: CloudCpShareEntry, next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
 	onStop: (entry: CloudCpShareEntry) => void;
 	onShowProject: () => void;
 }) {
 	const { t } = useTranslation();
 	const owner = access?.owner;
-	const entries = access?.entries ?? [];
 	if (loading) {
 		return (
 			<div className="flex flex-col gap-1.5" aria-busy="true">
@@ -633,41 +877,35 @@ function AccessList({ orgId, projectId, sessionId, scope, access, loading, hasLi
 			</div>
 		);
 	}
-	if (!owner && entries.length === 0) {
-		return (
-			<div className="flex flex-col gap-1.5">
-				<p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p>
-				<p className="flex items-start gap-1.5 text-xs leading-5 text-muted-foreground" data-share-empty="">
-					<Info className="mt-1 size-3 shrink-0 text-passive" aria-hidden="true" />
-					{scope === "project"
-						? hasLink ? t("share.projectNotSharedLink") : t("share.projectNotShared")
-						: hasLink ? t("share.notSharedLink") : t("share.notShared")}
-				</p>
-			</div>
-		);
-	}
+	// A project has no owner of its own: it is the workspace's, which always shows.
+	const workspaceRow = !personal || (!owner && scope === "project");
 	return (
 		<div className="flex flex-col gap-1.5">
 			<p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p>
 			<ul className="flex flex-col divide-y divide-border rounded-md bg-muted/40 py-0.5" data-share-access-list="">
-				{/* A session's top row is its owner; a project has none of its own, it is the workspace's. */}
-				{!owner && scope === "project" ? (
-					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-workspace-row="">
-						<TeamTile name={workspaceName || "W"} />
-						<span className="min-w-0 flex-1 truncate text-control text-foreground">
-							{workspaceName ? t("share.workspacePeople", { name: workspaceName }) : t("share.workspacePeopleUnnamed")}
-						</span>
+				{owner ? (
+					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-owner-row="">
+						<PersonAvatar name={owner.name} email={owner.email} />
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-control text-foreground">
+								{owner.name || owner.email}
+								{owner.email && owner.email.toLowerCase() === me ? <span className="text-muted-foreground"> {t("share.you")}</span> : null}
+							</p>
+							{owner.name && owner.email ? <p className="truncate text-xs text-muted-foreground">{owner.email}</p> : null}
+						</div>
 						<span className="pr-1 text-control text-passive">{t("share.owner")}</span>
 					</li>
 				) : null}
-				{owner ? (
-					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5">
-						<PersonAvatar name={owner.name} email={owner.email} />
-						<span className="min-w-0 flex-1 truncate text-control text-foreground">
-							{owner.name || owner.email}
-							{owner.email && owner.email.toLowerCase() === me ? <span className="text-muted-foreground"> {t("share.you")}</span> : null}
-						</span>
-						<span className="pr-1 text-control text-passive">{t("share.owner")}</span>
+				{workspaceRow ? (
+					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-workspace-row="">
+						<TeamTile name={workspaceName || "W"} />
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-control text-foreground">
+								{workspaceName ? t("share.workspacePeople", { name: workspaceName }) : t("share.workspacePeopleUnnamed")}
+							</p>
+							<p className="truncate text-xs text-muted-foreground">{t("share.workspaceMembers")}</p>
+						</div>
+						<span className="pr-1 text-control text-passive">{t("teams.access.full")}</span>
 					</li>
 				) : null}
 				{entries.map((entry) => (
@@ -739,7 +977,7 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 				{fromProject ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<span className="px-2 text-control whitespace-nowrap text-muted-foreground" tabIndex={0}>
+							<span className="px-2 text-control whitespace-nowrap text-muted-foreground" tabIndex={0} aria-disabled="true" data-share-locked="">
 								{roleLabel(t, entry.role, "project")}
 							</span>
 						</TooltipTrigger>
@@ -752,7 +990,7 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 						scope={scope}
 						onChange={onChange}
 						onStop={onStop}
-						stopLabel={t("share.stopSharingWith", { name })}
+						stopLabel={t("share.removeAccess")}
 						disabled={pending}
 					/>
 				)}
