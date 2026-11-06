@@ -1037,7 +1037,6 @@
 	"mobile.keepAwake.lidLabel": "Bei geschlossenem Deckel wach bleiben",
 	"mobile.keepAwake.lidHelp": "Verbraucht mehr Akku. Stelle den Mac gut belüftet auf. Stoppt unter 10 % Akkuladung oder bei kritischer Hitze.",
 	"mobile.keepAwake.lidActive": "Wach bleiben bei geschlossenem Deckel ist bereit.",
-	"mobile.keepAwake.lidIdle": "Wachhalten bei geschlossenem Deckel wird gestartet.",
 	"mobile.keepAwake.lidReason.starting": "Wach bleiben bei geschlossenem Deckel wird vorbereitet…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS oder ein anderes Programm steuert bereits den Deckel-Ruhezustand. AO ändert diese Steuerung nicht.",
 	"mobile.keepAwake.lidReason.low_battery": "Unter 10 % Akku gestoppt. Mac aufladen, dann diese Option aus- und wieder einschalten.",

@@ -1037,7 +1037,6 @@
 	"mobile.keepAwake.lidLabel": "ふたを閉じてもスリープさせない",
 	"mobile.keepAwake.lidHelp": "バッテリー消費が増えます。Mac は通気性のよい場所に置いてください。残量が 10% 未満、または温度が危険な状態になると停止します。",
 	"mobile.keepAwake.lidActive": "ふたを閉じた状態のスリープ防止が準備できました。",
-	"mobile.keepAwake.lidIdle": "蓋を閉じた状態でのスリープ防止を開始しています。",
 	"mobile.keepAwake.lidReason.starting": "ふたを閉じた状態のスリープ防止を準備中…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS または別のツールがふたのスリープを管理しています。AO は変更しません。",
 	"mobile.keepAwake.lidReason.low_battery": "残量が 10% 未満になったため停止しました。充電後、この設定をオフにしてからオンにしてください。",

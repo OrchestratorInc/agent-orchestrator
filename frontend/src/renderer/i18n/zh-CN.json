@@ -1037,7 +1037,6 @@
 	"mobile.keepAwake.lidLabel": "合上盖子后保持唤醒",
 	"mobile.keepAwake.lidHelp": "会增加耗电量。请保持 Mac 通风。电量低于 10% 或温度达到危险水平时会停止。",
 	"mobile.keepAwake.lidActive": "合盖保持唤醒已准备就绪。",
-	"mobile.keepAwake.lidIdle": "正在启动合盖唤醒。",
 	"mobile.keepAwake.lidReason.starting": "正在准备合盖保持唤醒…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS 或其他工具已在管理合盖睡眠。AO 不会更改该控制。",
 	"mobile.keepAwake.lidReason.low_battery": "因电量低于 10% 而停止。请充电后关闭并重新开启此选项。",

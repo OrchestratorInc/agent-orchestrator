@@ -978,17 +978,18 @@ function KeepAwakeRow({
 }) {
 	const { t } = useTranslation();
 	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// "starting" is transient while the helper acknowledges the lease; the
+	// switch already shows the request, so only settled states get a line.
+	const lidStarting = keepAwake.lidReason === "starting" || (!keepAwake.lidActive && !keepAwake.lidReason && !lidUnavailable);
 	const lidNeedsAttention =
 		lidUnavailable ||
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		(keepAwake.enabled && keepAwake.lidClosed && !lidStarting) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
 	const status = keepAwake.lidActive && keepAwake.enabled
 		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-		: keepAwake.lidReason || lidUnavailable
-			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
-			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
+		: t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.");
 	return (
 		<SettingsRow
 			data-testid="mobile-keep-awake"

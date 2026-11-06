@@ -1034,7 +1034,6 @@
 	"mobile.keepAwake.lidLabel": "Keep awake with lid closed",
 	"mobile.keepAwake.lidHelp": "Uses more battery. Keep your Mac ventilated. Stops below 10% battery or at critical heat.",
 	"mobile.keepAwake.lidActive": "Closed-lid keep awake is armed.",
-	"mobile.keepAwake.lidIdle": "Closed-lid wake is starting.",
 	"mobile.keepAwake.lidReason.starting": "Starting closed-lid keep awake…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS or another utility already manages lid sleep. AO is leaving that control unchanged.",
 	"mobile.keepAwake.lidReason.low_battery": "Stopped below 10% battery. Charge your Mac, then turn this option off and on to restart.",

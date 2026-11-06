@@ -1046,7 +1046,6 @@
 	"mobile.keepAwake.lidLabel": "Manter ativo com a tampa fechada",
 	"mobile.keepAwake.lidHelp": "Usa mais bateria. Mantenha o Mac ventilado. Para abaixo de 10% de bateria ou em caso de calor crítico.",
 	"mobile.keepAwake.lidActive": "A função com a tampa fechada está preparada.",
-	"mobile.keepAwake.lidIdle": "Iniciando o modo ativo com a tampa fechada.",
 	"mobile.keepAwake.lidReason.starting": "Preparando a função com a tampa fechada…",
 	"mobile.keepAwake.lidReason.system_managed": "O macOS ou outro utilitário já controla o repouso da tampa. O AO não altera esse controle.",
 	"mobile.keepAwake.lidReason.low_battery": "Parou abaixo de 10% de bateria. Carregue o Mac e desligue e ligue esta opção novamente.",

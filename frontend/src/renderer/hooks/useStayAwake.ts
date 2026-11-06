@@ -67,6 +67,22 @@ export function useStayAwake(enabled = true) {
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
 			};
+			// The lid POST answers before the native helper acknowledges its lease
+			// (two-second scan), so its response says "starting". Re-read until the
+			// helper settles; otherwise that transient reason stays cached.
+			const confirmLid = async () => {
+				const deadline = Date.now() + 5_000;
+				while (isLatest() && cache.getQueryData<MobileStatus>(mobileStatusQueryKey)?.keepAwake?.lidReason === "starting" && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 500));
+					try {
+						const { data } = await apiClient.GET("/api/v1/mobile/status");
+						if (!data) break;
+						cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+					} catch {
+						break;
+					}
+				}
+			};
 			const start = async () => {
 				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
 				// A successful POST writes a lease; the native helper acknowledges it
@@ -122,6 +138,7 @@ export function useStayAwake(enabled = true) {
 				// Reject a failed lid opt-in before creating or resuming desktop ownership.
 				await updateMobile(true, true);
 				await ensureDesktop();
+				await confirmLid();
 			} else {
 				await ensureDesktop();
 				if (change.rememberMobile) await updateMobile(true, false);
@@ -144,7 +161,10 @@ export function useStayAwake(enabled = true) {
 			const requested = current?.sessions?.some((s) => !s.endedAt)
 				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed))
 				|| current?.active || mobileState?.keepAwake?.enabled || mobileState?.keepAwake?.active;
-			change({ on: !(latestChange()?.on ?? requested) });
+			const on = !(latestChange()?.on ?? requested);
+			// Sidebar and Settings are one switch: where closed-lid wake is
+			// supported, turning on here arms the same mode Settings shows.
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true } : { on });
 		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),

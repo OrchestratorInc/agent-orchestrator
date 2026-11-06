@@ -94,6 +94,45 @@ async function showCombinedMobile(bridgeEnabled = false) {
 }
 
 describe("combined mobile wake with the shared hook", () => {
+	it("turns the Settings switch on when the sidebar starts wake on a lid-capable Mac", async () => {
+		await showCombinedMobile();
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		expect(toggle).not.toBeChecked();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
+		expect(mobile.keepAwake).toMatchObject({ enabled: true, active: true, lidClosed: true });
+		fireEvent.click(coffee());
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		expect(mobile.keepAwake).toMatchObject({ enabled: false, lidClosed: false });
+	});
+
+	it("keeps the transient lid starting status hidden and re-reads it until the helper confirms", async () => {
+		const keepAwake = mobile.keepAwake as typeof mobile.keepAwake & { lidReason?: string };
+		await showCombinedMobile();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/keep-awake") keepAwake.lidReason = "starting";
+			return post(path, options);
+		});
+		const get = test.get.getMockImplementation()!;
+		let statusReads = 0;
+		test.get.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/mobile/status" && keepAwake.lidReason === "starting") statusReads++;
+			if (statusReads > 0) keepAwake.lidReason = undefined;
+			return get(path, options);
+		});
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText("Closed-lid keep awake is armed.")).toBeInTheDocument(), { timeout: 3_000 });
+		expect(statusReads).toBeGreaterThan(0);
+		expect(toggle).toBeChecked();
+		expect(screen.queryByText(/Starting closed-lid keep awake/)).not.toBeInTheDocument();
+	});
+
 	it.each([false, true])("keeps both wake modes independent of mobile access (initially enabled=%s)", async (bridgeEnabled) => {
 		await showCombinedMobile(bridgeEnabled);
 		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
