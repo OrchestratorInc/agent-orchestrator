@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureMainError, installIpcErrorCapture, resetMainErrorCaptureForTests, sanitizeMainErrorCapture, setMainErrorSink, type MainErrorCapture } from "./main-error-capture";
+import { captureMainError, reportDaemonFailure, installIpcErrorCapture, resetMainErrorCaptureForTests, sanitizeMainErrorCapture, setMainErrorSink, type MainErrorCapture } from "./main-error-capture";
 
 afterEach(() => resetMainErrorCaptureForTests());
 
@@ -15,10 +15,41 @@ describe("main error capture", () => {
 	});
 
 	it("bounds the pre-consent queue", () => {
-		for (let i = 0; i < 50; i++) captureMainError({ category: "daemon", reason: "exited" });
+		for (let i = 0; i < 50; i++) captureMainError({ category: "daemon", reason: "exited", detail: `code:${i}` });
 		const sink = vi.fn();
 		setMainErrorSink(sink);
 		expect(sink).toHaveBeenCalledTimes(20);
+	});
+
+	it.each(["daemon", "update", "ipc", "window", "acp_runtime", "side_chat"] as const)("bounds fresh errors for %s independently of object identity", (category) => {
+		const sink = vi.fn(); setMainErrorSink(sink);
+		for (let i = 0; i < 20; i++) captureMainError({ category, reason: "handler", error: new Error(`private ${i}`), detail: "channel:cloudCp:request" });
+		expect(sink).toHaveBeenCalledTimes(5);
+		captureMainError({ category, reason: "handler", detail: "channel:other" });
+		captureMainError({ category, reason: "check", detail: "channel:cloudCp:request" });
+		expect(sink).toHaveBeenCalledTimes(7);
+		captureMainError({ category: category === "daemon" ? "update" : "daemon", reason: "handler", detail: "channel:cloudCp:request" });
+		expect(sink).toHaveBeenCalledTimes(8);
+	});
+
+	it("applies budgets before consent and retains them across sink changes", () => {
+		for (let i = 0; i < 20; i++) captureMainError({ category: "ipc", reason: "handler", error: new Error("retry") });
+		const sink = vi.fn(); setMainErrorSink(sink);
+		expect(sink).toHaveBeenCalledTimes(5);
+		setMainErrorSink(null); captureMainError({ category: "ipc", reason: "handler" }); setMainErrorSink(sink);
+		expect(sink).toHaveBeenCalledTimes(5);
+	});
+
+	it("bounds unique budget keys until the next UTC day", () => {
+		const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 6));
+		try {
+			const sink = vi.fn(); setMainErrorSink(sink);
+			for (let i = 0; i < 1100; i++) captureMainError({ category: "ipc", reason: "handler", detail: `code:${i}` });
+			expect(sink).toHaveBeenCalledTimes(1024);
+			clock.mockReturnValue(Date.UTC(2026, 10, 7));
+			captureMainError({ category: "ipc", reason: "handler", detail: "code:1100" });
+			expect(sink).toHaveBeenCalledTimes(1025);
+		} finally { clock.mockRestore(); }
 	});
 
 	it("deduplicates side-chat recovery errors across IPC and bounds retry storms", () => {
@@ -31,18 +62,18 @@ describe("main error capture", () => {
 		expect(sink).toHaveBeenCalledTimes(5);
 	});
 
-	it("caps side-chat retries across minutes until the next day", () => {
+	it.each(["daemon", "update", "ipc", "window", "acp_runtime", "side_chat"] as const)("caps %s across minutes until the next day", (category) => {
 		const clock = vi.spyOn(Date, "now");
 		try {
 			const base = Date.UTC(2026, 10, 4, 0, 0, 0);
 			const sink = vi.fn(); setMainErrorSink(sink);
 			for (let i = 0; i <= 200; i++) {
 				clock.mockReturnValue(base + i * 60_000);
-				captureMainError({ category: "side_chat", reason: "recovery" });
+				captureMainError({ category, reason: "recovery" });
 			}
 			expect(sink).toHaveBeenCalledTimes(200);
 			clock.mockReturnValue(base + 86_400_000);
-			captureMainError({ category: "side_chat", reason: "recovery" });
+			captureMainError({ category, reason: "recovery" });
 			expect(sink).toHaveBeenCalledTimes(201);
 		} finally { clock.mockRestore(); }
 	});
@@ -83,5 +114,25 @@ describe("main error capture", () => {
 		expect(() => handlers.get("telemetry:capture")?.({} as never)).toThrow("must not self-report");
 		expect(sink).toHaveBeenCalledOnce();
 		expect(sink.mock.calls[0]?.[0]).toMatchObject({ category: "ipc", reason: "handler", detail: "channel:app:chooseDirectory" });
+	});
+});
+
+
+describe("daemon failure reporting", () => {
+	it("reports failure transitions with safe exit detail, but not repeated refreshes", () => {
+		const sink = vi.fn(); setMainErrorSink(sink);
+		reportDaemonFailure({ state: "ready" }, { state: "error", code: "exited", signal: "SIGKILL", message: "/private/path" });
+		reportDaemonFailure({ state: "error", code: "exited" }, { state: "error", code: "exited" });
+		reportDaemonFailure({ state: "ready" }, { state: "error", code: "exited", exitCode: 7 });
+		expect(sink.mock.calls.map(([event]) => event)).toEqual([
+			{ category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
+			{ category: "daemon", reason: "exited", detail: "code:7" },
+		]);
+	});
+	it("ignores normal and transitional states", () => {
+		const sink = vi.fn(); setMainErrorSink(sink);
+		for (const code of ["not_ready", "not_configured", "daemon_unreachable"] as const) reportDaemonFailure({ state: "ready" }, { state: "error", code });
+		reportDaemonFailure({ state: "ready" }, { state: "stopped" });
+		expect(sink).not.toHaveBeenCalled();
 	});
 });

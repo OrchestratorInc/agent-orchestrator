@@ -441,6 +441,15 @@ func CaptureError(ctx context.Context, err error, tags map[string]string, finger
 	captureErrorFor(ctx, err, tags, fingerprint, route, site, tags["operation"])
 }
 
+// CaptureErrorAsync reports HTTP faults without waiting for Sentry transport.
+// It shares bounded admission, budgets and consent draining with background captures.
+func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	captureAsync(ctx, tags, fingerprint, route, site, tags["operation"])
+}
+
 func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
 	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture(ctx) {
 		return
@@ -450,10 +459,6 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 		return
 	}
 	capture(sentry.LevelError, tags, fingerprint, route, site, false)
-}
-
-func allowErrorFingerprint(fingerprint string, now time.Time) bool {
-	return allowErrorFingerprintFor(fingerprint, "", now)
 }
 
 // allowErrorFingerprintFor applies the per-fingerprint budget. Once a day has
