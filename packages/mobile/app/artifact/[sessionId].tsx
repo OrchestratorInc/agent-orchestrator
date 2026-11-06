@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -14,17 +14,19 @@ import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkd
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { sendFileFeedback } from "../../lib/files/api";
-import { ReviewTray, SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { ReviewButton } from "../../lib/files/ReviewButton";
 import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { haptics } from "../../lib/haptics";
-import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
+import { toolbarIcon } from "../../lib/toolbarIcon";
 import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
@@ -51,6 +53,7 @@ export default function ArtifactViewerScreen() {
 }
 
 function ArtifactViewerContent() {
+	const glassInset = useGlassBarInset();
 	// `ask` opens a comment on the whole file, from the gallery's Ask the agent.
 	const { sessionId: rawId, path: rawPath, hostId: routeHostId, ask: askParam } = useLocalSearchParams<{ sessionId: string; path?: string; hostId?: string; ask?: string }>();
 	const sessionId = String(rawId ?? "");
@@ -128,26 +131,20 @@ function ArtifactViewerContent() {
 	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: artifact?.name ?? path.split("/").pop() ?? "Artifact",
-			headerRight: artifact
-				? () => (
-					<View style={styles.headerActions}>
-						{canShowArtifactHistory(artifact) ? (
-							<Pressable accessibilityRole="button" accessibilityLabel="Version history" hitSlop={10} onPress={() => { haptics.tap(); openHistory(artifact); }} style={headerActionStyle}>
-								<Feather name="clock" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
-							</Pressable>
-						) : null}
-						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
-							<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
-						</Pressable>
-					</View>
-				)
-				: undefined,
-		});
-	}, [artifact, askAbout, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
+		navigation.setOptions({ title: artifact?.name ?? path.split("/").pop() ?? "Artifact" });
+	}, [artifact?.name, navigation, path]);
+	// Memoized: each new element re-registers the header's items.
+	const headerItems = useMemo(() => artifact ? (
+		<Stack.Toolbar placement="right">
+			{canShowArtifactHistory(artifact) ? <Stack.Toolbar.Button icon={toolbarIcon("history")} accessibilityLabel="Version history" onPress={() => openHistory(artifact)} /> : null}
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Artifact actions" onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} />
+		</Stack.Toolbar>
+	) : null, [artifact, askAbout, openHistory, openMenu]);
+	const openReview = useCallback(() => {
+		router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId: routeHostId } });
+	}, [routeHostId, router, sessionId]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact) {
@@ -156,8 +153,9 @@ function ArtifactViewerContent() {
 	}
 	return (
 		<View style={styles.screen}>
+			{headerItems}
 			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
-			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
+			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
 					key={ask.key}
@@ -169,7 +167,7 @@ function ArtifactViewerContent() {
 					onClose={() => { closeAsk(); setActionError(undefined); }}
 				/>
 			) : (
-				<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
+				<ReviewButton count={review.comments.length} onPress={openReview} />
 			)}
 			{menu}
 		</View>
@@ -229,6 +227,8 @@ function ArtifactWeb({ config, url, version, page }: {
 				// cookie, and it cannot reach the daemon.
 				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
 				style={styles.web}
+				// Under the clear glass bar, the page scrolls on beneath it.
+				contentInsetAdjustmentBehavior="automatic"
 				startInLoadingState
 				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
 				onLoadStart={() => setError(undefined)}
@@ -263,7 +263,7 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 	}, [source.uri]);
 	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
+		<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
 			<Image
 				source={imageSourceForPlatform(source)}
 				accessibilityLabel={name}
@@ -279,6 +279,7 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 type TextState = { key: string; text?: string; error?: string };
 
 function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
+	const glassInset = useGlassBarInset();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Re-read whenever the poll reports a newer version of the file.
@@ -304,12 +305,12 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 	if (looksBinary(text)) return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
 	// A long file shows its start: a text view is laid out whole, on Android on the UI thread.
 	const shown = shownText(text);
-	const cut = shown.truncated ? <View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
+	const cut = shown.truncated ? <View style={[styles.truncated, { marginTop: glassInset }]}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
 	if (markdown) {
 		return (
 			<View style={styles.screen}>
 				{cut}
-				<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
+				<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.document}>
 					{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
 					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
 				</ScrollView>
@@ -319,7 +320,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 	return (
 		<View style={styles.screen}>
 			{cut}
-			<ScrollView style={styles.screen} contentContainerStyle={styles.code}>
+			<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.code}>
 				<HighlightedCodeText
 					code={shown.text}
 					language={artifactLanguage(artifact.path)}
@@ -340,7 +341,6 @@ function Unavailable({ title, message, action }: { title: string; message?: stri
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	headerActions: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
