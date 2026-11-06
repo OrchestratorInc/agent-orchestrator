@@ -130,7 +130,7 @@ func TestActiveKimiBindingRemainsDiscoverable(t *testing.T) {
 	if !pending {
 		t.Fatal("active Kimi binding did not keep bounded child discovery active")
 	}
-	discovery, err := s.ListUsageDiscoveryBindings(ctx, 8)
+	discovery, err := s.ListUsageDiscoveryBindings(ctx, 0, 8)
 	mustNoError(t, err)
 	if len(discovery) != 1 || discovery[0].ID != binding.ID {
 		t.Fatalf("discovery bindings = %+v, want Kimi binding %d", discovery, binding.ID)
@@ -153,7 +153,7 @@ func TestSourceLessPiBindingRemainsDiscoverable(t *testing.T) {
 	if !pending {
 		t.Fatal("source-less Pi binding did not request discovery retry")
 	}
-	discovery, err := s.ListUsageDiscoveryBindings(ctx, 8)
+	discovery, err := s.ListUsageDiscoveryBindings(ctx, 0, 8)
 	mustNoError(t, err)
 	if len(discovery) != 1 || discovery[0].ID != binding.ID {
 		t.Fatalf("discovery bindings = %+v, want Pi binding %d", discovery, binding.ID)
@@ -1441,7 +1441,7 @@ func TestUsageBindingWaitsForPersistedCodexChildren(t *testing.T) {
 		State:           domain.UsageSourceComplete,
 	})
 
-	discovery, err := s.ListUsageDiscoveryBindings(ctx, 8)
+	discovery, err := s.ListUsageDiscoveryBindings(ctx, 0, 8)
 	if err != nil || len(discovery) != 1 || discovery[0].ID != binding.ID {
 		t.Fatalf("startup discovery bindings = %+v, err=%v", discovery, err)
 	}
@@ -1544,7 +1544,7 @@ func TestUsageBindingValidatesCodexDiscoveryStateShapes(t *testing.T) {
 				State:           domain.UsageSourceComplete,
 			})
 
-			discovery, err := s.ListUsageDiscoveryBindings(ctx, 8)
+			discovery, err := s.ListUsageDiscoveryBindings(ctx, 0, 8)
 			mustNoError(t, err)
 			if len(discovery) != 0 {
 				t.Fatalf("invalid state invented discovery bindings: %+v", discovery)

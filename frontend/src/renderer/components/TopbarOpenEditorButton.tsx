@@ -1,11 +1,13 @@
-import { ChevronDown, Code2, Copy, FolderOpen, SquareTerminal } from "lucide-react";
+import { ChevronDown, Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { OpenTarget, OpenTargetId } from "../../shared/editor-handoff";
+import type { OpenTargetId } from "../../shared/editor-handoff";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
+import type { TopbarView } from "../lib/topbar-actions";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
@@ -16,74 +18,8 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import {
-	AndroidStudioIcon,
-	AntigravityIcon,
-	CursorIcon,
-	FinderIcon,
-	GhosttyIcon,
-	JetBrainsIcon,
-	SublimeIcon,
-	VSCodeIcon,
-	VSCodiumIcon,
-	WindsurfIcon,
-	ZedIcon,
-} from "./icons";
-
-const editorIcons: Record<string, typeof VSCodeIcon> = {
-	vscode: VSCodeIcon,
-	"vscode-insiders": VSCodeIcon,
-	vscodium: VSCodiumIcon,
-	cursor: CursorIcon,
-	windsurf: WindsurfIcon,
-	zed: ZedIcon,
-	antigravity: AntigravityIcon,
-	sublime: SublimeIcon,
-	"android-studio": AndroidStudioIcon,
-	intellij: JetBrainsIcon,
-	webstorm: JetBrainsIcon,
-	pycharm: JetBrainsIcon,
-	goland: JetBrainsIcon,
-	phpstorm: JetBrainsIcon,
-	rubymine: JetBrainsIcon,
-	clion: JetBrainsIcon,
-	rider: JetBrainsIcon,
-	fleet: JetBrainsIcon,
-};
-
-const editorColors: Record<string, string> = {
-	vscode: "#1F9CF0",
-	"vscode-insiders": "#1F9CF0",
-	vscodium: "#2F80ED",
-	antigravity: "#4285F4",
-	sublime: "#FF9800",
-	"android-studio": "#3DDC84",
-};
-
-export function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
-	const [failedIcon, setFailedIcon] = useState<string>();
-	if (target?.kind === "file_manager") {
-		const Icon = target.name === "Finder" ? FinderIcon : FolderOpen;
-		return <Icon className={className} aria-hidden="true" />;
-	}
-	if (target?.id === "terminal") return <SquareTerminal className={className} aria-hidden="true" />;
-	if (target?.id === "ghostty") return <GhosttyIcon className={className} aria-hidden="true" />;
-	const iconDataUrl = target?.iconDataUrl;
-	if (iconDataUrl?.startsWith("data:image/png;base64,") && iconDataUrl !== failedIcon) {
-		// Use the same SVG slot and sizing rules as every other menu icon.
-		return (
-			<svg width="24" height="24" viewBox="0 0 24 24" className={className} aria-hidden="true">
-				<image href={iconDataUrl} width="24" height="24" onError={() => setFailedIcon(iconDataUrl)} />
-			</svg>
-		);
-	}
-	if (target?.kind === "terminal") {
-		return <SquareTerminal className={className} aria-hidden="true" />;
-	}
-	const Icon = (target && editorIcons[target.id]) || Code2;
-	const color = target ? editorColors[target.id] : undefined;
-	return <Icon className={className} style={color ? { color } : undefined} aria-hidden="true" />;
-}
+import { OpenTargetIcon } from "./OpenTargetIcon";
+export { OpenTargetIcon as TargetIcon } from "./OpenTargetIcon";
 
 // Electron main owns the complete handoff: it resolves the loopback-only
 // workspace path, launches the native target, and persists editor preference.
@@ -94,12 +30,15 @@ export function TopbarOpenEditorButton({
 	sessionCreatedAt,
 	sessionTerminated,
 	style,
+	telemetryView,
 }: {
 	sessionId: string;
 	projectId: string;
 	sessionCreatedAt?: string;
 	sessionTerminated?: boolean;
 	style?: React.CSSProperties;
+	/** Set when mounted in a session top bar, so its clicks are counted. */
+	telemetryView?: TopbarView;
 }) {
 	const { t } = useTranslation();
 	const stateQuery = useEditorHandoffState(sessionId, { sessionCreatedAt, sessionTerminated });
@@ -121,7 +60,7 @@ export function TopbarOpenEditorButton({
 		setCopyPending(true);
 		try {
 			await aoBridge.editorHandoff.copyWorkspacePath(sessionId);
-			showGlobalToast(t("shortcut.sessionPathCopied"));
+			showGlobalToast(t("terminal.copiedToClipboard"), undefined, { tone: "success", placement: "bottom-center", dedupeKey: "path-copied" });
 		} catch (error) {
 			showGlobalToast(t("shortcut.sessionPathCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 			void stateQuery.refetch();
@@ -176,10 +115,13 @@ export function TopbarOpenEditorButton({
 							className="bg-transparent hover:bg-transparent"
 							highlight={false}
 							disabled={mainDisabled}
-							onClick={() => launch()}
+							onClick={() => {
+								if (telemetryView) captureTopbarAction("open_editor", telemetryView);
+								launch();
+							}}
 							variant="icon"
 						>
-							<TargetIcon target={preferred} className="size-icon-md" />
+							<OpenTargetIcon target={preferred} className="size-icon-md" />
 						</TopbarButton>
 					</span>
 				</TooltipTrigger>
@@ -187,6 +129,7 @@ export function TopbarOpenEditorButton({
 			</Tooltip>
 			<DropdownMenu onOpenChange={(isOpen) => {
 				setMenuOpen(isOpen);
+				if (isOpen && telemetryView) captureTopbarAction("editor_menu", telemetryView);
 				if (isOpen) void stateQuery.refreshTargets().catch(() => stateQuery.refetch());
 			}}>
 				<span className="inline-flex">
@@ -202,11 +145,11 @@ export function TopbarOpenEditorButton({
 						</TopbarButton>
 					</DropdownMenuTrigger>
 				</span>
-			
+
 				<DropdownMenuContent align="end" className="min-w-52">
 					{[...openInTargets, ...editors].map((target) => (
 						<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-							<TargetIcon target={target} className="size-icon-sm" />
+							<OpenTargetIcon target={target} className="size-icon-sm" />
 							{target.name}
 						</DropdownMenuItem>
 					))}

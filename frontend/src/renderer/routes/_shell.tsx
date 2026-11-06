@@ -81,6 +81,7 @@ import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset"
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { pageHasTopbar } from "../lib/shell-topbar";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppShortcut } from "../hooks/useAppShortcut";
@@ -255,6 +256,7 @@ const macTrafficLightBand = hidesShellTopbar();
 const ShellCenter = memo(function ShellCenter({
 	isSessionRoute,
 	isHomeRoute,
+	isNewChatRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
@@ -263,6 +265,7 @@ const ShellCenter = memo(function ShellCenter({
 }: {
 	isSessionRoute: boolean;
 	isHomeRoute: boolean;
+	isNewChatRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
@@ -280,7 +283,12 @@ const ShellCenter = memo(function ShellCenter({
 	// so every page carries the bell except the welcome start page.
 	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} notifications={!isHomeRoute || startingOrchestrator}>
+		<CenterPanelShell
+			className={panelClassName}
+			notifications={!isHomeRoute || startingOrchestrator}
+			// The home and new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -1211,34 +1219,29 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		workspaceStartupState,
 	]);
 
-	// Keep Electron's nativeTheme in step with the shell so the embedded preview
-	// WebContentsView (which follows prefers-color-scheme) flips at the same time.
-	// Send the preference, not the resolved theme, so "system" keeps both surfaces
-	// following the OS instead of freezing matchMedia to a forced value.
-	useEffect(() => {
-		void aoBridge.theme?.set(themePreference);
-	}, [themePreference]);
-
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.
 	useEffect(() => {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// macOS Appearance preference: the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && windowTranslucency;
+
 	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read.
+	// data-theme has been applied before the token is read. A translucent window
+	// paints no background, and the read forces a whole-document style recalc
+	// mid-switch, so it is skipped there.
 	useEffect(() => {
+		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
 			const color = resolveCssColorToHex("--sidebar");
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme]);
-
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
+	}, [resolvedTheme, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1551,6 +1554,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							<ShellCenter
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
 								isHomeRoute={isHomeRoute}
+								isNewChatRoute={isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}

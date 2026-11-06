@@ -3,6 +3,8 @@ import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
+import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
+import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import type { TelemetryInstallContext } from "../../shared/telemetry";
@@ -359,6 +361,46 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 		...(githubLogin ? { github_login: githubLogin } : {}),
 	});
 	identifiedId = user.id;
+	linkPendingWebVisitor(user.id);
+}
+
+// A website visit to link to the account a sign-in just completed. The
+// orchestrator.inc return page adds the visitor's website PostHog id only for
+// visitors who accepted analytics there, and main hands it over once, with that
+// sign-in's notification. Held in memory only, and spent by the first identify
+// of that account, or at once when the account is already identified.
+let pendingWebVisitor: { userId: string; webDistinctId: string } | null = null;
+// alias() queues $create_alias; PostHog can still refuse the merge (the
+// website id already belongs to an identified person), so this records that
+// the link was asked for, not that it happened.
+const WEB_VISITOR_LINK_REQUESTED_EVENT = "ao.renderer.cloud_web_visitor_link_requested";
+
+/**
+ * Notes a cloud session notification: the signed-in WorkOS user (null when
+ * signed out or local) and the website visitor id a new sign-in carried. Another
+ * account or a sign-out drops a visit not yet linked; a token refresh of the
+ * same account keeps it.
+ */
+export function noteCloudSignInWebVisitor(userId: string | null, webDistinctId?: unknown): void {
+	if (pendingWebVisitor && pendingWebVisitor.userId !== userId) pendingWebVisitor = null;
+	if (!userId || webDistinctId === undefined) return;
+	pendingWebVisitor = null;
+	if (analyticsOptedOut || !isWebDistinctId(webDistinctId) || webDistinctId === userId) return;
+	pendingWebVisitor = { userId, webDistinctId };
+	if (identifiedId === userId) linkPendingWebVisitor(userId);
+}
+
+function linkPendingWebVisitor(userId: string): void {
+	const pending = pendingWebVisitor;
+	if (!pending || pending.userId !== userId) return;
+	pendingWebVisitor = null;
+	if (analyticsOptedOut || !posthogReady) return;
+	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINK_REQUESTED_EVENT)) return;
+	// alias(alias, original) sends $create_alias, which merges the website
+	// visitor's distinct id into the person already identified as this user.
+	const aliased = posthog.alias(pending.webDistinctId, userId);
+	if (typeof aliased !== "object" || aliased === null) return;
+	void captureRendererEvent(WEB_VISITOR_LINK_REQUESTED_EVENT, { website_distinct_id: pending.webDistinctId });
 }
 
 /**
@@ -369,6 +411,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 export function clearCloudUser(): void {
 	cloudUser = null;
 	signInKnown = true;
+	pendingWebVisitor = null;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -386,6 +429,8 @@ export function clearCloudUser(): void {
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
+		// A website visit not linked yet is dropped, not kept for a later opt-in.
+		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
 		// after a later opt-in, so the streak and pending daily counts go too.
 		try {
@@ -822,6 +867,10 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
 			break;
+		case "ao.renderer.cloud_web_visitor_link_requested":
+			// The website's own pseudonymous PostHog id, never anything typed.
+			if (isWebDistinctId(properties?.website_distinct_id)) safe.website_distinct_id = properties.website_distinct_id;
+			break;
 		case "ao.renderer.cloud_offering_resolved": {
 			safe.org_kind = enumValue(properties?.org_kind, CLOUD_ORG_KINDS);
 			safe.billing_mode = enumValue(properties?.billing_mode, CLOUD_BILLING_MODES);
@@ -873,6 +922,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 
 const CLOUD_FUNNEL_EVENTS = new Set([
 	"ao.renderer.cloud_signed_in",
+	"ao.renderer.cloud_web_visitor_link_requested",
 	"ao.renderer.cloud_offering_resolved",
 	"ao.renderer.cloud_project_created",
 	"ao.renderer.cloud_session_create_requested",
@@ -889,6 +939,8 @@ const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES
 
 const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
+const TOPBAR_ACTION_SET = new Set<string>(TOPBAR_ACTIONS);
+const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
 
 export async function sanitizeRendererProperties(
 	event: string,
@@ -991,6 +1043,10 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
+			break;
+		case "ao.renderer.topbar_action_clicked":
+			if (typeof properties?.action === "string" && TOPBAR_ACTION_SET.has(properties.action)) safe.action = properties.action;
+			if (typeof properties?.view === "string" && TOPBAR_VIEW_SET.has(properties.view)) safe.view = properties.view;
 			break;
 		case "ao.renderer.notification_mark_read_succeeded":
 		case "ao.renderer.notification_mark_read_failed":

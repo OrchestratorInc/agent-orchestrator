@@ -184,11 +184,17 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	if !parserCheckpointsEqual(cursorSample.checkpoint, parserState.Integrity.Checkpoint) {
 		return i.resetSourceGeneration(ctx, source, identity, now)
 	}
+	// A conflict leaves unread bytes. Suppress repeated ingestion only while
+	// that file snapshot is unchanged, so in-place corrections can recover.
+	conflict := parserState.Integrity.ConflictSnapshot
 	if source.Source.State == domain.UsageSourceComplete &&
 		source.BindingState != domain.UsageBindingFinalizing &&
-		info.Size() == source.Source.ByteOffset {
+		(info.Size() == source.Source.ByteOffset ||
+			(source.Source.LastErrorCode == domain.UsageErrorSourceEventConflict &&
+				conflict != nil && conflict.Size == info.Size() && conflict.ModTime.Equal(info.ModTime()))) {
 		return result, nil
 	}
+	parserState.Integrity.ConflictSnapshot = nil
 	if (source.BindingState == domain.UsageBindingComplete || source.BindingState == domain.UsageBindingPartial) &&
 		info.Size() > source.Source.ByteOffset {
 		if _, err := i.store.UpdateUsageBindingState(
@@ -319,7 +325,8 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			errors.New("transcript changed during ingestion"),
 		)
 	}
-	if done, err := i.applyParsedChunk(ctx, source, &parsed, now); err != nil || done {
+	fileSnapshot := &conflictSnapshotV1{Size: snapshot.size, ModTime: snapshot.modTime}
+	if done, err := i.applyParsedChunk(ctx, source, &parsed, fileSnapshot, &result, now); err != nil || done {
 		return result, err
 	}
 	i.notifyLateRouteEvidence(ctx, source.Source.ID)
@@ -332,12 +339,16 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 }
 
 // applyParsedChunk prices and stores one parsed chunk. done reports that the
-// caller must return immediately: the chunk failed, or an event conflict
-// settled the source instead.
+// caller must return result immediately: the chunk failed, or an event
+// conflict settled the source instead. conflict is the file snapshot a
+// conflict is recorded against, so ingestion resumes once the file changes;
+// nil for a source that skips unchanged reads itself.
 func (i *Ingestor) applyParsedChunk(
 	ctx context.Context,
 	source domain.UsageSourceContext,
 	parsed *parseResult,
+	conflict *conflictSnapshotV1,
+	result *IngestResult,
 	now time.Time,
 ) (done bool, err error) {
 	apply := func() error {
@@ -393,16 +404,35 @@ func (i *Ingestor) applyParsedChunk(
 	}
 	if err := apply(); err != nil {
 		if errors.Is(err, domain.ErrUsageSourceEventConflict) {
-			if _, markErr := i.store.MarkUsageSourceState(
+			// The failed transaction did not advance the cursor or parser.
+			// Persist the quarantine against that original state, with the
+			// same revision check used for a successful chunk.
+			conflictState, stateErr := decodeParserState(source.Source)
+			if stateErr != nil {
+				return true, errors.Join(err, stateErr)
+			}
+			conflictState.Integrity.ConflictSnapshot = conflict
+			encoded, stateErr := json.Marshal(conflictState)
+			if stateErr != nil {
+				return true, errors.Join(err, stateErr)
+			}
+			conflictCursor := cursorFromSource(source.Source, source.Source.ByteOffset, now)
+			conflictCursor.State = domain.UsageSourceComplete
+			conflictCursor.ParserStateJSON = string(encoded)
+			conflictCursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+			if markErr := i.store.ApplyUsageChunk(
 				ctx,
 				source.Source.ID,
-				domain.UsageSourceComplete,
-				domain.UsageErrorSourceEventConflict,
+				source.Source.ByteOffset,
+				source.Source.UpdatedAt,
+				conflictCursor,
 				nil,
-				now,
 			); markErr != nil {
 				return true, errors.Join(err, markErr)
 			}
+			// Retrying cannot resolve a conflict, so drop any finalization
+			// quiet-period retry scheduled above.
+			result.RetryAt = nil
 			if source.BindingState == domain.UsageBindingFinalizing {
 				return true, i.completeBinding(ctx, source.Source.BindingID, now)
 			}

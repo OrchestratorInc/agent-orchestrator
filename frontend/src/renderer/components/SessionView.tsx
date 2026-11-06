@@ -41,6 +41,7 @@ import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
@@ -1852,7 +1853,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Explicit open commands reveal once per command. A fast command's start
 	// and finish can share a React render, so either event can consume its ID.
-	// Later completion and UI changes must not override a user's close.
+	// Later completion and UI changes must not override a user's close. Only a
+	// command whose start arrived while this session was on screen counts: one
+	// begun while the user was elsewhere would otherwise pop Browser open a
+	// moment after they switch in.
 	useEffect(() => {
 		if (revealedBrowserCommandsRef.current.sessionId !== uiSessionId) {
 			revealedBrowserCommandsRef.current = { sessionId: uiSessionId, commands: new Set() };
@@ -1860,7 +1864,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!hasInspector || terminated) return;
 		const activity = browserView.agentBrowserActivity;
 		if (activity && BROWSER_REVEAL_ACTIONS.has(activity.action)) {
-			if (!activity.commandId || activity.viewId !== browserView.viewId) return;
+			if (!activity.commandId || activity.viewId !== browserView.viewId || !activity.startObserved) {
+				if (browserView.agentBrowserActive && !browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
+				return;
+			}
 			const commands = revealedBrowserCommandsRef.current.commands;
 			if (commands.has(activity.commandId)) return;
 			commands.add(activity.commandId);
@@ -1870,10 +1877,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!browserView.agentBrowserActive) return;
+		// Passive activity only badges Browser, including an orchestrator's.
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
-			setInspectorOpenForSession(uiSessionId, true);
-			return;
 		}
 		if (!browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
 	}, [
@@ -1889,7 +1895,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 		browserOnly,
 		setBrowserContentRevealed,
-		setInspectorOpenForSession,
 		revealBrowserPanel,
 	]);
 
@@ -2344,7 +2349,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
 							}
 							aria-pressed={isInspectorOpen}
-							onClick={handleToggleInspector}
+							onClick={() => {
+								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
+								handleToggleInspector();
+							}}
 							style={noDragStyle}
 							variant="icon"
 						>

@@ -38,6 +38,7 @@ import type {
 	EditorId,
 	EditorPreferenceState,
 	OpenSessionArtifactsInput,
+	ChatPathActionInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -52,7 +53,7 @@ import {
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
-import type { CloudAccount } from "./shared/cloud-account";
+import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
@@ -219,6 +220,7 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
 		checkAncestorRepo: (path: string) =>
@@ -471,6 +473,7 @@ const api = {
 		},
 	},
 	editorHandoff: {
+		pathAction: (input: ChatPathActionInput) => ipcRenderer.invoke("editorHandoff:pathAction", input) as Promise<void>,
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,
@@ -888,6 +891,9 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// The context a sign-in that just completed added (CloudSignInContext),
+		// with its account, taken once; null when there is none.
+		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,
 	},
 	// Cloud control-plane transport. The CP has no CORS and the WorkOS bearer
 	// token lives only in the main process, so every CP call is proxied through

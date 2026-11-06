@@ -190,7 +190,7 @@ func (i *Ingestor) ingestSQLite(
 			result.RetryAt = &settleAt
 		}
 	}
-	if done, err := i.applyParsedChunk(ctx, source, &parsed, now); err != nil || done {
+	if done, err := i.applyParsedChunk(ctx, source, &parsed, nil, &result, now); err != nil || done {
 		return result, err
 	}
 	i.notifyLateRouteEvidence(ctx, source.Source.ID)

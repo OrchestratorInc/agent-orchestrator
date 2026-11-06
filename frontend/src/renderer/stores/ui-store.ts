@@ -123,8 +123,8 @@ export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: num
 export type GlobalToast = {
 	title: string;
 	body?: string;
-	tone?: "info" | "error";
-	placement?: "bottom-right" | "top-center";
+	tone?: "info" | "error" | "success";
+	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
 	durationMs?: number;
 	dedupeKey?: string;
@@ -199,6 +199,12 @@ export type UiState = {
 	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
 	 */
 	newSidebarDesign: boolean;
+	/**
+	 * The simplified, floating top bar. Default on. The switch lives in
+	 * Developer mode, and turning it off only takes effect there: read it
+	 * through `isSimplifiedTopbar` (lib/simplified-topbar).
+	 */
+	simplifiedTopbar: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -263,6 +269,7 @@ export type UiState = {
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
 	setNewSidebarDesign: (enabled: boolean) => void;
+	setSimplifiedTopbar: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -335,6 +342,7 @@ const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
 const newSidebarDesignStorageKey = "ao.newSidebarDesign";
+const simplifiedTopbarStorageKey = "ao.simplifiedTopbar";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -437,6 +445,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
 	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
+	simplifiedTopbar: getLocalStorage()?.getItem(simplifiedTopbarStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -459,12 +468,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		if (get().themePreference === themePreference) return;
-		runThemeTransition(() => {
-			const resolvedTheme = resolveTheme(themePreference);
-			getLocalStorage()?.setItem(themeStorageKey, themePreference);
-			applyDocumentTheme(resolvedTheme);
-			set({ themePreference, resolvedTheme });
-		});
+		runThemeTransition(
+			() => {
+				const resolvedTheme = resolveTheme(themePreference);
+				getLocalStorage()?.setItem(themeStorageKey, themePreference);
+				applyDocumentTheme(resolvedTheme);
+				set({ themePreference, resolvedTheme });
+			},
+			// The window's vibrancy material follows nativeTheme; flip it as the
+			// new frame is revealed so the tint and the material change together.
+			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+		);
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
@@ -522,6 +536,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setNewSidebarDesign: (newSidebarDesign) => {
 		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
 		set({ newSidebarDesign });
+	},
+	setSimplifiedTopbar: (simplifiedTopbar) => {
+		getLocalStorage()?.setItem(simplifiedTopbarStorageKey, String(simplifiedTopbar));
+		set({ simplifiedTopbar });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
@@ -795,8 +813,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
-			const tone = options?.tone ?? (style === "error" || style === "info" ? style : "info");
-			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" ? style : "bottom-right");
+			const tone = options?.tone ?? (style === "error" || style === "info" || style === "success" ? style : "info");
+			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" || style === "bottom-center" ? style : "bottom-right");
 			const toast = { title, body, tone, placement, nonce, ...options };
 			const globalToasts = toast.dedupeKey
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
