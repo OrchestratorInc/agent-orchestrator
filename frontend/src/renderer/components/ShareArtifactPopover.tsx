@@ -34,7 +34,6 @@ interface OutdatedShare {
 
 /** Video formats no browser plays: a link has no download, so it could not show them. */
 const UNPLAYABLE_VIDEO_FILE = /\.(avi|mkv)$/i;
-const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv)$/i;
 /** Compressed files, whose contents the credentials check cannot read. */
 const ARCHIVE_FILE = /\.(zip|tar|tgz|gz|bz2|xz|7z|rar|docx|xlsx|pptx)$/i;
 const COPIED_MS = 2_000;
@@ -344,7 +343,7 @@ function SharePanel({
 					{title}
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") }), "alert") : null}
-					{VIDEO_FILE.test(file.path) ? status(t("artifacts.share.reviewVideo")) : ARCHIVE_FILE.test(file.path) ? status(t("artifacts.share.reviewArchive")) : null}
+					{ARCHIVE_FILE.test(file.path) ? status(t("artifacts.share.reviewArchive")) : null}
 					{footer(
 						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
 						<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>,

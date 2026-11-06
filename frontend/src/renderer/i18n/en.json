@@ -3121,7 +3121,6 @@
 	"artifacts.share.limitReached": "Free plan: up to {{limit}} active links. Upgrade to share more.",
 	"artifacts.share.upgrade": "Upgrade",
 	"artifacts.share.videoUnplayable": "This video format can't be played in a browser. Use MP4, MOV or WebM.",
-	"artifacts.share.reviewVideo": "Recordings can show private details. Watch it before publishing.",
 	"artifacts.share.reviewArchive": "The contents of compressed files aren't checked for credentials.",
 	"artifacts.share.notOwner": "Only the person who started this session can share its files.",
 	"artifacts.share.copyLink": "Copy link",

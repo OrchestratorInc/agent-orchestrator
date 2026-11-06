@@ -3195,7 +3195,6 @@
 	"artifacts.share.limitReached": "Offre gratuite : jusqu’à {{limit}} liens actifs. Passez à une offre supérieure pour partager plus.",
 	"artifacts.share.upgrade": "Mettre à niveau",
 	"artifacts.share.videoUnplayable": "Ce format vidéo ne peut pas être lu dans un navigateur. Utilisez MP4, MOV ou WebM.",
-	"artifacts.share.reviewVideo": "Les enregistrements peuvent montrer des informations privées. Regardez-le avant de publier.",
 	"artifacts.share.reviewArchive": "Le contenu des fichiers compressés n'est pas vérifié pour les identifiants.",
 	"artifacts.share.notOwner": "Seule la personne qui a démarré cette session peut partager ses fichiers.",
 	"artifacts.share.copyLink": "Copier le lien",

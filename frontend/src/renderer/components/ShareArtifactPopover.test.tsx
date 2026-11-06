@@ -323,12 +323,11 @@ describe("ShareArtifactButton", () => {
 		expect(await screen.findByRole("button", { name: "Share: clip.mkv" })).toBeDisabled();
 	});
 
-	it("publishes a video, reminding the person a recording can show private details", async () => {
+	it("publishes a video", async () => {
 		stub({ ...inspection, name: "clip.mp4" }, links, { status: "cancelled" });
 		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
 		await userEvent.click(await screen.findByRole("button", { name: "Share: clip.mp4" }));
-		expect(await screen.findByText(/Recordings can show private details/)).toBeTruthy();
-		expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeEnabled();
 	});
 
 	it("shows the control plane's own reason when it refuses a file", async () => {
