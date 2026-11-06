@@ -195,23 +195,67 @@ describe("SessionSearchView", () => {
 	});
 
 	it("reports how many matched and offers the next page", async () => {
-		getMock.mockResolvedValue(response({ total: 40 }));
+		// A full first page of the 40 sessions that match.
+		const firstPage = Array.from({ length: 25 }, (_, index) => ({
+			...result,
+			sessionId: `proj-${index}`,
+			messageId: `msg-${index}`,
+			sessionName: index === 0 ? result.sessionName : `Session ${index}`,
+		}));
+		getMock.mockResolvedValue(response({ results: firstPage, total: 40 }));
 		const user = userEvent.setup();
 		render(<SessionSearchView />, { wrapper });
 
 		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
 		await waitFor(() => expect(screen.getByText("Fix the login test")).toBeInTheDocument());
 
-		// The count is matches, not the page length: "1 of 40", not "1 of 1".
-		expect(screen.getByTestId("session-search-count")).toHaveTextContent("1 of 40 sessions");
-		await user.click(screen.getByRole("button", { name: /Show 39 more/ }));
+		// The count is matches, not the page length: "25 of 40", not "25 of 25".
+		expect(screen.getByTestId("session-search-count")).toHaveTextContent("25 of 40 sessions");
+		await user.click(screen.getByRole("button", { name: /Show 15 more/ }));
 
+		// The next page is its own request at the next offset, not a bigger one.
 		await waitFor(() => {
 			const lastCall = getMock.mock.calls.at(-1);
 			expect(lastCall?.[1]).toMatchObject({
-				params: { query: expect.objectContaining({ limit: 50 }) },
+				params: { query: expect.objectContaining({ limit: 25, offset: 25 }) },
 			});
 		});
+	});
+
+	// The daemon clamps every request to 100 rows (SessionSearchMaxLimit). Paging
+	// by a growing limit asked for 125 on the fifth page, got the same first 100,
+	// and every later "Show more" repeated them.
+	it("pages past the daemon's 100-row limit to the last session", async () => {
+		const all = Array.from({ length: 130 }, (_, index) => ({
+			...result,
+			sessionId: `proj-${index}`,
+			messageId: `msg-${index}`,
+			sessionName: `Session ${index}`,
+		}));
+		getMock.mockImplementation(async (path: string, options?: { params?: { query?: { limit?: number; offset?: number } } }) => {
+			if (path !== "/api/v1/search/sessions") return response();
+			const { limit = 25, offset = 0 } = options?.params?.query ?? {};
+			return response({ results: all.slice(offset, offset + Math.min(limit, 100)), total: all.length, limit, offset });
+		});
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Session 24")).toBeInTheDocument());
+		for (let page = 1; page < 6; page++) {
+			await user.click(screen.getByRole("button", { name: /Show \d+ more/ }));
+			const lastShown = Math.min((page + 1) * 25, all.length) - 1;
+			await waitFor(() => expect(screen.getByText(`Session ${lastShown}`)).toBeInTheDocument());
+		}
+
+		// Every session once, in order, and nothing left to show.
+		for (const session of all) expect(screen.getAllByText(session.sessionName)).toHaveLength(1);
+		expect(screen.getByTestId("session-search-count")).toHaveTextContent("130 of 130 sessions");
+		expect(screen.queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
+		// No request asked for more than one page.
+		const searches = getMock.mock.calls.filter(([path]) => path === "/api/v1/search/sessions");
+		expect(searches.every(([, options]) => options.params.query.limit === 25)).toBe(true);
+		expect(new Set(searches.map(([, options]) => options.params.query.offset ?? 0))).toEqual(new Set([0, 25, 50, 75, 100, 125]));
 	});
 
 	it("opens a reviewer-chat match in the reviewer chat and says it is one", async () => {

@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -44,19 +44,12 @@ export function sessionSearchQueryKey(filters: SessionSearchFilters, hostId: Hos
 	] as const;
 }
 
-/**
- * One page of ranked results over past sessions.
- *
- * The daemon owns ranking, filtering, and snippet offsets; this hook only
- * transports the query. A short query is not sent at all — matching one
- * character across every past session returns the whole archive.
- */
-export function useSessionSearch(filters: SessionSearchFilters, hostId: HostId = LOCAL_HOST) {
+function sessionSearchQueryOptions(filters: SessionSearchFilters, hostId: HostId) {
 	const query = filters.query.trim();
 	const filtersActive = Boolean(
 		filters.projectId || filters.harness || filters.from || filters.to || filters.sort === "recent",
 	);
-	return useQuery({
+	return {
 		queryKey: sessionSearchQueryKey(filters, hostId),
 		// A filter-only browse is a search too: opening the page with a project
 		// selected should show that project's sessions rather than nothing.
@@ -87,6 +80,75 @@ export function useSessionSearch(filters: SessionSearchFilters, hostId: HostId =
 			if (!data) throw new Error("Could not search past sessions");
 			return data;
 		},
+	};
+}
+
+/**
+ * One page of ranked results over past sessions.
+ *
+ * The daemon owns ranking, filtering, and snippet offsets; this hook only
+ * transports the query. A short query is not sent at all — matching one
+ * character across every past session returns the whole archive.
+ */
+export function useSessionSearch(filters: SessionSearchFilters, hostId: HostId = LOCAL_HOST) {
+	return useQuery(sessionSearchQueryOptions(filters, hostId));
+}
+
+/** The first pages of a search, joined into one list. */
+export type SessionSearchPages = {
+	/** The first page's response with every fetched page's results, in order. */
+	data: SessionSearchResponse | undefined;
+	isLoading: boolean;
+	isFetching: boolean;
+	error: Error | null;
+	/** The last page came back short: there is nothing more to fetch. */
+	exhausted: boolean;
+};
+
+function joinSessionSearchPages(pages: UseQueryResult<SessionSearchResponse>[]): SessionSearchPages {
+	const first = pages[0];
+	const last = pages.at(-1);
+	const seen = new Set<string>();
+	const results: SessionSearchResult[] = [];
+	for (const page of pages) {
+		for (const result of page.data?.results ?? []) {
+			// A session can move to a later page when new work is indexed between
+			// requests; it is shown once, at its first place.
+			if (seen.has(result.sessionId)) continue;
+			seen.add(result.sessionId);
+			results.push(result);
+		}
+	}
+	const lastResults = last?.data?.results;
+	return {
+		data: first?.data ? { ...first.data, results } : undefined,
+		isLoading: first?.isLoading ?? false,
+		isFetching: pages.some((page) => page.isFetching),
+		error: first?.error ?? null,
+		exhausted: Boolean(last?.data && !last.isPlaceholderData && (lastResults?.length ?? 0) < SESSION_SEARCH_PAGE_SIZE),
+	};
+}
+
+/**
+ * The first `pages` pages of a search, each its own request of
+ * SESSION_SEARCH_PAGE_SIZE rows at the next offset.
+ *
+ * The daemon caps one request at 100 rows (SessionSearchMaxLimit), so growing a
+ * single request's limit stopped at the first 100 sessions: every "Show more"
+ * past them returned the same rows. Fixed-size pages keep every request within
+ * the cap, and each page is cached on its own, so "Show more" fetches only the
+ * new one.
+ */
+export function useSessionSearchPages(
+	filters: SessionSearchFilters,
+	pages: number,
+	hostId: HostId = LOCAL_HOST,
+): SessionSearchPages {
+	return useQueries({
+		queries: Array.from({ length: Math.max(1, pages) }, (_, page) =>
+			sessionSearchQueryOptions({ ...filters, limit: SESSION_SEARCH_PAGE_SIZE, offset: page * SESSION_SEARCH_PAGE_SIZE }, hostId),
+		),
+		combine: joinSessionSearchPages,
 	});
 }
 

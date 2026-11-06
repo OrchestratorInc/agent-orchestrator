@@ -11,9 +11,8 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	SESSION_SEARCH_MIN_QUERY_CHARS,
-	SESSION_SEARCH_PAGE_SIZE,
 	snippetSegments,
-	useSessionSearch,
+	useSessionSearchPages,
 	type SessionSearchCoverage,
 	type SessionSearchFilters,
 	type SessionSearchResult,
@@ -57,10 +56,14 @@ export function SessionSearchView() {
 	const [from, setFrom] = useState("");
 	const [to, setTo] = useState("");
 	const [sort, setSort] = useState<"relevance" | "recent">("relevance");
-	// Paging is a growing limit rather than an offset: each page appends, so the
-	// list reads as one result set and an earlier page cannot be invalidated by
-	// new sessions arriving between requests.
-	const [limit, setLimit] = useState(SESSION_SEARCH_PAGE_SIZE);
+	// "Show more" adds a page: its own request at the next offset, appended to
+	// the list. One growing request could not reach past the daemon's 100-row
+	// cap. The count belongs to the question it was paged for, so a new search
+	// starts on its first page in the same render, without first fetching the
+	// old page count for the new question.
+	const pageKey = JSON.stringify([query.trim(), projectId, harness, from, to, sort]);
+	const [paging, setPaging] = useState({ key: pageKey, pages: 1 });
+	const pages = paging.key === pageKey ? paging.pages : 1;
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	// The field is the point of the view, so it takes focus on arrival.
@@ -76,15 +79,14 @@ export function SessionSearchView() {
 			from,
 			to,
 			sort,
-			limit,
 		}),
-		[from, harness, limit, projectId, query, sort, to],
+		[from, harness, projectId, query, sort, to],
 	);
-	const search = useSessionSearch(filters);
+	const search = useSessionSearchPages(filters, pages);
 	const results = search.data?.results ?? [];
 	const coverage = search.data?.coverage;
 	const total = search.data?.total ?? results.length;
-	const hasMore = results.length < total;
+	const hasMore = results.length < total && !search.exhausted;
 	const trimmed = query.trim();
 	const tooShort = trimmed.length > 0 && trimmed.length < SESSION_SEARCH_MIN_QUERY_CHARS;
 
@@ -128,12 +130,6 @@ export function SessionSearchView() {
 		);
 		void navigate(target);
 	};
-
-	// A new question starts at the first page; keeping a grown limit would show
-	// a different result count than the one just asked for.
-	useEffect(() => {
-		setLimit(SESSION_SEARCH_PAGE_SIZE);
-	}, [query, projectId, harness, from, to, sort]);
 
 	const clearFilters = () => {
 		setProjectId(ALL);
@@ -269,7 +265,7 @@ export function SessionSearchView() {
 									</ul>
 									{hasMore ? (
 										<div className="flex justify-center pt-3">
-											<TopbarButton onClick={() => setLimit((current) => current + SESSION_SEARCH_PAGE_SIZE)}>
+											<TopbarButton onClick={() => setPaging({ key: pageKey, pages: pages + 1 })}>
 												{t("search.showMore", { remaining: total - results.length })}
 											</TopbarButton>
 										</div>
