@@ -31,6 +31,7 @@ type PaneTerminalService interface {
 	TypeIntoSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID, text string, enter bool) error
 	InterruptSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error
 	SessionTerminalOutput(ctx context.Context, sessionID domain.SessionID, handleID string, lines int) (string, error)
+	CloseSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error
 }
 
 // PaneInputRequest types into one of the session's terminal tabs.
@@ -39,6 +40,7 @@ type PaneInputRequest struct {
 	Text      *string `json:"text,omitempty" description:"Text to type. Sent as a command (followed by Enter) unless enter is false."`
 	Enter     *bool   `json:"enter,omitempty" description:"Press Enter after the text. Defaults to true."`
 	Interrupt bool    `json:"interrupt,omitempty" description:"Send Ctrl-C instead of text."`
+	Close     bool    `json:"close,omitempty" description:"Close the terminal tab (its shell may already have exited)."`
 }
 
 // PaneOutputQuery selects a terminal tab and how much of its screen to read.
@@ -130,6 +132,9 @@ func (c *PanesController) input(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	switch {
+	case in.Close:
+		envelope.SetTelemetryField(r, "pane_action", "close")
+		err = c.Terminals.CloseSessionTerminal(r.Context(), sessionID, in.Tab)
 	case in.Interrupt:
 		envelope.SetTelemetryField(r, "pane_action", "interrupt")
 		err = c.Terminals.InterruptSessionTerminal(r.Context(), sessionID, in.Tab)

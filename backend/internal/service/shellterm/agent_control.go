@@ -19,8 +19,9 @@ import (
 // MaxSessionTerminalOutputLines bounds one read of a terminal's screen.
 const MaxSessionTerminalOutputLines = 2000
 
-// sessionShell returns sessionID's live shell terminal with handleID.
-func (s *Service) sessionShell(ctx context.Context, sessionID domain.SessionID, handleID string) (ports.RuntimeHandle, error) {
+// findSessionShell returns sessionID's shell terminal with handleID, live or
+// not.
+func (s *Service) findSessionShell(ctx context.Context, sessionID domain.SessionID, handleID string) (ports.RuntimeHandle, error) {
 	handleID = strings.TrimSpace(handleID)
 	if sessionID == "" || handleID == "" {
 		return ports.RuntimeHandle{}, apierr.Invalid("PANE_TERMINAL_REQUIRED", "A session and a terminal tab key are required", nil)
@@ -30,17 +31,34 @@ func (s *Service) sessionShell(ctx context.Context, sessionID domain.SessionID, 
 		return ports.RuntimeHandle{}, fmt.Errorf("find session terminal: %w", err)
 	}
 	for _, rec := range records {
-		if rec.HandleID != handleID || rec.SessionID != sessionID {
-			continue
+		if rec.HandleID == handleID && rec.SessionID == sessionID {
+			return ports.RuntimeHandle{ID: rec.HandleID}, nil
 		}
-		handle := ports.RuntimeHandle{ID: rec.HandleID}
-		if alive, aliveErr := s.runtime.IsChildAlive(ctx, handle); aliveErr == nil && !alive {
-			return ports.RuntimeHandle{}, apierr.Conflict("PANE_TERMINAL_EXITED", "That terminal's shell has exited; open a new one with `ao pane split terminal`", nil)
-		}
-		return handle, nil
 	}
 	return ports.RuntimeHandle{}, apierr.NotFound("PANE_TERMINAL_NOT_FOUND",
 		fmt.Sprintf("This session has no terminal %q. Run `ao pane` to list its terminal tab keys.", handleID))
+}
+
+// sessionShell returns sessionID's live shell terminal with handleID.
+func (s *Service) sessionShell(ctx context.Context, sessionID domain.SessionID, handleID string) (ports.RuntimeHandle, error) {
+	handle, err := s.findSessionShell(ctx, sessionID, handleID)
+	if err != nil {
+		return ports.RuntimeHandle{}, err
+	}
+	if alive, aliveErr := s.runtime.IsChildAlive(ctx, handle); aliveErr == nil && !alive {
+		return ports.RuntimeHandle{}, apierr.Conflict("PANE_TERMINAL_EXITED", "That terminal's shell has exited; close it with `ao pane close` or open a new one with `ao pane split terminal`", nil)
+	}
+	return handle, nil
+}
+
+// CloseSessionTerminal closes one of the session's shell terminals, running or
+// exited, as closing its tab does.
+func (s *Service) CloseSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error {
+	handle, err := s.findSessionShell(ctx, sessionID, handleID)
+	if err != nil {
+		return err
+	}
+	return s.CloseShellTerminal(ctx, handle.ID)
 }
 
 // TypeIntoSessionTerminal types text into one of the session's shell

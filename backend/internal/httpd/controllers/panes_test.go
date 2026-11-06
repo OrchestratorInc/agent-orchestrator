@@ -116,6 +116,7 @@ type fakePaneTerminals struct {
 	typed       string
 	enter       bool
 	interrupted bool
+	closed      bool
 	output      string
 	lines       int
 	err         error
@@ -134,6 +135,11 @@ func (f *fakePaneTerminals) InterruptSessionTerminal(context.Context, domain.Ses
 func (f *fakePaneTerminals) SessionTerminalOutput(_ context.Context, _ domain.SessionID, _ string, lines int) (string, error) {
 	f.lines = lines
 	return f.output, f.err
+}
+
+func (f *fakePaneTerminals) CloseSessionTerminal(context.Context, domain.SessionID, string) error {
+	f.closed = true
+	return f.err
 }
 
 func servePaneTerminals(t *testing.T, terms *fakePaneTerminals, method, target, body string) *httptest.ResponseRecorder {
@@ -160,6 +166,10 @@ func TestPaneInputTypesACommandOrInterrupts(t *testing.T) {
 	servePaneTerminals(t, terms, http.MethodPost, "/sessions/s-1/panes/input", `{"tab":"sh-1","interrupt":true}`)
 	if !terms.interrupted {
 		t.Fatal("interrupt not sent")
+	}
+	servePaneTerminals(t, terms, http.MethodPost, "/sessions/s-1/panes/input", `{"tab":"sh-1","close":true}`)
+	if !terms.closed {
+		t.Fatal("close not sent")
 	}
 	if rec := servePaneTerminals(t, terms, http.MethodPost, "/sessions/s-1/panes/input", `{"tab":"sh-1"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("no text: status = %d", rec.Code)
