@@ -24,11 +24,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ERROR_CLEAR_MS = 5_000;
 
-function fileManagerName(): string {
+export function fileManagerName(): string {
 	return isMacPlatform() ? "Finder" : isWindowsPlatform() ? "File Explorer" : "File Manager";
 }
 
-function terminalName(): string {
+export function terminalName(): string {
 	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
 }
 

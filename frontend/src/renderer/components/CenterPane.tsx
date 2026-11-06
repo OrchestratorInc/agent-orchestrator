@@ -1,5 +1,5 @@
-import { Pencil } from "lucide-react";
-import { isSettingsPageOpen } from "../hooks/useAppShortcut";
+import { Archive } from "lucide-react";
+import { isSettingsPageOpen, runAppShortcut } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
@@ -40,10 +40,12 @@ import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { SessionTabsTopbar } from "./PageTopbar";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
+import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { TabContextMenu, TabMenuShortcut } from "./TabContextMenu";
+import { ContextMenuItem } from "./ui/context-menu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -93,6 +95,8 @@ export type CenterPaneWorkspaceTab = {
 	content: ReactNode;
 	onSelect: () => void;
 	onClose?: () => void;
+	/** The tab's own right-click actions, above Close tab. */
+	menuItems?: ReactNode;
 };
 
 type AuxiliaryTab =
@@ -620,6 +624,7 @@ export function CenterPane({
 																? onSelectReviewerTerminal?.(tab.terminal)
 																: onSelectReviewerChat?.(tab.terminal)
 														}
+														tabMenu
 														title={tab.terminal.harness}
 													/>
 												) : tab.kind === "shell" ? (
@@ -637,7 +642,9 @@ export function CenterPane({
 														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
-													tab.tab.content
+													<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose}>
+														{tab.tab.content}
+													</TabContextMenu>
 												)}
 											</DraggableWorkspaceTab>
 										))}
@@ -723,6 +730,8 @@ type SessionPaneTabProps = {
 	tabAction?: ReactNode;
 	/** Keep the action showing at rest, e.g. while an interface switch runs. */
 	tabActionPinned?: boolean;
+	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
+	tabMenu?: boolean;
 };
 
 // The session, reviewer and no-session tabs of the strip. The full label only
@@ -738,6 +747,7 @@ export function SessionPaneTab({
 	title,
 	tabAction,
 	tabActionPinned = false,
+	tabMenu = false,
 }: SessionPaneTabProps) {
 	const { t } = useTranslation();
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
@@ -809,18 +819,32 @@ export function SessionPaneTab({
 			label={label}
 		/>
 	);
-	if (!renameSession || rename.isEditing) return tabFrame;
+	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
+	// The project orchestrator is archived with its project, not from here.
+	const canArchive = Boolean(session && !isOrchestratorSession(session) && !session.cloud?.shared);
 	return (
-		<ContextMenu>
-			<ContextMenuTrigger asChild>
-				<span className="contents">{tabFrame}</span>
-			</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem aria-label={t("shell.renameSession", { title: renameSession.title })} onSelect={rename.begin}>
-					<Pencil aria-hidden="true" />
-					{t("shell.rename")}
+		<TabContextMenu
+			destructive={canArchive ? (
+				<ContextMenuItem
+					className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+					// After the menu closes, like the command palette, so the
+					// confirmation dialog takes focus from the session.
+					onSelect={() => window.setTimeout(() => runAppShortcut({ id: "archive-session" }), 0)}
+				>
+					<Archive aria-hidden="true" />
+					{t("shell.archiveSession")}
+					<TabMenuShortcut id="archive-session" />
 				</ContextMenuItem>
-			</ContextMenuContent>
-		</ContextMenu>
+			) : undefined}
+			items={session ? (
+				<SessionContextMenuItems
+					onRename={renameSession ? rename.begin : undefined}
+					renameShortcut={renameSession ? "F2" : undefined}
+					session={session}
+				/>
+			) : undefined}
+		>
+			{tabFrame}
+		</TabContextMenu>
 	);
 }

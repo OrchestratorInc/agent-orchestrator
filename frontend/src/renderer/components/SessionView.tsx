@@ -64,7 +64,7 @@ import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
-import { SessionFileTab } from "./SessionFileTabs";
+import { FileTabMenuItems, SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
@@ -1570,8 +1570,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				),
 				onSelect: () => activateCenterFile(path),
 				onClose: () => closeCenterFile(path),
+				menuItems: (
+					<FileTabMenuItems
+						path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
+						remote={Boolean(hostId || session?.cloud)}
+						sessionId={sessionId}
+						source={centerFileRequestsBySession[uiSessionId]?.[path]?.source}
+					/>
+				),
 			})),
-		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
+		[activateCenterFile, closeCenterFile, dirtyFiles, mainActiveFilePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId, hostId, session?.cloud, sessionId],
 	);
 
 	// A group without the session's tab is selected like a workspace tab. With

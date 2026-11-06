@@ -44,6 +44,9 @@ vi.mock("motion/react", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		editorHandoff: {
+			getState: async () => ({ workspaceAvailable: false, targets: [] }),
+		},
 		app: {
 			setCloseShellTerminalShortcutEnabled: (enabled: boolean) => shortcutMocks.closeableStates.push(enabled),
 			onCloseShellTerminalShortcut: (listener: () => void) => {
@@ -195,7 +198,7 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 	});
 
@@ -823,5 +826,45 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.keyDown(sessionTab, { key: "ArrowRight" });
 		expect(document.activeElement).toBe(firstShellTab);
 		expect(screen.queryByRole("textbox", { name: /rename terminal/i })).toBeNull();
+	});
+});
+
+describe("CenterPane tab context menu", () => {
+	const shells = ["one", "two"].map((title, index) => ({
+		handleId: `h-${index}`,
+		title,
+		workingDir: "/tmp/ws",
+		createdAt: "2026-07-22T00:00:00Z",
+	}));
+
+	it("closes a shell tab from its menu", async () => {
+		const onCloseShellTerminal = vi.fn();
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onCloseShellTerminal).toHaveBeenCalledExactlyOnceWith("h-1");
+	});
+
+	it("closes a file tab with its own close action", async () => {
+		const onClose = vi.fn();
+		renderCenterPane({
+			session: worker,
+			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+		});
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("never closes the session's own tab", async () => {
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+
+		expect(await screen.findByRole("menuitem", { name: "Close tab" })).toHaveAttribute("aria-disabled", "true");
 	});
 });
