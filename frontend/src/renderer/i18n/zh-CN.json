@@ -54,6 +54,8 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
+	"chat.archived.body": "历史记录已保留。恢复会话以继续。",
+	"chat.archived.placeholder": "恢复会话以继续",
 	"chat.projectSetup.succeeded": "设置成功",
 	"chat.projectSetup.succeededIn": "设置已在 {{duration}} 内成功",
 	"chat.projectSetup.timedOut": "设置步骤 {{step}} 超时",

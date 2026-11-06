@@ -55,6 +55,8 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Ajoutez un message pendant que {{agent}} se prépare",
+	"chat.archived.body": "L'historique est conservé. Restaurez la session pour continuer.",
+	"chat.archived.placeholder": "Restaurez la session pour continuer",
 	"chat.projectSetup.succeeded": "Configuration réussie",
 	"chat.projectSetup.succeededIn": "Configuration réussie en {{duration}}",
 	"chat.projectSetup.timedOut": "L'étape {{step}} de configuration a dépassé le délai",

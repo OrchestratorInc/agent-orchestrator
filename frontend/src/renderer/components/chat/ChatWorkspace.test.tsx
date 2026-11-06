@@ -2182,6 +2182,61 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	it("offers Restore, not Resume, on a terminated session", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={restore}
+				onOpenShell={vi.fn()}
+			/>,
+		);
+
+		// Archiving is a normal end, not a failure.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Session terminated")).toBeInTheDocument();
+		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
+		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		// A shell here would open in the project root once the worktree is gone.
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Restore session" }));
+		expect(restore).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the composer locked while a terminated session restores", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true }}
+				onResumeAgent={vi.fn()}
+				resumingAgent
+			/>,
+		);
+
+		// The banner title and the composer placeholder both say so.
+		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		// A message sent now would reach a session the daemon still calls terminated.
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
+	it("does not wait for a reconnect on a terminated session", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				session={{ ...chatSession, isTerminated: true, statusReadiness: "checking" }}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+	});
+
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
 		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
 		const view = render(
