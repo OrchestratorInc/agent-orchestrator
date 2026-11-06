@@ -706,7 +706,7 @@ describe("linking a website visit at sign-in", () => {
 		const { noteCloudSignInWebVisitor, identifyCloudUser, captureRendererEvent } = await load();
 		noteCloudSignInWebVisitor(userA.id, webDistinctId);
 		await identifyCloudUser(userA);
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
 		expect(posthogStub.alias).not.toHaveBeenCalled();
 		expect(linkEvents()).toHaveLength(0);
@@ -783,7 +783,7 @@ describe("linking a website visit at sign-in", () => {
 		posthogStub.alias.mockImplementation(() => undefined);
 		noteCloudSignInWebVisitor(userA.id, VISITOR);
 		await identifyCloudUser(userA);
-		await captureRendererEvent("ao.renderer.support_opened");
+		await captureRendererEvent("ao.support.opened");
 		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
 		expect(linkEvents()).toHaveLength(0);
 	});
