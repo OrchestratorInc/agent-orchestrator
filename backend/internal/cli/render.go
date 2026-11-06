@@ -182,11 +182,13 @@ func renderShownText(renderID string) string {
 }
 
 // renderArtifactLine reports where a publish kept the page as an artifact, or
-// why it did not; it is empty when no artifact was asked for.
+// why it did not; it is empty when no artifact was asked for. A kept page is not
+// registered, and in a session that registered anything else it is not listed,
+// so the line gives the agent the command while it is still acting on the render.
 func renderArtifactLine(resp renderAPIResponse) string {
 	switch {
 	case resp.ArtifactPath != "":
-		return "saved as artifact: " + resp.ArtifactPath
+		return "saved as artifact: " + resp.ArtifactPath + "\nto list it as an artifact, run: ao artifact add \"" + resp.ArtifactPath + "\""
 	case resp.ArtifactError != "":
 		return "warning: not saved as artifact: " + resp.ArtifactError
 	}
