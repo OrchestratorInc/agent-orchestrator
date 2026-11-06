@@ -7,7 +7,9 @@
  * device the dialog offers "Copy new link" instead.
  *
  * Without protected storage (no keychain, or Linux's basic_text backend) the
- * URLs live only in memory for this run, never as plain text on disk.
+ * URLs live only in memory for this run, never as plain text on disk. They
+ * belong to the account that made them: signing out, or in as someone else,
+ * clears them (main.ts).
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -39,15 +41,31 @@ function shareUrl(value: unknown): string | undefined {
 }
 
 export class SessionShareUrls {
-	private urls: Map<string, string> | undefined;
+	/** This run's URLs, with the file's merged in once it has been read. */
+	private urls = new Map<string, string>();
+	/** Links forgotten before the file was read, so reading it doesn't bring them back. */
+	private forgotten = new Set<string>();
+	/**
+	 * Whether the file has been read (or found missing), so writing it keeps
+	 * what it held. Until then nothing is written: a keychain that is locked or
+	 * unavailable for a moment must not cost the URLs already saved.
+	 */
+	private loaded = false;
+	/** Bumped by clear(), so a read that started before it can't bring the old URLs back. */
+	private generation = 0;
+	/** Cleared, and nothing remembered since: clearing again (every signed-out notice) has nothing to do. */
+	private empty = false;
 	private writing: Promise<void> = Promise.resolve();
 
 	constructor(private readonly file: string, private readonly crypto: SessionShareUrlCrypto) {}
 
 	async remember(baseUrl: string, linkId: string, url: string): Promise<void> {
 		const urls = await this.load();
-		urls.delete(key(baseUrl, linkId));
-		urls.set(key(baseUrl, linkId), url);
+		const id = key(baseUrl, linkId);
+		this.empty = false;
+		this.forgotten.delete(id);
+		urls.delete(id);
+		urls.set(id, url);
 		// Oldest first: past the cap the oldest links are forgotten.
 		for (const old of urls.keys()) {
 			if (urls.size <= MAX_LINKS) break;
@@ -69,34 +87,73 @@ export class SessionShareUrls {
 	async forget(baseUrl: string, linkIds: readonly string[]): Promise<void> {
 		const urls = await this.load();
 		let changed = false;
-		for (const linkId of linkIds) changed = urls.delete(key(baseUrl, linkId)) || changed;
+		for (const linkId of linkIds) {
+			const id = key(baseUrl, linkId);
+			if (!this.loaded) this.forgotten.add(id);
+			changed = urls.delete(id) || changed;
+		}
 		if (changed) await this.save();
 	}
 
-	private async load(): Promise<Map<string, string>> {
-		if (this.urls) return this.urls;
+	/**
+	 * Forgets every URL, on disk too: the account that made them signed out
+	 * or another signed in. Waits for any write in flight, so none lands after.
+	 */
+	async clear(): Promise<void> {
+		if (this.empty) return;
+		this.empty = true;
 		this.urls = new Map();
-		if (!this.crypto.available()) return this.urls;
+		this.forgotten.clear();
+		this.generation += 1;
+		// Nothing left to keep from the file: writing again starts it afresh.
+		this.loaded = true;
+		this.writing = this.writing.then(() => fs.rm(this.file, { force: true })).catch(() => undefined);
+		await this.writing;
+	}
+
+	private async load(): Promise<Map<string, string>> {
+		if (this.loaded || !this.crypto.available()) return this.urls;
+		const generation = this.generation;
+		let raw: Buffer;
 		try {
-			const parsed: unknown = JSON.parse(this.crypto.decrypt(await fs.readFile(this.file)));
-			if (Array.isArray(parsed)) {
-				for (const item of parsed) {
-					if (Array.isArray(item) && typeof item[0] === "string" && shareUrl(item[1])) this.urls.set(item[0], item[1] as string);
-				}
-			}
-		} catch {
-			// Missing, from another keychain, or damaged: start empty.
+			raw = await fs.readFile(this.file);
+		} catch (error) {
+			// None yet: there is nothing to keep. Unreadable for now: try again next time.
+			if (generation === this.generation && (error as NodeJS.ErrnoException).code === "ENOENT") this.loaded = true;
+			return this.urls;
 		}
+		if (generation !== this.generation) return this.urls;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(this.crypto.decrypt(raw));
+		} catch {
+			// Another keychain's, a keychain locked for now, or damaged: leave the
+			// file as it is and keep this run's URLs in memory. Sign-out clears it.
+			return this.urls;
+		}
+		// This run's URLs are newer than the file's, and a link forgotten in the meantime stays forgotten.
+		const merged = new Map<string, string>();
+		if (Array.isArray(parsed)) {
+			for (const item of parsed) {
+				if (Array.isArray(item) && typeof item[0] === "string" && shareUrl(item[1]) && !this.forgotten.has(item[0])) merged.set(item[0], item[1] as string);
+			}
+		}
+		for (const [id, url] of this.urls) {
+			merged.delete(id);
+			merged.set(id, url);
+		}
+		this.urls = merged;
+		this.forgotten.clear();
+		this.loaded = true;
 		return this.urls;
 	}
 
 	// Writes are serialized and atomic: a crash leaves the old file or the new.
+	// Without protected storage, or before the file could be read, nothing is
+	// written and nothing removed: the URLs stay in memory for this run.
 	private save(): Promise<void> {
-		if (!this.crypto.available()) {
-			this.writing = this.writing.then(() => fs.rm(this.file, { force: true })).catch(() => undefined);
-			return this.writing;
-		}
-		const snapshot = JSON.stringify([...(this.urls ?? new Map()).entries()]);
+		if (!this.loaded || !this.crypto.available()) return this.writing;
+		const snapshot = JSON.stringify([...this.urls.entries()]);
 		this.writing = this.writing.then(async () => {
 			await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
 			const temporary = `${this.file}.${process.pid}.tmp`;

@@ -3346,11 +3346,12 @@ registerCloudShareIpc({
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
 // Session and project share links this device made, so Copy link works again later.
-registerSessionShareUrlsIpc(ipcMain, new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
+const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
 	available: protectedStorageAvailable,
 	encrypt: (text) => safeStorage.encryptString(text),
 	decrypt: (value) => safeStorage.decryptString(value),
-}));
+});
+registerSessionShareUrlsIpc(ipcMain, sessionShareUrls);
 registerAgentLoginIpc({
 	ipcMain,
 	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
@@ -3683,11 +3684,19 @@ const pendingCloudSignIn = createPendingCloudSignIn();
 
 ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 
+// The account this run last told the renderer about, to notice another one signing in.
+let notifiedCloudUserId: string | undefined;
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
 	pendingCloudSignIn.note(account, signIn);
+	// Share URLs belong to the account that made them: they go when it signs out or someone else signs in.
+	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
+		void sessionShareUrls.clear().catch(() => undefined);
+	}
+	notifiedCloudUserId = account?.user.id;
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
