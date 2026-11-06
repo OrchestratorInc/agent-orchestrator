@@ -256,6 +256,8 @@ const API_ERROR_DEDUPE_MS = 30_000;
 // wired in this process, or a shell the user already closed. Other 401 and
 // 404 responses still report, including an expired GitHub token.
 const EXPECTED_API_ERROR_CODES = new Set([
+	"UPSTREAM_UNAVAILABLE",
+	"HOST_IDENTITY_UNVERIFIED",
 	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
 	"SHELL_TERMINAL_NOT_FOUND",
 ]);
