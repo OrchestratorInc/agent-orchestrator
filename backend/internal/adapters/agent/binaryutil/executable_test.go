@@ -1,0 +1,207 @@
+package binaryutil
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func writeDiscoveryLauncher(t *testing.T, root, name, body string) string {
+	t.Helper()
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestDiscoveryExecutableRejectsPowerShellCommandModes(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "powershell", "pwsh.exe", `"C:/Program Files/PowerShell/7/pwsh.exe"`} {
+		for _, args := range []string{
+			"-Command autohand", `-Command "autohand"`, "-c autohand", "-Co autohand",
+			"-EncodedCommand YQB1AHQAbwBoAGEAbgBkAA==", "-enc YQB1AHQAbwBoAGEAbgBkAA==",
+			"-e YQB1AHQAbwBoAGEAbgBkAA==", "-CommandWithArgs autohand",
+			"-NoProfile -NonInteractive -Command autohand", "autohand",
+			"-Command", "-File -", "-Unknown autohand",
+		} {
+			t.Run(shell+"/"+args, func(t *testing.T) {
+				launcher := writeDiscoveryLauncher(t, t.TempDir(), "grok.cmd", "@"+shell+" "+args+"\n")
+				if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "PowerShell command mode") {
+					t.Fatalf("verification = %v, want uninspectable PowerShell mode refused", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDiscoveryExecutableInspectsPowerShellFileMode(t *testing.T) {
+	for _, options := range []string{"-File", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File", "-NoLogo -WindowStyle Hidden -f"} {
+		t.Run(options, func(t *testing.T) {
+			root := t.TempDir()
+			writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+			script := writeDiscoveryLauncher(t, root, "grok.ps1", "& \"$PSScriptRoot/grok.exe\" @args\n")
+			// Arguments after the file belong to the script, not PowerShell.
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@pwsh.exe "+options+" \"%~dp0grok.ps1\" -Command data\n")
+			if selected, err := VerifyExecutable(t.Context(), "grok", launcher); err != nil || selected != launcher {
+				t.Fatalf("valid file launcher = %q, %v", selected, err)
+			}
+			if err := os.WriteFile(script, []byte("& autohand @args\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("redirected file launcher = %v, want Autohand refused", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
+	for _, files := range []int{discoveryLauncherFileLimit, discoveryLauncherFileLimit + 1} {
+		t.Run(fmt.Sprint(files), func(t *testing.T) {
+			root := t.TempDir()
+			var body strings.Builder
+			for i := 1; i < files; i++ {
+				name := fmt.Sprintf("bridge-%d.cmd", i)
+				writeDiscoveryLauncher(t, root, name, "@echo off\n")
+				fmt.Fprintf(&body, "@call \"%%~dp0%s\" %%*\n", name)
+			}
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", body.String())
+			_, err := VerifyExecutable(context.Background(), "grok", launcher)
+			if files <= discoveryLauncherFileLimit {
+				if err != nil {
+					t.Fatalf("launcher within file budget rejected: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "total file inspection limit") {
+				t.Fatalf("verification = %v, want total file limit rejection", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableExplainsLargeUnverifiedApplication(t *testing.T) {
+	for _, ext := range []string{".js", ".mjs", ".cjs"} {
+		t.Run(ext, func(t *testing.T) {
+			root := t.TempDir()
+			body := "#!/usr/bin/env node\n" + strings.Repeat("// application code\n", discoveryLauncherReadLimit)
+			writeDiscoveryLauncher(t, root, "custom/cli"+ext, body)
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@node \"%~dp0custom/cli"+ext+"\" %*\n")
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify launcher identity") || !strings.Contains(err.Error(), "inspection limit") {
+				t.Fatalf("large unverified application = %v, want identity-verification diagnostic", err)
+			}
+			// Large applications in an identified agent package still pass.
+			writeDiscoveryLauncher(t, root, "node_modules/grok-cli/cli"+ext, body)
+			launcher = writeDiscoveryLauncher(t, root, "grok.cmd", "@node \"%~dp0node_modules/grok-cli/cli"+ext+"\" %*\n")
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err != nil {
+				t.Fatalf("large verified package application refused: %v", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableReusesSharedTargets(t *testing.T) {
+	root := t.TempDir()
+	// Repeated quoted commands and branches must reuse completed results rather
+	// than reread each file.
+	shared := strings.Repeat("\"%~dp0grok.exe\" %*\n", discoveryLauncherFileLimit+1)
+	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+	writeDiscoveryLauncher(t, root, "left.cmd", shared)
+	writeDiscoveryLauncher(t, root, "right.cmd", shared)
+	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0left.cmd\" %*\n@call \"%~dp0right.cmd\" %*\n")
+	if _, err := VerifyExecutable(context.Background(), "grok", launcher); err != nil {
+		t.Fatalf("repeated shared targets rejected: %v", err)
+	}
+}
+
+func TestDiscoveryExecutableAllowsNativeManagerSymlinks(t *testing.T) {
+	for _, tc := range []struct{ name, target, body string }{
+		{"mise", ".local/bin/mise", "\x7fELF\x00fixture"},
+		{"volta", ".volta/bin/volta-shim", "\xcf\xfa\xed\xfe\x00fixture"},
+		{"renamed native", "releases/release-9f31b7", "MZ fixture"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := writeDiscoveryLauncher(t, root, tc.target, tc.body)
+			name := "grok"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			link := filepath.Join(root, name)
+			if err := os.Symlink(target, link); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlink creation unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			verified, err := VerifyExecutable(context.Background(), "grok", link)
+			if err != nil || verified != link {
+				t.Fatalf("native manager verification = %q, %v, want launcher %q", verified, err, link)
+			}
+			if _, err := VerifyExecutable(context.Background(), "grok", target); err == nil {
+				t.Fatal("unidentified native target accepted without an agent entry point")
+			}
+			inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]discoveryInspectionResult{}}
+			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", link, inspection); err != nil || !ok {
+				t.Fatalf("agent alias rejected: %v", err)
+			}
+			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", target, inspection); err != nil || ok {
+				t.Fatalf("cached agent alias identity leaked to unidentified target: %t, %v", ok, err)
+			}
+		})
+	}
+}
+
+func linkDiscoveryLauncher(t *testing.T, target, link string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("extensionless npm bins and POSIX shims are not Windows launchers")
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+func TestDiscoveryExecutableAllowsNodeShebangPackageBins(t *testing.T) {
+	// Shaped like the published @kilocode/cli, @mimo-ai/cli and @factory/cli
+	// bins: extensionless node scripts whose `//` comments are not commands.
+	body := "#!/usr/bin/env node\n\nconst childProcess = require(\"child_process\")\n//\n// kilocode_change start\n  configureTreeSitterResources(target) // kilocode_change\n"
+	for _, tc := range []struct{ agent, pkg, bin string }{
+		{"kilocode", "@kilocode/cli", "kilo"},
+		{"mimo-code", "@mimo-ai/cli", "mimo"},
+		{"droid", "@factory/cli", "droid"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			root := t.TempDir()
+			target := writeDiscoveryLauncher(t, root, filepath.Join("lib/node_modules", tc.pkg, "bin", tc.bin), body)
+			link := linkDiscoveryLauncher(t, target, filepath.Join(root, tc.bin))
+			if verified, err := VerifyExecutable(context.Background(), tc.agent, link); err != nil || verified != link {
+				t.Fatalf("node package bin verification = %q, %v, want launcher %q", verified, err, link)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableIdentifiesScopedPackage(t *testing.T) {
+	root := t.TempDir()
+	// OMP publishes as @oh-my-pi/pi-coding-agent; its bare package segment
+	// must not identify it as Pi.
+	target := writeDiscoveryLauncher(t, root, "install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", "#!/usr/bin/env bun\n// application code\n")
+	shim := writeDiscoveryLauncher(t, root, "omp.cmd", "@\"%~dp0\\node.exe\" \"%~dp0\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js\" %*\n")
+	if verified, err := VerifyExecutable(context.Background(), "omp", shim); err != nil || verified != shim {
+		t.Fatalf("omp npm shim verification = %q, %v, want launcher %q", verified, err, shim)
+	}
+	if _, err := VerifyExecutable(context.Background(), "pi", shim); err == nil || !strings.Contains(err.Error(), "omp instead of pi") {
+		t.Fatalf("pi verification of omp shim = %v, want omp identified", err)
+	}
+	link := linkDiscoveryLauncher(t, target, filepath.Join(root, "omp"))
+	if verified, err := VerifyExecutable(context.Background(), "omp", link); err != nil || verified != link {
+		t.Fatalf("omp package symlink verification = %q, %v, want launcher %q", verified, err, link)
+	}
+}

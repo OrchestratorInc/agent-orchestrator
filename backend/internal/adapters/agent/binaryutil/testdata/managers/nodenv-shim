@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -e
+[ -n "$NODENV_DEBUG" ] && set -x
+
+program="${0##*/}"
+if [ "$program" = "node" ]; then
+  for arg; do
+    case "$arg" in
+    -e* | -- ) break ;;
+    */* )
+      if [ -f "$arg" ]; then
+        export NODENV_DIR="${arg%/*}"
+        break
+      fi
+      ;;
+    esac
+  done
+fi
+
+export NODENV_ROOT="@ROOT@"
+exec "@ROOT@/libexec/nodenv" exec "$program" "$@"

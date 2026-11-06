@@ -671,6 +671,8 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/home/test/.local/bin/agent", Output: "cursor 1.2.3\n"}, nil
 	})
+	succeeded := make(chan Target, 1)
+	s.SetOnSucceeded(func(target Target) { succeeded <- target })
 
 	job, err := s.StartAgent(context.Background(), TargetCursor, "official-installer")
 	if err != nil {
@@ -680,6 +682,16 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 		t.Fatalf("initial job = %+v", job)
 	}
 	waitForStatus(t, s, TargetCursor, StatusSucceeded)
+	// In-memory status is visible before the terminal record is persisted.
+	// The success callback runs only after that persistence has completed.
+	select {
+	case target := <-succeeded:
+		if target != TargetCursor {
+			t.Fatalf("callback target = %q, want %q", target, TargetCursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for persisted vendor install success")
+	}
 	command := <-captured
 	if command.URL != "https://cursor.com/install" {
 		t.Fatalf("URL = %q", command.URL)
