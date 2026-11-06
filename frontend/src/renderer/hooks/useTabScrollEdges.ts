@@ -53,12 +53,25 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 		};
 		element.addEventListener("scroll", updateEdges, { passive: true });
 		element.addEventListener("wheel", handleWheel, { passive: false });
-		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateEdges);
+		// Read the strip's overflow in the next frame, not inside the observer
+		// pass. Another observer (a terminal refit, a chat reflow) has usually
+		// just changed layout there, so reading scrollWidth forced a full
+		// synchronous layout on every frame of the inspector slide.
+		let frame: number | null = null;
+		const scheduleUpdate = () => {
+			if (frame !== null) return;
+			frame = window.requestAnimationFrame(() => {
+				frame = null;
+				updateEdges();
+			});
+		};
+		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleUpdate);
 		observer?.observe(element);
 		return () => {
 			element.removeEventListener("scroll", updateEdges);
 			element.removeEventListener("wheel", handleWheel);
 			observer?.disconnect();
+			if (frame !== null) window.cancelAnimationFrame(frame);
 		};
 	}, [element, updateEdges, ...dependencies]);
 

@@ -28,6 +28,16 @@
 	mix-blend-mode: normal;
 }
 
+/* Translucent window: no animation at all. The group's own 250 ms animation
+ * keeps the transition (and its frozen snapshot) alive, and the old snapshot
+ * would show its tint through the new one, so it is hidden. */
+html[data-window-translucent="true"]::view-transition-group(root) {
+	animation: none;
+}
+html[data-window-translucent="true"]::view-transition-old(root) {
+	display: none;
+}
+
 /* While data-theme flips, kill per-element color tweens (composer, search,
    switches). Without this they animate for hundreds of ms and read as a
    white box in dark mode / a black strip in light mode. */
@@ -235,6 +245,7 @@
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
+	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -774,6 +785,19 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
 	border-color: color-mix(in oklch, var(--color-foreground) 5%, transparent);
 	background-color: color-mix(in oklch, var(--color-foreground) 9%, transparent);
+}
+
+/* Light: the selected tab matches the center panel instead of a gray wash
+ * over the chrome. --solid-bg-primary exists only in a translucent window. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	border-color: color-mix(in oklch, var(--color-foreground) 12%, transparent);
+	background-color: var(--solid-bg-primary, var(--color-bg-primary));
+}
+
+/* Muted gray icons wash out on the light chrome; bar icons use the full
+ * foreground there. Disabled controls keep their own reduced opacity. */
+html[data-theme="light"] .center-panel-shell--floating-topbar :is(.topbar-control, .session-inspector__tab-button) {
+	color: var(--color-foreground);
 }
 
 .center-panel-shell--floating-topbar [data-testid="active-terminal-tab-indicator"] {
@@ -6359,6 +6383,14 @@ html:root[data-window-translucent="true"] {
 	--solid-sidebar-accent: var(--sidebar-accent);
 }
 
+/* Light follows native light apps: a frosted sidebar over a solid content
+ * panel (below). The light material itself is a mid gray, so the sidebar
+ * tint is pushed toward white to keep the chrome bright, at 72% so the
+ * material still shows through. */
+html:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
+}
+
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
  * :root values stay intact for the solid copies above. */
 html[data-window-translucent="true"] body {
@@ -6398,6 +6430,27 @@ html[data-window-translucent="true"] :is(
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Light: the center panel keeps the solid surfaces, so content reads as it does
+ * in an opaque window. It clears over a live browser page exactly as the
+ * opaque panel does (the native browser rules above). Dark keeps the clear
+ * single-tint panel. */
+html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
 }
 
 /* A Cloud session's startup and interface-switch screens cover the session
@@ -6466,8 +6519,19 @@ html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
 }
 
 /* The live page is a native view below the shell. Cut the tint out over its
- * rect (published by useBrowserView) so the page is not tinted. */
+ * rect (published by useBrowserView on .app-shell-root) so the page is not
+ * tinted. The rect changes every frame while the inspector slides, so the
+ * properties do not inherit: only this pseudo-element restyles, not the app. */
+@property --browser-hole-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-y { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-w { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-h { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
 html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	--browser-hole-x: inherit;
+	--browser-hole-y: inherit;
+	--browser-hole-w: inherit;
+	--browser-hole-h: inherit;
 	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
 	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
 	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);

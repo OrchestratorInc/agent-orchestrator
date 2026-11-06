@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
@@ -853,7 +854,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
+			if (error) throw apiErrorException(error, "Unable to load reviews");
 			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});
@@ -1853,7 +1854,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	// Explicit open commands reveal once per command. A fast command's start
 	// and finish can share a React render, so either event can consume its ID.
-	// Later completion and UI changes must not override a user's close.
+	// Later completion and UI changes must not override a user's close. Only a
+	// command whose start arrived while this session was on screen counts: one
+	// begun while the user was elsewhere would otherwise pop Browser open a
+	// moment after they switch in.
 	useEffect(() => {
 		if (revealedBrowserCommandsRef.current.sessionId !== uiSessionId) {
 			revealedBrowserCommandsRef.current = { sessionId: uiSessionId, commands: new Set() };
@@ -1861,7 +1865,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!hasInspector || terminated) return;
 		const activity = browserView.agentBrowserActivity;
 		if (activity && BROWSER_REVEAL_ACTIONS.has(activity.action)) {
-			if (!activity.commandId || activity.viewId !== browserView.viewId) return;
+			if (!activity.commandId || activity.viewId !== browserView.viewId || !activity.startObserved) {
+				if (browserView.agentBrowserActive && !browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
+				return;
+			}
 			const commands = revealedBrowserCommandsRef.current.commands;
 			if (commands.has(activity.commandId)) return;
 			commands.add(activity.commandId);
@@ -1871,10 +1878,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!browserView.agentBrowserActive) return;
+		// Passive activity only badges Browser, including an orchestrator's.
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
-			setInspectorOpenForSession(uiSessionId, true);
-			return;
 		}
 		if (!browserIsVisible(uiSessionId, browserPoppedOut)) setBrowserUnseen(uiSessionId, true);
 	}, [
@@ -1890,7 +1896,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 		browserOnly,
 		setBrowserContentRevealed,
-		setInspectorOpenForSession,
 		revealBrowserPanel,
 	]);
 

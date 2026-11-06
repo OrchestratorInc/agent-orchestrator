@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useSyncExternalStore } from "react";
 import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
@@ -7,7 +8,7 @@ import {
 	clearOptimisticSessionKill,
 	trackOptimisticSessionKill,
 } from "./optimistic-session-kills";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { useTranslation } from "react-i18next";
@@ -55,7 +56,7 @@ async function terminateSession(queryClient: QueryClient, session: TerminateSess
 	});
 	if (error) {
 		const fallback = response ? `Failed to terminate session (${response.status})` : "Failed to terminate session";
-		throw new Error(apiErrorMessage(error, fallback));
+		throw apiErrorException(error, fallback);
 	}
 	return data?.artifactsDeleted === true;
 }
