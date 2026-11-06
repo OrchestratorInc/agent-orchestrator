@@ -210,14 +210,41 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
 	});
 
-	it("Windows: right-click enters edit, double-click does not", () => {
+	it("Windows: right-click opens the tab menu, double-click enters edit", () => {
 		isWindowsPlatform.mockReturnValue(true);
-		renderTab();
+		renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		fireEvent.doubleClick(tab);
-		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 		fireEvent.contextMenu(tab);
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+		fireEvent.doubleClick(tab);
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+});
+
+describe("ShellTerminalTab context menu", () => {
+	it("starts rename from the menu", async () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		fireEvent.click(screen.getByRole("menuitem", { name: /rename terminal/i }));
+
+		expect(await screen.findByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+
+	it("opens from the keyboard with Shift+F10", () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.keyDown(screen.getByRole("tab", { name: "ao" }), { key: "F10", shiftKey: true });
+
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
+	it("disables rename where the tab cannot be renamed", () => {
+		renderTab({ appearance: "connected", onRename: undefined });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toHaveAttribute("aria-disabled", "true");
 	});
 });
 

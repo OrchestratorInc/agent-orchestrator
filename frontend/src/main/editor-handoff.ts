@@ -494,6 +494,10 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		name: deps.platform === "darwin" ? "Finder" : deps.platform === "win32" ? "File Explorer" : "File Manager",
 		kind: "file_manager",
 	};
+	// Linux opens folders through xdg-open, so there is no single app to take an icon from.
+	const fileManagerIconPath = deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app"
+		: deps.platform === "win32" ? path.win32.join(deps.env.SystemRoot || deps.env.windir || "C:\\Windows", "explorer.exe")
+			: undefined;
 
 	const icons = new Map<string, Promise<string | undefined>>();
 	const readIcon = (iconPath: string) => {
@@ -636,7 +640,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 				const terminal = terminals.find((entry) => entry.target.id === target.id);
 				let iconPath = editor?.command.iconPath ?? (terminal
 					? terminal.command.iconPath ?? terminal.command.command
-					: target.kind === "file_manager" && deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : undefined);
+					: target.kind === "file_manager" ? fileManagerIconPath : undefined);
 				if (editor) {
 					// CLI shims may point into a relocated .app. Use that actual bundle's
 					// native icon before falling back to the registered installation or executable.

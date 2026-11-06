@@ -1,6 +1,7 @@
 import { render, fireEvent } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { SplitDivider, SplitGroupTab } from "./SplitView";
+import { TabMenuBody } from "./TabContextMenu";
 import { TooltipProvider } from "./ui/tooltip";
 import { useShellAgentStore } from "../stores/shell-agent-store";
 
@@ -72,4 +73,22 @@ it("names a grouped shell by the agent running in it and keeps the agent watch o
 	expect(container.querySelector("[data-shell-agent-state='working']")).not.toBeNull();
 	expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
 	useShellAgentStore.setState({ agents: {} });
+});
+
+it("lists the focused member's tab menu below Ungroup", () => {
+	const member = (key: string, label: string) => ({ key, label, icon: null, onSelect: vi.fn(), onClose: vi.fn() });
+	const { container, getAllByRole } = render(
+		<TooltipProvider>
+			<SplitGroupTab
+				active
+				focusedKey="sh-1"
+				members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]}
+				menuItems={<TabMenuBody onClose={vi.fn()} />}
+				onUngroup={vi.fn()}
+			/>
+		</TooltipProvider>,
+	);
+	fireEvent.contextMenu(container.querySelector("[data-terminal-tab-frame]")!);
+
+	expect(getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Ungroup", "Close tab"]);
 });

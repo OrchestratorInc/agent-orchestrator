@@ -334,6 +334,19 @@ describe("editor handoff", () => {
 		expect(readIcon).toHaveBeenCalledTimes(4);
 	});
 
+	it("reads File Explorer's icon from explorer.exe on Windows and none for xdg-open on Linux", async () => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		const winIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const winState = await createEditorHandoff(winDeps({ readIcon: winIcon, env: { SystemRoot: "D:\\Win" } })).getState("ao-1");
+		expect(winIcon).toHaveBeenCalledWith("D:\\Win\\explorer.exe");
+		expect(winState.targets.find((target) => target.id === "file-manager")).toMatchObject({ name: "File Explorer", iconDataUrl });
+		expect(JSON.stringify(winState)).not.toContain("explorer.exe");
+
+		const linuxIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const linuxState = await createEditorHandoff(deps({ platform: "linux", readIcon: linuxIcon })).getState("ao-1");
+		expect(linuxState.targets.find((target) => target.id === "file-manager")).not.toHaveProperty("iconDataUrl");
+	});
+
 	it.each([
 		["cursor", "Cursor"], ["vscode", "Visual Studio Code"], ["zed", "Zed"], ["antigravity", "Antigravity IDE"],
 	])("derives %s branding from its discovered app without an editor icon mapping", async (id, appName) => {

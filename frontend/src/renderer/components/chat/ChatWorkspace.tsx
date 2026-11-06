@@ -112,6 +112,7 @@ import {
 import { AgentAvatar } from "../AgentAvatar";
 import { DraggableWorkspaceTab, SessionPaneTab, SessionTabSlot } from "../CenterPane";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "../split-pane-context";
+import { TabContextMenu } from "../TabContextMenu";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -266,7 +267,7 @@ export interface ChatRetryControl {
 
 type ReviewerTerminalTarget = Extract<TerminalTarget, { kind: "reviewer" }>;
 type ShellTerminalTarget = Extract<TerminalTarget, { kind: "shell" }>;
-type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void };
+type WorkspaceTab = { key: string; content: ReactNode; onSelect: () => void; onClose?: () => void; menuItems?: ReactNode };
 type ChatAuxiliaryTab =
 	| { key: string; kind: "reviewer"; terminal: { handleId: string; harness: string } }
 	| { key: string; kind: "reviewer-chat"; terminal: { reviewId: string; harness: string } }
@@ -2485,10 +2486,14 @@ function ChatHeader({
 													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
 													label={t("terminal.reviewer")}
 													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
+													tabKey={tab.key}
+													tabMenu
 													title={tab.terminal.harness}
 												/>
 											) : (
-												tab.tab.content
+												<TabContextMenu closeShortcut={tab.key === workspaceActiveTabKey} items={tab.tab.menuItems} onClose={tab.tab.onClose} tabKey={tab.key}>
+													{tab.tab.content}
+												</TabContextMenu>
 											)}
 										</DraggableWorkspaceTab>
 									))}
