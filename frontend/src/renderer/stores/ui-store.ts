@@ -468,12 +468,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		if (get().themePreference === themePreference) return;
-		runThemeTransition(() => {
-			const resolvedTheme = resolveTheme(themePreference);
-			getLocalStorage()?.setItem(themeStorageKey, themePreference);
-			applyDocumentTheme(resolvedTheme);
-			set({ themePreference, resolvedTheme });
-		});
+		runThemeTransition(
+			() => {
+				const resolvedTheme = resolveTheme(themePreference);
+				getLocalStorage()?.setItem(themeStorageKey, themePreference);
+				applyDocumentTheme(resolvedTheme);
+				set({ themePreference, resolvedTheme });
+			},
+			// The window's vibrancy material follows nativeTheme; flip it as the
+			// new frame is revealed so the tint and the material change together.
+			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+		);
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;

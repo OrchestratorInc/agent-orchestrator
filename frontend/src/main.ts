@@ -530,22 +530,29 @@ let rendererWindowBackground: string | null = null;
 // macOS window transparency: the shell paints translucent surfaces and the
 // native vibrancy material underneath blurs the desktop.
 let windowTranslucent = false;
+// What each window last received, so theme changes and resizes skip identical
+// native calls. A new window (a Dock reopen) starts with no entry.
+const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
 
-function syncNativeWindowBackground(): void {
+/**
+ * Keep vibrancy and the native background in sync after window/renderer
+ * lifecycle changes, as well as theme updates. `force` re-applies both even
+ * when unchanged: lifecycle events and each new shell document's translucency
+ * request use it to recover native state that drifted.
+ */
+function syncNativeWindowBackground(force = false): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
-	// Keep vibrancy and the native background in sync after window/renderer
-	// lifecycle changes, as well as theme updates.
-	if (process.platform === "darwin") {
-		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	const vibrancy = process.platform === "darwin" && windowTranslucent ? "under-window" : null;
+	const color = windowTranslucent
+		? "#00000000"
+		: rendererWindowBackground ??
+			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT);
+	const applied = appliedNativeBackground.get(mainWindow);
+	if (process.platform === "darwin" && (force || applied?.vibrancy !== vibrancy)) {
+		mainWindow.setVibrancy(vibrancy);
 	}
-	if (windowTranslucent) {
-		mainWindow.setBackgroundColor("#00000000");
-		return;
-	}
-	mainWindow.setBackgroundColor(
-		rendererWindowBackground ??
-			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
-	);
+	if (force || applied?.color !== color) mainWindow.setBackgroundColor(color);
+	appliedNativeBackground.set(mainWindow, { vibrancy, color });
 }
 
 function resolvedDaemonDataDir(): string {
@@ -571,7 +578,7 @@ function persistTerminalThemeHint(scheme: "light" | "dark"): void {
 	}
 }
 
-nativeTheme.on("updated", syncNativeWindowBackground);
+nativeTheme.on("updated", () => syncNativeWindowBackground());
 
 // The packaged renderer is served from a custom standard scheme, not file://.
 // A file:// page has the opaque "null" origin, which the daemon must never
@@ -914,7 +921,7 @@ async function createWindowInternal(): Promise<void> {
 		hasLivePageBelow: () => browserViewHost?.hasVisiblePanel() ?? false,
 	});
 	windowComposition = composition;
-	syncNativeWindowBackground();
+	syncNativeWindowBackground(true);
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
@@ -1165,24 +1172,26 @@ async function createWindowInternal(): Promise<void> {
 		});
 	}
 
-	const syncWindowChrome = () => {
+	// Resizes fire per frame, so they only push what changed; show, restore,
+	// reload and zoom re-apply the native background in full.
+	const syncWindowChrome = (force = true) => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
-		syncNativeWindowBackground();
+		syncNativeWindowBackground(force);
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
-	mainWindow.on("resize", syncWindowChrome);
-	mainWindow.on("show", syncWindowChrome);
-	mainWindow.on("restore", syncWindowChrome);
-	shellWebContents.on("did-finish-load", syncWindowChrome);
+	mainWindow.on("resize", () => syncWindowChrome(false));
+	mainWindow.on("show", () => syncWindowChrome());
+	mainWindow.on("restore", () => syncWindowChrome());
+	shellWebContents.on("did-finish-load", () => syncWindowChrome());
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
 	// Native fullscreen removes the traffic-light horizontal reserve, while
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
-		syncNativeWindowBackground();
+		syncNativeWindowBackground(true);
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -2881,7 +2890,7 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	syncNativeWindowBackground();
+	syncNativeWindowBackground(true);
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
