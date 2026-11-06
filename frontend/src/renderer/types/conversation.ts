@@ -490,7 +490,9 @@ export interface SystemEventDetail {
 		| "workspace.script.run"
 		| "account.switched"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
-		| "approval_mode.substituted";
+		| "approval_mode.substituted"
+		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
+		| "session.model_unavailable";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */

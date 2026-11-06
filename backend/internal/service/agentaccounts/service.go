@@ -345,6 +345,19 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	return identity, true
 }
 
+// DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
+func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return nil, nil
+	}
+	account, err := s.newSessionAccount(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.providers[p].LaunchEnv(account.Home), nil
+}
+
 // SetDefaultChanged late-binds what must hear that the account new sessions of
 // a provider start on, or its sign-in, may have changed (agent readiness).
 func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {

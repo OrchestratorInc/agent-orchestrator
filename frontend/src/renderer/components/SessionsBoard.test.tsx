@@ -1651,6 +1651,21 @@ describe("SessionsBoard", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
+	it("closes the card's archive confirm on the first Escape", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-merged", title: "merged worker", status: "merged" })])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await userEvent.click(screen.getByRole("button", { name: "Archive merged worker" }));
+		await screen.findByRole("dialog");
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
 	it("terminates a live merged session from its card without opening the session", async () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "s-merged", title: "merged worker", status: "merged" })])],

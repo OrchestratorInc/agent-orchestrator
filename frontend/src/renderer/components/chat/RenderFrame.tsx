@@ -1,7 +1,8 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
@@ -205,7 +206,7 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 		params: { path: { sessionId, renderId: render.id } },
 		body: { title: render.title },
 	});
-	if (!data) throw new Error(apiErrorMessage(error, "save render as artifact failed"));
+	if (!data) throw apiErrorException(error, "save render as artifact failed");
 	return data.name;
 }
 

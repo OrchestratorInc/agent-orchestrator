@@ -102,7 +102,7 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 	const response = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
-	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
+	if (!response.ok) throw new Error(`Could not load your account's machines (${response.status}).`);
 	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
 	if (!await current()) return;
 	await adoptPreviousAccount(account, new Set(hosts.map((item) => item.hostId)), current);

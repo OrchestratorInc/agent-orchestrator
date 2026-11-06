@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
@@ -679,7 +680,7 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.ci.autoInjectError", { status: response.status })));
+			if (error) throw apiErrorException(error, t("inspector.ci.autoInjectError", { status: response.status }));
 		},
 		onMutate: async (autoInjectCI) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -742,7 +743,7 @@ function AutoInjectReviewPolicyControl({ session, hostId }: { session: Workspace
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.review.autoInjectError")));
+			if (error) throw apiErrorException(error, t("inspector.review.autoInjectError"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -808,7 +809,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
 			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to update merge policy (${response.status})`));
+			if (error) throw apiErrorException(error, `Failed to update merge policy (${response.status})`);
 		},
 		onMutate: async (terminateOnPrMerge) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -973,7 +974,7 @@ export function PRSummaryCard({
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
 		},
 		onSuccess: async (result) => {
@@ -1462,7 +1463,7 @@ function LocalReviewsSection({
 					agentConfig: nextReviewerConfig,
 				},
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to save reviewer"));
+			if (error) throw apiErrorException(error, "Unable to save reviewer");
 			if (data) queryClient.setQueryData(reviewsKey, data);
 		},
 		onSuccess: () => {
@@ -1479,7 +1480,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { enabled },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.reviewRequestFailed")));
+			if (error) throw apiErrorException(error, t("inspector.reviewRequestFailed"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -1496,7 +1497,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableStartReview"));
 			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
@@ -1529,7 +1530,7 @@ function LocalReviewsSection({
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/cancel", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableCancelReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableCancelReview"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: reviewsKey });
@@ -1541,7 +1542,7 @@ function LocalReviewsSection({
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/kill", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
+			if (error) throw apiErrorException(error, t("inspector.unableKillReviewSession"));
 			return {
 				data,
 				requestReviewsKey: reviewsKey,
@@ -1963,14 +1964,14 @@ function MergedReviewsSection({
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: review.pullRequestUrl, reviewerId: review.reviewerId },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to request re-review"));
+		if (error) throw apiErrorException(error, "Unable to request re-review");
 	};
 	const resolveInlineComment = async (comment: InspectorInlineComment) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to resolve review comment"));
+		if (error) throw apiErrorException(error, "Unable to resolve review comment");
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
@@ -1984,14 +1985,14 @@ function MergedReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { text: message, clientMessageId: crypto.randomUUID() },
 			});
-			if (error) throw new Error(apiErrorMessage(error, fallbackError));
+			if (error) throw apiErrorException(error, fallbackError);
 			return;
 		}
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
 			params: { path: { sessionId: session.id } },
 			body: { message, userAuthored: true },
 		});
-		if (error) throw new Error(apiErrorMessage(error, fallbackError));
+		if (error) throw apiErrorException(error, fallbackError);
 	};
 	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
 		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");

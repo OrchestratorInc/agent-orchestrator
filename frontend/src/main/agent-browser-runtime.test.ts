@@ -119,6 +119,8 @@ describe("agent-browser runtime lifecycle", () => {
 			start: vi.fn(overrides.start ?? (async () => "ws://127.0.0.1:1/fixture")),
 			close: vi.fn(overrides.close ?? (async () => undefined)),
 			reconcileTargets: vi.fn(),
+			beginCommand: vi.fn(async () => undefined),
+			endCommand: vi.fn(async () => undefined),
 		};
 		const processRunner = vi.fn(
 			overrides.processRunner ?? (async () => ({ stdout: "", stderr: "", exitCode: 0 })),
@@ -176,6 +178,28 @@ describe("agent-browser runtime lifecycle", () => {
 				code: "AGENT_BROWSER_COMMAND_FAILED",
 			});
 			expect(processRunner.mock.calls.some(([, args]) => (args as string[])[0] === "tab" && (args as string[])[1] !== "list")).toBe(false);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it("brackets every native command so the bridge can hide Runtime between commands", async () => {
+		const { dataDir, runtime, bridge } = await fixture({
+			processRunner: async (...args: unknown[]) =>
+				(args[1] as string[])[0] === "snapshot"
+					? { stdout: "", stderr: "boom", exitCode: 1 }
+					: { stdout: "", stderr: "", exitCode: 0 },
+		});
+		try {
+			await runtime.run("session-1", ["get", "url"], provider);
+			expect(bridge.beginCommand).toHaveBeenCalledOnce();
+			expect(bridge.endCommand).toHaveBeenCalledOnce();
+			await expect(runtime.run("session-1", ["snapshot"], provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			expect(bridge.beginCommand).toHaveBeenCalledTimes(2);
+			expect(bridge.endCommand).toHaveBeenCalledTimes(2);
 		} finally {
 			await runtime.dispose();
 			await cleanup(dataDir);
