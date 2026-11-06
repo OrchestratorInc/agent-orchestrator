@@ -5,6 +5,10 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
+import { isMacPlatform } from "../lib/platform";
+
+// The zoom chord is Cmd on macOS and Ctrl elsewhere, never both, as in the app menu.
+const primaryModifier = () => (isMacPlatform() ? { metaKey: true } : { ctrlKey: true });
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
@@ -545,7 +549,7 @@ describe("SessionArtifactsView", () => {
 		expect(reset).toHaveTextContent("90%");
 		await userEvent.click(reset);
 		expect(reset).toHaveTextContent("100%");
-		act(() => { screen.getByRole("button", { name: "Zoom in" }).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ctrlKey: true, metaKey: true, key: "=" })); });
+		act(() => { screen.getByRole("button", { name: "Zoom in" }).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...primaryModifier(), key: "=" })); });
 		expect(reset).toHaveTextContent("110%");
 	});
 
@@ -557,7 +561,7 @@ describe("SessionArtifactsView", () => {
 			expect(toolbar).toHaveAttribute("data-state", "visible");
 			await act(() => vi.advanceTimersByTimeAsync(1_500));
 			expect(toolbar).toHaveAttribute("data-state", "hidden");
-			act(() => { toolbar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ctrlKey: true, metaKey: true, key: "=" })); });
+			act(() => { toolbar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...primaryModifier(), key: "=" })); });
 			expect(toolbar).toHaveAttribute("data-state", "visible");
 			expect(screen.getByRole("button", { name: "Reset zoom" })).toHaveTextContent("110%");
 		} finally {
