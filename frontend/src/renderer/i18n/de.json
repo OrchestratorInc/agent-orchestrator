@@ -3851,6 +3851,7 @@
 	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
 	"newTask.cloudModelUnavailable": "{{model}} ist für Ihr {{agent}}-Konto in der Cloud nicht verfügbar und läuft daher nicht. Wählen Sie ein anderes Modell.",
 	"newTask.cloudProjectModelUnavailable": "Das Modell dieses Projekts, {{model}}, ist für Ihr {{agent}}-Konto in der Cloud nicht verfügbar, daher verwenden seine Aufgaben das Standardmodell. Ändern Sie es in den Projekteinstellungen.",
+	"chat.cloudModelUnavailableNotice": "{{model}} ist für Ihr {{agent}}-Konto in der Cloud nicht verfügbar, daher verwendet diese Sitzung das Standardmodell.",
 	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden",
 	"createProject.placementQuestion": "Wo sollen Agents an diesem Code arbeiten?",
 	"createProject.placementLocal": "Auf diesem Computer",

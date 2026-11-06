@@ -3933,6 +3933,7 @@
 	"newTask.cloudModelsVerified": "Проверены на ваших воркерах Cloud",
 	"newTask.cloudModelUnavailable": "{{model}} недоступна для вашей учётной записи {{agent}} в Cloud, поэтому не запустится. Выберите другую модель.",
 	"newTask.cloudProjectModelUnavailable": "Модель этого проекта, {{model}}, недоступна для вашей учётной записи {{agent}} в Cloud, поэтому задачи используют модель по умолчанию. Измените её в настройках проекта.",
+	"chat.cloudModelUnavailableNotice": "{{model}} недоступна для вашей учётной записи {{agent}} в Cloud, поэтому эта сессия использует модель по умолчанию.",
 	"settings.models.useConfiguredDefault": "Использовать модель проекта или агента по умолчанию",
 	"settings.harness.loginUi.title": "Вход в {{agent}}",
 	"settings.harness.loginUi.description": "Выберите способ подключения. Сохранёнными учётными данными управляет ваш агент.",

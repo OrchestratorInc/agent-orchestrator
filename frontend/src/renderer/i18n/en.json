@@ -3832,6 +3832,7 @@
 	"newTask.cloudModelsVerified": "Verified on your Cloud workers",
 	"newTask.cloudModelUnavailable": "{{model}} isn't available to your {{agent}} account on Cloud, so it won't run. Pick another model.",
 	"newTask.cloudProjectModelUnavailable": "This project's model, {{model}}, isn't available to your {{agent}} account on Cloud, so its tasks use the default. Change it in Project settings.",
+	"chat.cloudModelUnavailableNotice": "{{model}} isn't available to your {{agent}} account on Cloud, so this session uses the default model.",
 	"settings.models.useConfiguredDefault": "Use project or agent default",
 	"createProject.placementQuestion": "Where should agents work on this code?",
 	"createProject.placementLocal": "On this computer",

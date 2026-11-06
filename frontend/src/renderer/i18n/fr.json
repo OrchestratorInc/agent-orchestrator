@@ -3920,6 +3920,7 @@
 	"newTask.cloudModelsVerified": "Vérifié sur vos workers cloud",
 	"newTask.cloudModelUnavailable": "{{model}} n'est pas disponible pour votre compte {{agent}} dans le cloud et ne fonctionnera pas. Choisissez un autre modèle.",
 	"newTask.cloudProjectModelUnavailable": "Le modèle de ce projet, {{model}}, n'est pas disponible pour votre compte {{agent}} dans le cloud, donc ses tâches utilisent le modèle par défaut. Modifiez-le dans les paramètres du projet.",
+	"chat.cloudModelUnavailableNotice": "{{model}} n'est pas disponible pour votre compte {{agent}} dans le cloud, donc cette session utilise le modèle par défaut.",
 	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent",
 	"createProject.placementQuestion": "Où les agents doivent-ils travailler sur ce code ?",
 	"createProject.placementLocal": "Sur cet ordinateur",

@@ -277,6 +277,27 @@ describe("CloudSessionChatSurface", () => {
 			role: "user", origin: "automation", senderLabel: "Worker · Builder", text: "Full prompt",
 		});
 	});
+	it("says once, outside any turn, that the session runs the default because the account lacks the project's model", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "claude-opus-5-5", harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+			// A malformed one shows nothing.
+			{ sessionId: session.id, sequence: 2, type: "session.model_unavailable", payload: { harness: "claude-code" }, createdAt: "2026-10-01T00:00:00Z" },
+		];
+		const items = toSnapshot(session, events).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			kind: "activity", activityKind: "system", status: "completed",
+			summary: "claude-opus-5-5 isn't available to your Claude Code account on Cloud, so this session uses the default model.",
+			detail: { event: "session.model_unavailable" },
+		});
+		expect(items[0]?.turnId).toBeUndefined();
+		// Without a harness in the event, the session's own agent names the account.
+		const fallback = toSnapshot({ ...session, provider: "codex" }, [
+			{ sessionId: session.id, sequence: 1, type: "session.model_unavailable", payload: { model: "gpt-6.1-sol" }, createdAt: "2026-10-01T00:00:00Z" },
+		]).items[0];
+		expect(fallback).toMatchObject({ summary: "gpt-6.1-sol isn't available to your Codex account on Cloud, so this session uses the default model." });
+	});
+
 	it("shows a project setup outcome as a system row outside any turn", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 12_400, output: "stack up" }, createdAt: "2026-10-01T00:00:00Z" },

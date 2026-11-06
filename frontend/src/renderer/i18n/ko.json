@@ -3851,6 +3851,7 @@
 	"newTask.cloudModelsVerified": "내 클라우드 워커에서 확인됨",
 	"newTask.cloudModelUnavailable": "{{model}}은(는) 클라우드의 {{agent}} 계정에서 사용할 수 없어 실행되지 않습니다. 다른 모델을 선택하세요.",
 	"newTask.cloudProjectModelUnavailable": "이 프로젝트의 모델 {{model}}은(는) 클라우드의 {{agent}} 계정에서 사용할 수 없어 작업에 기본 모델이 사용됩니다. 프로젝트 설정에서 변경하세요.",
+	"chat.cloudModelUnavailableNotice": "{{model}}은(는) 클라우드의 {{agent}} 계정에서 사용할 수 없어 이 세션에는 기본 모델이 사용됩니다.",
 	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용",
 	"createProject.placementQuestion": "에이전트가 이 코드를 어디에서 작업할까요?",
 	"createProject.placementLocal": "이 컴퓨터에서",

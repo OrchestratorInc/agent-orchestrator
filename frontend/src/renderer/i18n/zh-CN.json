@@ -3833,6 +3833,7 @@
 	"newTask.cloudModelsVerified": "已在你的云端工作节点上验证",
 	"newTask.cloudModelUnavailable": "{{model}} 对你在云端的 {{agent}} 账号不可用，因此无法运行。请选择其他模型。",
 	"newTask.cloudProjectModelUnavailable": "此项目的模型 {{model}} 对你在云端的 {{agent}} 账号不可用，因此其任务使用默认模型。请在项目设置中更改。",
+	"chat.cloudModelUnavailableNotice": "{{model}} 对你在云端的 {{agent}} 账号不可用，因此此会话使用默认模型。",
 	"settings.models.useConfiguredDefault": "使用项目或智能体默认值",
 	"createProject.placementQuestion": "智能体要在哪里处理这些代码？",
 	"createProject.placementLocal": "在这台电脑上",

@@ -3851,6 +3851,7 @@
 	"newTask.cloudModelsVerified": "あなたのクラウドワーカーで確認済み",
 	"newTask.cloudModelUnavailable": "{{model}} はクラウドのあなたの {{agent}} アカウントでは利用できないため、実行されません。別のモデルを選んでください。",
 	"newTask.cloudProjectModelUnavailable": "このプロジェクトのモデル {{model}} はクラウドのあなたの {{agent}} アカウントでは利用できないため、タスクは既定のモデルを使います。プロジェクト設定で変更してください。",
+	"chat.cloudModelUnavailableNotice": "{{model}} はクラウドのあなたの {{agent}} アカウントでは利用できないため、このセッションは既定のモデルを使います。",
 	"settings.models.useConfiguredDefault": "プロジェクトまたはエージェントの既定を使用",
 	"createProject.placementQuestion": "エージェントはどこでこのコードを扱いますか？",
 	"createProject.placementLocal": "このコンピューター",
