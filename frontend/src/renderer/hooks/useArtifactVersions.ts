@@ -52,7 +52,7 @@ export function useHostServesMediaVersions({ enabled, hostId, path, sessionId }:
 			const { data: list, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/artifact-versions", {
 				params: { path: { sessionId }, query: { path } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to load version history"));
+			if (error) throw apiErrorException(error, "Unable to load version history");
 			return list?.mediaVersions === true;
 		},
 	});
