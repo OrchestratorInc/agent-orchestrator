@@ -3380,6 +3380,62 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(delegated()[0]).not.toHaveProperty("model");
 	});
 
+	it("does not hand a pick remembered for an agent in one local project to another after a Cloud project", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true }], "0.165.0"));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("claude-code", "Claude Code")] };
+		localProjects({ "proj-b": "gpt-b" }, {
+			codex: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true }, { id: "gpt-5.5", label: "GPT-5.5" }, { id: "gpt-b", label: "GPT-B" }],
+			"claude-code": [{ id: "claude-opus-5-5", label: "Opus 5.5", isDefault: true }],
+		});
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT-6-Astra"));
+		await userEvent.click(model);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
+		// Switching agents and back remembers GPT-5.5 as project A's Codex pick.
+		fireEvent.click(screen.getByTestId("agent-field"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
+		fireEvent.click(screen.getByTestId("agent-field"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5"));
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-b" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-B"));
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Run on B's model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(delegated()).toHaveLength(1));
+		expect(delegated()[0]).toMatchObject({ projectId: "proj-b", agent: "codex" });
+		expect(delegated()[0]).not.toHaveProperty("model");
+	});
+
+	it("brings a project's remembered agent picks back with it after a Cloud project", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true }], "0.165.0"));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("claude-code", "Claude Code")] };
+		localProjects({}, {
+			codex: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true }, { id: "gpt-5.5", label: "GPT-5.5" }],
+			"claude-code": [{ id: "claude-opus-5-5", label: "Opus 5.5", isDefault: true }],
+		});
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT-6-Astra"));
+		await userEvent.click(model);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
+		fireEvent.click(screen.getByTestId("agent-field"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
+		// Back in A, switching to Codex finds the pick A remembered for it.
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
+		fireEvent.click(screen.getByTestId("agent-field"));
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5"));
+	});
+
 	it("does not bring back a project's old default when its model changed while the composer was away", async () => {
 		const queryClient = cloudFixture("codex");
 		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true }], "0.165.0"));

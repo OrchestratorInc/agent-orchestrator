@@ -560,15 +560,16 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [agentDrafts, cloudBaseUrl, cloudConnectionsQuery.data, cloudOrg?.id, cloudUserId, isCloudProject, projectId, selectedAgent, selectedCloudConnection?.id, selectedCloudConnection?.updatedAt]);
 	// Local picks name this computer's models, which a Cloud worker may not run,
 	// and Cloud picks name the account's, which this computer may not. Moving
-	// between a local and a Cloud project parks the picks of the project left
-	// and the remembered picks of its kind. A pick comes back only to the
+	// between a local and a Cloud project parks the picks of the project left,
+	// with the picks it remembers for each agent. A pick comes back only to the
 	// project it was made in, and only for the agent it was made with: another
 	// project, or the same one with another agent now, starts from its own
-	// defaults (its project's model and effort), as it does without a move.
-	// Within one kind picks carry from project to project as they always did.
+	// defaults (its project's model and effort, and the agent picks it
+	// remembers), as it does without a move. Within one kind picks carry from
+	// project to project as they always did.
 	const pickOrigin = useRef({ cloud: isCloudProject, context: preferenceContext, agent: selectedAgent });
 	const parkedPicks = useRef<Record<string, ParkedComposerPicks>>({});
-	const parkedDrafts = useRef<Record<"cloud" | "local", Record<string, TaskComposerAgentPreference> | undefined>>({ cloud: undefined, local: undefined });
+	const parkedDrafts = useRef<Record<string, Record<string, TaskComposerAgentPreference>>>({});
 	// Set for the update that brings a pick back, so the defaults below (which
 	// still see that update's untouched state) do not replace it. Only what is
 	// brought back is held; everything else follows the project's defaults.
@@ -582,7 +583,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return;
 		}
 		parkedPicks.current[origin.context] = { agent: origin.agent, model, mode, effort, modelTouched, effortTouched };
-		parkedDrafts.current[origin.cloud ? "cloud" : "local"] = { ...agentDrafts };
+		parkedDrafts.current[origin.context] = { ...agentDrafts };
 		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext, agent: selectedAgent };
 		const entered = parkedPicks.current[preferenceContext];
 		const ownAgent = entered !== undefined && entered.agent === selectedAgent;
@@ -591,7 +592,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		restoringModel.current = keepModel;
 		restoringEffort.current = keepEffort;
 		for (const key of Object.keys(agentDrafts)) delete agentDrafts[key];
-		Object.assign(agentDrafts, parkedDrafts.current[isCloudProject ? "cloud" : "local"] ?? readTaskComposerPreferences(preferenceContext)?.agents);
+		Object.assign(agentDrafts, parkedDrafts.current[preferenceContext] ?? readTaskComposerPreferences(preferenceContext)?.agents);
 		setModel(keepModel ? entered.model : "");
 		setMode(keepModel ? entered.mode : "");
 		setModelTouched(keepModel);
