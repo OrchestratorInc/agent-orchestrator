@@ -1865,6 +1865,8 @@
 	"settings.models.selectedAgent": "the selected agent",
 	"settings.models.validateFailed": "Could not validate cached models.",
 	"settings.models.cloudModelUnavailable": "{{model}} isn't available to your {{agent}} account on Cloud, so tasks use the default. Pick another model.",
+	"settings.models.cloudModelsFailed": "Couldn't load AO Cloud's model list for {{agent}}.",
+	"settings.models.cloudModelsUnavailable": "AO Cloud has no model list for {{agent}}. Enter a model ID.",
 	"settings.models.workerMode": "Worker mode",
 	"settings.models.workerModel": "Worker model",
 	"settings.options.noMatches": "No matching options.",

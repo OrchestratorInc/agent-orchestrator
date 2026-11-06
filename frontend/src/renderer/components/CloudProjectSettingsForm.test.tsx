@@ -201,6 +201,47 @@ describe("Cloud project settings", () => {
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 	});
 
+	it("says when Cloud's model list could not be read, and reads it again on Retry", async () => {
+		project.config = { worker: { agent: "claude-code" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "claude-opus-5-5", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
+		mount();
+		const warnings = await screen.findAllByText("Couldn't load AO Cloud's model list for Claude Code.");
+		expect(warnings.length).toBeGreaterThan(0);
+		// A model ID can still be entered by hand.
+		const model = screen.getByRole("button", { name: "Worker model" });
+		await userEvent.click(model);
+		await userEvent.type(screen.getByRole("searchbox"), "claude-typed-1");
+		expect(screen.getByRole("menuitem", { name: /claude-typed-1/ })).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		// Retry reads Cloud's list again, not this computer's.
+		const calls = mocks.models.mock.calls.length;
+		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		await userEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+		await waitFor(() => expect(mocks.models.mock.calls.length).toBeGreaterThan(calls));
+		await waitFor(() => expect(screen.queryByText("Couldn't load AO Cloud's model list for Claude Code.")).not.toBeInTheDocument());
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(await screen.findByRole("menuitem", { name: /^Opus/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+	});
+
+	it("says when Cloud has no model list for an agent, without falling back to this computer's", async () => {
+		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "claude-code" } };
+		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
+			{ id: "local-only", label: "Only On This Computer", isDefault: true },
+		] } });
+		mocks.models.mockImplementation(async (_orgId: string, agent: string) => {
+			if (agent === "opencode") throw new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" });
+			return { source: "release", cliVersion: "test", models: [{ id: "opus", displayName: "Opus", default: true }] };
+		});
+		mount();
+		expect(await screen.findByText("AO Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
+	});
+
 	it("names Claude Code for a role without an agent and offers no empty choice for it", async () => {
 		project.config = {};
 		mount();

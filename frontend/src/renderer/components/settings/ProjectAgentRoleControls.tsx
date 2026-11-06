@@ -15,6 +15,7 @@ import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 
 export function AgentModelField({
 	role,
@@ -78,7 +79,18 @@ export function AgentModelField({
 	const catalog: AgentModelCatalog | undefined = cloudListed
 		? cloudCatalogAsAgentCatalog(agentId, cloudListed)
 		: localWanted ? query.data : undefined;
-	const catalogFetching = cloudOrgId && !localWanted ? cloud.loading : query.isFetching && !catalog;
+	// Cloud is the field's only source (a Cloud project, and not an agent Cloud
+	// lists nothing for that this computer's list stands in for).
+	const cloudSourced = Boolean(cloudOrgId) && !localWanted;
+	const catalogFetching = cloudSourced ? cloud.loading : query.isFetching && !catalog;
+	// Without Cloud's list the field says so, offers to read it again, and keeps
+	// manual entry; it never lists this computer's models in its place.
+	const cloudGapWarning = cloudSourced && !cloudListed && cloud.gap
+		? t(cloud.gap === "unavailable" ? "settings.models.cloudModelsUnavailable" : "settings.models.cloudModelsFailed", { agent: agentLabel(agentId) })
+		: undefined;
+	const readCloudAgain = async () => {
+		await cloud.query.refetch();
+	};
 	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
 	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
@@ -99,6 +111,7 @@ export function AgentModelField({
 	// start on the agent's default instead (the control plane sees to it).
 	const cloudUnavailable = cloudListed !== undefined && cloudModelVerdict(cloudListed, model) === "unavailable";
 	const warning =
+		cloudGapWarning ??
 		(cloudUnavailable ? t("settings.models.cloudModelUnavailable", { model, agent: agentLabel(agentId) }) : undefined) ??
 		(revalidationQuery.isError ? (revalidationQuery.error instanceof Error ? revalidationQuery.error.message : t("settings.models.validateFailed")) : undefined) ??
 		catalog?.warning ??
@@ -112,9 +125,9 @@ export function AgentModelField({
 				disabled={agentId === "" || (query.isFetching && !catalog)}
 				onModelChange={onModelChange} onModeChange={onModeChange} onEffortChange={onEffortChange}
 				onValidityChange={onValidityChange}
-				onRefresh={async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
+				onRefresh={cloudSourced ? readCloudAgain : async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
 			/>
-			{warning ? <p className={cn("text-xs text-warning", warningClassName)}>{warning}</p> : null}
+			{warning ? <FieldWarning className={cn("text-xs", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} /> : null}
 		</>;
 	}
 
@@ -144,7 +157,7 @@ export function AgentModelField({
 						/>
 					</div>
 				</div>
-				{warning && <p className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>{warning}</p>}
+				{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 			</>
 		);
 	}
@@ -165,8 +178,8 @@ export function AgentModelField({
 	const unsetLabel = emptyLabel ?? (catalogDefault ? agentModelDisplayLabel(agentId, catalogDefault.label) : undefined);
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
 	const refreshCatalog = async () => {
-		if (cloudListed) {
-			await cloud.query.refetch();
+		if (cloudSourced) {
+			await readCloudAgain();
 			return;
 		}
 		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
@@ -214,7 +227,7 @@ export function AgentModelField({
 					/>
 				</div>
 			</div>
-			{warning && <p className={cn("px-1 text-xs leading-row text-warning", warningClassName)}>{warning}</p>}
+			{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 		</>
 	);
 }
@@ -239,5 +252,19 @@ function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: 
 				onCheckedChange={onCheckedChange}
 			/>
 		</SettingsRow>
+	);
+}
+
+/** A model field's warning, with a Retry when reading Cloud's list again can clear it. */
+function FieldWarning({ warning, className, onRetry }: { warning: string; className?: string; onRetry?: () => Promise<void> }) {
+	const { t } = useTranslation();
+	if (!onRetry) return <p className={cn("text-warning", className)}>{warning}</p>;
+	return (
+		<div className={cn("flex items-center gap-2", className)}>
+			<p className="min-w-0 text-warning">{warning}</p>
+			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void onRetry().catch(() => undefined)}>
+				{t("newTask.modelNotice.retry")}
+			</Button>
+		</div>
 	);
 }

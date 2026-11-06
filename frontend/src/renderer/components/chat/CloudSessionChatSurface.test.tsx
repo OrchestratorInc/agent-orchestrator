@@ -84,6 +84,15 @@ describe("CloudSessionChatSurface", () => {
 		cloudSetup.maxAttachmentBytes = undefined;
 	});
 
+	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The composer's agent and model picker reads each agent's list through
+		// this organization's Cloud catalog (AgentSwitchPicker).
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
+	});
+
 	it("offers to attach files only while the control plane takes them, up to its limit", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });

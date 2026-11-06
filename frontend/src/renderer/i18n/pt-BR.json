@@ -1579,6 +1579,8 @@
 	"settings.models.selectedAgent": "agente selecionado",
 	"settings.models.validateFailed": "Não foi possível validar os modelos em cache.",
 	"settings.models.cloudModelUnavailable": "{{model}} não está disponível para sua conta do {{agent}} na nuvem, então as tarefas usam o padrão. Escolha outro modelo.",
+	"settings.models.cloudModelsFailed": "Não foi possível carregar a lista de modelos do AO Cloud para {{agent}}.",
+	"settings.models.cloudModelsUnavailable": "O AO Cloud não tem uma lista de modelos para {{agent}}. Insira um ID de modelo.",
 	"settings.models.workerMode": "Modo do worker",
 	"settings.models.workerModel": "Modelo do worker",
 	"settings.options.noMatches": "Nenhuma opção correspondente.",

@@ -1534,6 +1534,8 @@
 	"settings.models.selectedAgent": "所选代理",
 	"settings.models.validateFailed": "无法验证缓存的模型。",
 	"settings.models.cloudModelUnavailable": "{{model}} 对你在云端的 {{agent}} 账号不可用，因此任务使用默认模型。请选择其他模型。",
+	"settings.models.cloudModelsFailed": "无法加载 {{agent}} 的 AO Cloud 模型列表。",
+	"settings.models.cloudModelsUnavailable": "AO Cloud 没有 {{agent}} 的模型列表。请输入模型 ID。",
 	"settings.models.workerMode": "Worker 模式",
 	"settings.models.workerModel": "Worker 模型",
 	"settings.options.noMatches": "没有匹配的选项。",

@@ -18,6 +18,11 @@ describe("cloudCatalogOffers", () => {
 		["not a date suffix", claude, "claude-opus-4", false],
 		["another harness, listed", codex, "gpt-5.6-terra", true],
 		["another harness, not listed", codex, "gpt-6.1-sol", false],
+		// Matching errs towards keeping a model: a mis-cased ID is kept.
+		["another harness, another case", codex, "GPT-5.6-Terra", true],
+		// The effort is kept apart from the model, so a suffixed ID is not a listed one.
+		["a suffixed form of a listed model", codex, "gpt-5.6-terra/high", false],
+		["a provider-qualified ID, listed", [{ id: "opencode-go/model-1" }], "opencode-go/model-1", true],
 		["an empty list offers only the default", [], "opus", false],
 	] as const)("%s", (_name, models, id, want) => {
 		expect(cloudCatalogOffers(models, id)).toBe(want);
@@ -125,7 +130,14 @@ describe("cloudModelVerdict", () => {
 		expect(cloudModelVerdict({ source: "release", models: listed }, "claude-opus-5-5")).toBe("unverified");
 		expect(cloudModelVerdict({ source: "worker", models: listed }, "opus")).toBe("offered");
 		expect(cloudModelVerdict(undefined, "claude-opus-5-5")).toBe("offered");
-		// The agent's own default ("" or "default") is always offered.
+		// The agent's own default (no model) is always offered.
 		expect(cloudModelVerdict({ source: "worker", models: listed }, "")).toBe("offered");
+	});
+
+	it("treats the literal default as the control plane does: offered only by a list that names it", () => {
+		// Claude Code lists "default"; Codex does not, and Cloud refuses it there.
+		expect(cloudModelVerdict({ source: "worker", models: [...listed, { id: "default", displayName: "Default", default: false }] }, "default")).toBe("offered");
+		expect(cloudModelVerdict({ source: "worker", models: [{ id: "gpt-6-luna", displayName: "Luna", default: true }] }, "default")).toBe("unavailable");
+		expect(cloudModelVerdict({ source: "release", models: [{ id: "gpt-6-luna", displayName: "Luna", default: true }] }, "default")).toBe("unverified");
 	});
 });

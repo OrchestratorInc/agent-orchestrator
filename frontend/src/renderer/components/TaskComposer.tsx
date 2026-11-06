@@ -28,7 +28,7 @@ import { useChatPermissionModesQuery } from "../hooks/useChatPermissionModes";
 import { useSettings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudModelCatalog } from "../hooks/useCloudModelCatalog";
+import { invalidateCloudModelCatalogs, useCloudModelCatalog } from "../hooks/useCloudModelCatalog";
 import { cloudModelCatalogGap, cloudModelVerdict, listsLocalModelsForCloud } from "../lib/cloud-model-catalog";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -275,12 +275,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 				return session.id;
 			} catch (err) {
 				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				// Cloud refused a model the account's list lacks: the list the picker
+				// showed is older than Cloud's, so it is read again (the message says why).
+				if (err instanceof CloudCpError && err.code === "MODEL_UNAVAILABLE" && cloudOrg?.id && input.agent) {
+					void invalidateCloudModelCatalogs(queryClient, { baseUrl: cloudBaseUrl, userId: cloudUserId, orgId: cloudOrg.id, agent: input.agent });
+				}
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -554,40 +559,51 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setEffortTouched(false);
 	}, [agentDrafts, cloudBaseUrl, cloudConnectionsQuery.data, cloudOrg?.id, cloudUserId, isCloudProject, projectId, selectedAgent, selectedCloudConnection?.id, selectedCloudConnection?.updatedAt]);
 	// Local picks name this computer's models, which a Cloud worker may not run,
-	// and Cloud picks name the account's, which this computer may not. Picks
-	// belong to the project, and the kind of project, they were made in: shown
-	// in a project of the other kind they are parked under their kind, and the
-	// picks last made for the kind shown come back (none: the project's own
-	// remembered ones). Local to local keeps carrying them, and a project that
-	// turns out to be a Cloud one keeps the choice made for it.
-	const pickOrigin = useRef({ cloud: isCloudProject, context: preferenceContext });
-	const parkedPicks = useRef<Record<"cloud" | "local", ParkedComposerPicks | undefined>>({ cloud: undefined, local: undefined });
-	// Set for the update that brings picks back, so the defaults below (which
-	// still see that update's untouched state) do not replace them.
-	const restoringPicks = useRef(false);
+	// and Cloud picks name the account's, which this computer may not. Moving
+	// between a local and a Cloud project parks the picks of the project left
+	// and the remembered picks of its kind. A pick comes back only to the
+	// project it was made in, and only for the agent it was made with: another
+	// project, or the same one with another agent now, starts from its own
+	// defaults (its project's model and effort), as it does without a move.
+	// Within one kind picks carry from project to project as they always did.
+	const pickOrigin = useRef({ cloud: isCloudProject, context: preferenceContext, agent: selectedAgent });
+	const parkedPicks = useRef<Record<string, ParkedComposerPicks>>({});
+	const parkedDrafts = useRef<Record<"cloud" | "local", Record<string, TaskComposerAgentPreference> | undefined>>({ cloud: undefined, local: undefined });
+	// Set for the update that brings a pick back, so the defaults below (which
+	// still see that update's untouched state) do not replace it. Only what is
+	// brought back is held; everything else follows the project's defaults.
+	const restoringModel = useRef(false);
+	const restoringEffort = useRef(false);
 	useEffect(() => {
 		const origin = pickOrigin.current;
-		if (origin.context === preferenceContext || origin.cloud === isCloudProject) return;
-		parkedPicks.current[origin.cloud ? "cloud" : "local"] = {
-			model, mode, effort, modelTouched, effortTouched, drafts: { ...agentDrafts },
-		};
-		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext };
-		const entered = parkedPicks.current[isCloudProject ? "cloud" : "local"];
-		restoringPicks.current = true;
+		if (origin.context === preferenceContext) return;
+		if (origin.cloud === isCloudProject) {
+			pickOrigin.current = { ...origin, context: preferenceContext };
+			return;
+		}
+		parkedPicks.current[origin.context] = { agent: origin.agent, model, mode, effort, modelTouched, effortTouched };
+		parkedDrafts.current[origin.cloud ? "cloud" : "local"] = { ...agentDrafts };
+		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext, agent: selectedAgent };
+		const entered = parkedPicks.current[preferenceContext];
+		const ownAgent = entered !== undefined && entered.agent === selectedAgent;
+		const keepModel = ownAgent && entered.modelTouched;
+		const keepEffort = ownAgent && entered.effortTouched;
+		restoringModel.current = keepModel;
+		restoringEffort.current = keepEffort;
 		for (const key of Object.keys(agentDrafts)) delete agentDrafts[key];
-		Object.assign(agentDrafts, entered?.drafts ?? readTaskComposerPreferences(preferenceContext)?.agents);
-		setModel(entered?.model ?? "");
-		setMode(entered?.mode ?? "");
-		setEffort(entered?.effort ?? "");
-		setModelTouched(entered?.modelTouched ?? false);
-		setEffortTouched(entered?.effortTouched ?? false);
+		Object.assign(agentDrafts, parkedDrafts.current[isCloudProject ? "cloud" : "local"] ?? readTaskComposerPreferences(preferenceContext)?.agents);
+		setModel(keepModel ? entered.model : "");
+		setMode(keepModel ? entered.mode : "");
+		setModelTouched(keepModel);
+		setEffort(keepEffort ? entered.effort : "");
+		setEffortTouched(keepEffort);
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- runs on a move only, with the picks as they were
 	}, [isCloudProject, preferenceContext]);
-	// A pick (model, effort, agent) is made in the project shown.
+	// A pick (model, effort, agent) is made in the project shown, with the agent shown.
 	useEffect(() => {
-		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext };
+		pickOrigin.current = { cloud: isCloudProject, context: preferenceContext, agent: selectedAgent };
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- records where each pick was made
-	}, [model, mode, effort, agent]);
+	}, [model, mode, effort, agent, selectedAgent]);
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
@@ -948,17 +964,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
 	useEffect(() => {
-		if (!modelTouched && !restoringPicks.current) {
+		if (!modelTouched && !restoringModel.current) {
 			setModel(defaultModelForSelectedAgent);
 			setMode(defaultModeForSelectedAgent);
 		}
 	}, [defaultModelForSelectedAgent, defaultModeForSelectedAgent, modelTouched]);
 	useEffect(() => {
-		if (!effortTouched && !restoringPicks.current) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
+		if (!effortTouched && !restoringEffort.current) setEffort(defaultEffortForSelectedAgent || cloudDefaultEffort);
 	}, [cloudDefaultEffort, defaultEffortForSelectedAgent, effortTouched]);
-	// The update that brought picks back is over; defaults apply again.
+	// The update that brought a pick back is over; defaults apply again.
 	useEffect(() => {
-		restoringPicks.current = false;
+		restoringModel.current = false;
+		restoringEffort.current = false;
 	});
 
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
@@ -1365,14 +1382,15 @@ function startsLocally(agent: AgentInfo): boolean {
 	return agent.installation.state === "installed" && (isReadyAgent(agent) || agent.authentication.state === "configured");
 }
 
-/** The picks a composer had for one kind of project (local or Cloud), parked while it shows the other kind. */
+/** The picks a composer had for one project, parked while it shows a project of the other kind (local or Cloud). */
 type ParkedComposerPicks = {
+	/** The agent the picks were made with; they never come back for another. */
+	agent: string;
 	model: string;
 	mode: string;
 	effort: string;
 	modelTouched: boolean;
 	effortTouched: boolean;
-	drafts: Record<string, TaskComposerAgentPreference>;
 };
 
 // The launch form as a standalone composer. The app starts tasks from the new

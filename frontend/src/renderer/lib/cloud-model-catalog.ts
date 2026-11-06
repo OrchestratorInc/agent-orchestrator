@@ -1,5 +1,4 @@
 import { CloudCpError, type CloudCpChatModelsResponse } from "./cloud-cp";
-import { isConcreteModelID } from "./agent-model-choices";
 
 /**
  * Cloud's model list for an agent: the models a Cloud worker running the
@@ -125,7 +124,7 @@ function describedModel(description: string | undefined): string {
 
 /**
  * What Cloud's list says about running a model:
- * - "offered": the list has it (or it is the agent's default);
+ * - "offered": the list has it (or no model is named: the agent's default);
  * - "unavailable": the list is the account's own (verified) and lacks it, so
  *   a task on it fails;
  * - "unverified": only the release list is known yet, which lacks it; the
@@ -135,6 +134,9 @@ function describedModel(description: string | undefined): string {
 export type CloudModelVerdict = "offered" | "unavailable" | "unverified";
 
 export function cloudModelVerdict(catalog: Pick<CloudModelCatalog, "models" | "source"> | undefined, model: string): CloudModelVerdict {
-	if (!catalog || !isConcreteModelID(model) || cloudCatalogOffers(catalog.models, model)) return "offered";
+	// No model is the agent's default. The literal "default" is a model ID like
+	// any other, as the control plane's Offers has it: Claude Code lists it,
+	// Codex does not, and Cloud refuses it there.
+	if (!catalog || cloudCatalogOffers(catalog.models, model)) return "offered";
 	return catalog.source === "worker" ? "unavailable" : "unverified";
 }

@@ -1,4 +1,4 @@
-import { queryOptions, useQuery, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { focusManager, queryOptions, useQuery, type Query, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { cloudModelLabel } from "../lib/agent-model-choices";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
@@ -18,10 +18,41 @@ export function cloudModelCatalogQueryPrefix(baseUrl: string, userId: string, or
 
 /**
  * While Cloud only knows the release list it is learning the account's own
- * from a running session, so the list is read again this often until it
- * arrives.
+ * from a running session, so the list is read again until it arrives: after
+ * this long, then twice as long each time it is still the release list, up to
+ * MAX_UNVERIFIED_CATALOG_REFRESH_MS. An account with no session running may
+ * not get its list for a long time, and every open picker shares the reads.
  */
 export const UNVERIFIED_CATALOG_REFRESH_MS = 15_000;
+export const MAX_UNVERIFIED_CATALOG_REFRESH_MS = 5 * 60_000;
+
+// The window regaining focus starts the reads of a release list again from
+// UNVERIFIED_CATALOG_REFRESH_MS (someone is looking at it now).
+let focusEpoch = 0;
+focusManager.subscribe((focused) => {
+	if (focused) focusEpoch += 1;
+});
+const releaseStreaks = new WeakMap<object, { epoch: number; base: number }>();
+
+/**
+ * How long until a Cloud model list is read again: false once it is the
+ * account's own (it does not change by itself), and a doubling wait while it
+ * is still the release list. One query serves every picker of an account and
+ * agent, so this is one schedule however many pickers are open.
+ */
+export function unverifiedCatalogRefreshMs(query: Query<CloudModelCatalog, Error, CloudModelCatalog, readonly unknown[]>): number | false {
+	if (query.state.data?.source !== "release") return false;
+	let streak = releaseStreaks.get(query);
+	if (!streak || streak.epoch !== focusEpoch) {
+		// The streak's first read is the one in flight, else the one that gave
+		// the list shown.
+		const count = query.state.dataUpdateCount;
+		streak = { epoch: focusEpoch, base: query.state.fetchStatus === "fetching" ? count : count - 1 };
+		releaseStreaks.set(query, streak);
+	}
+	const reads = Math.max(1, query.state.dataUpdateCount - streak.base);
+	return Math.min(UNVERIFIED_CATALOG_REFRESH_MS * 2 ** (reads - 1), MAX_UNVERIFIED_CATALOG_REFRESH_MS);
+}
 
 /** The default valid credential an account has connected for an agent. */
 function agentConnection(connections: CloudCpProviderConnection[] | undefined, agent: string) {
@@ -32,8 +63,9 @@ function agentConnection(connections: CloudCpProviderConnection[] | undefined, a
 
 /**
  * The one query for Cloud's model list of an account and agent: keyed by the
- * credential (a new sign-in asks again), read again on focus, and every
- * UNVERIFIED_CATALOG_REFRESH_MS while it is still the release list.
+ * credential (a new sign-in asks again), read again on focus, and on the
+ * doubling schedule of unverifiedCatalogRefreshMs while it is still the
+ * release list.
  */
 export function cloudModelCatalogQueryOptions(scope: {
 	client: CloudCpClient;
@@ -52,9 +84,11 @@ export function cloudModelCatalogQueryOptions(scope: {
 		queryFn: ({ signal }): Promise<CloudModelCatalog> =>
 			scope.client.listUserAgentModels(scope.orgId, scope.agent as CloudCpAgentProvider, { signal }),
 		staleTime: 30_000,
-		refetchOnWindowFocus: true,
+		// A release list is read again on focus however fresh, which starts its
+		// reads again at the shortest wait.
+		refetchOnWindowFocus: (query) => query.state.data?.source === "release" ? "always" : true,
 		refetchOnReconnect: false,
-		refetchInterval: (query) => query.state.data?.source === "release" ? UNVERIFIED_CATALOG_REFRESH_MS : false,
+		refetchInterval: unverifiedCatalogRefreshMs,
 		retry: false,
 	});
 }
@@ -114,8 +148,9 @@ export interface CloudModelCatalogState {
  * Cloud task or project: the New Task composer, its agent switch and the cloud
  * project's settings. One query and one freshness rule for all of them: keyed
  * by the account's credential for the agent (a new sign-in asks again), read
- * again on focus, and every UNVERIFIED_CATALOG_REFRESH_MS while it is still
- * the release list, so the account's own list shows up as soon as Cloud has it.
+ * again on focus, and on a doubling schedule from UNVERIFIED_CATALOG_REFRESH_MS
+ * while it is still the release list, so the account's own list shows up soon
+ * after Cloud has it without polling forever for an account that has none.
  */
 export function useCloudModelCatalog({ orgId, agent, enabled }: {
 	orgId: string | undefined;

@@ -1552,6 +1552,8 @@
 	"settings.models.selectedAgent": "選択したエージェント",
 	"settings.models.validateFailed": "キャッシュ済みモデルを検証できませんでした。",
 	"settings.models.cloudModelUnavailable": "{{model}} はクラウドのあなたの {{agent}} アカウントでは利用できないため、タスクは既定のモデルを使います。別のモデルを選んでください。",
+	"settings.models.cloudModelsFailed": "{{agent}} の AO Cloud のモデル一覧を読み込めませんでした。",
+	"settings.models.cloudModelsUnavailable": "AO Cloud には {{agent}} のモデル一覧がありません。モデル ID を入力してください。",
 	"settings.models.workerMode": "ワーカーモード",
 	"settings.models.workerModel": "ワーカーモデル",
 	"settings.options.noMatches": "一致するオプションがありません。",

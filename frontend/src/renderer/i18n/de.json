@@ -1552,6 +1552,8 @@
 	"settings.models.selectedAgent": "dem ausgewählten Agenten",
 	"settings.models.validateFailed": "Zwischengespeicherte Modelle konnten nicht validiert werden.",
 	"settings.models.cloudModelUnavailable": "{{model}} ist für Ihr {{agent}}-Konto in der Cloud nicht verfügbar, daher verwenden Aufgaben das Standardmodell. Wählen Sie ein anderes Modell.",
+	"settings.models.cloudModelsFailed": "Die Modellliste von AO Cloud für {{agent}} konnte nicht geladen werden.",
+	"settings.models.cloudModelsUnavailable": "AO Cloud hat keine Modellliste für {{agent}}. Gib eine Modell-ID ein.",
 	"settings.models.workerMode": "Worker-Modus",
 	"settings.models.workerModel": "Worker-Modell",
 	"settings.options.noMatches": "Keine passenden Optionen.",

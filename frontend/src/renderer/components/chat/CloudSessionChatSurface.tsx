@@ -1619,13 +1619,15 @@ export function CloudSessionChatSurface({
 	// The composer's agent and model picker, with the agent's mark, as a local
 	// chat has. A Cloud session keeps the agent it started with, so the picker
 	// offers only its models; another agent is a new task.
+	// Its models are Cloud's for the account (cloudOrgId), as every Cloud picker's are.
 	const agentSwitch = useMemo<AgentSwitchProps>(() => ({
 		projectId: session.workspaceId,
+		cloudOrgId: cloud?.orgId,
 		agents: [{ id: session.provider, label: agentLabel(session.provider) }],
 		onPendingChange: () => undefined,
 		disabled: true,
 		harnessView: "cloud",
-	}), [session.provider, session.workspaceId]);
+	}), [cloud?.orgId, session.provider, session.workspaceId]);
 	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
 	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model, undefined, true, false);
 	// With no list of the session's own yet, Claude's choices come from the device's

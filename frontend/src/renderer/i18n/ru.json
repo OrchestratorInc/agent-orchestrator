@@ -1932,6 +1932,8 @@
 	"settings.models.selectedAgent": "выбранный агент",
 	"settings.models.validateFailed": "Не удалось проверить кэшированные модели.",
 	"settings.models.cloudModelUnavailable": "{{model}} недоступна для вашей учётной записи {{agent}} в Cloud, поэтому задачи используют модель по умолчанию. Выберите другую модель.",
+	"settings.models.cloudModelsFailed": "Не удалось загрузить список моделей AO Cloud для {{agent}}.",
+	"settings.models.cloudModelsUnavailable": "В AO Cloud нет списка моделей для {{agent}}. Введите ID модели.",
 	"settings.models.workerMode": "Режим воркера",
 	"settings.models.workerModel": "Модель воркера",
 	"settings.options.noMatches": "Подходящие варианты не найдены.",
