@@ -36,3 +36,19 @@ it("never calls a disconnected host or selects cached folders", async () => {
 	expect(get).not.toHaveBeenCalled();
 	expect(onChoose).not.toHaveBeenCalled();
 });
+
+it.each(["/srv/trailing ", "/srv/trailing\t", " /srv/leading"])("looks up and chooses the exact typed path %j", async (path) => {
+	const get = vi.fn(async (_url: string, options: { params: { query: { path?: string } } }) => ({
+		data: { path: options.params.query.path ?? "/srv", parent: "/srv", entries: [], truncated: false },
+	}));
+	gets.set("host-a", get);
+	const onChoose = vi.fn();
+	render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RemoteDirectoryPicker hostId="host-a" hostLabel="Host A" connected initialPath="/srv" onChoose={onChoose} onClose={vi.fn()} /></QueryClientProvider>);
+	const input = screen.getByRole("textbox", { name: "Folder path on host" });
+	await userEvent.clear(input);
+	await userEvent.type(input, path);
+	await userEvent.click(screen.getByRole("button", { name: "Go" }));
+	await waitFor(() => expect(get).toHaveBeenLastCalledWith("/api/v1/fs/dirs", { params: { query: { path } } }));
+	await userEvent.click(screen.getByRole("button", { name: "Use this folder" }));
+	expect(onChoose).toHaveBeenCalledWith(path);
+});
