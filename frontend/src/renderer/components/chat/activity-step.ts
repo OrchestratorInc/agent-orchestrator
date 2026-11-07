@@ -4,9 +4,9 @@ import type { ConversationActivity } from "../../types/conversation";
  * How a shell command or an agent's built-in tool reads in the chat: what it did,
  * in the words a person would use, instead of one "Ran command" for everything.
  *
- * This only names the step. Which rows group together is still decided by
- * `commandCategory` in activity-command.ts, so a new label never changes the
- * timeline's shape.
+ * This only names the step. Which rows group together is decided by
+ * `commandCategory` in activity-command.ts, from the same program a row is named
+ * by (`commandProgram`), so a row and the header above it agree.
  */
 
 /** The mark beside a step. The renderer maps each one to a Lucide icon. */
@@ -366,7 +366,16 @@ function moveStep(values: string[]): CommandStep | undefined {
 	if (values.length < 2) return undefined;
 	const destination = values.at(-1)!;
 	const sources = values.slice(0, -1);
-	if (sources.length === 1 && dirname(sources[0]!) === dirname(destination) && !destination.endsWith("/")) {
+	// Without a trailing slash, `mv notes.md archive` may as well be a move into a
+	// folder. Only a file given a new name with an extension, in the same place, is
+	// clearly a rename; anything else is a move.
+	const renamed =
+		sources.length === 1 &&
+		dirname(sources[0]!) === dirname(destination) &&
+		!destination.endsWith("/") &&
+		hasExtension(sources[0]!) &&
+		hasExtension(destination);
+	if (renamed) {
 		return {
 			done: "Renamed",
 			live: "Renaming",
@@ -656,6 +665,11 @@ function cargoStep(args: string[]): CommandStep {
 }
 
 function interpreterStep(binary: string, args: string[]): CommandStep {
+	if (binary === "deno") return denoStep(args);
+	// `tsx watch src/index.ts` runs the file and reruns it on change.
+	if (binary === "tsx" && positionals(args, INTERPRETER_VALUE_FLAGS)[0] === "watch") {
+		return interpreterStep(binary, args.filter((arg) => arg !== "watch"));
+	}
 	const module = flagValue(args, ["-m"]);
 	if (module) return TEST_TOOLS.has(module) ? testStep() : { done: "Ran", live: "Running", target: module, icon: "run" };
 	// `node -e '…'`, `python -c '…'`: inline code has no file to name.
@@ -667,6 +681,31 @@ function interpreterStep(binary: string, args: string[]): CommandStep {
 	return runFileStep(script);
 }
 
+/** `deno run main.ts`, `deno test`, `deno task dev`: deno takes a subcommand before the script. */
+function denoStep(args: string[]): CommandStep {
+	const values = positionals(args, INTERPRETER_VALUE_FLAGS);
+	const sub = values[0];
+	// `deno main.ts` is short for `deno run main.ts`.
+	if (sub && looksLikeScriptFile(sub)) return runFileStep(sub);
+	switch (sub) {
+		case "run":
+		case "serve":
+			return values[1] ? runFileStep(values[1]) : fallbackStep("deno");
+		case "test":
+			return testStep();
+		case "task":
+			return values[1] ? scriptStep(values[1], values[1]) : fallbackStep("deno");
+		case "fmt":
+			return formatStep();
+		case "lint":
+			return lintStep();
+		case "check":
+			return typecheckStep();
+		default:
+			return { done: "Ran", live: "Running", target: ["deno", sub].filter(Boolean).join(" "), icon: "run" };
+	}
+}
+
 function runFileStep(file: string): CommandStep {
 	return { done: "Ran", live: "Running", ...fileTarget(file), icon: "run" };
 }
@@ -676,6 +715,15 @@ function fallbackStep(binary: string): CommandStep {
 }
 
 // --- parsing -----------------------------------------------------------------
+
+/**
+ * The program a command line runs, as its row is named: past `cd dir &&`, env
+ * assignments, wrappers and `command -v` checks. Grouping reads the same program
+ * (`commandCategory`), so a row and the header above it agree.
+ */
+export function commandProgram(command: string): string | undefined {
+	return mainSegment(command)?.binary;
+}
 
 /**
  * The segment of a command line that says what it does: past any `cd dir &&`
@@ -739,18 +787,29 @@ function tokenize(line: string): Word[] {
 
 function splitSegments(words: Word[]): Word[][] {
 	const segments: Word[][] = [[]];
-	let inPipeline = false;
+	// While in a pipeline: where its first stage is, and the words of the stage after it.
+	let pipeline: { first: number; stage: Word[] } | undefined;
+	// Later stages of a pipeline only shape the first stage's output, except `tee`:
+	// `echo hi | tee notes.md` writes the file, and that is the step.
+	const endStage = () => {
+		if (pipeline && toSegment(pipeline.stage)?.binary === "tee") segments[pipeline.first] = pipeline.stage;
+	};
 	for (const word of words) {
 		if (word.operator) {
-			// Later stages of a pipeline only shape the first stage's output.
-			if (word.text === "|") inPipeline = true;
-			else if (word.text !== ")") inPipeline = false;
+			if (word.text === "|") {
+				endStage();
+				pipeline = { first: pipeline?.first ?? segments.length - 1, stage: [] };
+			} else if (word.text !== ")") {
+				endStage();
+				pipeline = undefined;
+			}
 			segments.push([]);
 			continue;
 		}
-		if (inPipeline) continue;
-		segments.at(-1)!.push(word);
+		if (pipeline) pipeline.stage.push(word);
+		else segments.at(-1)!.push(word);
 	}
+	endStage();
 	return segments.filter((segment) => segment.length > 0);
 }
 
@@ -884,6 +943,11 @@ function looksLikeFile(value: string): boolean {
 	);
 }
 
+/** `greet.js`, `notes.md`: a name with an extension, which a folder rarely has. */
+function hasExtension(path: string): boolean {
+	return /[^./]\.[A-Za-z0-9][\w-]*$/.test(fileBasename(path));
+}
+
 function looksLikeScriptFile(value: string): boolean {
 	return /\.[cm]?[jt]sx?$/.test(value) || value.includes("/");
 }
@@ -914,7 +978,8 @@ function repoName(url: string): string {
 	return fileBasename(url.replace(/\.git$/, ""));
 }
 
-function binaryName(value: string): string {
+/** The program's own name, so `/bin/sed` and `sed` read alike. */
+export function binaryName(value: string): string {
 	const slash = value.lastIndexOf("/");
 	return slash >= 0 ? value.slice(slash + 1) : value;
 }
@@ -945,6 +1010,13 @@ const READER_VALUE_FLAGS: Partial<Record<string, ReadonlySet<string>>> = {
 	tail: HEAD_TAIL_VALUE_FLAGS,
 	bat: new Set(["-r"]),
 };
+/**
+ * What grouping counts as exploring, from the same lists the rows are named by:
+ * programs that read files, and those that search for or list them. `glob` is how
+ * some agents report a file search.
+ */
+export const READ_PROGRAMS: ReadonlySet<string> = new Set([...READERS, "sed"]);
+export const SEARCH_PROGRAMS: ReadonlySet<string> = new Set([...SEARCHERS, ...LISTERS, "find", "fd", "fdfind", "glob"]);
 const SED_VALUE_FLAGS = new Set(["-e", "-f", "--expression", "--file", "-l"]);
 const SEARCH_VALUE_FLAGS = new Set([
 	"-e", "--regexp", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-A", "-B", "-C",

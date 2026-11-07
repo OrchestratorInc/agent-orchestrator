@@ -109,6 +109,21 @@ describe("ActivityRun in a running turn", () => {
 	});
 });
 
+describe("ActivityRun command groups", () => {
+	function command(id: string, line: string): ConversationActivity {
+		return { ...tool(id, id, line), activityKind: "command", detail: { command: line } };
+	}
+
+	it("groups a command by the program its row names, past cd and env assignments", () => {
+		render(
+			<TooltipProvider>
+				<ActivityRun activities={[command("activity-1", "cd repo && rg TODO ."), command("activity-2", "FOO=1 cat a.ts")]} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("button", { name: /Explored 2 tool calls/i })).toBeInTheDocument();
+	});
+});
+
 describe("ActivityRun agent built-in tools", () => {
 	function acpTool(id: string, summary: string, providerToolName: string, toolKind: string, input: unknown): ConversationActivity {
 		return {

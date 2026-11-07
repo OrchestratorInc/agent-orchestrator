@@ -98,6 +98,8 @@ describe("describeCommandStep", () => {
 		expect(done("touch activity-demo/notes.md")).toBe("Created notes.md");
 		expect(done("mv activity-demo/hello.js activity-demo/greet.js")).toBe("Renamed hello.js → greet.js");
 		expect(done("mv notes.md archive/")).toBe("Moved notes.md → archive");
+		// Without the slash `archive` may be a folder: only a clear rename says Renamed.
+		expect(done("mv notes.md archive")).toBe("Moved notes.md → archive");
 		expect(done("cp a.txt b.txt")).toBe("Copied a.txt → b.txt");
 		expect(done("rm -rf activity-demo")).toBe("Deleted activity-demo");
 		expect(done("rm a.txt b.txt")).toBe("Deleted 2 items a.txt, b.txt");
@@ -108,8 +110,13 @@ describe("describeCommandStep", () => {
 		expect(done("cat > activity-demo/notes.md <<'EOF'\nline one\nline two\nEOF")).toBe("Wrote notes.md");
 		expect(done("cat <<EOF > notes.md\nhello\nEOF")).toBe("Wrote notes.md");
 		expect(done("echo hello >> log.txt")).toBe("Appended to log.txt");
-		expect(done("printf 'a\\n' | tee out.txt")).toBe("Ran printf");
 		expect(done("tee out.txt")).toBe("Wrote out.txt");
+		// `tee` writes the file wherever it sits in the pipeline.
+		expect(done("printf 'a\\n' | tee out.txt")).toBe("Wrote out.txt");
+		expect(done("echo hi | tee notes.md")).toBe("Wrote notes.md");
+		expect(done("cat <<EOF | tee notes.md\nhello\nEOF")).toBe("Wrote notes.md");
+		expect(done("echo 127.0.0.1 | sudo tee /etc/hosts")).toBe("Wrote hosts");
+		expect(done("echo hi | tee -a log.txt")).toBe("Appended to log.txt");
 		// Routing a stream is not writing a file.
 		expect(done("rg TODO 2>/dev/null")).toBe("Searched for TODO");
 		expect(done("ls missing 2>&1")).toBe("Listed missing");
@@ -135,6 +142,16 @@ describe("describeCommandStep", () => {
 		expect(done("npm run seed")).toBe("Ran seed");
 		expect(done("make test")).toBe("Ran tests");
 		expect(done("make release")).toBe("Ran make release");
+	});
+
+	it("skips deno's and tsx's subcommand before the script", () => {
+		expect(done("deno run -A main.ts")).toBe("Ran main.ts");
+		expect(done("deno main.ts")).toBe("Ran main.ts");
+		expect(done("deno test")).toBe("Ran tests");
+		expect(describeCommandStep("deno test").icon).toBe("test");
+		expect(done("deno task dev")).toBe("Started dev");
+		expect(done("deno eval 'console.log(1)'")).toBe("Ran deno eval");
+		expect(done("tsx watch src/index.ts")).toBe("Ran index.ts");
 	});
 
 	it("names network fetches and waits", () => {
