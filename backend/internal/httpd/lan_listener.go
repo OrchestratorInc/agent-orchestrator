@@ -237,15 +237,17 @@ func (m *LANManager) start(port int, host string) (int, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		if !isAddrInUse(err) {
+		if !canRetryOnEphemeralPort(err) {
 			m.mu.Unlock()
 			return 0, fmt.Errorf("bind authenticated listener %s: %w", addr, err)
 		}
-		if ln, err = net.Listen("tcp", fmt.Sprintf("%s:0", host)); err != nil {
+		fallback, ferr := net.Listen("tcp", fmt.Sprintf("%s:0", host))
+		if ferr != nil {
 			m.mu.Unlock()
-			return 0, fmt.Errorf("bind authenticated listener ephemeral on %s: %w", host, err)
+			return 0, fmt.Errorf("bind authenticated listener %s: %w; ephemeral fallback on %s: %w", addr, err, host, ferr)
 		}
-		m.log.Warn("LAN port in use; bound ephemeral", "wanted", port, "bound", ln.Addr())
+		m.log.Warn("LAN port unavailable; bound ephemeral", "wanted", port, "bound", fallback.Addr(), "err", err)
+		ln = fallback
 	}
 	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
