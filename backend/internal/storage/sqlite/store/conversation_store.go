@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -4286,10 +4287,7 @@ func (s *Store) loadConversationSnapshotRange(
 		return ConversationSnapshot{}, err
 	}
 
-	batchedDeliveries, err := s.conversationBatchedDeliveries(ctx, conversationID)
-	if err != nil {
-		return ConversationSnapshot{}, err
-	}
+	batchedDeliveries := s.conversationBatchedDeliveries(ctx, conversationID)
 
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -4459,10 +4457,7 @@ func (s *Store) LoadConversationSnapshot(
 		return ConversationSnapshot{}, fmt.Errorf("select activities: %w", err)
 	}
 
-	batchedDeliveries, err := s.conversationBatchedDeliveries(ctx, conversationID)
-	if err != nil {
-		return ConversationSnapshot{}, err
-	}
+	batchedDeliveries := s.conversationBatchedDeliveries(ctx, conversationID)
 
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
 	snapshot := ConversationSnapshot{
@@ -5489,18 +5484,21 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 
 // conversationBatchedDeliveries reads where each batched queued turn was
 // delivered. A steer records the queued turns it carried; any other batched turn
-// joined its target's input in a queue drain.
-func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) ([]domain.ConversationBatchedDelivery, error) {
+// joined its target's input in a queue drain. The links only place report
+// lines, so a failed read leaves them out rather than failing the snapshot.
+func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) []domain.ConversationBatchedDelivery {
 	turns, err := s.qr.ListConversationBatchedTurns(ctx, conversationID)
 	if err != nil {
-		return nil, fmt.Errorf("list batched turns: %w", err)
+		slog.Warn("list batched turns failed", "conversation", conversationID, "error", err)
+		return nil
 	}
 	if len(turns) == 0 {
-		return nil, nil
+		return nil
 	}
 	steers, err := s.qr.ListConversationBatchSteers(ctx, conversationID)
 	if err != nil {
-		return nil, fmt.Errorf("list batch steers: %w", err)
+		slog.Warn("list batch steers failed", "conversation", conversationID, "error", err)
+		return nil
 	}
 	steerFor := map[string]string{}
 	for _, steer := range steers {
@@ -5522,5 +5520,5 @@ func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationI
 			SteerActivityID:     steerFor[turn.ID],
 		})
 	}
-	return out, nil
+	return out
 }

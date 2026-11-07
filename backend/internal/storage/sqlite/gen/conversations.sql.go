@@ -1488,8 +1488,11 @@ const listConversationBatchSteers = `-- name: ListConversationBatchSteers :many
 SELECT id, detail_json
 FROM conversation_activities
 WHERE conversation_id = ?1
-  AND json_extract(detail_json, '$.event') = 'steer'
-  AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array'
+  AND kind = 'system'
+  AND CASE WHEN json_valid(detail_json)
+      THEN json_extract(detail_json, '$.event') = 'steer'
+       AND json_type(detail_json, '$.providerInputSourceTurnIds') = 'array'
+      ELSE 0 END
 `
 
 type ListConversationBatchSteersRow struct {
@@ -1497,7 +1500,9 @@ type ListConversationBatchSteersRow struct {
 	DetailJson string
 }
 
-// Steers that carried queued turns, with the detail naming those turns.
+// Steers that carried queued turns, with the detail naming those turns. A steer
+// is a system row; other rows may have no detail at all, so the JSON is only
+// read once json_valid says it parses (WHERE terms have no evaluation order).
 func (q *Queries) ListConversationBatchSteers(ctx context.Context, conversationID string) ([]ListConversationBatchSteersRow, error) {
 	rows, err := q.db.QueryContext(ctx, listConversationBatchSteers, conversationID)
 	if err != nil {
