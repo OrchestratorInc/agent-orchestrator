@@ -213,6 +213,22 @@ describe("ManualConnectSheet on iOS", () => {
 		}
 	});
 
+	// The footer's text view keeps the same modifiers between the hint and an
+	// error; only the style they carry changes, so nothing is added or removed.
+	it("draws the hint and an error with the same footer modifier, changing only its style", async () => {
+		render();
+		const footerStyles = () => {
+			let footer: ReactTestRenderer | undefined;
+			act(() => { footer = create(renderer!.root.findAllByType("Section" as never)[1].props.footer); });
+			const styles = (footer!.root.findByType("Text" as never).props.modifiers as Modifier[]).filter((modifier) => modifier.$type === "foregroundStyle");
+			act(() => footer!.unmount());
+			return styles.map((modifier) => modifier.args[0]);
+		};
+		expect(footerStyles()).toEqual([{ type: "hierarchical", style: "secondary" }]);
+		await type("manual-connect-port", "0");
+		expect(footerStyles()).toEqual(["red"]);
+	});
+
 	it("reveals the password in place and hides it again", () => {
 		render({ editingHost: paired });
 		const reveal = renderer!.root.findByProps({ label: "Show password" });

@@ -54,7 +54,9 @@ export function sectionModifiers(t: Theme): ModifierConfig[] {
  */
 export function FormFooter({ children, error = false }: { children?: string; error?: boolean }) {
 	const t = useTheme();
-	return <Text modifiers={error ? [foregroundStyle(t.red)] : undefined}>{children ?? ""}</Text>;
+	// Always styled, as a footer draws its text by default (secondary) or in red,
+	// so switching between a hint and an error changes only the style.
+	return <Text modifiers={[foregroundStyle(error ? t.red : { type: "hierarchical", style: "secondary" })]}>{children ?? ""}</Text>;
 }
 
 function inputModifiers(t: Theme, props: FormTextFieldProps, contentType?: Parameters<typeof textContentType>[0]): ModifierConfig[] {
