@@ -772,6 +772,12 @@ type SessionAgentAccount struct {
 	BoundAt   time.Time
 }
 
+type SessionArtifact struct {
+	SessionID    domain.SessionID
+	Path         string
+	RegisteredAt time.Time
+}
+
 type SessionArtifactVersion struct {
 	SessionID    domain.SessionID
 	Path         string

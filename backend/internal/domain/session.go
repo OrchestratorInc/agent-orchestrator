@@ -119,6 +119,9 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
+// MaxArtifactRegistrationPaths bounds how many paths one ao artifact add sends.
+const MaxArtifactRegistrationPaths = 100
+
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
 	Path      string              `json:"path"`
@@ -126,6 +129,9 @@ type SessionArtifactFile struct {
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	// Registered is set on a file the agent registered as a deliverable, or
+	// inside a bundle directory it registered.
+	Registered bool `json:"registered,omitempty"`
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.

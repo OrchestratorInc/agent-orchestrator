@@ -4,6 +4,7 @@
  * Artifacts inspector (frontend SessionArtifactsView) for the phone.
  */
 
+import { deliverableArtifacts, type ArtifactFacts } from "../../shared/artifacts/deliverables";
 import type { FileAnnotationTarget } from "../../shared/files/file-annotations";
 
 /** The daemon's classification of an artifact file. */
@@ -17,6 +18,8 @@ export type SessionArtifact = {
 	kind: ArtifactKind;
 	size: number;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
 };
 
 /** How the viewer draws a file. */
@@ -57,7 +60,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 	const out: SessionArtifact[] = [];
 	for (const item of raw) {
 		if (!item || typeof item !== "object") continue;
-		const { path, name, kind, size, updatedAt } = item as Record<string, unknown>;
+		const { path, name, kind, size, updatedAt, registered } = item as Record<string, unknown>;
 		if (typeof path !== "string" || !isSafeArtifactPath(path)) continue;
 		out.push({
 			path,
@@ -65,6 +68,7 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 			kind: kind === "html" || kind === "markdown" ? kind : "file",
 			size: typeof size === "number" && size >= 0 ? size : 0,
 			updatedAt: typeof updatedAt === "string" ? updatedAt : "",
+			...(registered === true ? { registered } : {}),
 		});
 	}
 	return out;
@@ -264,4 +268,17 @@ export function stableArtifactOrder<T extends { path: string }>(previous: readon
 	});
 	const known = new Set(previous);
 	return [...kept, ...artifacts.filter((artifact) => !known.has(artifact.path))];
+}
+
+/**
+ * The viewer's pages: the artifacts the list shows, so swiping cannot reach a
+ * file the list hides. A hidden file opened by a link is a page of its own.
+ */
+export function artifactViewerPages<T extends ArtifactFacts>(previous: readonly string[] | undefined, artifacts: readonly T[], openPath: string): T[] {
+	const listed: readonly T[] = deliverableArtifacts(artifacts);
+	if (!listed.some((artifact) => artifact.path === openPath)) {
+		const opened = artifacts.find((artifact) => artifact.path === openPath);
+		if (opened) return [opened];
+	}
+	return stableArtifactOrder(previous, listed);
 }

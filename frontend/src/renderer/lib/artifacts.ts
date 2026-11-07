@@ -1,11 +1,12 @@
 import {
-	sessionArtifacts,
+	sessionDeliverables,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
 	type ArtifactKind,
 	type WorkspaceSummary,
 	type WorkspaceSession,
 } from "../types/workspace";
+import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
 import { CloudCpError } from "./cloud-cp/errors";
 import { isArchivedSession } from "./standalone-archive";
 
@@ -23,6 +24,8 @@ export type ArtifactRow = {
 	cloud?: WorkspaceSession["cloud"];
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
+	/** Set on a row that stands for a bundle directory; `path` is a file inside it. */
+	bundle?: ArtifactBundle;
 };
 
 /**
@@ -68,7 +71,7 @@ export type ArtifactGroup = {
 };
 
 /**
- * Groups every artifact from live local and cloud worker sessions by project.
+ * Groups the listed artifacts of live local and cloud worker sessions by project.
  * Remote-host projects, archived sessions and projects without artifacts are
  * left out; rows sort newest first and groups by their newest row.
  */
@@ -80,7 +83,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 		const rows = workerSessions(workspace.sessions)
 			.filter((session) => !isArchivedSession(session))
 			.flatMap((session) =>
-				sessionArtifacts(session).map((artifact): ArtifactRow => ({
+				sessionDeliverables(session).map((artifact): ArtifactRow => ({
 					path: artifact.path,
 					name: artifact.name,
 					kind: artifact.kind,
@@ -92,6 +95,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					sessionTitle: session.title,
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
+					bundle: artifact.bundle,
 				})),
 			)
 			.sort(newestFirst);

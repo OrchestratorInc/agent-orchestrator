@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
-import type { CloudCpNotification } from "../lib/cloud-cp/types";
+import { CloudCpError } from "../lib/cloud-cp/errors";
+import type { CloudCpNotification, CloudCpNotificationEvent } from "../lib/cloud-cp/types";
+import { isLegacyCloudNeedsYou, publishLiveCloudNotificationEvent } from "../lib/cloud-notifications";
 import {
 	applyNotificationsCleared,
 	type NotificationDTO,
@@ -18,6 +20,7 @@ const {
 	clearOneMock,
 	cloudNotificationsMock,
 	connectMock,
+	decideChatApprovalMock,
 	fetchNextPageMock,
 	markAllMock,
 	navigateMock,
@@ -30,6 +33,7 @@ const {
 	clearOneMock: vi.fn(),
 	cloudNotificationsMock: vi.fn(),
 	connectMock: vi.fn(),
+	decideChatApprovalMock: vi.fn(),
 	fetchNextPageMock: vi.fn(),
 	markAllMock: vi.fn(),
 	navigateMock: vi.fn(),
@@ -125,16 +129,31 @@ const cloudNotifications: CloudCpNotification[] = [
 
 const cloudMarkAllReadMock = vi.fn();
 const cloudMarkReadMock = vi.fn();
+const cloudMarkUnreadMock = vi.fn();
+const cloudSetDoneMock = vi.fn();
+const cloudSnoozeMock = vi.fn();
+const cloudRefetchMock = vi.fn();
 const cloudClearAllMock = vi.fn();
 const cloudClearOneMock = vi.fn();
 
+/** What useCloudNotifications answers on a control plane from before team notifications. */
 function cloudNotificationsResult(items: CloudCpNotification[]) {
+	const needsYou = items.filter(isLegacyCloudNeedsYou);
 	return {
-		data: { items, unreadCount: items.filter((item) => item.status === "unread").length },
-		items,
+		mode: "legacy" as const,
+		needsYou,
+		updates: items.filter((item) => !isLegacyCloudNeedsYou(item)),
+		all: items,
+		needsYouCount: needsYou.length,
+		unreadCount: items.filter((item) => item.status === "unread").length,
 		isLoading: false,
-		markAllRead: cloudMarkAllReadMock,
+		isError: false,
+		refetch: cloudRefetchMock,
 		markRead: cloudMarkReadMock,
+		markUnread: cloudMarkUnreadMock,
+		setDone: cloudSetDoneMock,
+		snooze: cloudSnoozeMock,
+		markAllRead: cloudMarkAllReadMock,
 		clearAll: cloudClearAllMock,
 		clearOne: cloudClearOneMock,
 	};
@@ -152,7 +171,11 @@ vi.mock("../hooks/useNotificationsQuery", () => ({
 }));
 
 vi.mock("../hooks/useCloudNotifications", () => ({
-	useCloudNotifications: (status: "all" | "unread" | "read") => cloudNotificationsMock(status),
+	useCloudNotifications: () => cloudNotificationsMock(),
+}));
+
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { decideChatApproval: decideChatApprovalMock }, ready: true, baseUrl: "https://cloud.test", userId: "user-1" }),
 }));
 
 vi.mock("../hooks/useRestoreSession", () => ({
@@ -193,10 +216,12 @@ function swipeRight(element: HTMLElement) {
 	for (const deltaX of [-20, -40, -60]) element.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaMode: WheelEvent.DOM_DELTA_PIXEL }));
 }
 
-async function clickOpen() {
+/** Opens the bell on the All tab, where every row shows whatever it blocks. */
+async function clickOpen(tab: "Needs you" | "Updates" | "All" | null = "All") {
 	const trigger = screen.getByRole("button", { name: /unread notifications/ });
 	await userEvent.click(trigger);
-	await screen.findByRole("dialog", { name: "Notifications" });
+	const panel = await screen.findByRole("dialog", { name: "Notifications" });
+	if (tab) await userEvent.click(within(panel).getByRole("tab", { name: new RegExp(`^${tab}`) }));
 	return trigger;
 }
 
@@ -244,6 +269,11 @@ beforeEach(() => {
 	clearOneMock.mockReset().mockResolvedValue(allNotifications[0]);
 	cloudMarkAllReadMock.mockReset().mockResolvedValue(undefined);
 	cloudMarkReadMock.mockReset().mockResolvedValue(undefined);
+	cloudMarkUnreadMock.mockReset().mockResolvedValue(undefined);
+	cloudSetDoneMock.mockReset().mockResolvedValue(undefined);
+	cloudSnoozeMock.mockReset().mockResolvedValue(undefined);
+	cloudRefetchMock.mockReset().mockResolvedValue(undefined);
+	decideChatApprovalMock.mockReset().mockResolvedValue({ ok: true });
 	cloudClearAllMock.mockReset().mockResolvedValue(undefined);
 	cloudClearOneMock.mockReset().mockResolvedValue(undefined);
 	cloudNotificationsMock.mockReset().mockReturnValue(emptyCloudResult);
@@ -334,7 +364,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 
 		expect(workspaceQueryMock).not.toHaveBeenCalled();
-		await clickOpen();
+		await clickOpen(null);
 		expect(workspaceQueryMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -376,14 +406,14 @@ describe("NotificationCenter", () => {
 		await waitFor(() => expect(trigger).toHaveFocus());
 	});
 
-	it("shows one paginated list of all notifications without Unread/All tabs", async () => {
+	it("lists every notification under All, beside Needs you and Updates, with no unread or unresolved tabs", async () => {
 		renderNotificationCenter();
 		await clickOpen();
 
 		const panel = within(screen.getByRole("dialog", { name: "Notifications" }));
 		expect(panel.getByRole("list")).toHaveClass("board-scrollbar", "overflow-y-auto");
+		expect(panel.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Needs you3", "Updates", "All"]);
 		expect(panel.queryByRole("tab", { name: "Unread" })).not.toBeInTheDocument();
-		expect(panel.queryByRole("tab", { name: "All" })).not.toBeInTheDocument();
 		expect(panel.queryByText("Unseen")).not.toBeInTheDocument();
 		expect(panel.queryByText("Unresolved")).not.toBeInTheDocument();
 
@@ -689,8 +719,11 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
 
-		expect(await screen.findByText("No notifications yet.")).toBeInTheDocument();
+		// Nothing blocks the person, so the bell opens on Updates.
+		expect(await screen.findByText("No updates yet.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Clear all" })).toBeDisabled();
+		await userEvent.click(screen.getByRole("tab", { name: "All" }));
+		expect(screen.getByText("No notifications yet.")).toBeInTheDocument();
 	});
 
 	it("surfaces a failed refresh over an unrelated cached empty page", async () => {
@@ -718,6 +751,7 @@ describe("NotificationCenter", () => {
 		});
 		renderNotificationCenter(queryClient);
 		await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+		await userEvent.click(await screen.findByRole("tab", { name: "All" }));
 
 		expect(await screen.findByText("No notifications yet.")).toBeInTheDocument();
 		expect(screen.queryByText("Could not load notifications.")).not.toBeInTheDocument();
@@ -1153,5 +1187,308 @@ describe("NotificationCenter cloud rows", () => {
 		expect(screen.getByText("acme/cloud#8 is ready to merge.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("NotificationCenter on a control plane with team notifications", () => {
+	const approval: CloudCpNotification = {
+		id: "cn-approve", source: "cloud", orgId: "org-2", projectId: "cproj-1", sessionId: "csess-1",
+		type: "approval_needed", tier: 0, title: "Cloud checkout needs approval", body: "pnpm prisma migrate dev",
+		status: "unread", reason: "owner", actor: { userId: "u2", name: "Ben Ortiz" },
+		metadata: {
+			requestId: "req-1",
+			decisions: [
+				{ id: "always", label: "Always", kind: "allow_always" },
+				{ id: "allow", label: "Allow", kind: "allow_once" },
+				{ id: "reject", label: "Reject", kind: "reject_once" },
+			],
+		},
+		createdAt: "2026-07-21T11:00:00Z", updatedAt: "2026-07-21T11:00:00Z",
+	};
+	const handled: CloudCpNotification = {
+		id: "cn-handled", source: "cloud", orgId: "org-2", projectId: "cproj-1", sessionId: "csess-1",
+		type: "approval_needed", tier: 0, title: "Cloud checkout needed approval", body: "pnpm test", status: "read",
+		resolvedAt: "2026-07-21T10:05:00Z", resolution: "handled", resolvedBy: { userId: "u2", name: "Ben Ortiz" },
+		createdAt: "2026-07-21T10:00:00Z", updatedAt: "2026-07-21T10:05:00Z",
+	};
+	const cleared: CloudCpNotification = { ...handled, id: "cn-cleared", title: "Old approval", resolution: "cleared", resolvedBy: undefined, createdAt: "2026-07-21T09:00:00Z" };
+	const merged: CloudCpNotification = {
+		id: "cn-merged", source: "cloud", orgId: "org-2", projectId: "cproj-1", sessionId: "csess-1",
+		type: "pr_merged", tier: 2, title: "PR #12 merged", body: "Ben merged it.", status: "unread", reason: "following",
+		createdAt: "2026-07-21T12:00:00Z", updatedAt: "2026-07-21T12:00:00Z",
+	};
+
+	function inboxResult(needsYou: CloudCpNotification[], updates: CloudCpNotification[], needsYouCount = needsYou.length) {
+		const all = [...needsYou, ...updates].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+		return {
+			...cloudNotificationsResult(all),
+			mode: "inbox" as const,
+			needsYou,
+			updates,
+			all,
+			needsYouCount,
+		};
+	}
+
+	const emptyLocal = (status: NotificationListStatus) => ({
+		...notificationQueryResult(status),
+		data: { pageParams: [""], pages: [{ notifications: [], unreadCount: 0, unresolvedCount: 0 }] },
+	});
+
+	beforeEach(() => {
+		notificationQueryMock.mockImplementation(emptyLocal);
+		cloudNotificationsMock.mockReturnValue(inboxResult([approval], [merged, handled, cleared], 2));
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "cproj-1", name: "acme/cloud", kind: "cloud", sessions: [{ id: "csess-1", isTerminated: false, status: "working", title: "Cloud checkout" }] }],
+			isError: false, isPending: false, isSuccess: true, refetch: vi.fn(),
+		});
+	});
+
+	async function openBell() {
+		await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+		return within(await screen.findByRole("dialog", { name: "Notifications" }));
+	}
+
+	it("badges the bell with what blocks the person, not every unread row", () => {
+		renderNotificationCenter();
+		expect(screen.getByRole("button", { name: "2 unread notifications" })).toBeInTheDocument();
+	});
+
+	it("opens on Needs you with the server's count and moves resolved rows to Updates", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveAttribute("aria-selected", "true");
+		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveTextContent("Needs you2");
+		expect(panel.getAllByRole("listitem").map((row) => row.textContent)).toEqual([expect.stringContaining("Cloud checkout needs approval")]);
+
+		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
+		expect(panel.getByText("Handled by Ben Ortiz")).toBeInTheDocument();
+		expect(panel.getByText("No longer needed")).toBeInTheDocument();
+		expect(panel.queryByText("Cloud checkout needs approval")).not.toBeInTheDocument();
+
+		await userEvent.click(panel.getByRole("tab", { name: "All" }));
+		expect(panel.getAllByRole("listitem")).toHaveLength(4);
+	});
+
+	it("opens on Updates when nothing blocks the person", async () => {
+		cloudNotificationsMock.mockReturnValue(inboxResult([], [merged]));
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		expect(panel.getByRole("tab", { name: /^Updates/ })).toHaveAttribute("aria-selected", "true");
+		expect(panel.getByText("PR #12 merged")).toBeInTheDocument();
+	});
+
+	it("reads nothing when the bell opens; Mark all read does", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		await waitFor(() => expect(panel.getAllByRole("listitem")).toHaveLength(1));
+		expect(cloudMarkReadMock).not.toHaveBeenCalled();
+		expect(cloudMarkAllReadMock).not.toHaveBeenCalled();
+
+		await userEvent.click(panel.getByRole("button", { name: "Mark all read" }));
+		expect(cloudMarkAllReadMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("says why the person got a row and who caused it", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+		const row = panel.getByText("Cloud checkout needs approval").closest<HTMLElement>("[role=listitem]")!;
+		expect(within(row).getByText("Owner")).toBeInTheDocument();
+		expect(within(row).getByText("Ben Ortiz")).toBeInTheDocument();
+	});
+
+	it("reads a row when it is clicked, and opens its session", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
+
+		await userEvent.click(panel.getByText("Ben merged it."));
+
+		expect(cloudMarkReadMock).toHaveBeenCalledWith(["cn-merged"]);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "cproj-1", sessionId: "csess-1" } });
+	});
+
+	it("marks a row done, snoozes it, and marks it unread on the server", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
+		const mergedRow = panel.getByText("PR #12 merged").closest<HTMLElement>("[role=listitem]")!;
+		const handledRow = panel.getByText("Cloud checkout needed approval").closest<HTMLElement>("[role=listitem]")!;
+
+		await userEvent.click(within(mergedRow).getByRole("button", { name: "Done" }));
+		expect(cloudClearOneMock).toHaveBeenCalledWith(merged);
+		expect(navigateMock).not.toHaveBeenCalled();
+
+		await userEvent.click(within(mergedRow).getByRole("button", { name: "Mark read" }));
+		expect(cloudMarkReadMock).toHaveBeenCalledWith(["cn-merged"]);
+		await userEvent.click(within(handledRow).getByRole("button", { name: "Mark unread" }));
+		expect(cloudMarkUnreadMock).toHaveBeenCalledWith(["cn-handled"]);
+
+		const before = Date.now();
+		await userEvent.click(within(mergedRow).getByRole("button", { name: "Snooze" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "For 1 hour" }));
+		expect(cloudSnoozeMock).toHaveBeenCalledWith(["cn-merged"], expect.any(Date));
+		const until = (cloudSnoozeMock.mock.calls[0]?.[1] as Date).getTime();
+		expect(until - before).toBeGreaterThanOrEqual(60 * 60 * 1000 - 1000);
+		expect(until - before).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("answers an approval in place with the chat's choices", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+		const row = panel.getByText("Cloud checkout needs approval").closest<HTMLElement>("[role=listitem]")!;
+
+		// The row itself is a button that opens the session; these are the actions in it.
+		const actions = within(row).getAllByRole("button").filter((button) => !button.hasAttribute("role"));
+		expect(actions.map((button) => button.textContent).filter((text) => text)).toEqual([
+			"Deny", "Allow once", "Always allow this command", "Open",
+		]);
+		await userEvent.click(within(row).getByRole("button", { name: "Allow once" }));
+
+		expect(decideChatApprovalMock).toHaveBeenCalledWith("org-2", "csess-1", "req-1", "allow");
+		await waitFor(() => expect(cloudRefetchMock).toHaveBeenCalled());
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps an approval it may not answer and says who can", async () => {
+		decideChatApprovalMock.mockRejectedValue(new CloudCpError("Forbidden", { status: 403, code: "forbidden" }));
+		renderNotificationCenter();
+		const panel = await openBell();
+		const row = panel.getByText("Cloud checkout needs approval").closest<HTMLElement>("[role=listitem]")!;
+
+		await userEvent.click(within(row).getByRole("button", { name: "Deny" }));
+
+		expect(await within(row).findByText("Only the person driving or the owner can answer this")).toBeInTheDocument();
+		expect(panel.getByText("Cloud checkout needs approval")).toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Allow once" })).toBeEnabled();
+	});
+
+	it("clears every loaded cloud row on the server with Clear all", async () => {
+		renderNotificationCenter();
+		const panel = await openBell();
+		await userEvent.click(panel.getByRole("button", { name: "Clear all" }));
+		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("puts local questions in Needs you beside the cloud's", async () => {
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
+			status === "unread" ? stableUnreadQuery : status === "all" ? stableAllQuery : notificationQueryResult(status));
+		renderNotificationCenter();
+		const panel = await openBell();
+
+		// Three unanswered local questions and the cloud's two blocking rows.
+		expect(panel.getByRole("tab", { name: /^Needs you/ })).toHaveTextContent("Needs you5");
+		expect(panel.getByText("Checkout flow needs input")).toBeInTheDocument();
+		const readyBody = "PR from session Checkout flow is ready to merge. CI passed with no blocking review feedback.";
+		expect(panel.queryByText(readyBody)).not.toBeInTheDocument();
+		await userEvent.click(panel.getByRole("tab", { name: /^Updates/ }));
+		expect(panel.getByText(readyBody)).toBeInTheDocument();
+	});
+});
+
+describe("NotificationRuntime desktop notifications for cloud", () => {
+	const row = (overrides: Partial<CloudCpNotification> = {}): CloudCpNotification => ({
+		id: "cn-1", source: "cloud", orgId: "org-2", projectId: "cproj-1", sessionId: "csess-1", type: "approval_needed",
+		title: "Cloud checkout needs approval", body: "pnpm test", status: "unread", tier: 0, desktop: true, eventId: "approval:req-1",
+		createdAt: "2026-07-21T11:00:00Z", updatedAt: "2026-07-21T11:00:00Z", ...overrides,
+	});
+	const event = (notification: CloudCpNotification, kind: CloudCpNotificationEvent["kind"] = "notification_created"): CloudCpNotificationEvent => ({
+		sequence: 1, orgId: notification.orgId, recipientUserId: "u1", kind, notification, createdAt: notification.updatedAt,
+	});
+
+	function renderRuntime() {
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<NotificationRuntime />
+			</QueryClientProvider>,
+		);
+	}
+
+	let show: ReturnType<typeof vi.fn<typeof aoBridge.notifications.show>>;
+	beforeEach(() => {
+		show = vi.fn<typeof aoBridge.notifications.show>().mockResolvedValue(undefined);
+		vi.spyOn(aoBridge.notifications, "show").mockImplementation(show);
+		vi.spyOn(document, "hasFocus").mockReturnValue(false);
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("shows a live blocking row through the desktop path, one per session", () => {
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(row())));
+		expect(show).toHaveBeenCalledWith({
+			id: "cloud-notification:cn-1",
+			title: "Cloud checkout needs approval",
+			body: "pnpm test",
+			type: "approval_needed",
+			watched: false,
+			tag: "cloud-session:csess-1",
+		});
+	});
+
+	it("skips rows the person doesn't want on the desktop, or that no longer wait on them", () => {
+		renderRuntime();
+		act(() => {
+			publishLiveCloudNotificationEvent(event(row({ id: "a", desktop: false })));
+			publishLiveCloudNotificationEvent(event(row({ id: "b", desktop: undefined })));
+			publishLiveCloudNotificationEvent(event(row({ id: "c", status: "read" })));
+			publishLiveCloudNotificationEvent(event(row({ id: "d", resolvedAt: "2026-07-21T11:05:00Z" })));
+			publishLiveCloudNotificationEvent(event(row({ id: "e", doneAt: "2026-07-21T11:05:00Z" })));
+			publishLiveCloudNotificationEvent(event(row({ id: "f", snoozedUntil: "2999-01-01T00:00:00Z" })));
+			publishLiveCloudNotificationEvent(event(row({ id: "g" }), "notification_resolved"));
+		});
+		expect(show).not.toHaveBeenCalled();
+	});
+
+	it("notifies once per thing that raised a row, however often it changes", () => {
+		renderRuntime();
+		act(() => {
+			publishLiveCloudNotificationEvent(event(row()));
+			// Marked unread on another device: same source event.
+			publishLiveCloudNotificationEvent(event(row({ updatedAt: "2026-07-21T11:10:00Z" }), "notification_updated"));
+		});
+		expect(show).toHaveBeenCalledTimes(1);
+		// The approval moved on to the next request.
+		act(() => publishLiveCloudNotificationEvent(event(row({ eventId: "approval:req-2" }), "notification_updated")));
+		expect(show).toHaveBeenCalledTimes(2);
+		expect(show.mock.calls.map(([payload]) => payload.tag)).toEqual(["cloud-session:csess-1", "cloud-session:csess-1"]);
+	});
+
+	it("marks the notification watched while that session is on screen in a focused window", () => {
+		paramsMock.mockReturnValue({ sessionId: "csess-1" });
+		vi.mocked(document.hasFocus).mockReturnValue(true);
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(row())));
+		expect(show).toHaveBeenCalledWith(expect.objectContaining({ watched: true }));
+	});
+
+	it("opens the cloud session when its desktop notification is clicked", () => {
+		let click: (id: string) => void = () => undefined;
+		vi.spyOn(aoBridge.notifications, "onClick").mockImplementation((listener) => {
+			click = listener;
+			return () => undefined;
+		});
+		renderRuntime();
+		act(() => publishLiveCloudNotificationEvent(event(row())));
+		act(() => click("cloud-notification:cn-1"));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "cproj-1", sessionId: "csess-1" } });
+	});
+
+	it("adds the cloud's blocking count to the dock badge only on a control plane with team notifications", () => {
+		const setBadge = vi.spyOn(aoBridge.notifications, "setBadge").mockResolvedValue(undefined);
+		cloudNotificationsMock.mockReturnValue({ ...cloudNotificationsResult([]), mode: "inbox", needsYouCount: 4 });
+		renderRuntime();
+		// Two unread local rows plus four blocking cloud rows.
+		expect(setBadge).toHaveBeenLastCalledWith(6);
+
+		setBadge.mockClear();
+		cloudNotificationsMock.mockReturnValue({ ...cloudNotificationsResult([cloudNotifications[0]]), mode: "legacy" });
+		renderRuntime();
+		expect(setBadge).toHaveBeenLastCalledWith(2);
 	});
 });

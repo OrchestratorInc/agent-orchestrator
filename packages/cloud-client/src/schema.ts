@@ -2139,6 +2139,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/artifacts/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Registers the committed files at paths in the worker's own session as
+         *     its deliverables, including the files inside a bundle directory, which
+         *     is what ao artifact add calls, and returns every file the session has
+         *     registered. A path with no committed file registers nothing and is
+         *     absent from the result, so the caller asks again once the worker's sync
+         *     has committed it. Registering a file again changes nothing; a newly
+         *     registered file appends an artifact.changed event and moves its
+         *     updatedAt. Requires `worker:connect`.
+         *      */
+        post: operations["registerWorkerArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/children": {
         parameters: {
             query?: never;
@@ -2389,6 +2414,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description Lists the caller's notifications, newest first. With view or state, the list is narrowed to an inbox tab (needs_you is tier 0 and unresolved; updates is everything else) and a triage state (active when neither set is omitted: not done and not snoozed). With neither, every notification is listed, as before team notifications. */
         get: operations["listCloudNotifications"];
         put?: never;
         post?: never;
@@ -2441,6 +2467,110 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["markAllCloudNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's notifications from every organization, a guest's in other workspaces included, newest first. Takes the same filters as an organization's list. */
+        get: operations["listMyCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's notification events from every organization, as JSON or, with Accept text/event-stream, as a replay and live stream. */
+        get: operations["listMyCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notifications/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Applies one triage action to some of the caller's own notifications, in any organization. Ids that aren't the caller's change nothing. Marking done clears a snooze; snoozing clears done. */
+        post: operations["changeCloudNotificationState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's choice for every notification kind, with defaults for kinds never changed. Preferences are the person's, the same in every organization. */
+        get: operations["getNotificationPreferences"];
+        /** @description Stores the caller's choices for the listed kinds. A locked kind keeps its in-app notification on. */
+        put: operations["setNotificationPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/follow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description How the caller follows the session. An empty level means they don't follow it. */
+        get: operations["getSessionFollow"];
+        /** @description Sets the caller's own follow level. A level set this way is never changed by later activity. */
+        put: operations["setSessionFollow"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/followers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Who is notified about the session, the creator included, limited to people who can still open it. */
+        get: operations["listSessionFollowers"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2635,6 +2765,67 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+            /** @description 0 blocks the recipient (counts in Needs you), 1 needs attention, 2 is an update. Absent from control planes before team notifications. */
+            tier?: number;
+            /** @description Why the recipient got it, such as owner, prompted, following, mentioned or requester. */
+            reason?: string;
+            actor?: components["schemas"]["NotificationPerson"];
+            /** @description Whether the recipient wants this notification on the desktop. */
+            desktop?: boolean;
+            /** Format: date-time */
+            doneAt?: string;
+            /** Format: date-time */
+            snoozedUntil?: string;
+            /** @description Why it stopped being active, such as handled or cleared. */
+            resolution?: string;
+            resolvedBy?: components["schemas"]["NotificationPerson"];
+        };
+        NotificationPerson: {
+            userId: string;
+            name: string;
+        };
+        NotificationStateChange: {
+            ids: string[];
+            read?: boolean;
+            done?: boolean;
+            /** @description An RFC 3339 time in the future to snooze until, or an empty string to clear a snooze. */
+            snoozedUntil?: string;
+        };
+        /** @enum {string} */
+        FollowLevel: "needs_you" | "participating" | "all" | "muted";
+        SessionFollower: {
+            userId: string;
+            name?: string;
+            /**
+             * @description Empty when the person doesn't follow the session.
+             * @enum {string}
+             */
+            level: "" | "needs_you" | "participating" | "all" | "muted";
+            reasons: ("creator" | "prompted" | "asided" | "mentioned" | "handoff" | "reviewer" | "manual")[];
+            manual: boolean;
+        };
+        NotificationPreferenceInput: {
+            kind: string;
+            inApp: boolean;
+            desktop: boolean;
+            /**
+             * @default following
+             * @enum {string}
+             */
+            scope: "following" | "mine";
+        };
+        NotificationPreference: {
+            kind: string;
+            inApp: boolean;
+            desktop: boolean;
+            /** @enum {string} */
+            scope: "following" | "mine";
+            /** @description The kind blocks someone, so its in-app notification can't be turned off. */
+            locked: boolean;
+            tier: number;
+        };
+        NotificationPreferenceList: {
+            items: components["schemas"]["NotificationPreference"][];
         };
         CloudNotificationEvent: {
             /** Format: int64 */
@@ -2659,6 +2850,8 @@ export interface components {
             unreadCount: number;
             /** Format: int64 */
             latestSequence: number;
+            /** @description Tier 0 notifications still active (not resolved, done or snoozed). Absent from control planes before team notifications. */
+            needsYouCount?: number;
         };
         NotificationEventPage: {
             items: components["schemas"]["CloudNotificationEvent"][];
@@ -4153,9 +4346,11 @@ export interface components {
             sha256: string;
             /**
              * Format: date-time
-             * @description When the control plane last committed a new version of the file.
+             * @description When the control plane last committed a new version of the file, or registered it as a deliverable.
              */
             updatedAt: string;
+            /** @description Set on a file the session's agent registered as a deliverable with ao artifact add, or inside a bundle directory it registered. Absent otherwise. A client lists only registered files as the session's artifacts, or the files at the root of its artifact directory when none is registered. */
+            registered?: boolean;
         };
         SessionArtifactResult: {
             artifact: components["schemas"]["SessionArtifact"];
@@ -4388,6 +4583,13 @@ export interface components {
             files?: components["schemas"]["WorkerArtifactCommitFile"][];
             /** @description Paths this worker previously synced and has since removed. */
             deleted?: string[];
+        };
+        WorkerArtifactRegistrationInput: {
+            paths: string[];
+        };
+        WorkerArtifactRegistrationResult: {
+            /** @description Every file the session has registered. */
+            registered: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
@@ -8769,6 +8971,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    registerWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactRegistrationInput"];
+            };
+        };
+        responses: {
+            /** @description The committed files at the paths are registered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactRegistrationResult"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
     listWorkerChildren: {
         parameters: {
             query?: {
@@ -9180,6 +9409,8 @@ export interface operations {
         parameters: {
             query?: {
                 status?: "all" | "unread" | "read";
+                view?: "needs_you" | "updates" | "all";
+                state?: "active" | "snoozed" | "done";
                 cursor?: string;
                 limit?: number;
             };
@@ -9275,6 +9506,212 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMyCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                view?: "needs_you" | "updates" | "all";
+                state?: "active" | "snoozed" | "done";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's notifications across organizations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMyCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    changeCloudNotificationState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationStateChange"];
+            };
+        };
+        responses: {
+            /** @description How many notifications changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        updated: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preferences, one per kind, in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferenceList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setNotificationPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    items: components["schemas"]["NotificationPreferenceInput"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Every preference after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferenceList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionFollow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's follow state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFollower"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setSessionFollow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    level: components["schemas"]["FollowLevel"];
+                };
+            };
+        };
+        responses: {
+            /** @description The caller's follow state after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionFollower"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionFollowers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's followers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["SessionFollower"][];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };

@@ -145,6 +145,8 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
+import { CloudSessionNotificationReader } from "./CloudSessionNotificationReader";
+import { SessionFollowMenu } from "./SessionFollowMenu";
 import { SessionPeopleControl } from "./SessionPeople";
 import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
@@ -2057,6 +2059,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			{isOrchestrator && session?.cloud && routedWorkspace ? (
 				<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
 			) : null}
+			{/* How this person hears about the session, and who else does. */}
+			{session?.cloud && !hostId ? <SessionFollowMenu key={session.id} orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
@@ -2488,6 +2492,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			{/* Opening a cloud session reads the notifications it raised for this person. */}
+			{session?.cloud && !hostId ? <CloudSessionNotificationReader sessionId={session.id} /> : null}
 			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
