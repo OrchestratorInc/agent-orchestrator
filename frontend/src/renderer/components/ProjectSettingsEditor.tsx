@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAttributionToggles, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -32,6 +32,10 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Local-only, Orchestrator attribution beta: add the Co-authored-by trailer to commits. */
+	attributionCommitTrailer?: boolean;
+	/** Local-only, Orchestrator attribution beta: end PR bodies with the Orchestrator line. */
+	attributionPRFooter?: boolean;
 	intakeEnabled: boolean;
 	intakeRepo: string;
 	intakeAssignee: string;
@@ -54,6 +58,8 @@ type Capabilities = {
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	/** Shown while the Orchestrator attribution beta is on (Settings, Advanced). */
+	attribution?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
 	/** Cloud defaults and tuning belong to its runtime, rather than the local catalog. */
@@ -188,6 +194,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
 					</ProjectSettingsSection>
+					{capabilities.attribution && <ProjectSettingsSection title={t("settings.project.attribution")} grouped>
+						<ProjectAttributionToggles commitTrailer={draft.attributionCommitTrailer ?? true} prFooter={draft.attributionPRFooter ?? true} onChange={patch} />
+					</ProjectSettingsSection>}
 				</>}
 				{generalExtra}
 			</> : <>

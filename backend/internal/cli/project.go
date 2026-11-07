@@ -106,6 +106,11 @@ type containerReapConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+type attributionConfig struct {
+	DisableCommitTrailer bool `json:"disableCommitTrailer,omitempty"`
+	DisablePRFooter      bool `json:"disablePRFooter,omitempty"`
+}
+
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json. Every domain key must be modeled here, or set-config drops it
@@ -132,6 +137,8 @@ type projectConfig struct {
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
 	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	// Attribution must round-trip too, so a CLI edit keeps a project's opt-out.
+	Attribution *attributionConfig `json:"attribution,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

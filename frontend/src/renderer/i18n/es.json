@@ -4128,5 +4128,13 @@
 	"teams.accessVia": "{{access}} · a través de {{team}}",
 	"teams.sharedToastViaTeam": "{{name}} compartió {{thing}} con {{team}}",
 	"teams.sharedToastWithYou": "{{name}} compartió {{thing}} contigo",
-	"teams.open": "Abrir"
+	"teams.open": "Abrir",
+	"settings.commitAttribution": "Atribución de Orchestrator (beta)",
+	"settings.commitAttributionHint": "Las sesiones nuevas añaden una línea de coautor de Orchestrator a sus commits y la línea \"Opened with Orchestrator\" a sus PR. Cada proyecto puede desactivar cualquiera de las dos.",
+	"settings.commitAttributionSaveFailed": "No se pudo guardar. Inténtalo de nuevo.",
+	"settings.project.attribution": "Atribución de Orchestrator",
+	"settings.project.attributionCommitTrailer": "Mencionar a Orchestrator en los commits",
+	"settings.project.attributionCommitTrailerDescription": "Añade la línea Co-authored-by: Orchestrator a los commits de las sesiones nuevas. Tú sigues siendo el autor y se conservan los demás coautores.",
+	"settings.project.attributionPRFooter": "Firmar las PR",
+	"settings.project.attributionPRFooterDescription": "Los agentes de las sesiones nuevas terminan cada descripción de PR con \"Opened with Orchestrator\"."
 }

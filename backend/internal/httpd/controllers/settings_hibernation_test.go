@@ -138,3 +138,32 @@ func TestSettingsSessionRetentionRequiresDays(t *testing.T) {
 		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
 	}
 }
+
+type commitAttributionSettingsService struct {
+	hibernationSettingsService
+	commitAttribution bool
+}
+
+func (s *commitAttributionSettingsService) SetCommitAttribution(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.commitAttribution = enabled
+	s.calls++
+	return settingssvc.Snapshot{CommitAttribution: enabled}, nil
+}
+
+func TestSettingsCommitAttributionRequiresBoolean(t *testing.T) {
+	svc := &commitAttributionSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		w := httptest.NewRecorder()
+		c.setCommitAttribution(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/commit-attribution", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setCommitAttribution(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/commit-attribution", strings.NewReader(`{"enabled":true}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || !got.CommitAttribution || !svc.commitAttribution {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}

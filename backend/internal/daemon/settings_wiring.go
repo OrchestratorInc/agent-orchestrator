@@ -27,6 +27,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		HarnessDefaults:      row.HarnessDefaults,
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
+		CommitAttribution:    row.CommitAttribution,
 		SessionRetentionDays: row.SessionRetentionDays,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
@@ -46,6 +47,10 @@ func (s settingsStore) SetVersionRefresh(ctx context.Context, enabled bool, now 
 
 func (s settingsStore) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetComputerUse(ctx, enabled, now)
+}
+
+func (s settingsStore) SetCommitAttribution(ctx context.Context, enabled bool, now time.Time) error {
+	return s.store.SetCommitAttribution(ctx, enabled, now)
 }
 
 func (s settingsStore) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {
