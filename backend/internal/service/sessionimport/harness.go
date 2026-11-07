@@ -38,7 +38,9 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCline:  {root: clineRoot, discover: discoverCline, read: readClineTranscript},
 	domain.HarnessCursor: {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
 	domain.HarnessGrok:   {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
+	// OpenCode 2 shares OpenCode 1's data folder and upgrades its database in place.
+	domain.HarnessOpenCodeV2: {root: openCodeRoot, discover: discoverOpenCodeV2, read: readOpenCodeV2Transcript},
+	domain.HarnessGemini:     {root: geminiRoot, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
 }
 
 func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {

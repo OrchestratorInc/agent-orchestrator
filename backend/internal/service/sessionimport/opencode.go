@@ -65,6 +65,11 @@ func discoverOpenCode(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
+	// After an OpenCode 2 upgrade these tables are frozen; the store's chats are
+	// OpenCode 2 chats (discoverOpenCodeV2), never imported from stale history.
+	if v2, err := opencode.HasV2Store(ctx, db); err != nil || v2 {
+		return nil, err
+	}
 	// The fingerprint pins the history a selection saw. The import's private
 	// copy must match it, so AO's archive and the resumed copy agree.
 	prints, err := opencode.NativeSessionFingerprints(ctx, db, "")

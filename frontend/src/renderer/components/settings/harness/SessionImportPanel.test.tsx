@@ -30,6 +30,7 @@ it("gates session import to the agents with a readable local history", () => {
 
 it("offers OpenCode imports, which resume from a private copy bound to AO's workspace", () => {
 	expect(IMPORTABLE_AGENTS.has("opencode")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("opencode-v2")).toBe(true);
 });
 
 it("does not offer Kimi imports while resumed tools use the saved directory", () => {

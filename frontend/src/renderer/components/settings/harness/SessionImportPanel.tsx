@@ -21,7 +21,7 @@ type Candidate = components["schemas"]["SessionImportCandidate"];
 type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
-export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "aider", "devin", "cline", "cursor", "grok", "opencode"]);
+export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "aider", "devin", "cline", "cursor", "grok", "opencode", "opencode-v2"]);
 
 const folderFilter = "folder:";
 /** The most chats one import request takes. */

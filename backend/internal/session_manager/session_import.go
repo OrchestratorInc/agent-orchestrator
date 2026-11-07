@@ -284,7 +284,7 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Lock-less like Pi (see above); AO resumes from its own relocated copy
 		// of the transcript, not the original.
 		return false
-	case domain.HarnessOpenCode:
+	case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
 		// OpenCode keeps all conversations in one shared SQLite store with no
 		// per-session lock or live-session registry, and its transcript path is a
 		// row id rather than a writable file. With no positive evidence that
