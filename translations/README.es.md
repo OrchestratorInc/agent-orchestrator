@@ -31,6 +31,8 @@
 
 <br />
 
+Orchestrator.inc (antes Agent Orchestrator) es una app de escritorio y CLI de código abierto (Apache-2.0) que ejecuta muchos agentes de programación en paralelo, cada uno en su propio worktree y rama de Git, y devuelve los fallos de CI, los comentarios de revisión y los conflictos de integración al agente responsable de cada pull request. Es compatible con 38 agentes de programación, entre ellos Claude Code, Codex y Cursor, en macOS, Windows y Linux, con apps para iPhone, iPad y Android.
+
 ## Por qué Orchestrator.inc
 
 Un agente de programación puede encargarse de una tarea. Ejecutar varios implica dividir el trabajo, evitar que las ramas choquen y seguir cada cambio a través de la CI, la revisión y la integración. Orchestrator.inc es un espacio de trabajo local de escritorio pensado para eso: cada tarea tiene su propio agente, rama y worktree, y tu código se queda en tu máquina.
@@ -175,6 +177,45 @@ Abre Orchestrator.inc y selecciona el repositorio que quieres que gestione. La a
 | [docs/cli/README.md](../docs/cli/README.md) | Comportamiento de la CLI y correspondencia con las rutas del daemon. |
 | [docs/development.md](../docs/development.md) | Requisitos previos, compilación, pruebas y solución de problemas para el desarrollo local. |
 | [docs/STATUS.md](../docs/STATUS.md) | Qué se distribuye actualmente en `main` y qué sigue en desarrollo. |
+| [orchestrator.inc/llms.txt](https://orchestrator.inc/llms.txt) | Un resumen del producto en texto plano para asistentes de IA y motores de respuesta. |
+| [docs.orchestrator.inc/llms.txt](https://docs.orchestrator.inc/llms.txt) | Un índice en texto plano de la documentación del producto para asistentes de IA. |
+
+## Preguntas frecuentes
+
+<details>
+<summary>¿Qué es Orchestrator.inc?</summary>
+
+Orchestrator.inc es una app de escritorio y CLI de código abierto para ejecutar un conjunto de agentes de programación con IA sobre un mismo repositorio. Un agente orquestador del proyecto planifica el trabajo e inicia agentes worker, cada uno en su propio worktree y rama de Git. Después sigue cada pull request por la CI, la revisión y la integración, con todas las sesiones en un solo tablero.
+
+</details>
+
+<details>
+<summary>¿Orchestrator.inc es lo mismo que Agent Orchestrator?</summary>
+
+Sí. Orchestrator.inc es el nuevo nombre de Agent Orchestrator (AO): el mismo proyecto, el mismo repositorio y la misma licencia Apache-2.0. Solo cambió el nombre. El comando `ao` de la CLI y los nombres de los archivos de versión, como `agent-orchestrator-darwin-arm64.dmg`, siguen usando el nombre anterior, así que las instalaciones y los scripts existentes siguen funcionando.
+
+</details>
+
+<details>
+<summary>¿Qué agentes de programación admite?</summary>
+
+Orchestrator.inc es compatible con 38 agentes de programación, entre ellos Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose y Cline. Cada proyecto elige sus propios agentes worker, orquestador y revisor, y tú eliges el agente y el modelo para cada tarea. La compatibilidad varía según el agente; las [guías de configuración de agentes](https://docs.orchestrator.inc/plugins/agents) recogen la matriz actualizada.
+
+</details>
+
+<details>
+<summary>¿Orchestrator.inc envía mi código a algún sitio?</summary>
+
+No. En el escritorio, tu código, los worktrees y los agentes se quedan en tu máquina, y Orchestrator.inc no hace de proxy de las llamadas a la API de tus agentes. La telemetría se limita a datos de uso y fiabilidad, nunca tu código, prompts, conversaciones con agentes ni credenciales, y puedes desactivarla en Ajustes. El código solo pasa a espacios de trabajo alojados si eliges Cloud Agents.
+
+</details>
+
+<details>
+<summary>¿En qué se diferencia de un único agente de programación?</summary>
+
+Un agente de programación escribe código para una tarea en una sesión. Orchestrator.inc no es un agente de programación, sino el espacio de trabajo donde se ejecutan los agentes. Reparte el trabajo grande entre varios agentes que funcionan en paralelo, mantiene sus ramas separadas con worktrees de Git y devuelve los fallos de CI, los comentarios de revisión y los conflictos de integración al agente responsable de cada PR.
+
+</details>
 
 ## Contribuir
 
