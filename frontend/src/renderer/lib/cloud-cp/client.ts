@@ -35,6 +35,11 @@ import type {
 	CloudCpNotificationEventsResponse,
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
+	CloudCpNotificationPreference,
+	CloudCpNotificationPreferenceInput,
+	CloudCpNotificationStateChange,
+	CloudCpFollowLevel,
+	CloudCpSessionFollower,
 	CloudCpOrgCoderConfigResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
@@ -544,6 +549,22 @@ export interface CloudCpClient {
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
 	markNotificationsRead(orgId: string, notificationIds?: string[], options?: CloudCpRequestOptions): Promise<{ updated: number }>;
 	subscribeNotificationEvents(orgId: string, options: CloudCpNotificationEventsOptions): Promise<void>;
+	/** The caller's notifications from every organization, a guest's included. Takes the org list's filters. */
+	listMyNotifications(query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
+	/** The caller's notification events from every organization, after a sequence. */
+	listMyNotificationEvents(after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
+	/** Marks some of the caller's notifications read or unread, done or not, or snoozed, in any organization. */
+	changeNotificationState(change: CloudCpNotificationStateChange, options?: CloudCpRequestOptions): Promise<{ updated: number }>;
+	/** The caller's choice for every notification kind, the same in every organization. */
+	getNotificationPreferences(options?: CloudCpRequestOptions): Promise<{ items: CloudCpNotificationPreference[] }>;
+	/** Stores the caller's choices for the listed kinds; answers every preference after the change. */
+	setNotificationPreferences(items: CloudCpNotificationPreferenceInput[], options?: CloudCpRequestOptions): Promise<{ items: CloudCpNotificationPreference[] }>;
+	/** How the caller follows a session; an empty level means they don't. */
+	getSessionFollow(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionFollower>;
+	/** Sets the caller's own follow level for a session. */
+	setSessionFollow(orgId: string, sessionId: string, level: CloudCpFollowLevel, options?: CloudCpRequestOptions): Promise<CloudCpSessionFollower>;
+	/** Who is notified about a session, the creator included. */
+	listSessionFollowers(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ items: CloudCpSessionFollower[] }>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -610,6 +631,11 @@ interface SendOptions {
 	signal?: AbortSignal;
 	idempotencyKey?: string;
 	accept?: string;
+}
+
+/** A notification list's query: the status filter, the inbox view and state, and the page. */
+function notificationListParams(query: CloudCpNotificationListQuery | undefined): QueryParams {
+	return { status: query?.status, view: query?.view, state: query?.state, limit: query?.limit, cursor: query?.cursor };
 }
 
 function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
@@ -1190,12 +1216,20 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		subscribeSessionEvents,
-		listNotifications: (orgId, query, o) => requestJson("GET", `/orgs/${seg(orgId)}/notifications`, { query: { status: query?.status, limit: query?.limit, cursor: query?.cursor }, signal: o?.signal }),
+		listNotifications: (orgId, query, o) => requestJson("GET", `/orgs/${seg(orgId)}/notifications`, { query: notificationListParams(query), signal: o?.signal }),
 		listNotificationEvents: (orgId, after, o) => requestJson("GET", `/orgs/${seg(orgId)}/notification-events`, { query: { after }, signal: o?.signal }),
 		markNotificationsRead: (orgId, notificationIds, o) => notificationIds === undefined || notificationIds.length === 0
 			? requestJson("POST", `/orgs/${seg(orgId)}/notifications/read-all`, { signal: o?.signal })
 			: Promise.all(notificationIds.map((id) => requestJson<{ updated: number }>("PATCH", `/orgs/${seg(orgId)}/notifications/${seg(id)}`, { body: { status: "read" }, signal: o?.signal }))).then((rows) => ({ updated: rows.reduce((total, row) => total + row.updated, 0) })),
 		subscribeNotificationEvents,
+		listMyNotifications: (query, o) => requestJson("GET", "/me/notifications", { query: notificationListParams(query), signal: o?.signal }),
+		listMyNotificationEvents: (after, o) => requestJson("GET", "/me/notification-events", { query: { after }, signal: o?.signal }),
+		changeNotificationState: (change, o) => requestJson("POST", "/me/notifications/state", { body: change, signal: o?.signal }),
+		getNotificationPreferences: (o) => requestJson("GET", "/me/notification-preferences", { signal: o?.signal }),
+		setNotificationPreferences: (items, o) => requestJson("PUT", "/me/notification-preferences", { body: { items }, signal: o?.signal }),
+		getSessionFollow: (orgId, sessionId, o) => requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/follow`, { signal: o?.signal }),
+		setSessionFollow: (orgId, sessionId, level, o) => requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/follow`, { body: { level }, signal: o?.signal }),
+		listSessionFollowers: (orgId, sessionId, o) => requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/followers`, { signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

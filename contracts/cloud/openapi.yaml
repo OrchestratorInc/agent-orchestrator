@@ -3667,6 +3667,12 @@ paths:
     get:
       operationId: listCloudNotifications
       tags: [Events]
+      description: >-
+        Lists the caller's notifications, newest first. With view or state, the
+        list is narrowed to an inbox tab (needs_you is tier 0 and unresolved;
+        updates is everything else) and a triage state (active when neither set
+        is omitted: not done and not snoozed). With neither, every notification
+        is listed, as before team notifications.
       parameters:
         - $ref: "#/components/parameters/OrgId"
         - name: status
@@ -3675,6 +3681,16 @@ paths:
             type: string
             enum: [all, unread, read]
             default: all
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [needs_you, updates, all]
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [active, snoozed, done]
         - name: cursor
           in: query
           schema:
@@ -3759,6 +3775,215 @@ paths:
       responses:
         "200":
           description: Every unread notification for the current recipient was marked read.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/notifications:
+    get:
+      operationId: listMyCloudNotifications
+      tags: [Events]
+      description: >-
+        The caller's notifications from every organization, a guest's in other
+        workspaces included, newest first. Takes the same filters as an
+        organization's list.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [all, unread, read]
+            default: all
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [needs_you, updates, all]
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [active, snoozed, done]
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: The caller's notifications across organizations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/notification-events:
+    get:
+      operationId: listMyCloudNotificationEvents
+      tags: [Events]
+      description: The caller's notification events from every organization, as JSON or, with Accept text/event-stream, as a replay and live stream.
+      parameters:
+        - name: after
+          in: query
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            maximum: 9007199254740991
+      responses:
+        "200":
+          description: Ordered durable notification events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationEventPage"
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/notifications/state:
+    post:
+      operationId: changeCloudNotificationState
+      tags: [Events]
+      description: >-
+        Applies one triage action to some of the caller's own notifications, in
+        any organization. Ids that aren't the caller's change nothing. Marking
+        done clears a snooze; snoozing clears done.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationStateChange"
+      responses:
+        "200":
+          description: How many notifications changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [updated]
+                properties:
+                  updated:
+                    type: integer
+                    minimum: 0
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      tags: [Events]
+      description: The caller's choice for every notification kind, with defaults for kinds never changed. Preferences are the person's, the same in every organization.
+      responses:
+        "200":
+          description: Preferences, one per kind, in display order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreferenceList"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: setNotificationPreferences
+      tags: [Events]
+      description: Stores the caller's choices for the listed kinds. A locked kind keeps its in-app notification on.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    $ref: "#/components/schemas/NotificationPreferenceInput"
+      responses:
+        "200":
+          description: Every preference after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreferenceList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/follow:
+    get:
+      operationId: getSessionFollow
+      tags: [Sessions]
+      description: How the caller follows the session. An empty level means they don't follow it.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The caller's follow state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionFollower"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: setSessionFollow
+      tags: [Sessions]
+      description: Sets the caller's own follow level. A level set this way is never changed by later activity.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [level]
+              properties:
+                level:
+                  $ref: "#/components/schemas/FollowLevel"
+      responses:
+        "200":
+          description: The caller's follow state after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionFollower"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/followers:
+    get:
+      operationId: listSessionFollowers
+      tags: [Sessions]
+      description: Who is notified about the session, the creator included, limited to people who can still open it.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The session's followers.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionFollower"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/hosts:
@@ -4319,6 +4544,126 @@ components:
         updatedAt:
           type: string
           format: date-time
+        tier:
+          description: 0 blocks the recipient (counts in Needs you), 1 needs attention, 2 is an update. Absent from control planes before team notifications.
+          type: integer
+          minimum: 0
+          maximum: 2
+        reason:
+          description: Why the recipient got it, such as owner, prompted, following, mentioned or requester.
+          type: string
+        actor:
+          $ref: "#/components/schemas/NotificationPerson"
+        desktop:
+          description: Whether the recipient wants this notification on the desktop.
+          type: boolean
+        doneAt:
+          type: string
+          format: date-time
+        snoozedUntil:
+          type: string
+          format: date-time
+        resolution:
+          description: Why it stopped being active, such as handled or cleared.
+          type: string
+        resolvedBy:
+          $ref: "#/components/schemas/NotificationPerson"
+    NotificationPerson:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+    NotificationStateChange:
+      type: object
+      additionalProperties: false
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: string
+            format: uuid
+        read:
+          type: boolean
+        done:
+          type: boolean
+        snoozedUntil:
+          description: An RFC 3339 time in the future to snooze until, or an empty string to clear a snooze.
+          type: string
+    FollowLevel:
+      type: string
+      enum: [needs_you, participating, all, muted]
+    SessionFollower:
+      type: object
+      additionalProperties: false
+      required: [userId, level, reasons, manual]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+        level:
+          description: Empty when the person doesn't follow the session.
+          type: string
+          enum: ["", needs_you, participating, all, muted]
+        reasons:
+          type: array
+          items:
+            type: string
+            enum: [creator, prompted, asided, mentioned, handoff, reviewer, manual]
+        manual:
+          type: boolean
+    NotificationPreferenceInput:
+      type: object
+      additionalProperties: false
+      required: [kind, inApp, desktop]
+      properties:
+        kind:
+          type: string
+        inApp:
+          type: boolean
+        desktop:
+          type: boolean
+        scope:
+          type: string
+          enum: [following, mine]
+          default: following
+    NotificationPreference:
+      type: object
+      additionalProperties: false
+      required: [kind, inApp, desktop, scope, locked, tier]
+      properties:
+        kind:
+          type: string
+        inApp:
+          type: boolean
+        desktop:
+          type: boolean
+        scope:
+          type: string
+          enum: [following, mine]
+        locked:
+          description: The kind blocks someone, so its in-app notification can't be turned off.
+          type: boolean
+        tier:
+          type: integer
+          minimum: 0
+          maximum: 2
+    NotificationPreferenceList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationPreference"
     CloudNotificationEvent:
       type: object
       additionalProperties: false
@@ -4367,6 +4712,10 @@ components:
         latestSequence:
           type: integer
           format: int64
+          minimum: 0
+        needsYouCount:
+          description: Tier 0 notifications still active (not resolved, done or snoozed). Absent from control planes before team notifications.
+          type: integer
           minimum: 0
     NotificationEventPage:
       type: object

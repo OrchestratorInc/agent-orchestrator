@@ -558,3 +558,58 @@ describe("Cloud control-plane share links", () => {
 		await expect(cp.revokeShareLink(ORG, "project", LINK)).rejects.toMatchObject({ status: 404 });
 	});
 });
+
+describe("Cloud control-plane team notifications", () => {
+	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+	const client = () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => json({ items: [], page: { hasMore: false }, unreadCount: 0, latestSequence: 0, updated: 1 }));
+		return { fetchImpl, client: createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl }) };
+	};
+	const call = (fetchImpl: ReturnType<typeof vi.fn>, index: number) => fetchImpl.mock.calls[index] as [string, RequestInit];
+
+	it("lists the caller's inbox across organizations with its view and state", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.listMyNotifications({ view: "needs_you", state: "active", limit: 50 });
+		await cp.listMyNotifications();
+		await cp.listMyNotificationEvents(12);
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications?view=needs_you&state=active&limit=50");
+		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications");
+		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/notification-events?after=12");
+	});
+
+	it("keeps an organization's list as it was, with the inbox filters when asked", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.listNotifications("org", { status: "all" });
+		await cp.listNotifications("org", { view: "updates", state: "done" });
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/notifications?status=all");
+		expect(call(fetchImpl, 1)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/notifications?view=updates&state=done");
+	});
+
+	it("posts triage actions to the caller's state route", async () => {
+		const { fetchImpl, client: cp } = client();
+		await expect(cp.changeNotificationState({ ids: ["a", "b"], done: true })).resolves.toMatchObject({ updated: 1 });
+		await cp.changeNotificationState({ ids: ["a"], snoozedUntil: "2026-11-08T09:00:00.000Z" });
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/notifications/state");
+		expect(call(fetchImpl, 0)[1]).toMatchObject({ method: "POST", body: JSON.stringify({ ids: ["a", "b"], done: true }) });
+		expect(JSON.parse(call(fetchImpl, 1)[1].body as string)).toEqual({ ids: ["a"], snoozedUntil: "2026-11-08T09:00:00.000Z" });
+	});
+
+	it("reads and writes notification preferences", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.getNotificationPreferences();
+		await cp.setNotificationPreferences([{ kind: "ci_failed", inApp: true, desktop: false, scope: "mine" }]);
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/me/notification-preferences");
+		expect(call(fetchImpl, 0)[1]).toMatchObject({ method: "GET" });
+		expect(call(fetchImpl, 1)[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ items: [{ kind: "ci_failed", inApp: true, desktop: false, scope: "mine" }] }) });
+	});
+
+	it("reads and sets how the caller follows a session, and who is notified", async () => {
+		const { fetchImpl, client: cp } = client();
+		await cp.getSessionFollow("org", "session 1");
+		await cp.setSessionFollow("org", "session 1", "muted");
+		await cp.listSessionFollowers("org", "session 1");
+		expect(call(fetchImpl, 0)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session%201/follow");
+		expect(call(fetchImpl, 1)[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ level: "muted" }) });
+		expect(call(fetchImpl, 2)[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org/sessions/session%201/followers");
+	});
+});

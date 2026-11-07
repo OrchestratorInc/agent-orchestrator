@@ -170,6 +170,18 @@ export interface CloudCpPageInfo {
 // Cloud notifications (`notification_handlers.go`)
 // ---------------------------------------------------------------------------
 
+/** Someone named on a notification: who caused it, or who handled it. */
+export interface CloudCpNotificationPerson {
+	userId: string;
+	name: string;
+}
+
+/**
+ * How urgent a notification is: 0 blocks the recipient (counts in Needs you),
+ * 1 needs attention, 2 is an update.
+ */
+export type CloudCpNotificationTier = 0 | 1 | 2;
+
 export interface CloudCpNotification {
 	id: string;
 	source: "cloud";
@@ -181,9 +193,24 @@ export interface CloudCpNotification {
 	title: string;
 	body: string;
 	status: "unread" | "read";
+	/** Kind-specific detail; an approval carries its request and decisions. */
+	metadata?: Record<string, unknown>;
 	resolvedAt?: string;
 	createdAt: string;
 	updatedAt: string;
+	// Team notification fields (`notification_team.go`). Control planes from
+	// before team notifications send none of them, so each is optional.
+	tier?: CloudCpNotificationTier;
+	/** Why the recipient got it: owner, prompted, following, mentioned, requester, ... */
+	reason?: string;
+	actor?: CloudCpNotificationPerson;
+	/** Whether the recipient wants it on the desktop. */
+	desktop?: boolean;
+	doneAt?: string;
+	snoozedUntil?: string;
+	/** Why it stopped being active: handled, cleared or superseded. */
+	resolution?: string;
+	resolvedBy?: CloudCpNotificationPerson;
 }
 
 export interface CloudCpNotificationEvent {
@@ -191,12 +218,21 @@ export interface CloudCpNotificationEvent {
 	orgId: string;
 	recipientUserId: string;
 	kind: "notification_created" | "notification_updated" | "notification_resolved";
+	eventId?: string;
 	notification: CloudCpNotification;
 	createdAt: string;
 }
 
+/** An inbox tab: blocking items, everything else, or both. */
+export type CloudCpNotificationView = "needs_you" | "updates" | "all";
+/** A triage state: neither done nor snoozed, snoozed, or done. */
+export type CloudCpNotificationState = "active" | "snoozed" | "done";
+
 export interface CloudCpNotificationListQuery extends CloudCpListQuery {
 	status?: "unread" | "read" | "all";
+	/** With neither view nor state the list holds every notification, as before team notifications. */
+	view?: CloudCpNotificationView;
+	state?: CloudCpNotificationState;
 }
 
 export interface CloudCpNotificationListResponse {
@@ -204,6 +240,54 @@ export interface CloudCpNotificationListResponse {
 	page: CloudCpPageInfo;
 	unreadCount: number;
 	latestSequence: number;
+	/** Active tier-0 notifications; absent from control planes before team notifications. */
+	needsYouCount?: number;
+}
+
+/**
+ * One triage action on some of the caller's notifications. Marking done
+ * clears a snooze; snoozing clears done. `snoozedUntil` is an RFC 3339 time
+ * in the future, or "" to clear a snooze.
+ */
+export interface CloudCpNotificationStateChange {
+	ids: string[];
+	read?: boolean;
+	done?: boolean;
+	snoozedUntil?: string;
+}
+
+/** How closely someone follows a session; each level includes the ones before it. */
+export type CloudCpFollowLevel = "needs_you" | "participating" | "all" | "muted";
+
+export type CloudCpFollowReason = "creator" | "prompted" | "asided" | "mentioned" | "handoff" | "reviewer" | "manual";
+
+export interface CloudCpSessionFollower {
+	userId: string;
+	name?: string;
+	/** Empty when the person doesn't follow the session. */
+	level: CloudCpFollowLevel | "";
+	reasons: CloudCpFollowReason[];
+	/** Set by the person themselves, so later activity never changes it. */
+	manual: boolean;
+}
+
+export type CloudCpNotificationScope = "following" | "mine";
+
+export interface CloudCpNotificationPreference {
+	kind: string;
+	inApp: boolean;
+	desktop: boolean;
+	scope: CloudCpNotificationScope;
+	/** The kind blocks someone, so its in-app notification can't be turned off. */
+	locked: boolean;
+	tier: CloudCpNotificationTier;
+}
+
+export interface CloudCpNotificationPreferenceInput {
+	kind: string;
+	inApp: boolean;
+	desktop: boolean;
+	scope?: CloudCpNotificationScope;
 }
 
 export interface CloudCpNotificationEventsResponse {
