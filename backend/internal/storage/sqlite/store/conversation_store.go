@@ -2674,7 +2674,9 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 
 // CompleteQueuedBatch links each source receipt to the provider turn that took
 // its input. The original messages keep their own transcript metadata.
-func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID string, now time.Time) error {
+// steerActivityID names the steer that carried the turns into a running turn;
+// empty means a queue drain, the turns joining the input providerTurnID started with.
+func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error {
 	if len(turnIDs) == 0 {
 		return nil
 	}
@@ -2689,9 +2691,11 @@ func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, 
 		}
 		for _, id := range turnIDs {
 			changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-				CompletedAt:      sql.NullTime{Time: now, Valid: true},
-				PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
-				ID:               id, ConversationID: conversationID,
+				CompletedAt:          sql.NullTime{Time: now, Valid: true},
+				PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
+				BatchDeliveryKind:    batchDeliveryKind(steerActivityID),
+				BatchDeliverySteerID: steerActivityID,
+				ID:                   id, ConversationID: conversationID,
 			})
 			if checkErr := expectBatchRow("complete queued batch turn", id, changed, err); checkErr != nil {
 				return checkErr
@@ -5261,9 +5265,11 @@ func (s *Store) CompleteSteerBatchDelivery(
 			}
 			for _, id := range turnIDs {
 				changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-					CompletedAt:      sql.NullTime{Time: now, Valid: true},
-					PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
-					ID:               id, ConversationID: conversationID,
+					CompletedAt:          sql.NullTime{Time: now, Valid: true},
+					PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
+					BatchDeliveryKind:    batchDeliveryKind(activity.ID),
+					BatchDeliverySteerID: activity.ID,
+					ID:                   id, ConversationID: conversationID,
 				})
 				if checkErr := expectBatchRow("complete steered batch turn", id, changed, err); checkErr != nil {
 					return checkErr
@@ -5378,9 +5384,17 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 	return nil
 }
 
+// batchDeliveryKind is how a batch reached the provider: by the steer named,
+// or with no steer, in a queue drain.
+func batchDeliveryKind(steerActivityID string) string {
+	if steerActivityID != "" {
+		return "steer"
+	}
+	return "drain"
+}
+
 // conversationBatchedDeliveries reads where each batched queued turn was
-// delivered. A steer records the queued turns it carried; any other batched turn
-// joined its target's input in a queue drain. The links only place report
+// delivered, as recorded when its batch completed. The links only place report
 // lines, so a failed read leaves them out rather than failing the snapshot.
 func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) []domain.ConversationBatchedDelivery {
 	turns, err := s.qr.ListConversationBatchedTurns(ctx, conversationID)
@@ -5388,32 +5402,12 @@ func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationI
 		slog.Warn("list batched turns failed", "conversation", conversationID, "error", err)
 		return nil
 	}
-	if len(turns) == 0 {
-		return nil
-	}
-	steers, err := s.qr.ListConversationBatchSteers(ctx, conversationID)
-	if err != nil {
-		slog.Warn("list batch steers failed", "conversation", conversationID, "error", err)
-		return nil
-	}
-	steerFor := map[string]string{}
-	for _, steer := range steers {
-		var detail struct {
-			SourceTurnIDs []string `json:"providerInputSourceTurnIds"`
-		}
-		if json.Unmarshal([]byte(steer.DetailJson), &detail) != nil {
-			continue
-		}
-		for _, turnID := range detail.SourceTurnIDs {
-			steerFor[turnID] = steer.ID
-		}
-	}
 	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
 	for _, turn := range turns {
 		out = append(out, domain.ConversationBatchedDelivery{
 			TurnID:              turn.ID,
 			DeliveredWithTurnID: turn.PromotedToTurnID.String,
-			SteerActivityID:     steerFor[turn.ID],
+			SteerActivityID:     turn.BatchDeliverySteerID,
 		})
 	}
 	return out
