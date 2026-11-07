@@ -55,6 +55,7 @@ type Store interface {
 	CreateProjectConversationWithContextReset(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
 	CreateProjectConversationAdoptingQueue(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
 	ConversationForSession(ctx context.Context, session domain.SessionID) (domain.ConversationRecord, error)
+	ProjectConversation(ctx context.Context, project domain.ProjectID) (domain.ConversationRecord, error)
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
