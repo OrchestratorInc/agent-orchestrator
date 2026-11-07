@@ -13696,6 +13696,8 @@ components:
           - claude
           - codex
           type: string
+        sameLoginAs:
+          type: string
         signedIn:
           type: boolean
       required:

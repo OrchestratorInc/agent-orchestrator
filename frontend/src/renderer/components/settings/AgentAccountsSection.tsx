@@ -1,7 +1,7 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useResolvedTheme } from "../../stores/ui-store";
@@ -42,7 +42,9 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
-	const rows = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const rows = withoutSameLogins(providerAccounts);
+	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id);
 	const login = logins[provider];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
@@ -102,17 +104,17 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
-			{rows.map((account) => <AccountRow
+			{rows.map((account) => { const cliTwin = cliTwinOf(account); return <AccountRow
 				key={account.id}
-				account={account}
-				aoTokens={tokensByAccount.get(account.id)}
+				account={cliTwin?.default ? { ...account, default: true } : account}
+				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
 				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
-			/>)}
+			/>; })}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}

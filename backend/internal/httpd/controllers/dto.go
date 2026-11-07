@@ -3951,8 +3951,9 @@ type AgentAccountResponse struct {
 	SignedIn  bool       `json:"signedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	// Problem says why identity or limits could not be read.
-	Problem string                     `json:"problem,omitempty"`
-	Limits  *domain.AgentAccountLimits `json:"limits,omitempty"`
+	Problem     string                     `json:"problem,omitempty"`
+	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
+	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.

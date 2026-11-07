@@ -122,3 +122,40 @@ it("offers only a sign-in on a signed-out CLI login, held while a login terminal
 	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
 });
+
+it("lists a login the CLI and a saved account share once", async () => {
+	const twin = { ...device, default: false, sameLoginAs: "acct-a" };
+	const savedA = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage"
+			? { days: 30, usage: [{ accountId: "device-claude", inputTokens: 1000, outputTokens: 0 }, { accountId: "acct-a", inputTokens: 2000, outputTokens: 0 }] }
+			: { accounts: [twin, savedA] },
+	}));
+	renderPanel({ disabled: false, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() });
+
+	const row = await waitFor(() => {
+		const found = document.querySelector<HTMLElement>('[data-agent-account="acct-a"]');
+		if (!found) throw new Error("no saved row");
+		return found;
+	});
+	expect(document.querySelector('[data-agent-account="device-claude"]')).not.toBeInTheDocument();
+	expect(screen.getAllByText("a@example.com")).toHaveLength(1);
+	await waitFor(() => expect(within(row).getByText(/3K tokens in AO/)).toBeInTheDocument());
+	expect(within(row).getByRole("button", { name: "Remove account" })).toBeInTheDocument();
+	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+});
+
+it("shows the shared login as the default when the CLI's login is", async () => {
+	const twin = { ...device, default: true, sameLoginAs: "acct-a" };
+	const savedA = { id: "acct-a", provider: "claude", device: false, default: false, signedIn: true, email: "a@example.com" };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [twin, savedA, { ...saved, signedIn: true }] },
+	}));
+	renderPanel();
+
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-a"]')).toBeInTheDocument());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-a"]')!;
+	expect(within(row).getByText("Default for new tasks")).toBeInTheDocument();
+	expect(within(row).queryByRole("button", { name: "Make default" })).not.toBeInTheDocument();
+	expect(screen.getAllByText("Default for new tasks")).toHaveLength(1);
+});

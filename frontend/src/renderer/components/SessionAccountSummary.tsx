@@ -1,7 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -33,8 +33,8 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	}, [settledPhase, accountMove?.id, session.id]);
 
 	if (!provider || session.cloud || session.isTerminated) return null;
-	const options = (accounts.data ?? []).filter((account) => account.provider === provider);
 	const currentId = current.data?.[provider];
+	const options = withoutSameLogins((accounts.data ?? []).filter((account) => account.provider === provider), currentId);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
 	// "Moved from … to …" answers the move; the next message makes it history.
