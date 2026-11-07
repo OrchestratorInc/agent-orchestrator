@@ -20,7 +20,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -1326,6 +1326,47 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.queryByText("Thinking")).toBeNull();
 		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+	});
+
+	it("shows each step on the live row first, then moves it up once it has been seen", async () => {
+		const turnId = "live-turn-claude-steps";
+		const at = "2026-08-11T10:01:00Z";
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Read the README",
+			streaming: false, createdAt: at,
+		};
+		// Claude Code reports a tool call as pending, then done, with nothing between.
+		const read = (status: "pending" | "completed", revision: number) => ({
+			kind: "activity" as const, id: "read", turnId, sequence: 2, revision,
+			activityKind: "mcp_tool" as const, status, summary: "Read README.md (1 - 40)",
+			detail: {
+				protocol: "acp", providerToolName: "Read", toolKind: "read",
+				input: { file_path: "/w/README.md", limit: 40 },
+			} as ConversationActivity["detail"],
+			createdAt: at,
+		});
+		const snapshot = (status: "pending" | "completed", revision: number): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: revision + 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [prompt, read(status, revision)],
+		});
+
+		const view = render(<ChatWorkspace snapshot={snapshot("pending", 0)} />);
+		const task = () => screen.getByTestId("live-working-task");
+		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+
+		// Done within a blink, it still stays beside the loader for a moment...
+		view.rerender(<ChatWorkspace snapshot={snapshot("completed", 1)} />);
+		expect(task()).toHaveTextContent(/^Reading README\.md$/);
+		expect(screen.queryByRole("button", { name: /^Read README\.md/ })).toBeNull();
+
+		// ...then moves up into the list, and the live row goes back to Thinking.
+		await waitFor(() => expect(screen.getByRole("button", { name: /^Read README\.md/ })).toBeInTheDocument(), { timeout: 2_000 });
+		expect(task()).toHaveTextContent(/^Thinking$/);
 	});
 
 	it("gives the step back its row once it finishes", () => {

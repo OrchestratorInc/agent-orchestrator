@@ -4796,6 +4796,67 @@ export function Timeline({
  * conversation. A turn is the right granularity because it is what changes: while
  * the agent works, one group grows and every other group is finished history.
  */
+/**
+ * How long a step stays on the live row once it shows there. Claude Code reports
+ * most tool calls as pending and then done, with nothing in between, and a quick
+ * one is done within a second. Without a floor the live row would never name it,
+ * and it would only ever appear in the list above.
+ */
+const LIVE_STEP_MIN_MS = 900;
+
+/**
+ * The step the live row names in place of its own row: the newest step that is
+ * running, or pending while nothing waits on the reader. Once no step is in
+ * progress, the newest one stays on the row until it has been there for
+ * LIVE_STEP_MIN_MS, so each step shows beside the loader before it moves up into
+ * the list. A step that was already done when the turn mounted (a session
+ * reopened mid-turn) never comes back to the row. A step in a subagent's tree, or
+ * one with a subagent under it, keeps its row, so the tree stays whole.
+ */
+function useLiveRowStep(group: TimelineGroup): ConversationActivity | undefined {
+	const [, setTick] = useState(0);
+	const memory = useRef<{ shownAt: Map<string, number>; doneAtMount?: Set<string> }>({ shownAt: new Map() });
+	const parents = new Set<string>();
+	for (const item of group.items) {
+		if (item.kind === "activity" && item.detail?.parentProviderItemId) parents.add(item.detail.parentProviderItemId);
+	}
+	const steps = group.live
+		? group.items.filter(
+				(item): item is ConversationActivity =>
+					item.kind === "activity" &&
+					isLiveStepKind(item) &&
+					!item.detail?.parentProviderItemId &&
+					!(item.providerItemId && parents.has(item.providerItemId)),
+			)
+		: [];
+	const inProgress = (step: ConversationActivity) => step.status === "running" || step.status === "pending";
+	memory.current.doneAtMount ??= new Set(steps.filter((step) => !inProgress(step)).map((step) => step.id));
+
+	const now = Date.now();
+	let step = [...steps]
+		.reverse()
+		.find((candidate) => candidate.status === "running" || (candidate.status === "pending" && !group.blocked));
+	const latest = steps.at(-1);
+	if (!step && latest && !inProgress(latest) && !memory.current.doneAtMount.has(latest.id)) {
+		const shownAt = memory.current.shownAt.get(latest.id);
+		if (shownAt === undefined || now - shownAt < LIVE_STEP_MIN_MS) step = latest;
+	}
+	if (step && !memory.current.shownAt.has(step.id)) memory.current.shownAt.set(step.id, now);
+
+	// A finished step on the row moves up once its time is out.
+	const holding = step && !inProgress(step) ? step.id : undefined;
+	useEffect(() => {
+		if (!holding) return;
+		const shownAt = memory.current.shownAt.get(holding) ?? Date.now();
+		const timer = window.setTimeout(
+			() => setTick((tick) => tick + 1),
+			Math.max(0, shownAt + LIVE_STEP_MIN_MS - Date.now()) + 20,
+		);
+		return () => window.clearTimeout(timer);
+	}, [holding]);
+	return step;
+}
+
 const TurnGroup = memo(function TurnGroup({
 	group,
 	harness,
@@ -4965,17 +5026,9 @@ const TurnGroup = memo(function TurnGroup({
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
-	// finishes. A step in a subagent's tree, or one with a subagent under it, keeps
-	// its row, so the tree stays whole.
-	const liveStep =
-		currentTask &&
-		isLiveStepKind(currentTask) &&
-		!currentTask.detail?.parentProviderItemId &&
-		!(currentTask.providerItemId && group.items.some(
-			(item) => item.kind === "activity" && item.detail?.parentProviderItemId === currentTask.providerItemId,
-		))
-			? currentTask
-			: undefined;
+	// is done and has had its moment on the live row.
+	const liveStep = useLiveRowStep(group);
+	const liveTask = liveStep ?? currentTask;
 	// Only the run the agent is working in stays open while the turn runs; earlier
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
@@ -5065,7 +5118,7 @@ const TurnGroup = memo(function TurnGroup({
 				// Between steps the agent is still working out what to do next, so the row
 				// says "Thinking" beside the loader rather than only a timer. A turn waiting
 				// on the reader's answer is not thinking, so it keeps the timer alone.
-				task={currentTask ? liveTaskLabel(currentTask) : group.live && !group.blocked ? "Thinking" : undefined}
+				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked ? "Thinking" : undefined}
 				step={liveStep}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
