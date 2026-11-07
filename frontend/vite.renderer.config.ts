@@ -133,6 +133,10 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		[
 			"connect-src",
 			"'self'",
+			// Copy and Save on a chat image read its bytes with fetch, and a
+			// render's images are data: URLs (ao render inlines local images).
+			// A data: URL never leaves the renderer.
+			"data:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
 			// Session artifact files are read from the daemon's artifact preview
