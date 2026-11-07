@@ -21,7 +21,7 @@ export interface ChatLoginBandProps {
 	/** The refused message sends again by itself once the login takes. */
 	queued: boolean;
 	onLogin: () => void;
-	/** Send the refused message again; offered while the login is pending, and once the user is in and it was not sent. */
+	/** Send the refused message again; offered before and while the login is pending, and once the user is in and it was not sent. */
 	onSendAgain?: () => void;
 	/** Why sending it again failed. */
 	error?: string;
@@ -67,7 +67,14 @@ export function ChatLoginBand({ harness, agent, host, state, queued, onLogin, on
 		mark = <AgentAvatar provider={harness} decorative className="size-4 shrink-0" />;
 		title = host ? t("chat.login.signedOutOnHost", { agent, host }) : t("chat.login.signedOut", { agent });
 		detail = queued ? t("chat.login.sendsOnceIn") : t("chat.login.sendAgainOnceIn");
-		action = <Button type="button" variant="primary" size="sm" onClick={onLogin} className="px-3">{t("chat.login.action")}</Button>;
+		// A login fixed before the daemon looks again (a terminal, a token that
+		// refreshed) is sent from here, without a trip through the Harness page.
+		action = (
+			<>
+				{onSendAgain ? <Button type="button" variant="ghost" size="sm" onClick={onSendAgain} className="px-3">{t("chat.login.sendAgainAction")}</Button> : null}
+				<Button type="button" variant="primary" size="sm" onClick={onLogin} className="px-3">{t("chat.login.action")}</Button>
+			</>
+		);
 	}
 	return (
 		<div data-testid="login-band" data-login-state={state} className="flex min-h-10 min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 py-1.5 pr-2.5 pl-3 text-sm leading-5">

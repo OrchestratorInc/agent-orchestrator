@@ -5879,8 +5879,8 @@ function useChatLogin({ snapshot, retryControl, hostId, cloud, newWorkDisabled }
 				state,
 				queued,
 				onLogin: logIn,
-				// Offered while the login is pending and once the user is in, also for a
-				// message that did work: sending it again is the user's click, never automatic.
+				// Offered from signed out on, also for a message that did work: sending it
+				// again is the user's click, never automatic.
 				...(resendable ? { onSendAgain: sendAgain } : {}),
 				...(sendError ? { error: sendError } : {}),
 			},

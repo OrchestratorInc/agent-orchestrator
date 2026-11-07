@@ -138,6 +138,18 @@ describe("ChatWorkspace refused login", () => {
 		expect(retry).toHaveBeenCalledWith("turn-1");
 	});
 
+	it("offers Send again while signed out, for a login fixed before the daemon looks again", async () => {
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+
+		expect(band()).toHaveAttribute("data-login-state", "signedOut");
+		// Logged in from a terminal, say: no trip through the Harness page to send it.
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledOnce();
+		expect(retry).toHaveBeenCalledWith("turn-1");
+		expect(useUiStore.getState().settingsModal).toBeFalsy();
+	});
+
 	it("opens the chat box once the daemon finds the login working again, however it came back", async () => {
 		const retry = vi.fn();
 		const snapshot = signedOutSnapshot({ didWork: false });
