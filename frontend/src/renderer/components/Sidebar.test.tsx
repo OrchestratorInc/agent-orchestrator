@@ -1187,7 +1187,7 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
 	});
 
-	it("shows scroll-edge fades on project and Scratchpad sections as they scroll", () => {
+	it("fades the scroll edges of project and Scratchpad sections as they scroll", () => {
 		renderSidebar({
 			workspaces: [
 				...Array.from({ length: 2 }, (_, index) => ({
@@ -1214,18 +1214,18 @@ describe("Sidebar", () => {
 			});
 
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-end");
+			expect(scroller).not.toHaveAttribute("data-fade-start");
 
 			scroller.scrollTop = 50;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).toHaveAttribute("data-fade-end");
 
 			scroller.scrollTop = 100;
 			fireEvent.scroll(scroller);
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--top")).toBeInTheDocument();
-			expect(scroller.parentElement?.querySelector(".sidebar-section-scroll-fade--bottom")).not.toBeInTheDocument();
+			expect(scroller).toHaveAttribute("data-fade-start");
+			expect(scroller).not.toHaveAttribute("data-fade-end");
 		}
 	});
 
@@ -3191,6 +3191,22 @@ describe("Sidebar", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
+	it("previews a row again after renaming it from the context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		resetSessionPreviewWarmth();
+		fireEvent.contextMenu(screen.getByLabelText("Open fix login"));
+		await user.click(await screen.findByRole("menuitem", { name: "Rename fix login" }));
+		const input = screen.getByRole("textbox", { name: "Rename fix login" });
+		await user.clear(input);
+		await user.type(input, "polish login{Enter}");
+		await waitFor(() => expect(renameSessionMock).toHaveBeenCalledWith("proj-1-1", "polish login"));
+
+		await user.hover(screen.getByLabelText("Open fix login"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("fix login");
 	});
 
 	it("previews a row when focus moves to it from another control", async () => {
