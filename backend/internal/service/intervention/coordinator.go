@@ -345,6 +345,8 @@ type QueueRequest struct {
 	AttemptID       domain.WorkflowAttemptID
 	ClientMessageID string
 	Text            string
+	// AuthoredByOperator 仅由已验证的 HTTP Principal 设置，不能从请求正文接收。
+	AuthoredByOperator bool
 	// ControllerGeneration is the generation the caller observed; empty means the
 	// binding's. A disagreement is refused, not replaced.
 	ControllerGeneration string
@@ -366,6 +368,7 @@ func (c *Coordinator) Queue(ctx context.Context, request QueueRequest) (Outcome,
 	}
 	return c.performMessage(ctx, messageParams{
 		mode:            domain.WorkflowInterventionModeQueue,
+		human:           request.AuthoredByOperator,
 		workflowID:      request.WorkflowID,
 		taskID:          request.TaskID,
 		attemptID:       request.AttemptID,
@@ -625,6 +628,7 @@ func stopOutcome(
 
 // messageParams is the shared input for the steer and queue paths.
 type messageParams struct {
+	human           bool
 	mode            domain.WorkflowInterventionMode
 	workflowID      domain.WorkflowID
 	taskID          domain.WorkflowTaskID
@@ -693,10 +697,12 @@ func (c *Coordinator) performMessage(ctx context.Context, params messageParams) 
 		SessionID:       params.sessionID,
 		ClientMessageID: params.clientMessageID,
 		Text:            params.text,
-		// A workflow-originated message is automation, never human. Presenting it as
-		// human would let a sub-agent masquerade as the user.
+		// 默认保留自动化来源；只有经过 Operator 校验的排队指示可以进入现有人工编辑入口。
 		Origin:               domain.MessageOriginAutomation,
 		ControllerGeneration: params.generation,
+	}
+	if params.human {
+		request.Origin = domain.MessageOriginHuman
 	}
 	var receipt ports.MessageReceipt
 	var sendErr error

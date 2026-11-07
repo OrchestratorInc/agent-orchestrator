@@ -29,18 +29,18 @@ ORDER BY repo_key;
 -- name: InsertWorkflowTask :exec
 INSERT INTO workflow_tasks (
     id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetWorkflowTask :one
 SELECT id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
 FROM workflow_tasks
 WHERE workflow_id = ? AND id = ?;
 
 -- name: ListWorkflowTasks :many
 SELECT id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
 FROM workflow_tasks
 WHERE workflow_id = sqlc.arg(workflow_id)
   AND (CAST(sqlc.arg(state_filter) AS TEXT) = '' OR state = CAST(sqlc.arg(state_filter) AS TEXT))
@@ -133,6 +133,10 @@ WHERE workflow_tasks.workflow_id = sqlc.arg(workflow_id)
   AND workflow_tasks.id = sqlc.arg(task_id)
   AND workflow_tasks.state = 'ready'
   AND workflow_tasks.revision = sqlc.arg(expected_revision)
+	AND (workflow_tasks.planner=TRUE OR NOT EXISTS (
+		SELECT 1 FROM workflow_tasks planner WHERE planner.workflow_id=workflow_tasks.workflow_id
+		AND planner.planner=TRUE AND planner.state NOT IN ('succeeded','cancelled','failed')
+	))
   AND EXISTS (
       SELECT 1 FROM workflows
       WHERE id = sqlc.arg(workflow_id) AND state = 'active'
@@ -269,7 +273,7 @@ WHERE workflows.id = sqlc.arg(workflow_id)
   AND NOT EXISTS (
       SELECT 1 FROM workflow_tasks
       WHERE workflow_tasks.workflow_id = workflows.id
-        AND workflow_tasks.state <> 'succeeded'
+        AND workflow_tasks.state NOT IN ('succeeded', 'cancelled')
   );
 
 -- name: FailWorkflowIfAnyTaskFailed :execrows

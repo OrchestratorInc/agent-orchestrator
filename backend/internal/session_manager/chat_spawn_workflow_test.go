@@ -15,6 +15,7 @@ import (
 func TestChatSpawnOmitsLegacyWorkflowLease(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)
+	mgr.store = &initialWorkflowTaskStore{fakeStore: store}
 	mgr.dataDir = t.TempDir()
 	mgr.browserCapabilities = browsersvc.NewAuthority()
 	var accountLog []string
@@ -51,6 +52,13 @@ func TestChatSpawnOmitsLegacyWorkflowLease(t *testing.T) {
 	if start.Env[EnvBrowserCapability] == "" || mcpEnv[EnvBrowserCapability] != start.Env[EnvBrowserCapability] {
 		t.Fatal("initial MCP environment lost the issued Session capability")
 	}
+}
+
+// initialWorkflowTaskStore 补齐非 Planner 的持久任务身份，不放宽生产查询门禁。
+type initialWorkflowTaskStore struct{ *fakeStore }
+
+func (s *initialWorkflowTaskStore) GetWorkflowTask(_ context.Context, w domain.WorkflowID, id domain.WorkflowTaskID) (domain.WorkflowTask, bool, error) {
+	return domain.WorkflowTask{ID: id, WorkflowID: w}, w == "workflow-initial" && id == "task-initial", nil
 }
 
 // workflowLeaseAccounts 模拟旧账户启动环境在项目过滤后重新带入租约。

@@ -70,7 +70,7 @@ class EventSourceStub {
 		this.handlers.set(type, listener);
 	}
 	emit(type: string, data: string) {
-		this.handlers.get(type)?.({ data } as unknown as Event);
+		this.handlers.get(type)?.(new MessageEvent(type, { data }));
 	}
 	close() {
 		this.closed = true;
@@ -331,8 +331,9 @@ describe("createEventTransport", () => {
 		expect(EventSourceStub.instances).toHaveLength(2);
 	});
 
-	it("closes the old connection and reconnects when the base URL changes", () => {
-		createEventTransport(fakeQueryClient()).connect();
+	it("closes the old connection and ignores its workflow events after the base URL changes", async () => {
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
 		const first = cdcSources()[0];
 		const firstAccount = accountSources()[0];
 		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
@@ -345,6 +346,17 @@ describe("createEventTransport", () => {
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
 		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events?after=latest");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+		first.emit("workflow_task_updated", "{}");
+		expect(client.invalidateQueries).not.toHaveBeenCalled();
+		for (const type of ["workflow_task_updated", "scheduler_updated", "reset"]) {
+			cdcSources()[1].emit(type, "{}");
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workflows", "http://127.0.0.1:3099"] }, { cancelRefetch: false });
+			await Promise.resolve();
+			vi.mocked(client.invalidateQueries).mockClear();
+		}
+		disconnect();
 	});
 
 	it("does not make a new daemon port serve the dead port's backoff delay", () => {
@@ -444,7 +456,7 @@ describe("createEventTransport", () => {
 
 			vi.advanceTimersByTime(200);
 
-			for (const queryKey of [["session-reviews"], ["session-interface-transition"], ["agent-models"]]) {
+			for (const queryKey of [["session-reviews"], ["session-interface-transition"], ["agent-models"], ["workflows", "http://127.0.0.1:3001"]]) {
 				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
 			}
 		} finally {

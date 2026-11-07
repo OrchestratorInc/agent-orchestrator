@@ -199,6 +199,9 @@ type SpawnRequest struct {
 	// SpawnHash fingerprints the request so the owner can detect a reused key with
 	// different content, exactly like the workflow idempotency ledger.
 	SpawnHash string `json:"-"`
+	Model     string `json:"model,omitempty"`
+	Effort    string `json:"effort,omitempty"`
+	Profile   string `json:"profile,omitempty"`
 
 	ProjectID domain.ProjectID    `json:"projectId"`
 	Harness   domain.AgentHarness `json:"harness,omitempty"`

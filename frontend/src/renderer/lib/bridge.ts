@@ -7,6 +7,8 @@ export const aoBridge: AoBridge =
 	window.ao ??
 	({
 		operator: {
+			authorizeWorkflow: async () => { throw new Error("只读授权需要桌面应用"); },
+			readWorkflow: async () => { throw new Error("工作流受保护数据需要桌面应用"); },
 			runVerb: async () => {
 				throw new Error("Operator actions require the desktop app.");
 			},

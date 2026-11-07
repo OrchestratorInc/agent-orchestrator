@@ -4706,6 +4706,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/attempts/{attemptId}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read negotiated capabilities for the bound session */
+        get: operations["getWorkflowAttemptCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions": {
         parameters: {
             query?: never;
@@ -4713,7 +4730,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read durable intervention receipts for an attempt */
+        get: operations["listWorkflowInterventionReceipts"];
         put?: never;
         /** Steer into a running turn, queue a message, or stop and request a replan */
         post: operations["createWorkflowIntervention"];
@@ -4997,6 +5015,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{workflowId}/plan-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List durable plan candidates */
+        get: operations["listWorkflowPlans"];
+        put?: never;
+        /** Validate a completed planner turn */
+        post: operations["prepareWorkflowPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/plan-candidates/{candidateId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a candidate and pause scheduling */
+        post: operations["confirmWorkflowPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{workflowId}/quality-policies": {
         parameters: {
             query?: never;
@@ -5042,6 +5095,40 @@ export interface paths {
         get: operations["getWorkflowQualitySummary"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/read-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authorize desktop-only workflow reads for 30 minutes */
+        post: operations["authorizeWorkflowReadAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflowId}/replan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a new planner after trusted stop */
+        post: operations["startWorkflowReplan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5265,6 +5352,23 @@ export interface paths {
         get: operations["getWorkflowCapabilities"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a read-only planning task */
+        post: operations["startWorkflowPlan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6337,6 +6441,11 @@ export interface components {
             updateAvailable: boolean;
             version?: string;
         };
+        ConfirmWorkflowPlanRequest: {
+            digest: string;
+            /** Format: int64 */
+            expectedRevision: number;
+        };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
         };
@@ -6913,7 +7022,7 @@ export interface components {
             leaseUntil: string;
             leaseValid: boolean;
             model: string;
-            repositories: components["schemas"]["DomainWorkflowTaskRepository"][];
+            repositories: components["schemas"]["WorkflowTaskRepository"][];
             /** Format: int64 */
             revision: number;
             sessionId: string;
@@ -7125,13 +7234,6 @@ export interface components {
             revision: number;
             selection: string;
             sourceRole: string;
-        };
-        DomainWorkflowTaskRepository: {
-            allowedPaths: string[];
-            baseSha: string;
-            repoKey: string;
-            taskId: string;
-            workflowId: string;
         };
         EditConversationMessageRequest: {
             clientMessageId?: string;
@@ -7785,6 +7887,30 @@ export interface components {
             revision: number;
             scopePath: string;
             sessionId: string;
+            taskId: string;
+        };
+        PlanDependencyInput: {
+            fromTaskId: string;
+            toTaskId: string;
+        };
+        PlanTaskInput: {
+            agentHarness?: string;
+            brief?: string;
+            effort?: string;
+            id: string;
+            kind: string;
+            /** Format: int64 */
+            maxAttempts?: number;
+            model?: string;
+            /** Format: int64 */
+            priority?: number;
+            profile?: string;
+            title: string;
+        };
+        PlanTaskRepositoryInput: {
+            allowedPaths?: string[];
+            baseSha?: string;
+            repoKey: string;
             taskId: string;
         };
         PrepareTaskResponse: {
@@ -9152,6 +9278,16 @@ export interface components {
             idempotencyKey: string;
             reason?: string;
         };
+        StartWorkflowPlanRequest: {
+            agentHarness: string;
+            effort?: string;
+            goal: string;
+            idempotencyKey: string;
+            model: string;
+            profile?: string;
+            repositories: components["schemas"]["WorkflowRepositoryInput"][];
+            title: string;
+        };
         SteerConversationRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
@@ -9543,6 +9679,11 @@ export interface components {
             fromTaskId: string;
             toTaskId: string;
         };
+        WorkflowEdge: {
+            fromTaskId: string;
+            toTaskId: string;
+            workflowId: string;
+        };
         WorkflowEdgeResponse: {
             fromTaskId: string;
             toTaskId: string;
@@ -9557,6 +9698,9 @@ export interface components {
             queueAvailable: boolean;
             reasonCode?: string;
             replan?: components["schemas"]["WorkflowReplanResponse"];
+        };
+        WorkflowInterventionReceiptsResponse: {
+            interventions: components["schemas"]["WorkflowInterventionResponse"][];
         };
         WorkflowInterventionRequest: {
             clientMessageId: string;
@@ -9613,6 +9757,48 @@ export interface components {
             updatedAt: string;
             workflowId: string;
         };
+        WorkflowPlanCandidate: {
+            /** Format: int64 */
+            confirmedRevision: number;
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: int64 */
+            expectedRevision: number;
+            id: string;
+            patch: components["schemas"]["WorkflowPlanPatch"];
+            sourceAttemptId: string;
+            sourceTurnId: string;
+            stopInterventionId: string;
+            workflowId: string;
+        };
+        WorkflowPlanDefinition: {
+            dependencies: components["schemas"]["PlanDependencyInput"][];
+            retireTaskIds: string[];
+            taskRepositories: components["schemas"]["PlanTaskRepositoryInput"][];
+            tasks: components["schemas"]["PlanTaskInput"][];
+        };
+        WorkflowPlanInput: {
+            edited?: components["schemas"]["WorkflowPlanDefinition"];
+            /** Format: int64 */
+            expectedRevision: number;
+            idempotencyKey: string;
+            sourceAttemptId: string;
+            sourceTurnId: string;
+            stopInterventionId?: string;
+        };
+        WorkflowPlanPatch: {
+            dependencies: components["schemas"]["WorkflowEdge"][];
+            retireTaskIds: string[];
+            taskRepositories: components["schemas"]["WorkflowTaskRepository"][];
+            tasks: components["schemas"]["WorkflowTask"][];
+        };
+        WorkflowPlanResponse: {
+            candidate: components["schemas"]["WorkflowPlanCandidate"];
+        };
+        WorkflowPlansResponse: {
+            candidates: components["schemas"]["WorkflowPlanCandidate"][];
+        };
         WorkflowQualitySummaryResponse: {
             artifacts: components["schemas"]["ArtifactSnapshot"][];
             commits: components["schemas"]["TaskCommit"][];
@@ -9622,6 +9808,21 @@ export interface components {
             operations: components["schemas"]["IntegrationOperation"][];
             reviews: components["schemas"]["QualityReview"][];
             truncated: boolean;
+        };
+        WorkflowReadAccessResponse: {
+            /** Format: date-time */
+            expiresAt: string;
+            readToken: string;
+        };
+        WorkflowReplanInput: {
+            agentHarness: string;
+            effort?: string;
+            /** Format: int64 */
+            expectedRevision: number;
+            idempotencyKey: string;
+            model: string;
+            profile?: string;
+            stopInterventionId: string;
         };
         WorkflowReplanResponse: {
             interventionId: string;
@@ -9691,6 +9892,29 @@ export interface components {
             sessionId: string;
             terminated: boolean;
         };
+        WorkflowTask: {
+            agentHarness?: string;
+            brief: string;
+            /** Format: date-time */
+            createdAt: string;
+            effort?: string;
+            id: string;
+            kind: string;
+            /** Format: int64 */
+            maxAttempts: number;
+            model?: string;
+            planner: boolean;
+            /** Format: int64 */
+            priority: number;
+            profile?: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+            workflowId: string;
+        };
         WorkflowTaskEnvelope: {
             attempts: components["schemas"]["WorkflowAttemptResponse"][];
             task: components["schemas"]["WorkflowTaskResponse"];
@@ -9699,6 +9923,7 @@ export interface components {
             /** @enum {string} */
             agentHarness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";
             brief?: string;
+            effort?: string;
             /** @description Client-chosen task identifier, unique inside the workflow. */
             id: string;
             /** @enum {string} */
@@ -9708,9 +9933,18 @@ export interface components {
              * @description Attempts the task may spend before it needs a retry. Defaults to 1.
              */
             maxAttempts?: number;
+            model?: string;
             /** Format: int64 */
             priority?: number;
+            profile?: string;
             title: string;
+        };
+        WorkflowTaskRepository: {
+            allowedPaths: string[];
+            baseSha: string;
+            repoKey: string;
+            taskId: string;
+            workflowId: string;
         };
         WorkflowTaskRepositoryInput: {
             /** @description Repo-relative directories the task may write. Omit to grant no path scope. */
@@ -9790,13 +10024,17 @@ export interface components {
             brief?: string;
             /** Format: date-time */
             createdAt: string;
+            effort?: string;
             id: string;
             /** @enum {string} */
             kind: "analysis" | "development" | "testing" | "review" | "integration" | "approval";
             /** Format: int64 */
             maxAttempts: number;
+            model?: string;
+            planner: boolean;
             /** Format: int64 */
             priority: number;
+            profile?: string;
             /** Format: int64 */
             revision: number;
             /** @enum {string} */
@@ -27687,6 +27925,170 @@ export interface operations {
             };
         };
     };
+    getWorkflowAttemptCapabilities: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Workflow attempt identifier. */
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetWorkflowCapabilitiesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listWorkflowInterventionReceipts: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+                /** @description Workflow attempt identifier. */
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowInterventionReceiptsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     createWorkflowIntervention: {
         parameters: {
             query?: never;
@@ -29287,6 +29689,254 @@ export interface operations {
             };
         };
     };
+    listWorkflowPlans: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowPlansResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prepareWorkflowPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowPlanInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowPlanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    confirmWorkflowPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                workflowId: string;
+                candidateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmWorkflowPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowPlanResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listWorkflowQualityPolicies: {
         parameters: {
             query?: never;
@@ -29473,6 +30123,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowQualitySummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    authorizeWorkflowReadAccess: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowReadAccessResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startWorkflowReplan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path: {
+                /** @description Workflow identifier. */
+                workflowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowReplanInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTaskEnvelope"];
                 };
             };
             /** @description Bad Request */
@@ -30754,6 +31568,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GetWorkflowCapabilitiesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startWorkflowPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One confirmed native operator approval bound to the exact method, path and raw request body; consumed once. */
+                "X-AO-Operator-Approval"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartWorkflowPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowEnvelope"];
                 };
             };
             /** @description Bad Request */

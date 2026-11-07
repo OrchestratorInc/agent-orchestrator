@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/resources"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/artifact"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/budget"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/execution"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/scheduler"
@@ -19,15 +20,18 @@ import (
 // m3Services 在发布给 HTTP 和后台任务前完成循环依赖装配；构造期间不启动 goroutine。
 type m3Services struct {
 	m2Services
-	Scheduler *scheduler.Service
-	Workflows *workflow.Service
-	Budget    *budget.Service
-	store     *sqlite.Store
+	Scheduler     *scheduler.Service
+	Workflows     *workflow.Service
+	Budget        *budget.Service
+	store         *sqlite.Store
+	planRetirer   workflowSessionRetirer
+	planArtifacts *artifact.Service
 }
 
 // newM3Services 将所有启动路径绑定到本实例 Leader；闭包仅在装配结束后被调用。
 func newM3Services(deps m2GatewayDeps) *m3Services {
 	m := &m3Services{store: deps.Store}
+	m.planRetirer, _ = deps.Sessions.(workflowSessionRetirer)
 	deps.ExecutionFence = func(ctx context.Context) (domain.SchedulerFence, error) {
 		return m.Scheduler.CurrentFence(ctx)
 	}
@@ -91,6 +95,7 @@ func (m *m3Services) dispatch(ctx context.Context, d scheduler.Dispatch) error {
 	_, err = m.Binder.BindAttempt(ports.WithExecutionPermit(ctx, permit), ports.SpawnRequest{
 		WorkflowID: d.WorkflowID, TaskID: d.TaskID, AttemptID: d.AttemptID,
 		ProjectID: ownership.ProjectID, Harness: ownership.Harness, Mode: domain.SessionModeChat,
+		Model: ownership.Task.Model, Effort: ownership.Task.Effort, Profile: ownership.Task.Profile,
 		SpawnKey: execution.SpawnKey(d.AttemptID, execution.ActionSpawn),
 		Prompt:   ownership.Task.Title + "\n\n" + ownership.Task.Brief, Repos: refs,
 	}, ownership.Repos)

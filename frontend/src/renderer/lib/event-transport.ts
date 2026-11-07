@@ -39,6 +39,7 @@ const EVENTSOURCE_CLOSED = 2;
 // subscribed explicitly. Every one of these can change the project/session list
 // the sidebar renders, so they all trigger a (batched) workspace refetch.
 const CDC_EVENT_TYPES = [
+	"workflow_created", "workflow_updated", "workflow_task_updated", "workflow_attempt_updated", "scheduler_updated",
 	"session_created",
 	"session_updated",
 	"pr_created",
@@ -326,6 +327,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
+				if (!event || event.type.startsWith("workflow_") || event.type === "scheduler_updated" || event.type === "reset") {
+					invalidate(["workflows", sourceBaseUrl ?? getApiBaseUrl()]);
+				}
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
 				let idOnlySessionUpdate = false;
@@ -536,9 +540,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							},
 						);
 					};
-					source.onmessage = refreshWorkspaces; // unnamed events, if any
+					const refreshCurrentSource = (event: Event) => {
+						if (disposed || source !== connectedSource || sourceBaseUrl !== baseUrl) return;
+						refreshWorkspaces(event);
+					};
+					source.onmessage = refreshCurrentSource;
+					source.addEventListener("reset", refreshCurrentSource);
 					for (const type of CDC_EVENT_TYPES) {
-						source.addEventListener(type, refreshWorkspaces);
+						source.addEventListener(type, refreshCurrentSource);
 					}
 					// EventSource auto-reconnects and resumes via Last-Event-ID while
 					// CONNECTING; scheduleRetry only covers the terminal CLOSED state.

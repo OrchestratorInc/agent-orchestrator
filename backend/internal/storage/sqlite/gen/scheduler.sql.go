@@ -604,10 +604,14 @@ func (q *Queries) ListSchedulerAdmissions(ctx context.Context, occupiedOnly inte
 
 const listSchedulerCandidates = `-- name: ListSchedulerCandidates :many
 WITH clock AS (SELECT CAST(?4 AS INTEGER) AS seconds)
-SELECT workflow_tasks.id, workflow_tasks.workflow_id, workflow_tasks.kind, workflow_tasks.title, workflow_tasks.brief, workflow_tasks.state, workflow_tasks.priority, workflow_tasks.agent_harness, workflow_tasks.max_attempts, workflow_tasks.revision, workflow_tasks.created_at, workflow_tasks.updated_at FROM workflow_tasks,clock WHERE workflow_id=?1 AND state='ready'
-ORDER BY CASE WHEN priority > 9223372036854775807 - MIN(5,MAX(0,(clock.seconds-unixepoch(substr(updated_at,1,19)))/300)) THEN 9223372036854775807
-ELSE priority + MIN(5,MAX(0,(clock.seconds-unixepoch(substr(updated_at,1,19)))/300)) END DESC,
-created_at,id LIMIT ?3 OFFSET ?2
+SELECT workflow_tasks.id, workflow_tasks.workflow_id, workflow_tasks.kind, workflow_tasks.title, workflow_tasks.brief, workflow_tasks.state, workflow_tasks.priority, workflow_tasks.agent_harness, workflow_tasks.max_attempts, workflow_tasks.revision, workflow_tasks.created_at, workflow_tasks.updated_at, workflow_tasks.model, workflow_tasks.effort, workflow_tasks.profile, workflow_tasks.planner FROM workflow_tasks,clock WHERE workflow_tasks.workflow_id=?1 AND workflow_tasks.state='ready'
+AND (workflow_tasks.planner=TRUE OR NOT EXISTS (
+ SELECT 1 FROM workflow_tasks planner WHERE planner.workflow_id=workflow_tasks.workflow_id
+ AND planner.planner=TRUE AND planner.state NOT IN ('succeeded','cancelled','failed')
+))
+ORDER BY CASE WHEN workflow_tasks.priority > 9223372036854775807 - MIN(5,MAX(0,(clock.seconds-unixepoch(substr(workflow_tasks.updated_at,1,19)))/300)) THEN 9223372036854775807
+ELSE workflow_tasks.priority + MIN(5,MAX(0,(clock.seconds-unixepoch(substr(workflow_tasks.updated_at,1,19)))/300)) END DESC,
+workflow_tasks.created_at,workflow_tasks.id LIMIT ?3 OFFSET ?2
 `
 
 type ListSchedulerCandidatesParams struct {
@@ -644,6 +648,10 @@ func (q *Queries) ListSchedulerCandidates(ctx context.Context, arg ListScheduler
 			&i.Revision,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Model,
+			&i.Effort,
+			&i.Profile,
+			&i.Planner,
 		); err != nil {
 			return nil, err
 		}

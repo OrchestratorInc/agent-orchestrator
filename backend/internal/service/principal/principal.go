@@ -243,7 +243,7 @@ func (r *Resolver) operator(req *http.Request) (Caller, error) {
 	// proof existed. Only a present approval is evaluated (and spent), so the refusal a caller
 	// sees for missing-everything stays COLLAB_NOT_AUTHORIZED while a present-but-unusable
 	// approval gets the specific OPERATOR_APPROVAL_* code.
-	if strings.TrimSpace(req.Header.Get(HeaderOperatorApproval)) == "" {
+	if strings.TrimSpace(req.Header.Get(HeaderOperatorApproval)) == "" && !hasHeader(req, HeaderWorkflowReadAccess) {
 		return Caller{}, ErrNotAuthorized
 	}
 	fingerprint, err := prover.ProveApproval(req)

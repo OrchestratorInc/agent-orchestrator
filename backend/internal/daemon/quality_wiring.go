@@ -18,7 +18,7 @@ import (
 )
 
 // wireQualityServices 在既有数据目录下装配质量侧车，复用唯一审批表与 Session 服务，不启动 Provider。
-func wireQualityServices(deps *httpd.APIDeps, store *sqlite.Store, dataDir string, approvals *principal.ApprovalStore, log *slog.Logger) {
+func wireQualityServices(deps *httpd.APIDeps, store *sqlite.Store, dataDir string, approvals *principal.ApprovalStore, log *slog.Logger) *artifact.Service {
 	registry, err := qualitygate.LoadRegistry(filepath.Join(dataDir, "quality-policies.json"))
 	if err != nil {
 		log.Error("quality policy registry unavailable; gates remain blocked", "err", err)
@@ -32,4 +32,5 @@ func wireQualityServices(deps *httpd.APIDeps, store *sqlite.Store, dataDir strin
 	deps.WorkflowCommits = &taskcommit.Service{Store: store, Artifacts: a, Gates: g, Clock: time.Now}
 	deps.WorkflowIntegrations = &integrationsvc.Service{Store: store, Gates: g, Scratch: filepath.Join(scratch, "integrations"), Clock: time.Now, Approvals: approvals}
 	deps.WorkflowCoordination = &coordination.Service{Store: store, Sessions: deps.Sessions, Clock: time.Now}
+	return a
 }

@@ -164,6 +164,24 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"WorkflowReplanInput":                                  "WorkflowReplanInput",
+	"ControllersStartWorkflowPlanRequest":                  "StartWorkflowPlanRequest",
+	"ControllersConfirmWorkflowPlanRequest":                "ConfirmWorkflowPlanRequest",
+	"ControllersWorkflowPlanCandidateIDParam":              "WorkflowPlanCandidateIDParam",
+	"ControllersWorkflowPlanResponse":                      "WorkflowPlanResponse",
+	"ControllersWorkflowPlansResponse":                     "WorkflowPlansResponse",
+	"ControllersWorkflowInterventionReceiptsResponse":      "WorkflowInterventionReceiptsResponse",
+	"WorkflowPlanInput":                                    "WorkflowPlanInput",
+	"WorkflowPlanDefinition":                               "WorkflowPlanDefinition",
+	"WorkflowTaskInput":                                    "PlanTaskInput",
+	"WorkflowDependencyInput":                              "PlanDependencyInput",
+	"WorkflowTaskRepositoryInput":                          "PlanTaskRepositoryInput",
+	"DomainWorkflowPlanCandidate":                          "WorkflowPlanCandidate",
+	"DomainWorkflowPlanPatch":                              "WorkflowPlanPatch",
+	"DomainWorkflowTask":                                   "WorkflowTask",
+	"DomainWorkflowEdge":                                   "WorkflowEdge",
+	"DomainWorkflowTaskRepository":                         "WorkflowTaskRepository",
+	"ControllersWorkflowReadAccessResponse":                "WorkflowReadAccessResponse",
 	"ControllersWorkflowQualitySummaryResponse":            "WorkflowQualitySummaryResponse",
 	"ControllersWorkflowCoordinationResponse":              "WorkflowCoordinationResponse",
 	"ControllersQualityPoliciesResponse":                   "QualityPoliciesResponse",
@@ -885,6 +903,7 @@ func operations() []operation {
 	ops = append(ops, workflowOperations()...)
 	ops = append(ops, schedulerOperations()...)
 	ops = append(ops, qualityOperations()...)
+	ops = append(ops, planningOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)

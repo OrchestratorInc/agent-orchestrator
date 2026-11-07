@@ -1,4 +1,5 @@
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
+import { useWorkflowUi } from "../stores/workflow-ui-store";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
@@ -86,6 +87,7 @@ import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+const WorkflowWorkbench = lazy(() => import("../components/workflow/WorkflowWorkbench"));
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -158,12 +160,16 @@ function ShellLayoutWithSettings() {
  */
 function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const workflowOpen = useWorkflowUi((state) => state.open);
+	const [workflowLoaded, setWorkflowLoaded] = useState(workflowOpen);
+	useEffect(() => { if (workflowOpen) setWorkflowLoaded(true); }, [workflowOpen]);
 	return (
 		<>
-			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
+			<div className={cn("relative flex min-h-0 flex-1 flex-col", (settingsOpen || workflowOpen) && "hidden")} inert={workflowOpen || undefined}>
 				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
 				{startingChat}
 			</div>
+			{(workflowLoaded || workflowOpen) && <div className={cn("flex min-h-0 flex-1 flex-col", (!workflowOpen || settingsOpen) && "hidden")} inert={!workflowOpen || undefined}><Suspense fallback={null}><WorkflowWorkbench /></Suspense></div>}
 			<SettingsPane />
 			<ShareLinkHost />
 		</>

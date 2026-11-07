@@ -116,6 +116,10 @@ func startM3Scheduler(ctx context.Context, m *m3Services, boot <-chan struct{}, 
 
 // maintain 在同一任期恢复占位和费用，可信续租先于过期处理；失败始终保留原占位。
 func (m *m3Services) maintain(ctx context.Context, leader domain.SchedulerLeader) error {
+	retired, err := m.retirePlanSessions(ctx, leader.Fence)
+	if err != nil {
+		return err
+	}
 	if !leader.Recovered {
 		if err := m.Binder.RecoverAdmissions(ctx, leader.Fence); err != nil {
 			return err
@@ -137,13 +141,16 @@ func (m *m3Services) maintain(ctx context.Context, leader domain.SchedulerLeader
 	if err := m.Binder.RefreshLeases(ctx, leader.Fence); err != nil {
 		return err
 	}
+	if err := m.freezePlanArtifacts(ctx, leader.Fence, retired); err != nil {
+		return err
+	}
 	if err := m.startReadyAttempts(ctx, leader.Fence); err != nil {
 		return err
 	}
 	if _, err := m.Workflows.RecoverExpired(ctx); err != nil {
 		return err
 	}
-	_, err := m.Budget.Reconcile(ctx)
+	_, err = m.Budget.Reconcile(ctx)
 	return err
 }
 

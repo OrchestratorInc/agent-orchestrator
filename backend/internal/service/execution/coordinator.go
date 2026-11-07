@@ -259,6 +259,18 @@ func SpawnKey(attemptID domain.WorkflowAttemptID, action Action) string {
 // an innocuous edit look like a conflict.
 func SpawnHash(request ports.SpawnRequest) (string, error) {
 	var builder strings.Builder
+	if request.Profile != "" {
+		return "", fmt.Errorf("%w: profile selection is unsupported", ports.ErrExecutionRefused)
+	}
+	if request.Model != "" || request.Effort != "" {
+		for _, selection := range []string{request.Model, request.Effort} {
+			if strings.ContainsAny(selection, "\r\n\x00") {
+				return "", ports.ErrExecutionRefused
+			}
+			builder.WriteString(selection)
+			builder.WriteByte('\n')
+		}
+	}
 	builder.WriteString("workflow=")
 	builder.WriteString(string(request.WorkflowID))
 	builder.WriteString("\ntask=")

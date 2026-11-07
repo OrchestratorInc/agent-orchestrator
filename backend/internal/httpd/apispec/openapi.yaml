@@ -14327,7 +14327,150 @@ paths:
       summary: Read one attempt's session binding state; never returns a lease token
       tags:
       - workflows
+  /api/v1/workflows/{workflowId}/attempts/{attemptId}/capabilities:
+    get:
+      operationId: getWorkflowAttemptCapabilities
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetWorkflowCapabilitiesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read negotiated capabilities for the bound session
+      tags:
+      - workflows
   /api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions:
+    get:
+      operationId: listWorkflowInterventionReceipts
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: Workflow attempt identifier.
+        in: path
+        name: attemptId
+        required: true
+        schema:
+          description: Workflow attempt identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInterventionReceiptsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read durable intervention receipts for an attempt
+      tags:
+      - workflows
     post:
       operationId: createWorkflowIntervention
       parameters:
@@ -15730,6 +15873,215 @@ paths:
       summary: Pause new admissions after one operator approval
       tags:
       - workflows
+  /api/v1/workflows/{workflowId}/plan-candidates:
+    get:
+      operationId: listWorkflowPlans
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowPlansResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List durable plan candidates
+      tags:
+      - workflows
+    post:
+      operationId: prepareWorkflowPlan
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowPlanInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowPlanResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Validate a completed planner turn
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/plan-candidates/{candidateId}/confirm:
+    post:
+      operationId: confirmWorkflowPlan
+      parameters:
+      - in: path
+        name: workflowId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: candidateId
+        required: true
+        schema:
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmWorkflowPlanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowPlanResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Confirm a candidate and pause scheduling
+      tags:
+      - workflows
   /api/v1/workflows/{workflowId}/quality-policies:
     get:
       operationId: listWorkflowQualityPolicies
@@ -15929,6 +16281,142 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: getWorkflowQualitySummary
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/read-access:
+    post:
+      operationId: authorizeWorkflowReadAccess
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowReadAccessResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Authorize desktop-only workflow reads for 30 minutes
+      tags:
+      - workflows
+  /api/v1/workflows/{workflowId}/replan:
+    post:
+      operationId: startWorkflowReplan
+      parameters:
+      - description: Workflow identifier.
+        in: path
+        name: workflowId
+        required: true
+        schema:
+          description: Workflow identifier.
+          type: string
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowReplanInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowTaskEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start a new planner after trusted stop
       tags:
       - workflows
   /api/v1/workflows/{workflowId}/resume-scheduling:
@@ -17061,6 +17549,70 @@ paths:
           description: Not Implemented
       summary: Report graded capability evidence per launch harness, with its source
         and expiry
+      tags:
+      - workflows
+  /api/v1/workflows/plan:
+    post:
+      operationId: startWorkflowPlan
+      parameters:
+      - description: One confirmed native operator approval bound to the exact method,
+          path and raw request body; consumed once.
+        in: header
+        name: X-AO-Operator-Approval
+        schema:
+          description: One confirmed native operator approval bound to the exact method,
+            path and raw request body; consumed once.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartWorkflowPlanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start a read-only planning task
       tags:
       - workflows
   /api/v1/workflows/recover-expired:
@@ -19872,6 +20424,17 @@ components:
       - daemon
       - imageDirectory
       type: object
+    ConfirmWorkflowPlanRequest:
+      properties:
+        digest:
+          type: string
+        expectedRevision:
+          format: int64
+          type: integer
+      required:
+      - digest
+      - expectedRevision
+      type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:
         idempotencyKey:
@@ -21414,7 +21977,7 @@ components:
           type: string
         repositories:
           items:
-            $ref: '#/components/schemas/DomainWorkflowTaskRepository'
+            $ref: '#/components/schemas/WorkflowTaskRepository'
           type: array
         revision:
           format: int64
@@ -22039,27 +22602,6 @@ components:
       - revision
       - selection
       - sourceRole
-      type: object
-    DomainWorkflowTaskRepository:
-      properties:
-        allowedPaths:
-          items:
-            type: string
-          type: array
-        baseSha:
-          type: string
-        repoKey:
-          type: string
-        taskId:
-          type: string
-        workflowId:
-          type: string
-      required:
-      - workflowId
-      - taskId
-      - repoKey
-      - allowedPaths
-      - baseSha
       type: object
     EditConversationMessageRequest:
       properties:
@@ -23804,6 +24346,61 @@ components:
       - sessionId
       - leaseUntil
       - revision
+      type: object
+    PlanDependencyInput:
+      properties:
+        fromTaskId:
+          type: string
+        toTaskId:
+          type: string
+      required:
+      - fromTaskId
+      - toTaskId
+      type: object
+    PlanTaskInput:
+      properties:
+        agentHarness:
+          type: string
+        brief:
+          type: string
+        effort:
+          type: string
+        id:
+          type: string
+        kind:
+          type: string
+        maxAttempts:
+          format: int64
+          type: integer
+        model:
+          type: string
+        priority:
+          format: int64
+          type: integer
+        profile:
+          type: string
+        title:
+          type: string
+      required:
+      - id
+      - kind
+      - title
+      type: object
+    PlanTaskRepositoryInput:
+      properties:
+        allowedPaths:
+          items:
+            type: string
+          type: array
+        baseSha:
+          type: string
+        repoKey:
+          type: string
+        taskId:
+          type: string
+      required:
+      - taskId
+      - repoKey
       type: object
     PrepareTaskResponse:
       properties:
@@ -27243,6 +27840,34 @@ components:
       required:
       - idempotencyKey
       type: object
+    StartWorkflowPlanRequest:
+      properties:
+        agentHarness:
+          type: string
+        effort:
+          type: string
+        goal:
+          type: string
+        idempotencyKey:
+          type: string
+        model:
+          type: string
+        profile:
+          type: string
+        repositories:
+          items:
+            $ref: '#/components/schemas/WorkflowRepositoryInput'
+          type: array
+        title:
+          type: string
+      required:
+      - title
+      - goal
+      - repositories
+      - agentHarness
+      - model
+      - idempotencyKey
+      type: object
     SteerConversationRequest:
       properties:
         attachments:
@@ -28318,6 +28943,19 @@ components:
       - fromTaskId
       - toTaskId
       type: object
+    WorkflowEdge:
+      properties:
+        fromTaskId:
+          type: string
+        toTaskId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - workflowId
+      - fromTaskId
+      - toTaskId
+      type: object
     WorkflowEdgeResponse:
       properties:
         fromTaskId:
@@ -28354,6 +28992,15 @@ components:
       - performed
       - frozen
       - queueAvailable
+      type: object
+    WorkflowInterventionReceiptsResponse:
+      properties:
+        interventions:
+          items:
+            $ref: '#/components/schemas/WorkflowInterventionResponse'
+          type: array
+      required:
+      - interventions
       type: object
     WorkflowInterventionRequest:
       properties:
@@ -28509,6 +29156,128 @@ components:
       - createdAt
       - updatedAt
       type: object
+    WorkflowPlanCandidate:
+      properties:
+        confirmedRevision:
+          format: int64
+          type: integer
+        createdAt:
+          format: date-time
+          type: string
+        digest:
+          type: string
+        expectedRevision:
+          format: int64
+          type: integer
+        id:
+          type: string
+        patch:
+          $ref: '#/components/schemas/WorkflowPlanPatch'
+        sourceAttemptId:
+          type: string
+        sourceTurnId:
+          type: string
+        stopInterventionId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - sourceAttemptId
+      - sourceTurnId
+      - stopInterventionId
+      - expectedRevision
+      - digest
+      - patch
+      - confirmedRevision
+      - createdAt
+      type: object
+    WorkflowPlanDefinition:
+      properties:
+        dependencies:
+          items:
+            $ref: '#/components/schemas/PlanDependencyInput'
+          type: array
+        retireTaskIds:
+          items:
+            type: string
+          type: array
+        taskRepositories:
+          items:
+            $ref: '#/components/schemas/PlanTaskRepositoryInput'
+          type: array
+        tasks:
+          items:
+            $ref: '#/components/schemas/PlanTaskInput'
+          type: array
+      required:
+      - tasks
+      - dependencies
+      - taskRepositories
+      - retireTaskIds
+      type: object
+    WorkflowPlanInput:
+      properties:
+        edited:
+          $ref: '#/components/schemas/WorkflowPlanDefinition'
+        expectedRevision:
+          format: int64
+          type: integer
+        idempotencyKey:
+          type: string
+        sourceAttemptId:
+          type: string
+        sourceTurnId:
+          type: string
+        stopInterventionId:
+          type: string
+      required:
+      - sourceAttemptId
+      - sourceTurnId
+      - expectedRevision
+      - idempotencyKey
+      type: object
+    WorkflowPlanPatch:
+      properties:
+        dependencies:
+          items:
+            $ref: '#/components/schemas/WorkflowEdge'
+          type: array
+        retireTaskIds:
+          items:
+            type: string
+          type: array
+        taskRepositories:
+          items:
+            $ref: '#/components/schemas/WorkflowTaskRepository'
+          type: array
+        tasks:
+          items:
+            $ref: '#/components/schemas/WorkflowTask'
+          type: array
+      required:
+      - tasks
+      - dependencies
+      - taskRepositories
+      - retireTaskIds
+      type: object
+    WorkflowPlanResponse:
+      properties:
+        candidate:
+          $ref: '#/components/schemas/WorkflowPlanCandidate'
+      required:
+      - candidate
+      type: object
+    WorkflowPlansResponse:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/WorkflowPlanCandidate'
+          type: array
+      required:
+      - candidates
+      type: object
     WorkflowQualitySummaryResponse:
       properties:
         artifacts:
@@ -28551,6 +29320,41 @@ components:
       - commits
       - integrations
       - operations
+      type: object
+    WorkflowReadAccessResponse:
+      properties:
+        expiresAt:
+          format: date-time
+          type: string
+        readToken:
+          type: string
+      required:
+      - readToken
+      - expiresAt
+      type: object
+    WorkflowReplanInput:
+      properties:
+        agentHarness:
+          type: string
+        effort:
+          type: string
+        expectedRevision:
+          format: int64
+          type: integer
+        idempotencyKey:
+          type: string
+        model:
+          type: string
+        profile:
+          type: string
+        stopInterventionId:
+          type: string
+      required:
+      - stopInterventionId
+      - expectedRevision
+      - idempotencyKey
+      - agentHarness
+      - model
       type: object
     WorkflowReplanResponse:
       properties:
@@ -28718,6 +29522,59 @@ components:
       - terminated
       - observedAt
       type: object
+    WorkflowTask:
+      properties:
+        agentHarness:
+          type: string
+        brief:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        effort:
+          type: string
+        id:
+          type: string
+        kind:
+          type: string
+        maxAttempts:
+          format: int64
+          type: integer
+        model:
+          type: string
+        planner:
+          type: boolean
+        priority:
+          format: int64
+          type: integer
+        profile:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        state:
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        workflowId:
+          type: string
+      required:
+      - id
+      - workflowId
+      - kind
+      - title
+      - brief
+      - state
+      - priority
+      - planner
+      - maxAttempts
+      - revision
+      - createdAt
+      - updatedAt
+      type: object
     WorkflowTaskEnvelope:
       properties:
         attempts:
@@ -28775,6 +29632,9 @@ components:
           type: string
         brief:
           type: string
+        effort:
+          maxLength: 32
+          type: string
         id:
           description: Client-chosen task identifier, unique inside the workflow.
           minLength: 1
@@ -28794,9 +29654,15 @@ components:
           format: int64
           minimum: 1
           type: integer
+        model:
+          maxLength: 256
+          type: string
         priority:
           format: int64
           type: integer
+        profile:
+          maxLength: 256
+          type: string
         title:
           minLength: 1
           type: string
@@ -28804,6 +29670,27 @@ components:
       - id
       - kind
       - title
+      type: object
+    WorkflowTaskRepository:
+      properties:
+        allowedPaths:
+          items:
+            type: string
+          type: array
+        baseSha:
+          type: string
+        repoKey:
+          type: string
+        taskId:
+          type: string
+        workflowId:
+          type: string
+      required:
+      - workflowId
+      - taskId
+      - repoKey
+      - allowedPaths
+      - baseSha
       type: object
     WorkflowTaskRepositoryInput:
       properties:
@@ -29014,6 +29901,8 @@ components:
         createdAt:
           format: date-time
           type: string
+        effort:
+          type: string
         id:
           type: string
         kind:
@@ -29028,9 +29917,15 @@ components:
         maxAttempts:
           format: int64
           type: integer
+        model:
+          type: string
+        planner:
+          type: boolean
         priority:
           format: int64
           type: integer
+        profile:
+          type: string
         revision:
           format: int64
           type: integer
@@ -29058,6 +29953,7 @@ components:
         workflowId:
           type: string
       required:
+      - planner
       - id
       - workflowId
       - kind

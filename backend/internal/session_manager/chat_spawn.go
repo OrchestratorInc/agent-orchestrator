@@ -250,6 +250,14 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	// config is shared with the callback below, which fills that one key in before
 	// the driver reads the list.
 	mcpServers := m.aoMCPServers(ctx, in.cfg.Harness, env, in.cfg.WorkflowSpawn)
+	readOnly, err := m.workflowPlanner(ctx, in.cfg.WorkflowSpawn)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, err)
+	}
+	if readOnly {
+		mcpServers = nil
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:     id,
 		ProjectID:     in.cfg.ProjectID,
@@ -264,6 +272,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
+		ReadOnly:                readOnly,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
 		MCPServers:              mcpServers,
@@ -575,6 +584,13 @@ func (m *Manager) resumeChatController(
 	}
 	validationSessionID := rec.ID
 	resumeMCPServers := m.aoMCPServers(ctx, rec.Harness, env, workflowContext)
+	readOnly, err := m.workflowPlanner(ctx, workflowContext)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if readOnly {
+		resumeMCPServers = nil
+	}
 	if controllerGeneration == "" {
 		controllerGeneration = uuid.NewString()
 	}
@@ -603,6 +619,7 @@ func (m *Manager) resumeChatController(
 		Model:                   agentConfig.Model,
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
+		ReadOnly:                readOnly,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
 		MCPServers:              resumeMCPServers,

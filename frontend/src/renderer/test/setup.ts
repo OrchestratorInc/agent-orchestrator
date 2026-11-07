@@ -156,6 +156,8 @@ if (typeof window !== "undefined") {
 
 	window.ao = {
 		operator: {
+			authorizeWorkflow: async () => { throw new Error("Workflow authorization requires the desktop app."); },
+			readWorkflow: async () => { throw new Error("Workflow reading requires the desktop app."); },
 			runVerb: async () => {
 				throw new Error("Operator actions require the desktop app.");
 			},

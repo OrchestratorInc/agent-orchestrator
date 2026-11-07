@@ -15,8 +15,9 @@ import (
 
 // OperatorController 仅允许本地进程申请审批；授权由 daemon 调用 OS 验证后逐操作发放。
 type OperatorController struct {
-	Approvals *principal.ApprovalStore
-	Consent   principal.ConsentVerifier
+	Approvals  *principal.ApprovalStore
+	Consent    principal.ConsentVerifier
+	Principals *principal.Resolver
 }
 
 // Register 挂载审批请求、状态与 OS 验证入口；不公开可枚举的审批列表。
@@ -24,6 +25,7 @@ func (c *OperatorController) Register(r chi.Router) {
 	r.Post("/operator/approvals", c.createApproval)
 	r.Post("/operator/approvals/{approvalId}/confirm", c.confirmApproval)
 	r.Post("/operator/approvals/{approvalId}/status", c.approvalStatus)
+	r.Post("/workflows/{workflowId}/read-access", c.workflowReadAccess)
 }
 
 // CreateOperatorApprovalRequest names the operation and payload a human is being asked about.

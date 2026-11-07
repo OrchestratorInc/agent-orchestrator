@@ -66,6 +66,10 @@ WHERE workflow_tasks.workflow_id = ?2
   AND workflow_tasks.id = ?3
   AND workflow_tasks.state = 'ready'
   AND workflow_tasks.revision = ?4
+	AND (workflow_tasks.planner=TRUE OR NOT EXISTS (
+		SELECT 1 FROM workflow_tasks planner WHERE planner.workflow_id=workflow_tasks.workflow_id
+		AND planner.planner=TRUE AND planner.state NOT IN ('succeeded','cancelled','failed')
+	))
   AND EXISTS (
       SELECT 1 FROM workflows
       WHERE id = ?2 AND state = 'active'
@@ -123,7 +127,7 @@ WHERE workflows.id = ?2
   AND NOT EXISTS (
       SELECT 1 FROM workflow_tasks
       WHERE workflow_tasks.workflow_id = workflows.id
-        AND workflow_tasks.state <> 'succeeded'
+        AND workflow_tasks.state NOT IN ('succeeded', 'cancelled')
   )
 `
 
@@ -260,7 +264,7 @@ func (q *Queries) GetWorkflowIdempotency(ctx context.Context, idempotencyKey str
 
 const getWorkflowTask = `-- name: GetWorkflowTask :one
 SELECT id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
 FROM workflow_tasks
 WHERE workflow_id = ? AND id = ?
 `
@@ -286,6 +290,10 @@ func (q *Queries) GetWorkflowTask(ctx context.Context, arg GetWorkflowTaskParams
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Model,
+		&i.Effort,
+		&i.Profile,
+		&i.Planner,
 	)
 	return i, err
 }
@@ -448,8 +456,8 @@ func (q *Queries) InsertWorkflowRepository(ctx context.Context, arg InsertWorkfl
 const insertWorkflowTask = `-- name: InsertWorkflowTask :exec
 INSERT INTO workflow_tasks (
     id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertWorkflowTaskParams struct {
@@ -465,6 +473,10 @@ type InsertWorkflowTaskParams struct {
 	Revision     int64
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	Model        string
+	Effort       string
+	Profile      string
+	Planner      bool
 }
 
 func (q *Queries) InsertWorkflowTask(ctx context.Context, arg InsertWorkflowTaskParams) error {
@@ -481,6 +493,10 @@ func (q *Queries) InsertWorkflowTask(ctx context.Context, arg InsertWorkflowTask
 		arg.Revision,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.Model,
+		arg.Effort,
+		arg.Profile,
+		arg.Planner,
 	)
 	return err
 }
@@ -673,7 +689,7 @@ func (q *Queries) ListWorkflowTaskRepositories(ctx context.Context, arg ListWork
 
 const listWorkflowTasks = `-- name: ListWorkflowTasks :many
 SELECT id, workflow_id, kind, title, brief, state, priority, agent_harness,
-    max_attempts, revision, created_at, updated_at
+    max_attempts, revision, created_at, updated_at, model, effort, profile, planner
 FROM workflow_tasks
 WHERE workflow_id = ?1
   AND (CAST(?2 AS TEXT) = '' OR state = CAST(?2 AS TEXT))
@@ -715,6 +731,10 @@ func (q *Queries) ListWorkflowTasks(ctx context.Context, arg ListWorkflowTasksPa
 			&i.Revision,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Model,
+			&i.Effort,
+			&i.Profile,
+			&i.Planner,
 		); err != nil {
 			return nil, err
 		}

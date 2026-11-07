@@ -323,8 +323,9 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Audit:            deps.WorkflowAudit,
 		},
 		operator: &controllers.OperatorController{
-			Approvals: deps.OperatorApprovals,
-			Consent:   deps.OperatorConsent,
+			Approvals:  deps.OperatorApprovals,
+			Consent:    deps.OperatorConsent,
+			Principals: deps.WorkflowPrincipals,
 		},
 		events: &EventsController{Source: deps.CDC, Live: deps.Events},
 	}

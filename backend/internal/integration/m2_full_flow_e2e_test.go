@@ -99,6 +99,7 @@ type m2ffPlant struct {
 	repoA      string
 	repoB      string
 	m3         *m3Control
+	driver     ports.ChatDriver
 }
 
 // newM2FFFixture builds one daemon boot over an existing store and an existing layout.
@@ -141,17 +142,21 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 	// The same scripted driver the siblings use: it speaks AO's port vocabulary and starts no
 	// provider. Steering is enabled so the generation fence, not a missing capability, is what a
 	// stale intervention hits.
-	registry := scripted.Registry(scripted.NewDriver(scripted.Config{
-		Harness: m2smDriverHarness,
-		Capabilities: ports.ChatCapabilities{
-			ports.ChatCapabilityStreaming: true,
-			ports.ChatCapabilityApprovals: true,
-			ports.ChatCapabilityInterrupt: true,
-			ports.ChatCapabilityResume:    true,
-			ports.ChatCapabilitySteer:     true,
-		},
-		Steerable: true,
-	}))
+	driver := plant.driver
+	if driver == nil {
+		driver = scripted.NewDriver(scripted.Config{
+			Harness: m2smDriverHarness,
+			Capabilities: ports.ChatCapabilities{
+				ports.ChatCapabilityStreaming: true,
+				ports.ChatCapabilityApprovals: true,
+				ports.ChatCapabilityInterrupt: true,
+				ports.ChatCapabilityResume:    true,
+				ports.ChatCapabilitySteer:     true,
+			},
+			Steerable: true,
+		})
+	}
+	registry := scripted.Registry(driver)
 
 	lcm := lifecycle.New(st, nil)
 	chatSvc := chatsvc.New(chatsvc.Options{
@@ -242,6 +247,7 @@ func newM2FFFixture(t *testing.T, plant m2ffPlant) *m2ffFixture {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	deps := httpd.APIDeps{
+		Conversations:            chatSvc,
 		Workflows:                workflows,
 		WorkflowExecutionPermits: st,
 		WorkflowExecutionFence:   fence,

@@ -1388,6 +1388,22 @@ type WorkflowMessage struct {
 	UpdatedAt       time.Time
 }
 
+type WorkflowPlanCandidate struct {
+	ID                 string
+	WorkflowID         string
+	SourceAttemptID    string
+	SourceTurnID       string
+	StopInterventionID string
+	ExpectedRevision   int64
+	Digest             string
+	DefinitionJson     string
+	IdempotencyKey     string
+	RequestFingerprint string
+	StateFingerprint   string
+	ConfirmedRevision  int64
+	CreatedAt          string
+}
+
 type WorkflowQualityPolicy struct {
 	WorkflowID   string
 	PolicyJson   string
@@ -1419,6 +1435,15 @@ type WorkflowQualityReview struct {
 	UpdatedAt           time.Time
 }
 
+type WorkflowReplan struct {
+	PlannerTaskID      string
+	WorkflowID         string
+	StopInterventionID string
+	StoppedAttemptID   string
+	IdempotencyKey     string
+	RequestFingerprint string
+}
+
 type WorkflowRepository struct {
 	WorkflowID domain.WorkflowID
 	RepoKey    domain.WorkflowRepoKey
@@ -1441,6 +1466,10 @@ type WorkflowTask struct {
 	Revision     int64
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	Model        string
+	Effort       string
+	Profile      string
+	Planner      bool
 }
 
 type WorkflowTaskCommit struct {

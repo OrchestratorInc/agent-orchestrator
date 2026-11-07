@@ -345,6 +345,9 @@ func (g *LocalGateway) Spawn(
 	ctx context.Context,
 	request ports.SpawnRequest,
 ) (ports.SessionObservation, error) {
+	if request.Profile != "" {
+		return ports.SessionObservation{}, fmt.Errorf("workflow profile is unsupported")
+	}
 	if err := request.Validate(); err != nil {
 		return ports.SessionObservation{}, err
 	}
@@ -378,6 +381,8 @@ func (g *LocalGateway) Spawn(
 		ProjectID:         request.ProjectID,
 		Kind:              domain.KindWorker,
 		Harness:           request.Harness,
+		AgentConfig:       ports.AgentConfig{Model: request.Model, Effort: request.Effort},
+		EffortOverride:    request.Effort != "",
 		RequestedMode:     request.Mode,
 		Prompt:            request.Prompt,
 		ClientRequestID:   request.SpawnKey,
@@ -543,9 +548,8 @@ func (g *LocalGateway) Send(
 			ClientMessageID: request.ClientMessageID,
 			Origin:          originOrDefault(request.Origin),
 			SenderSessionID: string(request.SenderSessionID),
-			// A workflow sends direction to a worker. Attributing it to a human would
-			// make the timeline lie about who asked for the work.
-			AuthoredByUser: false,
+			// 来源由可信协调器设置，Agent 消息仍保持 automation，不能冒充人工。
+			AuthoredByUser: request.Origin == domain.MessageOriginHuman,
 		})
 	if err != nil {
 		return ports.MessageReceipt{}, mapChatError(err)
@@ -623,22 +627,22 @@ func (g *LocalGateway) Steer(
 		// guidance). Dropping it would force a caller to re-observe the provider to learn
 		// something AO already knows, and the error alone is not actionable.
 		return ports.MessageReceipt{
-				SessionID:       request.SessionID,
-				ClientMessageID: request.ClientMessageID,
-				// The turn that absorbed it is a real row, so it is resolved here too: a
-				// caller investigating the mismatch needs it. Steered stays false below, so
-				// this can never be read as a successful steer.
-				TurnID:         g.durableTurnID(ctx, request.SessionID, result.ProviderTurnID),
-				ProviderTurnID: result.ProviderTurnID,
-				// Steered stays false: this receipt is evidence of what the provider did,
-				// not a claim that the caller's request succeeded. Setting it true would
-				// make MatchesSteer's contract depend on the caller ignoring the error.
-				Steered:              false,
-				TargetProviderTurnID: result.ProviderTurnID,
-				ControllerGeneration: request.ControllerGeneration,
-			}, fmt.Errorf(
-				"%w: the provider absorbed the guidance into %q, not %q",
-				ports.ErrExecutionTargetMismatch, result.ProviderTurnID, request.TargetProviderTurnID)
+			SessionID:       request.SessionID,
+			ClientMessageID: request.ClientMessageID,
+			// The turn that absorbed it is a real row, so it is resolved here too: a
+			// caller investigating the mismatch needs it. Steered stays false below, so
+			// this can never be read as a successful steer.
+			TurnID:         g.durableTurnID(ctx, request.SessionID, result.ProviderTurnID),
+			ProviderTurnID: result.ProviderTurnID,
+			// Steered stays false: this receipt is evidence of what the provider did,
+			// not a claim that the caller's request succeeded. Setting it true would
+			// make MatchesSteer's contract depend on the caller ignoring the error.
+			Steered:              false,
+			TargetProviderTurnID: result.ProviderTurnID,
+			ControllerGeneration: request.ControllerGeneration,
+		}, fmt.Errorf(
+			"%w: the provider absorbed the guidance into %q, not %q",
+			ports.ErrExecutionTargetMismatch, result.ProviderTurnID, request.TargetProviderTurnID)
 	}
 	return ports.MessageReceipt{
 		SessionID:            request.SessionID,

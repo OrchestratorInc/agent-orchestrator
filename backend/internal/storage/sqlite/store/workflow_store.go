@@ -471,6 +471,7 @@ func workflowTaskToInsert(rec domain.WorkflowTask) gen.InsertWorkflowTaskParams 
 		ID: rec.ID, WorkflowID: rec.WorkflowID, Kind: rec.Kind, Title: rec.Title,
 		Brief: rec.Brief, State: rec.State, Priority: rec.Priority,
 		AgentHarness: rec.AgentHarness, MaxAttempts: rec.MaxAttempts, Revision: rec.Revision,
+		Model: rec.Model, Effort: rec.Effort, Profile: rec.Profile, Planner: rec.Planner,
 		CreatedAt: utcTime(rec.CreatedAt), UpdatedAt: utcTime(rec.UpdatedAt),
 	}
 }
@@ -499,6 +500,7 @@ func workflowTaskFromGen(row gen.WorkflowTask) domain.WorkflowTask {
 		ID: row.ID, WorkflowID: row.WorkflowID, Kind: row.Kind, Title: row.Title,
 		Brief: row.Brief, State: row.State, Priority: row.Priority,
 		AgentHarness: row.AgentHarness, MaxAttempts: row.MaxAttempts, Revision: row.Revision,
+		Model: row.Model, Effort: row.Effort, Profile: row.Profile, Planner: row.Planner,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }

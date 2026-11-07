@@ -65,6 +65,10 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 			if err != nil {
 				return err
 			}
+			// 已结算但未确认物理终止的 Attempt 保留占位，不能借恢复重新协调执行。
+			if p.AttemptState != domain.WorkflowAttemptStateClaimed && p.AttemptState != domain.WorkflowAttemptStateRunning {
+				continue
+			}
 			if _, err := c.Reconcile(ports.WithExecutionPermit(ctx, p), ad.AttemptID); err != nil {
 				return err
 			}

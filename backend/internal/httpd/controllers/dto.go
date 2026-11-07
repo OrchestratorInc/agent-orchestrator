@@ -4027,6 +4027,9 @@ type WorkflowRepositoryInput struct {
 // WorkflowTaskInput describes one task of a new workflow. Lifecycle state is
 // assigned by the daemon, never by the caller.
 type WorkflowTaskInput struct {
+	Model        string `json:"model,omitempty" maxLength:"256"`
+	Effort       string `json:"effort,omitempty" maxLength:"32"`
+	Profile      string `json:"profile,omitempty" maxLength:"256"`
 	ID           string `json:"id" minLength:"1" description:"Client-chosen task identifier, unique inside the workflow."`
 	Kind         string `json:"kind" enum:"analysis,development,testing,review,integration,approval"`
 	Title        string `json:"title" minLength:"1"`
@@ -4125,6 +4128,10 @@ type WorkflowRepositoryResponse struct {
 
 // WorkflowTaskResponse is the API representation of one workflow task.
 type WorkflowTaskResponse struct {
+	Planner      bool      `json:"planner"`
+	Model        string    `json:"model,omitempty"`
+	Effort       string    `json:"effort,omitempty"`
+	Profile      string    `json:"profile,omitempty"`
 	ID           string    `json:"id"`
 	WorkflowID   string    `json:"workflowId"`
 	Kind         string    `json:"kind" enum:"analysis,development,testing,review,integration,approval"`

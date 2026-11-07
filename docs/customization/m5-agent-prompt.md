@@ -11,11 +11,11 @@
 3. `docs/customization/m5-design.md`、`m5-plan.md`。
 4. 派发消息给出的 M4 独立验收报告、提交 SHA 和 M4 实施报告。
 
-你负责 M5 的实现、自测、返修及实施报告。统筹负责独立验收和验收后的本地提交，再开启 M6。具体实现方法、内部工作拆分、测试安排和子 Agent 使用由你决定，不必逐步等待统筹批准。
+你负责 M5 的实现、自测、返修及实施报告。统筹负责独立验收和验收后的本地提交，再开启 M6。当前总并发为 2，本阶段由一个执行会话完成，不创建子 Agent。具体实现方法、文件拆分和测试安排由你决定，不必逐步等待统筹批准。
 
 ## 约束
 
-- 当前会话和全部子 Agent 使用 Astra（`gpt-6-astra`），按难度选择思考强度；不静默改其他模型，不使用 `codexhost-delegation`。
+- 当前会话使用 Astra（`gpt-6-astra`），按难度选择思考强度；不派发子 Agent，不静默改其他模型，不使用 `codexhost-delegation`。
 - 保护未提交改动，不覆盖未知文件。按真实源码接续 M4，不能把总体设计 API 草案当作已有接口。
 - 复用持久 Session 宿主、终端缓存、类型化 API、SSE 和原生 Operator 审批；不得创建第二个 Scheduler/SessionRegistry/审批系统。
 - 核心结果包括双模式不丢 Session、DAG/任务与 Agent 定位、能力感知干预、协作/TaskRequest、逐仓质量/审批、预算和恢复状态。

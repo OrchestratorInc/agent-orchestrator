@@ -148,7 +148,11 @@ SELECT * FROM workflows WHERE state='active' AND id>sqlc.arg(after_id) ORDER BY 
 
 -- name: ListSchedulerCandidates :many
 WITH clock AS (SELECT CAST(sqlc.arg(now_epoch) AS INTEGER) AS seconds)
-SELECT workflow_tasks.* FROM workflow_tasks,clock WHERE workflow_id=sqlc.arg(workflow_id) AND state='ready'
-ORDER BY CASE WHEN priority > 9223372036854775807 - MIN(5,MAX(0,(clock.seconds-unixepoch(substr(updated_at,1,19)))/300)) THEN 9223372036854775807
-ELSE priority + MIN(5,MAX(0,(clock.seconds-unixepoch(substr(updated_at,1,19)))/300)) END DESC,
-created_at,id LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(candidate_offset);
+SELECT workflow_tasks.* FROM workflow_tasks,clock WHERE workflow_tasks.workflow_id=sqlc.arg(workflow_id) AND workflow_tasks.state='ready'
+AND (workflow_tasks.planner=TRUE OR NOT EXISTS (
+ SELECT 1 FROM workflow_tasks planner WHERE planner.workflow_id=workflow_tasks.workflow_id
+ AND planner.planner=TRUE AND planner.state NOT IN ('succeeded','cancelled','failed')
+))
+ORDER BY CASE WHEN workflow_tasks.priority > 9223372036854775807 - MIN(5,MAX(0,(clock.seconds-unixepoch(substr(workflow_tasks.updated_at,1,19)))/300)) THEN 9223372036854775807
+ELSE workflow_tasks.priority + MIN(5,MAX(0,(clock.seconds-unixepoch(substr(workflow_tasks.updated_at,1,19)))/300)) END DESC,
+workflow_tasks.created_at,workflow_tasks.id LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(candidate_offset);

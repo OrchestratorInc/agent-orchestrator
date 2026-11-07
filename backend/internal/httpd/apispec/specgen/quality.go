@@ -11,6 +11,7 @@ import (
 func qualityOperations() []operation {
 	errors := []respUnit{{400, envelope.APIError{}}, {403, envelope.APIError{}}, {404, envelope.APIError{}}, {409, envelope.APIError{}}, {500, envelope.APIError{}}, {501, envelope.APIError{}}}
 	return []operation{
+		{method: "POST", path: "/api/v1/workflows/{workflowId}/read-access", id: "authorizeWorkflowReadAccess", tag: "workflows", summary: "Authorize desktop-only workflow reads for 30 minutes", pathParams: []any{controllers.WorkflowIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowReadAccessResponse{}}}, errors...)},
 		{method: "GET", path: "/api/v1/workflows/{workflowId}/quality-summary", id: "getWorkflowQualitySummary", tag: "workflows", summary: "getWorkflowQualitySummary", pathParams: []any{controllers.WorkflowIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowQualitySummaryResponse{}}}, errors...)},
 		{method: "GET", path: "/api/v1/workflows/{workflowId}/coordination-summary", id: "getWorkflowCoordinationSummary", tag: "workflows", summary: "getWorkflowCoordinationSummary", pathParams: []any{controllers.WorkflowIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.WorkflowCoordinationResponse{}}}, errors...)},
 		{method: "GET", path: "/api/v1/workflows/{workflowId}/quality-policies", id: "listWorkflowQualityPolicies", tag: "workflows", summary: "listWorkflowQualityPolicies", pathParams: []any{controllers.WorkflowIDParam{}}, resps: append([]respUnit{{http.StatusOK, controllers.QualityPoliciesResponse{}}}, errors...)},

@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useWorkflowUi } from "../stores/workflow-ui-store";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -643,6 +644,9 @@ export function Sidebar({
 	resizeAuxiliaryTargetRef,
 }: SidebarProps) {
 	const { t } = useTranslation();
+	const workflowOpen = useWorkflowUi((state) => state.open);
+	const workflowPathname = useRouterState({ select: (state) => state.location.pathname });
+	useEffect(() => { useWorkflowUi.getState().setOpen(false); }, [workflowPathname]);
 	const remoteNavigate = useNavigate();
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
@@ -1045,6 +1049,7 @@ export function Sidebar({
 					</SidebarGroup>
 				) : null}
 				<SidebarMenu className="mb-3 gap-0.5 group-data-[collapsible=icon]:gap-1">
+					<SidebarMenuItem><SidebarTopNavRow active={workflowOpen} icon={<LayoutGrid aria-hidden="true" />} label={t("workflow.title")} onClick={() => useWorkflowUi.getState().setOpen(!workflowOpen)} tooltip={isCollapsed ? t("workflow.title") : undefined} /></SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isAutomations}

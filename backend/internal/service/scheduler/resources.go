@@ -58,6 +58,8 @@ func (s *Service) RefreshResources(ctx context.Context) error {
 		return domain.ErrSchedulerCapacity
 	}
 	sample, err := s.deps.Resources.Sample(ctx)
+	// 采样器读取系统计数后才记录 ObservedAt，不能用采样前的时钟判断未来样本。
+	now = s.deps.Clock().UTC()
 	if err != nil {
 		sample = domain.ResourceSample{ObservedAt: now, ReasonCode: "RESOURCE_SAMPLE_FAILED"}
 	}

@@ -1214,7 +1214,7 @@ func Run(buildVersion string) error {
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
 	}
-	wireQualityServices(&apiDeps, store, cfg.DataDir, operatorAuth.Approvals, log)
+	m3.planArtifacts = wireQualityServices(&apiDeps, store, cfg.DataDir, operatorAuth.Approvals, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, apiDeps)
 	if err != nil {
 		stop()

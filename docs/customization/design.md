@@ -1,6 +1,6 @@
 # 多编码 Agent 桌面编排平台 — 详细设计 V0.1
 
-> 状态：**总体设计 V0.1；M1 Workflow 核心后端已完成并经独立复核判 PASS。M0 已完成无预算范围的环境、构建和部分桌面/Agent 预检，正式验收仍为 BLOCKED；M0-05 预算暂缓。M2 实现及回归修复已落盘，用户决定先本地提交，第六轮离线独立复验与真实 Agent 完整验收暂缓留档；M2 仍为 NOT ACCEPTED**（见 [m0-report.md](m0-report.md)、[m1-plan.md](m1-plan.md) 与 [M2 后续验收留档](m2-handoff.md)）。
+> 状态（2026-11-08）：**总体设计 V0.1；M1 已独立验收 PASS，M2、M3 为 Windows 离线限定范围 PASS。M4 已在本地离线范围验收并提交 `8384bcc2a48d148e611f6d20b596de4eecd15a2d`。M5相关独立回归和部分真实桌面验收已通过，整体验收未通过；用户最新要求先跳过本人操作继续开发，正收口开发检查点提交，随后推进M6自动工作。M0 正式验收仍为 BLOCKED，M0-05 真实 Provider 预算暂缓。** 当前状态与证据统一见 [阶段调度](delivery-status.md)、[M4 统筹验收](m4-supervisor-acceptance.md) 和 [M5 统筹验收](m5-acceptance.md)；限定离线 PASS 不代表真实 Provider、Windows Hello 正向或安装升级通过。
 > 日期：2026-11-03；基座：Orchestrator.inc 上游 `23840aa54104`；本地改造分支：`feat/multi-agent-desktop`。
 > 需求输入：`requirements.md` Q1–Q10；源码事实：`gap-analysis.md`。未来调整以验证结果和明确需求变更为准。
 
@@ -413,6 +413,6 @@ Attempt 产物
 
 M0 的执行结果、剩余阻断与 M0-05 预算前提统一记录在 [m0-report.md](m0-report.md)；M0-05 预算暂未批准，后续执行，当前不得发送真实 Provider 请求。
 
-M1 的实施拆解与验收标准统一记录在 [m1-plan.md](m1-plan.md)。当前第一项为 **M1-01：数据库迁移与领域模型**，按顺序完成 M1-01～M1-05。M1 只允许本地后端核心与 Fake/Stub 测试，不启动真实 Agent、不改用户 `~/.ao` 数据、不触碰 `.codex/` / `.claude/` 配置；M2～M6 不在本阶段提前实现。
+当前入口为 **M5 桌面双模式的剩余验收与返修**：实施范围见 [m5-plan.md](m5-plan.md)，统筹结论见 [m5-acceptance.md](m5-acceptance.md)，缺陷关闭条件见 [m5-supervisor-rework.md](m5-supervisor-rework.md)。M4 已提交；M5 必须验收成功并本地提交后，才可派发 [M6 阶段计划](m6-plan.md)。构建、完整回归及真实桌面未验项不得以定向测试或历史阶段 PASS 替代。
 
-**M1-01 开始前**：复核 SQLite migration / sqlc / domain 现有模式，确认测试数据库路径和生成命令；遵循根目录 `AGENTS.md`。若未来准备向上游提交 Feature PR，还需先满足 `CONTRIBUTING.md` 的 core-team approval 要求。
+**执行约束**：仅保留统筹与一个执行会话，执行方不开子 Agent，不使用 `codexhost-delegation`；高 I/O 操作串行，新增缓存、依赖、日志与构建产物放 C 盘隔离目录。不改用户真实 AO 数据或 `.codex/`、`.claude/` 配置，不发送真实 Provider 请求，不 Push、Merge 或发布。详细调度与提交门禁见 [delivery-status.md](delivery-status.md)，仍须遵循根目录 `AGENTS.md`。若未来准备向上游提交 Feature PR，还需先满足 `CONTRIBUTING.md` 的 core-team approval 要求。

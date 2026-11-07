@@ -718,17 +718,18 @@ app.once("will-quit", () => {
 /** Main 提供可信 shell 和原生确认；最终的人机验证由 daemon 调用 Windows Hello。 */
 const operatorIpcDeps: OperatorDeps = {
 	ipcMain,
+	daemonIdentity: () => String(daemonAttachmentGeneration),
 	baseURL: () => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
 	trustedWebContents: () => mainWindow && !mainWindow.isDestroyed() ? getShellWebContents() : null,
 	rendererURL: rendererUrl,
 	/** 展示 Main 已校验的目标和原文；取消时不创建审批。 */
-	confirmOperation: async ({ verb, operationPath, body }) => {
+	confirmOperation: async ({ verb, method, operationPath, body }) => {
 		if (!mainWindow || mainWindow.isDestroyed()) return false;
 		const result = await dialog.showMessageBox(mainWindow, {
 			type: "warning",
 			title: "工作流操作确认",
 			message: `确认执行 ${verb}？`,
-			detail: `POST ${operationPath}\n\n请求正文：\n${body || "（空正文）"}\n\n继续后需要 Windows Hello 验证。`,
+			detail: `${method} ${operationPath}\n\n请求正文：\n${body || "（空正文）"}\n\n继续后需要 Windows Hello 验证。`,
 			buttons: ["取消", "继续验证"],
 			defaultId: 0,
 			cancelId: 0,

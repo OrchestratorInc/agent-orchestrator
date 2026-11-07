@@ -94,6 +94,11 @@ type WorkflowsController struct {
 
 // Register mounts the workflow API routes on r.
 func (c *WorkflowsController) Register(r chi.Router) {
+	r.Post("/workflows/plan", c.startPlan)
+	r.Post("/workflows/{workflowId}/replan", c.startReplan)
+	r.Post("/workflows/{workflowId}/plan-candidates", c.preparePlan)
+	r.Get("/workflows/{workflowId}/plan-candidates", c.listPlans)
+	r.Post("/workflows/{workflowId}/plan-candidates/{candidateId}/confirm", c.confirmPlan)
 	r.Get("/workflows", c.list)
 	r.Post("/workflows", c.create)
 	r.Post("/workflows/recover-expired", c.recoverExpired)
@@ -449,7 +454,8 @@ func workflowCreateInput(req CreateWorkflowRequest) workflowsvc.CreateInput {
 			Brief:        task.Brief,
 			Priority:     task.Priority,
 			AgentHarness: domain.AgentHarness(task.AgentHarness),
-			MaxAttempts:  task.MaxAttempts,
+			Model:        task.Model, Effort: task.Effort, Profile: task.Profile,
+			MaxAttempts: task.MaxAttempts,
 		})
 	}
 	input.Dependencies = make([]workflowsvc.DependencyInput, 0, len(req.Dependencies))
@@ -498,6 +504,7 @@ func workflowTaskResponse(task domain.WorkflowTask) WorkflowTaskResponse {
 		ID: string(task.ID), WorkflowID: string(task.WorkflowID), Kind: string(task.Kind),
 		Title: task.Title, Brief: task.Brief, State: string(task.State), Priority: task.Priority,
 		AgentHarness: string(task.AgentHarness), MaxAttempts: task.MaxAttempts,
+		Model: task.Model, Effort: task.Effort, Profile: task.Profile, Planner: task.Planner,
 		Revision: task.Revision, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
 	}
 }
@@ -866,6 +873,8 @@ func (c *WorkflowsController) RegisterM2(r chi.Router) {
 		r.Use(operatorApprovalBinding)
 		r.Get("/workflows/capabilities", c.capabilities)
 		r.Get("/workflows/{workflowId}/attempts/{attemptId}/binding", c.binding)
+		r.Get("/workflows/{workflowId}/attempts/{attemptId}/capabilities", c.attemptCapabilities)
+		r.Get("/workflows/{workflowId}/attempts/{attemptId}/interventions", c.interventionReceipts)
 		r.Post("/workflows/{workflowId}/attempts/{attemptId}/bind", c.bind)
 		r.Get("/workflows/{workflowId}/attempts/{attemptId}/observe", c.observe)
 		r.Post("/workflows/{workflowId}/attempts/{attemptId}/reconcile", c.reconcile)
@@ -1186,9 +1195,10 @@ func (c *WorkflowsController) bind(w http.ResponseWriter, r *http.Request) {
 		SpawnKey:   req.IdempotencyKey,
 		ProjectID:  ownership.ProjectID,
 		Harness:    harness,
-		Mode:       req.Mode,
-		Prompt:     req.Prompt,
-		Repos:      repositoryRefs(repositories),
+		Model:      ownership.Task.Model, Effort: ownership.Task.Effort, Profile: ownership.Task.Profile,
+		Mode:   req.Mode,
+		Prompt: req.Prompt,
+		Repos:  repositoryRefs(repositories),
 	}, repositories)
 	if err != nil {
 		envelope.WriteError(w, r, bindError(err))
@@ -1562,9 +1572,10 @@ func (c *WorkflowsController) intervention(w http.ResponseWriter, r *http.Reques
 	}
 	workflowID := domain.WorkflowID(chi.URLParam(r, "workflowId"))
 	attemptID := domain.WorkflowAttemptID(chi.URLParam(r, "attemptId"))
-	if _, ok := c.caller(w, r, principal.RequestFacts{
+	caller, ok := c.caller(w, r, principal.RequestFacts{
 		WorkflowID: workflowID, RouteAttemptID: attemptID,
-	}); !ok {
+	})
+	if !ok {
 		return
 	}
 	if strings.TrimSpace(req.ClientMessageID) == "" {
@@ -1613,6 +1624,7 @@ func (c *WorkflowsController) intervention(w http.ResponseWriter, r *http.Reques
 			WorkflowID: workflowID, TaskID: taskID, AttemptID: attemptID,
 			ClientMessageID: req.ClientMessageID, Text: req.Text,
 			ControllerGeneration: req.ControllerGeneration,
+			AuthoredByOperator:   caller.IsOperator(),
 		})
 	case domain.WorkflowInterventionModeStop:
 		outcome, replan, err = c.Interventions.Stop(r.Context(), interventionsvc.StopRequest{

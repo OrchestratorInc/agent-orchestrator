@@ -213,6 +213,10 @@ type WorkflowTask struct {
 	State        WorkflowTaskState `json:"state"`
 	Priority     int64             `json:"priority"`
 	AgentHarness AgentHarness      `json:"agentHarness,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	Effort       string            `json:"effort,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
+	Planner      bool              `json:"planner"`
 	MaxAttempts  int64             `json:"maxAttempts"`
 	Revision     int64             `json:"revision"`
 	CreatedAt    time.Time         `json:"createdAt"`

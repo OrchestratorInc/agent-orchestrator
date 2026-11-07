@@ -26,7 +26,7 @@ func TestMigrationWorkflowCoreCreatesDurableTablesAndConstraints(t *testing.T) {
 		},
 		"workflow_tasks": {
 			"id", "workflow_id", "kind", "title", "brief", "state", "priority", "agent_harness",
-			"max_attempts", "revision", "created_at", "updated_at",
+			"max_attempts", "revision", "created_at", "updated_at", "model", "effort", "profile", "planner",
 		},
 		"workflow_edges":      {"workflow_id", "from_task_id", "to_task_id"},
 		"workflow_task_repos": {"workflow_id", "task_id", "repo_key", "allowed_paths_json", "base_sha"},

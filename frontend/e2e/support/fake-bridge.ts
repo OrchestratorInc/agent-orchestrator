@@ -74,6 +74,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				// 授权必须由具体行为用例显式提供，通用 Renderer fixture 不假装完成原生审批。
+				operator: {
+					authorizeWorkflow: async () => { throw new Error("未装配测试只读授权"); },
+					readWorkflow: async () => ({ status: 403, body: { code: "WORKFLOW_READ_ACCESS_REQUIRED" } }),
+					runVerb: async () => { throw new Error("未装配测试原生审批"); },
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
@@ -983,6 +989,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				// 授权必须由具体行为用例显式提供，通用 Renderer fixture 不假装完成原生审批。
+				operator: {
+					authorizeWorkflow: async () => { throw new Error("未装配测试只读授权"); },
+					readWorkflow: async () => ({ status: 403, body: { code: "WORKFLOW_READ_ACCESS_REQUIRED" } }),
+					runVerb: async () => { throw new Error("未装配测试原生审批"); },
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,

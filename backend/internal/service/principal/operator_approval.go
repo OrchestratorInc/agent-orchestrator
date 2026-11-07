@@ -106,6 +106,12 @@ type OperatorOperation struct {
 // be an approval for "anything", and the whole point is that the human approved a specific
 // operation. Adding a route here is a security-relevant edit and belongs with the route.
 var OperatorOperations = []OperatorOperation{
+	{Method: http.MethodPost, Path: "/api/v1/workflows/plan"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/replan"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/plan-candidates"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/plan-candidates"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/plan-candidates/{candidateId}/confirm"},
+	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/read-access"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integrations/{planId}/apply"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/integrations/{planId}/push"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows"},
@@ -128,8 +134,10 @@ var OperatorOperations = []OperatorOperation{
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/resume"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/task-requests/{requestId}/decide"},
 	{Method: http.MethodPost, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/interventions"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/capabilities"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/binding"},
+	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/capabilities"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/attempts/{attemptId}/observe"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/messages"},
 	{Method: http.MethodGet, Path: "/api/v1/workflows/{workflowId}/task-requests"},
@@ -312,15 +320,16 @@ type ApprovalStoreOptions struct {
 // records live for minutes in this process and die with it, which is what makes "a restart
 // invalidates every outstanding approval" true by construction rather than by cleanup code.
 type ApprovalStore struct {
-	mu        sync.Mutex
-	consentMu sync.Mutex
-	ttl       time.Duration
-	clock     func() time.Time
-	newID     func() string
-	newCode   func() string
-	max       int
-	entries   map[string]Approval
-	order     []string
+	mu         sync.Mutex
+	consentMu  sync.Mutex
+	ttl        time.Duration
+	clock      func() time.Time
+	newID      func() string
+	newCode    func() string
+	max        int
+	entries    map[string]Approval
+	order      []string
+	readGrants map[string]workflowReadGrant
 }
 
 // NewApprovalStore builds an approval table.
@@ -795,6 +804,9 @@ func (t ApprovalOperatorTrust) PermitsOperator(_ *http.Request) bool {
 // Refusals, in order: no approval header (nothing to prove), no request binding, unknown id,
 // expired, unconfirmed, consumed, wrong operation, wrong payload.
 func (t ApprovalOperatorTrust) ProveApproval(req *http.Request) (string, error) {
+	if req != nil && hasHeader(req, HeaderWorkflowReadAccess) {
+		return t.Approvals.proveWorkflowReadAccess(req)
+	}
 	if req == nil {
 		return "", &ApprovalRefusal{
 			Code: CodeApprovalInvalid, Reason: ReasonApprovalMissing,

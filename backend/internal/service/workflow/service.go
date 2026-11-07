@@ -101,6 +101,10 @@ type TaskInput struct {
 	Brief        string                  `json:"brief,omitempty"`
 	Priority     int64                   `json:"priority,omitempty"`
 	AgentHarness domain.AgentHarness     `json:"agentHarness,omitempty"`
+	Model        string                  `json:"model,omitempty"`
+	Effort       string                  `json:"effort,omitempty"`
+	Profile      string                  `json:"profile,omitempty"`
+	Planner      bool                    `json:"-"`
 	MaxAttempts  int64                   `json:"maxAttempts,omitempty"`
 }
 
@@ -244,9 +248,16 @@ func (s *Service) Create(ctx context.Context, idempotencyKey string, input Creat
 		if task.AgentHarness != "" && !task.AgentHarness.IsKnown() {
 			return domain.Workflow{}, false, apierr.Invalid("INVALID_WORKFLOW_HARNESS", "A task references an unknown Agent harness", nil)
 		}
+		if task.Profile != "" {
+			return domain.Workflow{}, false, apierr.Invalid("WORKFLOW_PROFILE_UNSUPPORTED", "当前 Adapter 没有可验证的 profile 引用，不能静默忽略", map[string]any{"taskId": task.ID, "field": "profile"})
+		}
+		if len(task.Model) > 256 || len(task.Effort) > 32 || strings.ContainsAny(task.Model+task.Effort, "\r\n\x00") || (task.Effort != "" && task.Model == "") {
+			return domain.Workflow{}, false, apierr.Invalid("INVALID_WORKFLOW_MODEL", "模型或 effort 无效", map[string]any{"taskId": task.ID, "field": "model"})
+		}
 		record := domain.WorkflowTask{
 			ID: task.ID, WorkflowID: workflowID, Kind: task.Kind, Title: task.Title, Brief: task.Brief,
 			State: domain.WorkflowTaskStatePending, Priority: task.Priority, AgentHarness: task.AgentHarness,
+			Model: task.Model, Effort: task.Effort, Profile: task.Profile, Planner: task.Planner,
 			MaxAttempts: maxAttempts, Revision: 1, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := record.Validate(); err != nil {
@@ -312,6 +323,15 @@ func (s *Service) Create(ctx context.Context, idempotencyKey string, input Creat
 	}
 
 	fingerprint, err := requestFingerprint(input)
+	// 内部只读 Planner 标记不属于 HTTP DTO，但必须参与创建幂等身份。
+	for _, task := range input.Tasks {
+		if task.Planner && err == nil {
+			fingerprint, err = requestFingerprint(struct {
+				Input     CreateInput
+				PlannerID domain.WorkflowTaskID
+			}{input, task.ID})
+		}
+	}
 	if err != nil {
 		return domain.Workflow{}, false, apierr.InternalCause("WORKFLOW_FINGERPRINT_FAILED", "Failed to identify the workflow request", err)
 	}

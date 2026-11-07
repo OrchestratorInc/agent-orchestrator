@@ -23,7 +23,7 @@ function setup() {
 			const created = JSON.parse(init!.body as string);
 			approval = {
 				approvalId: "approval-1", code: "12345678", state: "pending",
-				operation: { method: "POST", path: created.operationPath },
+				operation: { method: created.operationMethod, path: created.operationPath },
 				payloadDigest: created.payloadDigest, expiresAt: "2099-01-01T00:00:00Z",
 			};
 			return Response.json({ approval }, { status: 201 });
@@ -43,6 +43,41 @@ function setup() {
 }
 
 describe("operator IPC", () => {
+	// 删除 Main 授权缓存或误把查询接到审批链，会出现重复 Hello 或向 Renderer 泄漏 token。
+	it("显式授权只确认一次，实时读取不再弹窗且凭据不出 Main", async () => {
+		const h = setup();
+		const original = h.request.getMockImplementation()!;
+		const token = "a".repeat(64);
+		h.request.mockImplementation(async (url, init) => {
+			if (String(url).endsWith("/w1/read-access")) return Response.json({ readToken: token, expiresAt: new Date(Date.now() + 60000).toISOString() });
+			if (init?.method === "GET") return Response.json({ messages: [] });
+			return original(url, init);
+		});
+		const read = () => h.handlers.get("operator:readWorkflow")!(h.event, { workflowId: "w1", verb: "messages", operationPath: "/api/v1/workflows/w1/messages" });
+		expect(await read()).toMatchObject({ status: 403 });
+		expect(h.request).not.toHaveBeenCalled();
+		const authorize = () => h.handlers.get("operator:authorizeWorkflow")!(h.event, "w1");
+		const results = await Promise.all([authorize(), authorize()]);
+		expect(JSON.stringify(results)).not.toContain(token);
+		await Promise.all([read(), read(), read()]);
+		expect(h.confirmOperation).toHaveBeenCalledTimes(1);
+		expect(h.request.mock.calls.filter(([, init]) => init?.method === "GET")).toHaveLength(3);
+		expect(h.request.mock.calls.at(-1)?.[1]?.headers).toEqual({ "X-AO-Workflow-Read-Access": token });
+		await h.handlers.get("operator:readWorkflow")!(h.event, { workflowId: "w1", verb: "attempt-capabilities", operationPath: "/api/v1/workflows/w1/attempts/a/capabilities" });
+		await expect(h.handlers.get("operator:readWorkflow")!(h.event, { workflowId: "w1", verb: "attempt-capabilities", operationPath: "/api/v1/workflows/w2/attempts/a/capabilities" })).rejects.toMatchObject({ code: "OPERATOR_INVALID_REQUEST" });
+		expect(h.confirmOperation).toHaveBeenCalledTimes(1);
+		await expect(h.invoke({ verb: "message", operationPath: "/api/v1/workflows/w1/messages" })).rejects.toMatchObject({ code: "OPERATOR_INVALID_REQUEST" });
+		await expect(h.invoke({ verb: "read-access", operationPath: "/api/v1/workflows/w1/read-access" })).rejects.toMatchObject({ code: "OPERATOR_INVALID_REQUEST" });
+	});
+
+	// 删除无授权查询的闭锁，会在取消后的 Query 重试再次请求原生验证。
+	it("授权取消后后台查询不能再次触发确认", async () => {
+		const h = setup(); h.confirmOperation.mockResolvedValue(false);
+		await expect(h.handlers.get("operator:authorizeWorkflow")!(h.event, "w1")).rejects.toMatchObject({ code: "OPERATOR_CANCELLED" });
+		for (let i = 0; i < 3; i++) await h.handlers.get("operator:readWorkflow")!(h.event, { workflowId: "w1", verb: "messages", operationPath: "/api/v1/workflows/w1/messages" });
+		expect(h.confirmOperation).toHaveBeenCalledTimes(1);
+		expect(h.request).not.toHaveBeenCalled();
+	});
 	// 删除来源检查会允许非主窗口触发特权操作。
 	it("拒绝其他窗口、子 frame、伪装 app 来源和远程来源", async () => {
 		const h = setup();
@@ -81,8 +116,8 @@ describe("operator IPC", () => {
 	it("取消时不请求 daemon", async () => {
 		const h = setup();
 		h.confirmOperation.mockResolvedValue(false);
-		await expect(h.invoke()).rejects.toMatchObject({ code: "OPERATOR_CANCELLED" });
-		expect(h.confirmOperation).toHaveBeenCalledWith({ verb: "bind", operationPath, body: rawBody });
+		await expect(h.invoke()).resolves.toMatchObject({ status: 499, code: "OPERATOR_CANCELLED", body: { code: "OPERATOR_CANCELLED" } });
+		expect(h.confirmOperation).toHaveBeenCalledWith({ verb: "bind", method: "POST", operationPath, body: rawBody });
 		expect(h.request).not.toHaveBeenCalled();
 	});
 
@@ -107,7 +142,6 @@ describe("operator IPC", () => {
 			const route = `/api/v1/workflows/wf-1/${verb === "decide" ? "task-requests/request-1" : "attempts/attempt-1"}/${verb}`;
 			const body = verb === "resume" ? "" : rawBody;
 			const result = await h.invoke({ verb, operationPath: route, ...(body ? { body } : {}) });
-			expect([...h.handlers.keys()]).toEqual(["operator:runVerb"]);
 			expect(h.request.mock.calls.map(([url]) => url)).toEqual([
 				`${base}/api/v1/operator/approvals`, `${base}/api/v1/operator/approvals/approval-1/confirm`, `${base}${route}`,
 			]);
@@ -145,6 +179,19 @@ describe("operator IPC", () => {
 });
 
 describe("operator IPC 响应凭据保护", () => {
+	// 删除 method 绑定会把 PUT 审批变成 POST，或允许错误方法的批准继续提交。
+	it("PUT 策略的原生确认、审批与最终请求绑定同一方法和原文", async () => {
+		const h = setup();
+		const path = "/api/v1/workflows/wf-1/quality-policy";
+		await h.invoke({ verb: "quality-policy", operationPath: path, body: rawBody });
+		expect(h.confirmOperation).toHaveBeenCalledWith({ verb: "quality-policy", method: "PUT", operationPath: path, body: rawBody });
+		expect(JSON.parse(h.request.mock.calls[0]![1]!.body as string)).toMatchObject({ operationMethod: "PUT", operationPath: path, payloadDigest: digest(rawBody) });
+		expect(h.request.mock.calls[2]![1]).toMatchObject({ method: "PUT", body: rawBody });
+		const bad = setup();
+		bad.request.mockResolvedValueOnce(Response.json({ approval: { approvalId: "wrong", code: "123", state: "pending", payloadDigest: digest(rawBody), operation: { method: "POST", path } } }));
+		await expect(bad.invoke({ verb: "quality-policy", operationPath: path, body: rawBody })).rejects.toMatchObject({ code: "OPERATOR_REQUEST_FAILED" });
+		expect(bad.request).toHaveBeenCalledTimes(1);
+	});
 	// 删除响应字段检查后，操作结果会把已知顶层 operator 凭据字段传给 renderer。
 	it("最终操作响应包含凭据字段时闭锁", async () => {
 		for (const field of ["operatorToken", "X-AO-Operator-Token"]) {

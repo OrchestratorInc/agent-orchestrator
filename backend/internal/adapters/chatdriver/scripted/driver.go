@@ -303,6 +303,13 @@ func (c *SteerableConversation) Steer(
 }
 
 // CompleteTurn publishes turn.completed for one turn, settling it.
+// ReplyAndComplete 通过正常 Driver 事件产生结构化输出，不直接写入 Chat 或 Workflow 数据库。
+func (c *Conversation) ReplyAndComplete(providerTurnID, text string) {
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: providerTurnID,
+		ProviderConversationID: c.ProviderConversationID(), ProviderItemID: providerTurnID + "-reply", Text: text})
+	c.CompleteTurn(providerTurnID)
+}
+
 func (c *Conversation) CompleteTurn(providerTurnID string) {
 	c.emit(ports.ChatEvent{
 		Kind:                   ports.ChatEventTurnCompleted,

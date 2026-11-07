@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -82,6 +84,81 @@ func TestResourceSoftLimitAndMemoryBoundaries(t *testing.T) {
 	if got := w.evaluate(r, r.ObservedAt, p); got.ReasonCode != "RESOURCE_HARD_LIMIT" {
 		t.Fatalf("RAM below 15%% = %+v", got)
 	}
+}
+
+// 删除采样后的时钟复核会把采样期间正常前进的合法读数误判为未来样本。
+func TestRefreshResourcesAcceptsSampleCompletedAfterRefreshStarted(t *testing.T) {
+	f := newFixture(t)
+	var raw domain.ResourceSample
+	var sampleErr error
+	f.scheduler.deps.Resources = resourceSamplerFunc(func(context.Context) (domain.ResourceSample, error) {
+		f.clock.Advance(time.Second)
+		return raw, sampleErr
+	})
+	// 一条正式 Service 路径覆盖恢复滞回及时间/采样故障闭锁，不放宽既有阈值。
+	cases := []struct {
+		name   string
+		shift  time.Duration
+		reason string
+		fail   bool
+		want   int64
+	}{
+		{name: "first_sample", reason: "resource_first_sample"},
+		{name: "healthy_1"}, {name: "healthy_2"}, {name: "healthy_3", want: 1},
+		{name: "healthy_4", want: 2}, {name: "healthy_5", want: 3},
+		{name: "future", shift: time.Second},
+		{name: "stale", shift: -16 * time.Second},
+		{name: "failed", fail: true},
+		{name: "gap", reason: "resource_sample_gap"},
+		{name: "incomplete", reason: "resource_sample_invalid"},
+		{name: "recover_1"}, {name: "recover_2"}, {name: "recover_3", want: 1},
+	}
+	for _, tc := range cases {
+		f.clock.Advance(SampleInterval)
+		if _, err := f.scheduler.MaintainLeadership(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		raw = healthyResource(f.clock.Now().Add(time.Second + tc.shift))
+		raw.ReasonCode = tc.reason
+		sampleErr = nil
+		if tc.fail {
+			sampleErr = errors.New("sample unavailable")
+		}
+		err := f.scheduler.RefreshResources(t.Context())
+		if !errors.Is(err, sampleErr) {
+			t.Fatalf("%s: error=%v", tc.name, err)
+		}
+		status, err := f.scheduler.Status(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: capacity=%+v resources=%+v", tc.name, status.Capacity, status.Resources)
+		wantReason := "RESOURCE_READY"
+		if tc.reason != "" || tc.shift != 0 || tc.fail {
+			wantReason = "RESOURCE_UNKNOWN"
+		}
+		if status.Capacity.Limit != tc.want || status.Capacity.ReasonCode != wantReason {
+			t.Fatalf("%s: capacity=%+v, want limit=%d reason=%s", tc.name, status.Capacity, tc.want, wantReason)
+		}
+		if !tc.fail && status.Resources != raw {
+			t.Fatalf("%s: raw sample changed: %+v", tc.name, status.Resources)
+		}
+		if err := f.scheduler.RefreshResources(t.Context()); !errors.Is(err, nil) {
+			t.Fatal(err)
+		}
+		repeated, err := f.scheduler.Status(t.Context())
+		if err != nil || repeated.Capacity != status.Capacity {
+			t.Fatalf("duplicate sample advanced recovery: %+v %v", repeated.Capacity, err)
+		}
+	}
+}
+
+// resourceSamplerFunc 只替换外部采样边界，让正式 Service 经历采样耗时。
+type resourceSamplerFunc func(context.Context) (domain.ResourceSample, error)
+
+// Sample 把带时间推进的样本交给正式 RefreshResources。
+func (f resourceSamplerFunc) Sample(ctx context.Context) (domain.ResourceSample, error) {
+	return f(ctx)
 }
 
 func healthyResource(now time.Time) domain.ResourceSample {
