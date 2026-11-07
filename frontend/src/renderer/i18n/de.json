@@ -1376,6 +1376,7 @@
 	"settings.telemetryEvents.description": "Begrenzte, datenschutzgefilterte Fehlerdiagnosen zur Verbesserung der Zuverlässigkeit teilen.",
 	"settings.telemetryEvents.pending": "Telemetrie ist lokal aus. Die Daemon-Bereinigung steht noch aus.",
 	"settings.telemetryEvents.failed": "Die Telemetrie-Bereinigung ist fehlgeschlagen. Die Übertragung bleibt deaktiviert.",
+	"settings.telemetryEvents.loadFailed": "Die Einstellung zum Teilen von Fehlern konnte nicht geladen werden.",
 	"settings.telemetryEvents.veto": "Diese Einstellung ist durch die Umgebung deaktiviert.",
 	"settings.telemetryEvents.unsupported": "Die Aktivierung ist auf dieser Plattform nicht verfügbar.",
 	"settings.telemetryEvents.releaseBlocked": "Fehlerberichte sind durch die Sicherheitsfreigabe dieser Version deaktiviert.",

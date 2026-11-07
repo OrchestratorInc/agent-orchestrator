@@ -1380,6 +1380,7 @@
 	"settings.telemetryEvents.description": "Share bounded, privacy-filtered error diagnostics to improve reliability.",
 	"settings.telemetryEvents.pending": "Telemetry is off locally. Daemon cleanup is still pending.",
 	"settings.telemetryEvents.failed": "Telemetry cleanup failed. Reporting remains disabled while cleanup retries.",
+	"settings.telemetryEvents.loadFailed": "Could not load the error sharing preference.",
 	"settings.telemetryEvents.veto": "This preference is disabled by the environment.",
 	"settings.telemetryEvents.unsupported": "Enabling is unavailable on this platform because durable consent writes are not supported.",
 	"settings.telemetryEvents.releaseBlocked": "Error reporting is disabled by this release's safety gate.",

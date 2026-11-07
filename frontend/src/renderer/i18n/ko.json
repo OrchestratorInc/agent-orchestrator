@@ -1376,6 +1376,7 @@
 	"settings.telemetryEvents.description": "신뢰성 개선을 위해 제한되고 개인정보가 필터링된 오류 진단을 공유합니다.",
 	"settings.telemetryEvents.pending": "텔레메트리는 로컬에서 꺼졌습니다. 데몬 정리가 아직 진행 중입니다.",
 	"settings.telemetryEvents.failed": "텔레메트리 정리에 실패했습니다. 보고는 비활성 상태로 유지됩니다.",
+	"settings.telemetryEvents.loadFailed": "오류 공유 설정을 불러오지 못했습니다.",
 	"settings.telemetryEvents.veto": "이 환경에서는 이 설정을 사용할 수 없습니다.",
 	"settings.telemetryEvents.unsupported": "이 플랫폼에서는 활성화할 수 없습니다.",
 	"settings.telemetryEvents.releaseBlocked": "이 릴리스의 안전 게이트로 오류 보고가 비활성화되었습니다.",

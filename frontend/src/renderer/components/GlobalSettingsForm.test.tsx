@@ -250,7 +250,7 @@ beforeEach(async () => {
 		saveError: false,
 	});
 	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
-	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
+	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false, saveErrorView: null, loadError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -469,6 +469,34 @@ describe("GlobalSettingsForm", () => {
 		const user = userEvent.setup(); renderForm();
 		await user.click(await screen.findByRole("switch", { name: "Share error events" }));
 		expect(await screen.findByText("Telemetry is off locally. Daemon cleanup is still pending.")).toBeInTheDocument();
+	});
+
+	it("describes the applied view instead of an earlier failed save once a policy event arrives", async () => {
+		const offView = { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied" as const, environmentVeto: false, durabilitySupported: true };
+		let publishPolicy!: (view: typeof offView) => void;
+		onTelemetryPolicy.mockImplementation((listener) => { publishPolicy = listener; return () => undefined; });
+		getTelemetryPolicy.mockResolvedValue(offView);
+		useTelemetryPolicyStore.setState({ view: null, loaded: false });
+		await useTelemetryPolicyStore.getState().load();
+		setTelemetryEvents.mockRejectedValueOnce(new Error("write failed"));
+		const user = userEvent.setup(); renderForm();
+		const toggle = await screen.findByRole("switch", { name: "Share error events" });
+		await user.click(toggle);
+		expect(await screen.findByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).toHaveAttribute("role", "alert");
+
+		act(() => publishPolicy({ ...offView, eventsEnabled: true, consentGeneration: "generation-on" }));
+
+		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
+		expect(screen.getByText("Share bounded, privacy-filtered error diagnostics to improve reliability.")).not.toHaveAttribute("role", "alert");
+		expect(toggle).toBeChecked();
+	});
+
+	it("does not report a failed policy read as a telemetry cleanup failure", async () => {
+		useTelemetryPolicyStore.setState({ view: null, loaded: true, loadError: true });
+		renderForm();
+		expect(await screen.findByText("Could not load the error sharing preference.")).toHaveAttribute("role", "alert");
+		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
+		expect(screen.getByRole("switch", { name: "Share error events" })).toBeDisabled();
 	});
 
 	it("opts out of PostHog usage analytics from the Privacy section, independent of error events", async () => {

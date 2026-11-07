@@ -548,11 +548,13 @@ function TelemetryEventsRow() {
 	const { t } = useTranslation();
 	const view = useTelemetryPolicyStore((state) => state.view);
 	const saving = useTelemetryPolicyStore((state) => state.saving);
+	const loadError = useTelemetryPolicyStore((state) => state.loadError);
 	const saveError = useTelemetryPolicyStore((state) => state.saveError);
 	const setEnabled = useTelemetryPolicyStore((state) => state.setEnabled);
 	const checked = view?.eventsEnabled ?? false;
 	const blockedEnable = !checked && (view?.environmentVeto || !view?.durabilitySupported);
 	const status = saveError ? "failed"
+		: loadError ? "loadFailed"
 		: !view ? null
 		: !view.durabilitySupported ? "unsupported"
 		: view.state === "cleanup_failed" ? "failed"
@@ -560,11 +562,12 @@ function TelemetryEventsRow() {
 		: view.reason === "environment_veto" ? "veto"
 		: view.reason === "release_blocked" ? "releaseBlocked"
 		: null;
+	const failed = status === "failed" || status === "loadFailed";
 	return (
 		<SettingsRow
 			label={t("settings.telemetryEvents.label")}
 			description={
-				<span className={cn(status === "failed" && "text-error")} role={status === "failed" ? "alert" : undefined}>
+				<span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>
 					{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
 				</span>
 			}

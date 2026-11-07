@@ -1398,6 +1398,7 @@
 	"settings.telemetryEvents.description": "Partager des diagnostics d’erreur limités et filtrés pour améliorer la fiabilité.",
 	"settings.telemetryEvents.pending": "La télémétrie est désactivée localement. Le nettoyage du daemon est en attente.",
 	"settings.telemetryEvents.failed": "Le nettoyage de la télémétrie a échoué. Les rapports restent désactivés.",
+	"settings.telemetryEvents.loadFailed": "Impossible de charger la préférence de partage des erreurs.",
 	"settings.telemetryEvents.veto": "Cette préférence est désactivée par l’environnement.",
 	"settings.telemetryEvents.unsupported": "L’activation n’est pas disponible sur cette plateforme.",
 	"settings.telemetryEvents.releaseBlocked": "Les rapports d’erreur sont désactivés par la barrière de sécurité de cette version.",
