@@ -2524,6 +2524,11 @@ function ChatHeader({
 
 const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
 
+/** Starts an action whose failure the banner already shows. */
+function runIgnoringErrors(run?: () => void | Promise<unknown>) {
+	void Promise.resolve().then(() => run?.()).catch(() => {});
+}
+
 /**
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
@@ -2568,27 +2573,27 @@ function ControllerBanner({
 }) {
 	const { t } = useTranslation();
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
-	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped";
-	// The other app releases the chat without telling AO (Codex can hold a closed
-	// one for many minutes), so keep checking instead of waiting for Retry.
+	// An archived session is restored, never resumed, so it is not "open elsewhere".
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
 	const resumeRef = useRef(onResume);
 	resumeRef.current = onResume;
+	// The other app releases the chat without telling AO (Codex can hold a closed
+	// one for many minutes), so keep checking instead of waiting for Retry; but
+	// not while a handoff, restart or startup owns the agent.
+	const recheck = openElsewhere && Boolean(onResume) && !resuming && !transitioning && !reconnecting &&
+		provisionState !== "provisioning" && provisionState !== "failed";
 	useEffect(() => {
-		if (!openElsewhere || resuming) return;
-		const timer = window.setTimeout(() => {
-			void Promise.resolve().then(() => resumeRef.current?.()).catch(() => {});
-		}, OPEN_ELSEWHERE_RECHECK_MS);
+		if (!recheck) return;
+		const timer = window.setTimeout(() => runIgnoringErrors(resumeRef.current), OPEN_ELSEWHERE_RECHECK_MS);
 		return () => window.clearTimeout(timer);
-	}, [openElsewhere, resuming]);
+	}, [recheck]);
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
 	// Nothing to act on yet: offering Resume here invites a click the daemon is
 	// about to make unnecessary.
 	const restarting = Boolean(reconnecting && controller.state === "stopped" && !waking);
-	const resumeClick = () => {
-		void Promise.resolve().then(() => onResume?.()).catch(() => {});
-	};
+	const resumeClick = () => runIgnoringErrors(onResume);
 
 	// The transition coordinator intentionally stops one controller before it
 	// starts the other. The top-bar handoff state already explains that interval;
@@ -2610,13 +2615,13 @@ function ControllerBanner({
 			title: terminated
 				? t(waking ? "shell.restoringSession" : "terminal.sessionTerminated")
 				: waking
-					? "Resuming chat…"
+					? t("chat.controller.resumingChat")
 					: restarting
 						? "Reconnecting to the agent…"
 						: openElsewhere
-							? "This is open elsewhere"
+							? t("chat.controller.openElsewhere")
 							: needsResume
-								? "Could not connect to the agent"
+								? t("chat.controller.couldNotConnect")
 								: "The agent controller stopped",
 			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
@@ -2658,8 +2663,12 @@ function ControllerBanner({
 							{terminated
 								? t("chat.archived.body")
 								: openElsewhere
-									? `Close it there to continue here.${harness === "codex" ? " Codex can keep a closed chat for a while." : ""} AO checks again every ${OPEN_ELSEWHERE_RECHECK_MS / 1000} seconds.`
-									: needsResume ? "Retry to continue this conversation." : "History is kept. Resume the agent or open a shell in the same worktree."}
+									? [
+										t("chat.controller.openElsewhereBody"),
+										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+									].filter(Boolean).join(" ")
+									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
@@ -2679,7 +2688,7 @@ function ControllerBanner({
 							onClick={resumeClick}
 							disabled={resuming}
 						>
-							{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : resumeError || needsResume ? "Retry" : "Resume agent"}
+							{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : resumeError || needsResume ? t("chat.controller.retry") : "Resume agent"}
 						</Button>
 					) : null}
 					{/* Once the worktree is gone a shell would open in the project root. */}

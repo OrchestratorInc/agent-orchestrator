@@ -20,7 +20,7 @@ type Candidate = components["schemas"]["SessionImportCandidate"];
 type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
-export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "aider", "cline", "cursor", "grok", "opencode"]);
+export { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
 
 const folderFilter = "folder:";
 /** The most chats one import request takes. */
@@ -119,15 +119,14 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		navigateToSession(c.projectId, sessionId);
 	};
 	// The most recent chat this import created.
-	let latest: { candidate: Candidate; sessionId: string } | undefined;
+	let firstCreated: { candidate: Candidate; sessionId: string } | undefined;
 	for (const r of results) {
 		if (r.status !== "created" || !r.sessionId) continue;
 		const c = candidates.find((item) => item.id === r.id);
-		if (c && (!latest || c.lastActivity.localeCompare(latest.candidate.lastActivity) > 0)) {
-			latest = { candidate: c, sessionId: r.sessionId };
+		if (c && (!firstCreated || c.lastActivity.localeCompare(firstCreated.candidate.lastActivity) > 0)) {
+			firstCreated = { candidate: c, sessionId: r.sessionId };
 		}
 	}
-	const firstCreated = latest;
 	const toggle = (ids: string[], checked: boolean) => {
 		keepChoicesRef.current = true;
 		setSelected((current) => {
@@ -257,7 +256,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						}
 						disabled={importing || !eligible.length}
 					/>
-					{t("sessionImport.selectAll", { count: visible.length })}
+					{t("sessionImport.selectAll", { count: eligible.length })}
 				</label>
 				<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
 					{visible.map((c) => (
@@ -320,7 +319,14 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 						onClick={() => {
 							setError(undefined);
 							keepChoicesRef.current = false;
-							void preview.refetch();
+							// A rescan with an unchanged list keeps preview.data's identity, so the
+							// effect would not run: reset here.
+							setResults([]);
+							void preview.refetch().then(({ data }) => {
+								if (data && !keepChoicesRef.current) {
+									setSelected(new Set(data.candidates.filter((c) => c.suggested && !c.sessionId).map((c) => c.id)));
+								}
+							});
 						}}
 						disabled={importing || preview.isFetching}
 					>

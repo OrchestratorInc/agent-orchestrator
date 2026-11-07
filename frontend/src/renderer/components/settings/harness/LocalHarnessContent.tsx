@@ -58,7 +58,8 @@ import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab, type HarnessLinkTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
-import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
+import { SessionImportPanel } from "./SessionImportPanel";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the

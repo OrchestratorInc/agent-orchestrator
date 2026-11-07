@@ -5,8 +5,8 @@ import { agentLabel, type AgentId } from "../lib/agent-options";
 import { agentSignedIn } from "../lib/agent-select-options";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
-import { IMPORTABLE_AGENTS } from "./settings/harness/SessionImportPanel";
-import { TopbarButton } from "./TopbarButton";
+import { IMPORTABLE_AGENTS } from "../lib/session-import-agents";
+import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 /** Logos shown before the rest collapse into "+N", so the card keeps one row
@@ -42,16 +42,16 @@ export function SessionImportOffer() {
 						<p className="mt-0.5 text-[12px] leading-5 text-[var(--color-text-import-muted)]">{t("sessionImport.offerDescription")}</p>
 						<div className="mt-3 flex flex-wrap items-center gap-2">
 							{agents.length === 1 ? (
-								<TopbarButton onClick={() => openImport(agents[0])} variant="primary">
+								<Button onClick={() => openImport(agents[0])} size="sm" variant="primary">
 									{t("sessionImport.offerAction", { agent: agentLabel(agents[0]) })}
-								</TopbarButton>
+								</Button>
 							) : (
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>
-										<TopbarButton variant="primary">
+										<Button size="sm" variant="primary">
 											{t("sessionImport.offerChoose")}
 											<ChevronDown className="size-3.5" aria-hidden="true" />
-										</TopbarButton>
+										</Button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align="start" className="max-h-80 min-w-48 overflow-y-auto">
 										{agents.map((agentId) => (
@@ -63,9 +63,9 @@ export function SessionImportOffer() {
 									</DropdownMenuContent>
 								</DropdownMenu>
 							)}
-							<TopbarButton onClick={() => closeSessionImportOffer()} variant="accent">
+							<Button onClick={() => closeSessionImportOffer()} size="sm" variant="quiet">
 								{t("sessionImport.offerDismiss")}
-							</TopbarButton>
+							</Button>
 							{agents.length > 1 ? (
 								<span
 									aria-label={agents.map(agentLabel).join(", ")}
