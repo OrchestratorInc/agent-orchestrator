@@ -903,6 +903,12 @@ func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID
 	return c.svc.MarkAccountSwitch(ctx, id, accountID)
 }
 
+// RecordInterfaceTransitionBoundary shows a degraded handoff's boundary notice
+// in the Chat timeline without sending it to the agent.
+func (c chatLauncher) RecordInterfaceTransitionBoundary(ctx context.Context, id domain.SessionID, transitionID, summary string) error {
+	return c.svc.RecordInterfaceTransitionBoundary(ctx, id, transitionID, summary)
+}
+
 func (c chatLauncher) PrepareChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
