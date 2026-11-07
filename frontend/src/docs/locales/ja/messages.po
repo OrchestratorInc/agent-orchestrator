@@ -63,6 +63,10 @@ msgstr "このセクションへのリンクをコピー"
 msgid "Copy Markdown"
 msgstr "Markdown をコピー"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "ダークテーマ"
+
 msgid "Docs"
 msgstr "ドキュメント"
 
@@ -81,6 +85,10 @@ msgstr "ヘルプ"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "サイドバーを隠す"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "ライトテーマ"
 
 msgid "Main site"
 msgstr "メインサイト"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "メニューを切り替え"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "テーマを切り替え"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "トラッカー"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "システムのテーマを使用"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

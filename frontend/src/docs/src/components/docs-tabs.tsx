@@ -27,7 +27,7 @@ export function Tabs({ items, children }: { items?: string[]; children: ReactNod
           </button>
         ))}
       </div>
-      <div className="prose prose-invert max-w-none px-4 py-4 prose-p:my-2 prose-pre:my-2">
+      <div className="prose max-w-none px-4 py-4 prose-p:my-2 prose-pre:my-2">
         {tabs[active]?.props.children}
       </div>
     </div>

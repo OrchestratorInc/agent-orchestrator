@@ -1,16 +1,16 @@
 .prose {
-  --tw-prose-body: rgb(255 255 255 / 0.7);
-  --tw-prose-headings: rgb(255 255 255);
-  --tw-prose-links: rgb(96 165 250);
-  --tw-prose-bold: rgb(255 255 255);
-  --tw-prose-counters: rgb(255 255 255 / 0.5);
-  --tw-prose-bullets: rgb(255 255 255 / 0.4);
-  --tw-prose-hr: rgb(255 255 255 / 0.1);
-  --tw-prose-quotes: rgb(255 255 255 / 0.6);
-  --tw-prose-quote-borders: rgb(255 255 255 / 0.2);
-  --tw-prose-code: rgb(255 255 255 / 0.9);
-  --tw-prose-pre-bg: rgb(255 255 255 / 0.03);
-  --tw-prose-pre-code: rgb(255 255 255 / 0.8);
+  --tw-prose-body: color-mix(in oklab, var(--foreground) 70%, transparent);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-links: var(--link);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: color-mix(in oklab, var(--foreground) 60%, transparent);
+  --tw-prose-bullets: color-mix(in oklab, var(--foreground) 40%, transparent);
+  --tw-prose-hr: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --tw-prose-quotes: color-mix(in oklab, var(--foreground) 60%, transparent);
+  --tw-prose-quote-borders: color-mix(in oklab, var(--foreground) 20%, transparent);
+  --tw-prose-code: color-mix(in oklab, var(--foreground) 90%, transparent);
+  --tw-prose-pre-bg: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --tw-prose-pre-code: color-mix(in oklab, var(--foreground) 80%, transparent);
 }
 
 .prose h1 {
@@ -58,21 +58,21 @@
 /* Card-style links opt out with `not-prose`, as in the typography plugin. */
 .prose a:not(:where(.not-prose, .not-prose *)) {
   text-decoration: underline;
-  text-decoration-color: rgb(255 255 255 / 0.3);
+  text-decoration-color: color-mix(in oklab, var(--foreground) 30%, transparent);
   text-underline-offset: 2px;
   transition: text-decoration-color 0.15s;
 }
 
 .prose a:not(:where(.not-prose, .not-prose *)):hover {
-  text-decoration-color: rgb(255 255 255 / 0.6);
+  text-decoration-color: color-mix(in oklab, var(--foreground) 60%, transparent);
 }
 
 .prose code:not(pre code) {
-  background: rgb(255 255 255 / 0.05);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
   padding: 0.2em 0.4em;
   border-radius: 0.25rem;
   font-size: 0.875em;
-  color: rgb(255 255 255 / 0.9);
+  color: color-mix(in oklab, var(--foreground) 90%, transparent);
   font-family: var(--font-mono);
 }
 
@@ -82,12 +82,12 @@
 }
 
 .prose pre {
-  background: rgb(255 255 255 / 0.05);
-  border: 1px solid rgb(255 255 255 / 0.1);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
   border-radius: 0.5rem;
   padding: 1rem;
   overflow-x: auto;
-  color: rgb(255 255 255 / 0.85);
+  color: color-mix(in oklab, var(--foreground) 85%, transparent);
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.7;
@@ -112,20 +112,20 @@
 }
 
 .prose thead {
-  border-bottom: 1px solid rgb(255 255 255 / 0.15);
+  border-bottom: 1px solid color-mix(in oklab, var(--foreground) 15%, transparent);
 }
 
 .prose th {
   padding: 0.5rem 0.75rem;
   text-align: left;
   font-weight: 600;
-  color: rgb(255 255 255);
+  color: var(--foreground);
 }
 
 .prose td {
   padding: 0.5rem 0.75rem;
-  color: rgb(255 255 255 / 0.7);
-  border-top: 1px solid rgb(255 255 255 / 0.08);
+  color: color-mix(in oklab, var(--foreground) 70%, transparent);
+  border-top: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
 .prose tbody tr:first-child td {
@@ -134,5 +134,5 @@
 
 .prose blockquote {
   font-style: normal;
-  border-left-color: rgb(255 255 255 / 0.2);
+  border-left-color: color-mix(in oklab, var(--foreground) 20%, transparent);
 }

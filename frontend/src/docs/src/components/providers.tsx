@@ -99,7 +99,9 @@ export function Providers({
   return (
     <I18nProvider i18n={i18n}>
       <RootProvider
-        theme={{ enabled: false }}
+        // Follows the OS until the reader picks a theme in the sidebar. The
+        // single-key shortcut is off so typing "d" never flips the page.
+        theme={{ defaultTheme: "system", enableSystem: true, disableTransitionOnChange: true, hotKey: false }}
         search={{ SearchDialog: DocsSearchDialog }}
         i18n={{
           locale,

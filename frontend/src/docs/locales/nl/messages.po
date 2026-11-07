@@ -63,6 +63,10 @@ msgstr "Link naar deze sectie kopiëren"
 msgid "Copy Markdown"
 msgstr "Markdown kopiëren"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Donker thema"
+
 msgid "Docs"
 msgstr "Documentatie"
 
@@ -81,6 +85,10 @@ msgstr "Hulp"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Zijbalk verbergen"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Licht thema"
 
 msgid "Main site"
 msgstr "Hoofdsite"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Menu in- of uitklappen"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Thema wisselen"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Trackers"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Systeemthema gebruiken"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

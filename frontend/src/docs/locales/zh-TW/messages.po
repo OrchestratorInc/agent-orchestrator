@@ -63,6 +63,10 @@ msgstr "複製此章節的連結"
 msgid "Copy Markdown"
 msgstr "複製 Markdown"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "深色主題"
+
 msgid "Docs"
 msgstr "文件"
 
@@ -81,6 +85,10 @@ msgstr "說明"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "隱藏側邊欄"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "淺色主題"
 
 msgid "Main site"
 msgstr "官方網站"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "切換選單"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "切換主題"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "追蹤器"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "跟隨系統主題"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
