@@ -32,8 +32,12 @@ export type CodeSelection = {
  */
 export type SelectionEnd = { column: Element; row: Element; rowIndex: number; offset: number; text: string; rowCount: number };
 
-/** Both ends of a selection, in row-relative coordinates a rebuild can resolve. */
-export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd };
+/**
+ * Both ends of a selection, in row-relative coordinates a rebuild can resolve,
+ * plus the text of every selected row: a rebuild is only trusted while the
+ * whole captured span still reads the same, not just its endpoints.
+ */
+export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd; texts: Array<string> };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
 
@@ -130,12 +134,15 @@ function selectionEnd(node: Node, offset: number): SelectionEnd | null {
  * on purpose (Escape, a click elsewhere) and must stay cleared.
  *
  * A rebuild is only trusted while the column still has the captured rows: row
- * counts and row text must match, so a refresh that inserted, removed, or
- * changed rows refuses to resolve the snapshot onto other code and the
- * selection stays cleared instead.
+ * counts and the text of every row in the captured span must match, so a
+ * refresh that inserted, removed, or changed rows refuses to resolve the
+ * snapshot onto other code and the selection stays cleared instead.
  */
 export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnapshot): boolean {
 	if (snapshot.anchor.row.isConnected || snapshot.focus.row.isConnected) return false;
+	// Both ends were captured in one column (readCodeSelection keeps the drag
+	// to the column it started in); anything else cannot be validated as a span.
+	if (snapshot.anchor.column !== snapshot.focus.column) return false;
 	const root = host.shadowRoot as ShadowRootWithSelection | null;
 	if (!root) return false;
 	const place = (end: SelectionEnd) => {
@@ -149,6 +156,15 @@ export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnaps
 	const anchor = place(snapshot.anchor);
 	const focus = place(snapshot.focus);
 	if (!anchor || !focus) return false;
+	// The endpoints matching is not enough: a refresh can rewrite a row between
+	// them, leaving the ends on the captured code and the span on other code.
+	const rows = [...snapshot.anchor.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+	const first = Math.min(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
+	const last = Math.max(snapshot.anchor.rowIndex, snapshot.focus.rowIndex);
+	if (last - first + 1 !== snapshot.texts.length) return false;
+	for (let index = first; index <= last; index++) {
+		if (normalizeCodeRowText(rows[index]?.textContent ?? "") !== snapshot.texts[index - first]) return false;
+	}
 	root.getSelection?.()?.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
 	return true;
 }
@@ -219,6 +235,7 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 			// The anchor/focus rows were validated above, so their ends resolve.
 			anchor: selectionEnd(selection.anchorNode!, selection.anchorOffset)!,
 			focus: selectionEnd(selection.focusNode!, selection.focusOffset)!,
+			texts: elements.map(element => normalizeCodeRowText(element.textContent ?? "")),
 		},
 	};
 }
@@ -230,11 +247,22 @@ function scrollParent(element: Element): Element {
 	return document.documentElement;
 }
 
+// One selection can sit at two DOM ranges across a rebuild: the restored
+// native selection lands on the replacement rows while the captured object
+// still holds the Range from the removed rows. The store must swap to the
+// fresh object so the toolbar's live-range check and geometry see the new
+// nodes, even though line numbers and geometry are unchanged.
+function sameRange(a?: Range, b?: Range): boolean {
+	if (!a || !b) return a === b;
+	return a.startContainer === b.startContainer && a.startOffset === b.startOffset
+		&& a.endContainer === b.endContainer && a.endOffset === b.endOffset;
+}
+
 function sameSelection(a: CodeSelection | null, b: CodeSelection | null): boolean {
 	if (!a || !b) return a === b;
 	return a.host === b.host && a.range.start === b.range.start && a.range.end === b.range.end && a.range.side === b.range.side
 		&& a.range.endSide === b.range.endSide && Math.round(a.point.x) === Math.round(b.point.x) && Math.round(a.point.y) === Math.round(b.point.y)
-		&& a.dragging === b.dragging;
+		&& a.dragging === b.dragging && sameRange(a.textRange, b.textRange);
 }
 
 /** What the Ask button needs from a code selection; useCodeSelection provides it. */

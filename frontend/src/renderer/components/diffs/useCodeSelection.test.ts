@@ -184,6 +184,43 @@ describe("restoreCodeSelection", () => {
 		}
 		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
 	});
+
+	it("does not restore when the rebuild changed a row inside the selected span", () => {
+		const host = surface([{ rows: [[1, "context", "alpha;", 1], [2, "context", "middle();", 2], [3, "context", "omega;", 3]] }]);
+		const placed: Array<[Node, number, Node, number]> = [];
+		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 2), 6, recordPlacement);
+		const selection = readCodeSelection(host)!;
+		// Same row count, both endpoints still on their captured text: only the
+		// interior row was rewritten. Restoring would highlight changed code.
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			column.replaceChildren(...[...column.children].map((child) => {
+				const copy = child.cloneNode(true) as Element;
+				if (copy.textContent === "middle();") copy.textContent = "completely changed code";
+				return copy;
+			}));
+		}
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
+		expect(placed).toEqual([]);
+	});
+
+	it("still restores when the rebuild changed rows outside the selected span", () => {
+		const host = surface([{ rows: [[1, "context", "before();", 1], [2, "context", "one;", 2], [3, "context", "two;", 3], [4, "context", "after();", 4]] }]);
+		const placed: Array<[Node, number, Node, number]> = [];
+		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
+		select(host, rowAt(host, 0, 1), rowAt(host, 0, 2), 4, recordPlacement);
+		const selection = readCodeSelection(host)!;
+		// Only unselected rows were rewritten; the captured span itself is intact.
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			column.replaceChildren(...[...column.children].map((child) => {
+				const copy = child.cloneNode(true) as Element;
+				if (copy.textContent === "before();" || copy.textContent === "after();") copy.textContent = "changed();";
+				return copy;
+			}));
+		}
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(true);
+		expect(placed).toEqual([[rowAt(host, 0, 1).firstChild, 0, rowAt(host, 0, 2).firstChild, 4]]);
+	});
 });
 
 describe("codeReference", () => {
@@ -268,6 +305,38 @@ describe("code selection capture scheduling", () => {
 		host.remove();
 		expect(hook.result.current.ask()).toBe(false);
 		expect(ask).not.toHaveBeenCalled();
+		hook.unmount(); container.remove(); frame.mockRestore();
+	});
+	it("republishes the fresh range after an identical-row rebuild so the toolbar can act", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((next) => { callback = next; return 1; });
+		const deliver = vi.fn();
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const containerRef = { current: container };
+		const hook = renderHook(() => useCodeSelection(containerRef, deliver));
+		act(() => { const next = callback; callback = undefined; next?.(0); });
+		const captured = hook.result.current.source.get()!;
+		// The viewer re-tokenizes: every row is swapped for a fresh identical copy,
+		// and the browser's selection lands on the replacements.
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+		}
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 3);
+		// The redraw (observed) or the restored selection (selectionchange) schedules
+		// the next capture; run one frame and read what it publishes.
+		act(() => { document.dispatchEvent(new Event("selectionchange")); const next = callback; callback = undefined; next?.(0); });
+		const fresh = hook.result.current.source.get();
+		// Same lines and geometry, but the store must swap to the fresh object:
+		// its old Range collapsed onto the removed rows, and a stale textRange
+		// makes the toolbar refuse Cmd/Ctrl+L.
+		expect(fresh).not.toBe(captured);
+		expect(fresh!.textRange!.startContainer).toBe(rowAt(host, 0, 0).firstChild);
+		expect(fresh!.textRange!.startContainer.isConnected).toBe(true);
+		expect(fresh!.snapshot.texts).toEqual(["one", "two"]);
+		expect(hook.result.current.ask()).toBe(true);
+		expect(deliver).toHaveBeenCalledExactlyOnceWith(fresh);
 		hook.unmount(); container.remove(); frame.mockRestore();
 	});
 });
