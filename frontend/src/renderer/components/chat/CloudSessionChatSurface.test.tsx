@@ -12,7 +12,8 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -1830,15 +1831,102 @@ describe("CloudSessionChatSurface", () => {
 		expect(failed.items.find((item) => item.kind === "activity")).toMatchObject({ status: "recovered" });
 	});
 
-	it("continues a long history from its last sequence", async () => {
-		const event = (sequence: number): CloudCpClientEvent => ({
-			sessionId: session.id, sequence, type: "chat.assistant_delta",
-			payload: { text: String(sequence) }, createdAt: session.updatedAt,
+	it("reads a turn whose start is not loaded as started, and marks older history", () => {
+		const event = (sequence: number, type: string, payload: unknown): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
 		});
-		const listChatEvents = vi.fn().mockResolvedValue({ events: [event(500), event(501)], hasMore: false, nextAfter: 501 });
-		const events = await loadCloudChatEvents({ listChatEvents }, "org-1", session.id, [event(1), event(500)]);
-		expect(listChatEvents).toHaveBeenCalledWith("org-1", session.id, { after: 500, limit: 500 });
-		expect(events.map((item) => item.sequence)).toEqual([1, 500, 501]);
+		// The newest events begin inside turn-1: its prompt and start are older.
+		const events = [
+			event(50, "chat.assistant_delta", { turnId: "turn-1", text: "Still working" }),
+			event(51, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		const partial = toSnapshot(session, events, undefined, { partial: true });
+		expect(partial.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-1", "running"], ["turn-2", "queued"]]);
+		expect(partial).toMatchObject({ hasMoreBefore: true, oldestSequence: 50, latestSequence: 51 });
+		const settled = toSnapshot(session, [...events, event(52, "chat.turn_completed", { turnId: "turn-1" })], undefined, { partial: true });
+		expect(settled.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-1", "completed"], ["turn-2", "running"]]);
+		// The whole history from the session's start reads as it always did.
+		expect(toSnapshot(session, events)).toMatchObject({ hasMoreBefore: false });
+	});
+
+	it("keeps a later Setup where it ran when the session's first prompt is not loaded", () => {
+		const step = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId: "reopen", step: 1, total: 1, status: "succeeded", exitCode: 0, durationMs: 10, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 60, type: "chat.user_message", payload: { text: "Wake up", turnId: "turn-9" }, createdAt: "2026-10-20T16:02:00Z" },
+			step(61),
+			{ sessionId: session.id, sequence: 62, type: "chat.turn_started", payload: { turnId: "turn-9" }, createdAt: "2026-10-20T16:02:02Z" },
+		];
+		const order = (items: { kind: string; detail?: { event?: string } }[]) =>
+			items.map((item) => item.detail?.event === "workspace.script.run" ? "setup" : item.kind);
+		// From the session's start this is its first prompt, which its Setup leads.
+		expect(order(toSnapshot(session, events).items)).toEqual(["setup", "message"]);
+		// Here it is only the first one loaded: the Setup stays after it, as it does once older pages load.
+		expect(order(toSnapshot(session, events, undefined, { partial: true }).items)).toEqual(["message", "setup"]);
+	});
+
+	it("shows the newest page first, then the half hour before it, and older pages on demand", async () => {
+		const at = (minutes: number) => new Date(Date.UTC(2026, 10, 8, 10, minutes)).toISOString();
+		const event = (sequence: number, type: string, payload: unknown, createdAt: string): CloudCpClientEvent => ({ sessionId: session.id, sequence, type, payload, createdAt });
+		const newest = [
+			event(90, "chat.user_message", { text: "Latest", turnId: "turn-3" }, at(50)),
+			event(91, "chat.turn_started", { turnId: "turn-3" }, at(50)),
+			event(92, "chat.turn_completed", { turnId: "turn-3" }, at(51)),
+		];
+		const recent = [
+			event(70, "chat.user_message", { text: "Earlier", turnId: "turn-2" }, at(30)),
+			event(71, "chat.turn_completed", { turnId: "turn-2" }, at(31)),
+		];
+		const oldest = [event(1, "chat.user_message", { text: "First", turnId: "turn-1" }, at(0)), event(2, "chat.turn_completed", { turnId: "turn-1" }, at(1))];
+		let releaseRecent!: () => void;
+		const recentHeld = new Promise<void>((resolve) => { releaseRecent = resolve; });
+		cloudMocks.listChatEvents.mockReset().mockImplementation(async (_org: string, _session: string, query: { before?: number; after?: number; since?: string }) => {
+			if (query.before === 9007199254740991 && query.after === undefined) return { events: newest, hasMore: false, nextAfter: 92, hasOlder: true, nextBefore: 90 };
+			if (query.before === 90) {
+				await recentHeld;
+				return { events: recent, hasMore: false, nextAfter: 71, hasOlder: true, nextBefore: 70 };
+			}
+			if (query.before === 70) return { events: oldest, hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: 1 };
+			return { events: [], hasMore: false, nextAfter: query.after ?? 0, hasOlder: false, nextBefore: query.before };
+		});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const texts = () => (props()?.snapshot.items as { kind: string; text?: string }[]).filter((item) => item.kind === "message").map((item) => item.text);
+		// The newest page shows while the half hour before it is still being read.
+		await waitFor(() => expect(texts()).toEqual(["Latest"]));
+		expect(props()).toMatchObject({ hasOlder: true, snapshot: { hasMoreBefore: true } });
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 90, limit: 500, since: at(20) });
+		releaseRecent();
+		await waitFor(() => expect(texts()).toEqual(["Earlier", "Latest"]));
+		expect(cloudMocks.listChatEvents).not.toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ before: 70 }));
+		// Older pages only on demand, as the reader scrolls up.
+		act(() => props().onLoadOlder());
+		await waitFor(() => expect(texts()).toEqual(["First", "Earlier", "Latest"]));
+		expect(props()).toMatchObject({ hasOlder: false, loadingOlder: false, snapshot: { hasMoreBefore: false } });
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 70, limit: 200, since: undefined });
+	});
+
+	it("reads the whole history forward from a control plane that cannot read back", async () => {
+		const event = (sequence: number, text: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text, turnId: `turn-${sequence}` }, createdAt: session.updatedAt,
+		});
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [event(1, "One")], hasMore: true, nextAfter: 1 })
+			.mockResolvedValueOnce({ events: [event(2, "Two")], hasMore: false, nextAfter: 2 })
+			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect((props()?.snapshot.items as { text?: string }[]).map((item) => item.text)).toEqual(["One", "Two"]));
+		expect(cloudMocks.listChatEvents.mock.calls.slice(0, 2).map((call) => call[2])).toEqual([{ before: 9007199254740991, limit: 150 }, { after: 1, limit: 500 }]);
+		expect(props()?.hasOlder).toBeFalsy();
+		expect(props()?.snapshot.hasMoreBefore).toBe(false);
 	});
 
 	it("projects completed and interrupted turns without leaving output streaming", () => {

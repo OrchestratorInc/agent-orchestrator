@@ -15,11 +15,12 @@ import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
-import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
+import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
+import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ActivityKind, ApprovalMode, ChatConfigOption, ConversationActivity, ConversationContentSummary, ConversationItem, ConversationMessage, ConversationPlan, ConversationSnapshot, ConversationTurn, ConversationUsage, DiffFile, FileChangeFile, PlanStep, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -247,27 +248,6 @@ export function appendCloudEvents(existing: CloudCpClientEvent[], incoming: Clou
 	return [...existing, ...incoming.filter((event) => event.sequence > lastSequence)];
 }
 
-/**
- * Both lists' events in sequence order, each once. The poll and the live stream
- * write the same cached list, so either may already hold events the other is
- * about to add; a union never drops one because the other got further ahead.
- */
-export function mergeCloudEvents(existing: CloudCpClientEvent[], incoming: CloudCpClientEvent[]): CloudCpClientEvent[] {
-	const lastSequence = existing.at(-1)?.sequence ?? 0;
-	if (incoming.every((event, index) => event.sequence > lastSequence && (index === 0 || event.sequence > incoming[index - 1].sequence))) {
-		return incoming.length ? [...existing, ...incoming] : existing;
-	}
-	const bySequence = new Map<number, CloudCpClientEvent>();
-	for (const event of existing) bySequence.set(event.sequence, event);
-	let added = false;
-	for (const event of incoming) {
-		if (bySequence.has(event.sequence)) continue;
-		bySequence.set(event.sequence, event);
-		added = true;
-	}
-	return added ? [...bySequence.values()].sort((a, b) => a.sequence - b.sequence) : existing;
-}
-
 // How long the stream gathers events before the chat redraws: one frame's
 // worth, so a burst of deltas is one snapshot rebuild, not one per token.
 const STREAM_FLUSH_MS = 32;
@@ -305,7 +285,8 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 			const events = pending.events;
 			pending.events = [];
 			if (!events.length || batch.current !== pending) return;
-			queryClient.setQueryData<CloudCpClientEvent[]>(["cloud-chat-events", orgId, sessionId], (current) => mergeCloudEvents(current ?? [], events));
+			queryClient.setQueryData<CloudCpClientEvent[]>(["cloud-chat-events", orgId, sessionId], (current) =>
+				mergeCloudEvents(current ?? [], streamedCloudChatEvents(queryClient, orgId, sessionId, current ?? [], events)));
 		}, STREAM_FLUSH_MS);
 	}, [orgId, queryClient, sessionId, streamKey]);
 	// Before the poll's first page there is nothing to resume from, and the
@@ -315,23 +296,6 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 		return loaded ? loaded.at(-1)?.sequence ?? 0 : "loading" as const;
 	}, [orgId, queryClient, sessionId]);
 	return useCloudSessionEventStream({ baseUrl, orgId, sessionId, enabled, onEvent, resumeAfter });
-}
-
-export async function loadCloudChatEvents(
-	client: Pick<CloudCpClient, "listChatEvents">,
-	orgId: string,
-	sessionId: string,
-	existing: CloudCpClientEvent[],
-): Promise<CloudCpClientEvent[]> {
-	let events = existing;
-	let after = existing.at(-1)?.sequence ?? 0;
-	for (;;) {
-		const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 });
-		events = appendCloudEvents(events, page.events);
-		if (!page.hasMore) return events;
-		if (page.nextAfter <= after) throw new Error("Cloud event cursor did not advance.");
-		after = page.nextAfter;
-	}
 }
 
 /** A worker's turn_plan activity as the turn's plan, or undefined when it carries none. */
@@ -664,7 +628,12 @@ function eventContent(payload: EventPayload): ConversationContentSummary[] | und
 	return content.length > 0 ? content : undefined;
 }
 
-export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string): ConversationSnapshot {
+/**
+ * The chat of a Cloud session from its events. `partial`: the events are the
+ * newest part of the history (older pages load on demand), so the first of
+ * them is not the session's first.
+ */
+export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[], viewerUserId?: string, { partial = false }: { partial?: boolean } = {}): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
 	const approvals = new Map<string, ConversationActivity>();
@@ -682,15 +651,22 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// The session's first prompt is recorded before its Setup runs, so the turn
 	// it opens is anchored ahead of Setup and Setup would read after the reply.
 	// A Setup that ran before any turn started sits just above that prompt.
+	// Without the session's start loaded, the first prompt here is not its first.
 	const firstTurnStart = events.find((event) => event.type === "chat.turn_started")?.sequence ?? Infinity;
-	const firstPrompt = events.find((event) => event.type === "chat.user_message")?.sequence;
+	const firstPrompt = partial ? undefined : events.find((event) => event.type === "chat.user_message")?.sequence;
 	const runSequence = (run: ScriptRun) =>
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
-			turns.set(turnID, { id: turnID, state: "queued", requestedAt: event.createdAt });
+			// A turn starts with its prompt. One whose first event here is any
+			// other began before the loaded events (the control plane starts a
+			// page inside a turn only when the turn is very long): it had started.
+			const startedEarlier = partial && event.type !== "chat.user_message" && event.type !== "chat.turn_started";
+			turns.set(turnID, startedEarlier
+				? { id: turnID, state: "running", requestedAt: event.createdAt, startedAt: event.createdAt }
+				: { id: turnID, state: "queued", requestedAt: event.createdAt });
 		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
@@ -951,7 +927,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
 		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items,
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
-		hasMoreBefore: false, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
+		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),
 		// File captures reach a Cloud agent inlined in the message text.
 		supportsFileReferences: true,
@@ -1230,15 +1206,28 @@ export function CloudSessionChatSurface({
 		// catches what a dropped or not-yet-open stream missed. An open stream
 		// counts from the moment it opens, so an idle chat slows down at once.
 		refetchInterval: streaming ? CHAT_EVENTS_SAFETY_POLL_MS : CHAT_EVENTS_FALLBACK_POLL_MS,
-		queryFn: async () => {
-			if (!cloud) return [] as CloudCpClientEvent[];
-			const key = ["cloud-chat-events", cloud.orgId, session.id];
-			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(key) ?? [];
-			const loaded = await loadCloudChatEvents(client, cloud.orgId, session.id, previous);
-			// The stream may have added events while this page loaded.
-			return mergeCloudEvents(queryClient.getQueryData<CloudCpClientEvent[]>(key) ?? [], loaded);
-		},
+		// The newest page first, then only what came after the newest event held.
+		queryFn: async () => cloud ? loadCloudChatHistory(queryClient, client, cloud.orgId, session.id) : [] as CloudCpClientEvent[],
 	});
+	// What the list holds of the history; older pages load on demand. Kept as
+	// long as the list is, so a kept list never reads as the whole history.
+	const historyKey = cloudChatHistoryKey(cloud?.orgId ?? "", session.id);
+	const history = useQuery<CloudChatHistory | null>({
+		queryKey: historyKey,
+		queryFn: () => queryClient.getQueryData<CloudChatHistory | null>(historyKey) ?? null,
+		enabled: false,
+		staleTime: Infinity,
+		gcTime: Infinity,
+	}).data ?? undefined;
+	const loadOlder = useCallback((recent?: boolean) => {
+		if (cloud) void loadOlderCloudChatEvents(queryClient, client, cloud.orgId, session.id, { recent }).catch(() => {});
+	}, [client, cloud, queryClient, session.id]);
+	// The half hour before the first page follows it at once.
+	const recentPending = Boolean(history?.recentPending && eventsQuery.data);
+	useEffect(() => {
+		if (recentPending) loadOlder(true);
+	}, [loadOlder, recentPending]);
+	const onLoadOlder = useCallback(() => loadOlder(), [loadOlder]);
 	// Until the worker lists its models (it starts the agent to ask, after a
 	// sandbox waking from a pause has come back), the picker shows the control
 	// plane's catalog for the agent: what a worker on the same CLI and
@@ -1448,14 +1437,14 @@ export function CloudSessionChatSurface({
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
-		const projected = toSnapshot(session, eventsQuery.data ?? [], me);
+		const projected = toSnapshot(session, eventsQuery.data ?? [], me, { partial: history?.hasOlder });
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, history?.hasOlder, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -1643,6 +1632,9 @@ export function CloudSessionChatSurface({
 		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
 			snapshot={snapshot}
+			hasOlder={history?.hasOlder}
+			loadingOlder={history?.loadingOlder}
+			onLoadOlder={onLoadOlder}
 			localEchos={openingEchos}
 			openingStartedAt={opening?.createdAt}
 			onSessionLinkOpen={openSessionLink}
