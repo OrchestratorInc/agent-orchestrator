@@ -19,6 +19,9 @@ export const aoBridge: AoBridge =
 			openExternal: async (url: string) => {
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
