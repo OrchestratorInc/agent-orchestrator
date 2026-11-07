@@ -91,3 +91,12 @@
     overscroll-behavior: contain;
   }
 }
+
+/* Below the desktop breakpoint the navbar links move into the menu. Let the
+   title side take the free space so the Download button in it sits next to
+   the search and menu buttons. Unlayered, so it wins over the utility. */
+@media (width < 64rem) {
+  #nd-subnav [data-header-body] > :last-child {
+    flex: none;
+  }
+}
